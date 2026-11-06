@@ -8,7 +8,6 @@ from unittest import mock
 import test_port_0922_battle_runtime as fixture
 from gui.mods.offline_lan_0922 import (
     replica_physics, vehicle_fitting_context, vehicle_physics)
-from gui.mods.offline_lan_0922.player_control import equipment_policy
 
 
 class ForbiddenBot(object):
@@ -120,18 +119,39 @@ class PlayerRuntimeIsolationTests(unittest.TestCase):
         self.assertEqual((.1, .2, .3), result)
         predict.assert_called_once()
 
-    def test_player_consumable_selection_is_not_a_bot_priority_alias(self):
-        from gui.mods.offline_lan_0922 import equipment_mechanics
-        critical = dict(devices=[dict(name='gunHealth', state='destroyed'),
-                                dict(name='leftTrackHealth', state='destroyed')],
+    def test_player_consumable_copy_runs_without_original_bot_methods(self):
+        from test_player_control_completion import CanonicalConsumableCompletionTests
+        import test_port_0922_consumable_audit as consumables
+        completion = CanonicalConsumableCompletionTests()
+        self.addCleanup(completion.doCleanups)
+        mounted = consumables.item('smallRepairkit', 4, tags=('repairkit',),
+                                    reuseCount=-1, cooldownSeconds=90)
+        unused, battle, player, entity, owner, control, sent, restore = completion.setup_equipment(mounted)
+        critical = dict(devices=[dict(name='gunHealth', hp=0, max_hp=100, state='destroyed'),
+                                dict(name='leftTrackHealth', hp=0, max_hp=100, state='destroyed')],
+                        destroyed=['gunHealth', 'leftTrackHealth'],
                         crew_ko=['driver', 'loader1'])
+        player.effective_params['critical']['devices'].extend([
+            dict(name='gunHealth', max_hp=100, regen_hp=50),
+            dict(name='leftTrackHealth', max_hp=100, regen_hp=50)])
+        player.effective_params['critical']['activation_targets'] = [
+            dict(index=82, name='gunHealth'), dict(index=83, name='leftTrackHealth')]
+        player.critical = copy.deepcopy(critical)
+        owner._records['player:1']['critical_state'] = critical
+        entity.typeDescriptor.extras = {82: types.SimpleNamespace(name='gunHealth'),
+                                       83: types.SimpleNamespace(name='leftTrackHealth')}
         before = copy.deepcopy(critical)
-        with mock.patch.object(equipment_mechanics, 'BOT_REPAIR_PRIORITY', ()), \
-                mock.patch.object(equipment_mechanics, 'BOT_CREW_PRIORITY', ()):
-            states, repair, crew = equipment_policy.select_targets(critical)
-        self.assertEqual('gunHealth', repair)
-        self.assertEqual('loader1', crew)
-        self.assertEqual('destroyed', states['leftTrackHealth'])
+        with mock.patch.object(fixture.bot_runtime.BotRuntime, '_poll_bot_equipments',
+                side_effect=AssertionError('player used original Bot equipment decision')), \
+                mock.patch.object(fixture.bot_runtime.BotRuntime, '_apply_bot_equipment_effect',
+                side_effect=AssertionError('player used original Bot equipment executor')):
+            completion.poll_equipment(control)
+            self.assertFalse(sent)
+            completion.poll_equipment(control)
+        self.assertEqual('gunHealth', sent[0]['selected'])
+        self.assertTrue(player.equipment_intent_result['accepted'])
+        self.assertNotIn('gunHealth', player.critical['destroyed'])
+        self.assertIn('leftTrackHealth', player.critical['destroyed'])
         self.assertEqual(before, critical)
 
     def test_local_critical_factors_do_not_call_bot_fitting_readers(self):

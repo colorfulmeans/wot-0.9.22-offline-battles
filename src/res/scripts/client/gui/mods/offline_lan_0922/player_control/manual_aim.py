@@ -11,7 +11,7 @@ import math
 
 from .. import ballistics
 from ..gun_mechanics import _field
-from .aiming import Aiming, _angle, _direction, _point, mechanical_reach
+from .native_aim import NativeAimGeometry, _angle, _direction, _point, mechanical_reach
 from .commands import INTEGER_TYPES, TERMINAL
 from .test_actions import _same_identity
 
@@ -174,8 +174,7 @@ class ManualAim(object):
                            else command['args']['position'])
             # Reuse the reviewed native source solver, but not its automatic
             # target selection, velocity history, armour policy or shot gates.
-            planner = Aiming(owner)
-            planner.begin([], now)
+            planner = NativeAimGeometry(owner)
             entity, gun = self._entity(), owner._gun_state
             own = planner._own()
             dx, dy, dz = (point[i] - own['origin'][i] for i in range(3))

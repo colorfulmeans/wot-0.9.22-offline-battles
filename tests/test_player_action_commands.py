@@ -7,35 +7,10 @@ from unittest import mock
 
 import test_player_control_completion as completion
 import test_port_0922_battle_runtime as runtime_fixture
+import test_player_full_runtime as full_runtime_fixture
 
 from gui.mods.offline_lan_0922.player_control import PlayerControl
-from gui.mods.offline_lan_0922.player_control.missions import Mission
 from gui.mods.offline_lan_0922.player_control.test_actions import MAX_WATCHERS, TestActions
-
-
-class ObservedMissionNavigation(object):
-    """Keep the real Mission lifecycle while omitting route-planner geometry."""
-    def __init__(self, clock):
-        self.clock = clock
-        self.mission = None
-        self.receipt = dict(status='test_navigation')
-
-    def validate_mission(self, action, args, state):
-        return Mission(args['command_id'], action, args, state, None, None).snapshot()
-
-    def start_mission(self, action, args, state):
-        if self.mission is not None:
-            self.mission.finish('cancelled', 'replaced', state['now'])
-        self.mission = Mission(args['command_id'], action, args, state, None, None)
-        self.mission.observe(state, dict(supported=True), 0.)
-        return self.mission_status()
-
-    def mission_status(self):
-        return self.mission.snapshot() if self.mission else dict(id=None, status='idle', phase='idle')
-
-    def close(self):
-        if self.mission is not None:
-            self.mission.finish('cancelled', 'navigation_closed', self.clock())
 
 
 class ActionHarness(object):
@@ -62,13 +37,27 @@ class ActionHarness(object):
         return self.control.gateway.requests[command_id]['receipt']
 
     def admit_mission(self, command_id='mission-one', timeout=15.):
+        if self.control.runtime is None:
+            # Mission commands use the complete copied runtime, not the
+            # retired standalone Mission/navigation implementation. Only
+            # physical observation queries use the native flat-world fixture.
+            physical = full_runtime_fixture.FullRuntimeTests()
+            physical.setUp()
+            self.addCleanup(physical.doCleanups)
+            owner, previous = physical.battle, self.control.owner
+            for name in ('state', '_battle_live', '_battle_result', '_worker_mode',
+                         '_replay_mode', '_clock', '_local_fire_intent'):
+                setattr(owner, name, getattr(previous, name))
+            owner._player_control = self.control
+            self.control.owner = owner
+            physical.runtime.controller = self.control
+            self.control.runtime = physical.runtime
+            self.assertTrue(physical.runtime.attach())
         self.control.features.add('drive')
-        self.control.active = True
-        if self.control.navigation is None:
-            self.control.navigation = ObservedMissionNavigation(lambda: self.fixture.now[0])
         row = self.submit('hold_position', dict(position=(10., 0., 0.)), command_id, timeout)
         self.assertEqual('accepted', row['status'])
-        return self.control.navigation.mission
+        self.assertIs(self.control.navigation, self.control.runtime)
+        return self.control.runtime._mission
 
     def fire_group(self, command_id, identities, completed=True, include_list=True):
         receipt = dict(self.control.identity(), type='command', id=command_id, action='fire',
@@ -213,7 +202,7 @@ class ActionObservationTests(ActionHarness, unittest.TestCase):
                                       command_id='mission-one'), 'wait')
         self.assertEqual('completed', self.submit('stop', {})['status'])
         self.observe(.1)
-        self.assertEqual('cancelled', mission.status)
+        self.assertEqual('cancelled', mission['status'])
         self.assertNotIn('result', self.receipt('mission-one'))
         self.assertIsNone(self.control.navigation)
         result = self.receipt('wait')
@@ -240,7 +229,7 @@ class ActionObservationTests(ActionHarness, unittest.TestCase):
         self.assertEqual('completed', self.receipt('replace-wait')['status'])
         self.assertEqual('mission-two', self.receipt('replace-wait')['result']['mission']['id'])
         self.assertEqual('accepted', self.receipt('mission-three')['status'])
-        self.assertEqual('running', replacement.status)
+        self.assertEqual('running', replacement['status'])
 
     def test_missing_terminal_phase_is_explicitly_unavailable_not_invented(self):
         self.admit_mission()

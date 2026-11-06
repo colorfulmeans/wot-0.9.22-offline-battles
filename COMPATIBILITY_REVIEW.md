@@ -1,4 +1,165 @@
-# November 6 limited-traverse, magazine and automatic-burst follow-up
+# November 6 unified-trigger and complete foreground-copy rebuild
+
+## Current scope and superseded conclusions
+
+This rebuild starts at `ac953f201d4ae09033ad02bbc330286096228bb9`.
+The user's original dirty worktree is preserved separately. The current scope
+explicitly replaces the old reduced player automation and rewrites physical
+trigger execution for **both manual players and Bots**. Earlier statements
+limiting the work to player-only burst tails are superseded. Bot navigation and
+aiming policy sources remain the copying reference, not a place to simplify
+behaviour to make the player port pass.
+
+The previous sections below are historical reports of older code and packages.
+They do not define the current implementation contract. In particular, none of
+the following older claims is a requirement or a completion proof:
+
+- A diagnostic-only or deliberately minimal player controller is sufficient.
+- The former handwritten player modules fully copied Bot behaviour.
+- Every physical machinegun shell must re-enter tactical fire admission.
+- A blocked tail may wait five seconds and then be cancelled.
+- Stop, mission cancellation, target loss or a projectile rejection may cancel
+  the remaining shells of an already committed trigger.
+- Passing the old tests proves full migration or native Windows acceptance.
+
+## Trigger model and source boundary
+
+The implementation keeps the mounted #1513 descriptor's `gun.burst` (physical
+shells and interval within one trigger) separate from `gun.clip` (magazine
+capacity and the next-trigger reload). Ordinary single-shot and conventional
+autoloading guns use a one-shell trigger; machineguns may use multiple shells.
+The last partial trigger uses the available magazine and stock, not an invented
+full-group requirement. No current web vehicle statistics overwrite the mounted
+descriptor.
+
+Official and community sources were checked on 2026-11-06:
+
+- [Wargaming's Luchs tankopedia](https://worldoftanks.com/en/tankopedia/6161-G25_PzII_Luchs/)
+  distinguishes magazine capacity, shells in a container and their intervals.
+  It is current PC documentation, not a pinned 0.9.22 numerical fixture.
+- [Wargaming's July 23, 2024 console update](https://modernarmor.worldoftanks.com/en/cms/news/update-notes-july-23/)
+  explicitly distinguishes the older one-trigger/multiple-shot behaviour from
+  its new autocannon behaviour. It corroborates the distinction only; console
+  changes are not imported into this PC port.
+- The community's [PC Pz. I C record](https://wikiwiki.jp/wotanks/Pz.Kpfw.%20I%20Ausf.%20C)
+  separately lists burst size and magazine capacity and records later version
+  changes. Its newer balance values are not #1513 constants.
+- [GuidesBlitz's burst-fire description](https://guidesblitz.com/gun-types/)
+  describes one click producing an uninterrupted group. This is cross-product
+  corroboration, not exact-PC ABI evidence. The user's explicit PC gameplay
+  observation and required uninterrupted-trigger contract govern this rebuild.
+
+The old Wargaming wiki endpoints did not yield readable mechanics content in
+this environment. Current continuous-fire/overheating autocannons and their HE
+rules are deliberately not substituted for the 0.9.22 descriptor model. Exact
+client resource/ABI evidence and Windows acceptance remain distinct from public
+documentation.
+
+`TriggerClock` and the native weapon store separate scheduling from committing.
+Advancing time cannot consume a shell. A successful physical commit advances the
+next index exactly once; a failed uncommitted first edge can be aborted without
+a debit. Once committed, the group may terminate only for an explicit physical
+gun, actor, transport or battle lifecycle failure. Tactical changes cannot
+terminate it. Every emitted shell still uses current barrel/dispersion and has
+independent ammunition, launch identity, collision and damage bookkeeping.
+
+The foreground first-trigger gate is `TriggerAdmission`; manual firing does not
+run automatic penetration policy. Native input, callbacks and sender reentry
+are tested separately from high-level selection. A delayed rejection of one
+projectile retires that projectile, not its still-running physical trigger.
+
+## Complete-copy boundary and foreground adapter
+
+`player_control/copied/` is generated from complete source modules plus the
+required BattleRuntime geometry callback closure. The manifest records the
+source file, exact import/portability adaptations, and the explicit
+controlled-actor boundary. Source comparisons reverse that boundary adaptation
+and compare the original bodies; algorithms are not replaced by equivalents
+chosen by the agent. Neutral shared imports have a closed allowlist. A fresh
+process import test bans original Bot/AI/planner modules and the original
+network module's implicit behaviour imports.
+
+`FullPlayerRuntime` creates independent copied planner/loop/geometry owners.
+Other visible vehicles are observation context; only the local player is an
+actuator target. Native foreground pose, gun clock, dispersion, ammunition,
+equipment and projectile settlement are authoritative. The adapter projects
+observations and sends native input; it must not advance private shadow physics
+or publish another vehicle's Bot messages.
+
+The player's new attack policy is a separate explicit change **after** copying.
+It preserves current-ammunition ownership, immediately consumes an executable
+current candidate, separates armour proof from obstruction, and uses fresh
+all-relevant-enemy evidence for the eight-second search. Ordinary copied
+firing-position recovery keeps its own bounded failure/fallback path. HE
+penetration and real-contact fallback are separate candidates; a proved zero
+HP fallback contact is not unknown. Every evidence reuse must satisfy its pose,
+shell, identity and geometry dependencies.
+
+The two reversible copy seams select the locally controlled actor for execution
+and an identity-only public roster for the original SPG endgame count. They do
+not turn an unobserved peer into a spatial target or advance peer physics.
+Team tactics consume the existing server-admitted `bot_observation` receipts;
+an observation is not permission to simulate its sender. Traffic input freshness
+follows each peer's accepted input sequence rather than the render cadence or
+another peer's newer snapshot.
+
+Live snapshots also publish `defense` from the server's existing
+`_bot_defense_context()` producer. Contributor IDs/points and threatened circles
+come from the committed one-Hz capture state, not the foreground's newer
+instantaneous positions. Snapshot delta transport retains this complete
+read-only section. The foreground privately maps only its own human identity
+to its copied actor ID; it does not change the wire, award points, or control a
+peer. The original Bot defense algorithm is unchanged.
+
+Negative global search has its own bounded work frontier. Work is sliced and
+round-robin, and a supplemental closure pass checks a work deadline and native
+query/candidate budgets. A native call already in progress cannot be preempted
+by that Python deadline. An unfinished or invalidated pass is unknown, not an
+all-enemy penetration failure; it cannot start the eight-second clock. The
+long-range, low-velocity stress fixture requires many updates to close the
+complete negative domain. These bounds prevent unbounded work in one decision;
+they do not establish acceptable Windows frame time or search latency.
+
+## Legacy tests and replacement evidence
+
+The old reduced behaviour modules and their dependent tests are retired as one
+replacement, not retained as a hidden fallback. Public lifecycle and native
+consumer requirements are carried into the new suites. Private fields and
+thresholds belonging only to the retired implementation are not requirements
+on the copied Bot state machines.
+
+| Retired test responsibility | Replacement evidence |
+| --- | --- |
+| Reduced navigation, routes, cover, traffic, sortie and recovery | Exact source/import closure checks; unchanged original fixtures run against both namespaces; foreground native-input, peer-observation and bounded-recovery integration |
+| Reduced controller and migration glue | `test_player_controller_rebuild.py`, manual-command integration, control-completion and transport suites |
+| Per-shell tactical cancellation and hit-result-driven ammunition cycles | `test_trigger_transaction_contract.py`, physical human/Bot trigger suites, burst-liveness and rebuilt attack-policy suites |
+| Magazine selection, movement and early reload | `test_player_full_shell_settings.py` through real vehicle-setting and GunState consumers, not mocked switch/reload methods |
+| Stationary engagement, limited traverse, capture and mission priority | Full-control-arbitration, limited-traverse and native mission-ownership integration |
+| Direct/SPG aiming, current component geometry and first-trigger approval | Full-runtime and fire-admission integration, including moving/high-arc/cross-slope fixtures and ownership reentry |
+
+The retired failure-streak ammunition cycle, cancellable physical tails,
+player-specific low-health withdrawal, and human-only simplified flanker
+election are intentionally not restored. Original copied Bot laws and the
+explicitly requested new player attack policy replace them. Differential
+fixtures establish source/copy behaviour, while the foreground cases establish
+that their relevant outputs actually reach native consumers; neither test
+category substitutes for the other.
+
+## Validation scope
+
+Source equality, source import isolation, copied/original differential fixtures,
+foreground integration, trigger transactions, native weapon tests and packaging
+are separate checks. Their results must not be merged into a claim that the
+visible #1513 client has passed gameplay acceptance. The final PR/build handoff
+records the actual frozen revision and tests. Native frame cost, exact-client
+runtime behaviour and multiplayer observation/input independence still require
+an observed Windows run; no earlier report is evidence for this new build.
+
+# Historical November 6 limited-traverse, magazine and automatic-burst follow-up
+
+**Historical implementation and test record, superseded by the rebuild above.**
+The tail-cancellation design documented in this record was incorrect and is not
+retained. Its old test totals describe that earlier tree only.
 
 The report `wot-error-report-20261106-183205-e97f70580e0d` identifies both
 the installed client and bundled launcher payload as

@@ -32,30 +32,3 @@ def ammunition_state(gun):
     return dict(state=state, empty=total == 0, available=True, total=total,
                 current=counts[current], shell_index=current, clip=clip,
                 reload_seconds=max(0., reload_seconds), can_fire=can_fire)
-
-
-class Governor(object):
-    """Player-owned uphill and progressing wreck-push equipment decisions."""
-    def __init__(self):
-        self.uphill_since = self.push = None
-
-    def wanted(self, now, speed, pitch, supported, engine_damaged, push=None):
-        if not supported or engine_damaged:
-            self.uphill_since = self.push = None
-            return False
-        if push and push.get('phase') in ('pushing', 'steering'):
-            self.uphill_since = None
-            previous = self.push
-            progress = float(push.get('progress', 0.))
-            if (previous is None or previous[0] != push['peer'] or
-                    progress >= previous[1] + .1 or now < previous[2]):
-                self.push = (push['peer'], progress, now)
-            return now - self.push[2] < 2.
-        self.push = None
-        grade = (-pitch if speed > 0. else pitch) if pitch is not None else 0.
-        if abs(speed) <= .1 or grade <= math.radians(.5):
-            self.uphill_since = None
-            return False
-        if self.uphill_since is None or now < self.uphill_since:
-            self.uphill_since = now
-        return now - self.uphill_since >= 2.

@@ -316,8 +316,9 @@ class ConsumableSettlementTests(unittest.TestCase):
 
 class PlayerAutomaticConsumableTests(unittest.TestCase):
     def test_automatic_requests_reach_canonical_effect_and_cooldown(self):
-        from gui.mods.offline_lan_0922.player_control import PlayerControl
-        from gui.mods.offline_lan_0922.battle_runtime import BattleRuntime
+        from test_player_control_completion import CanonicalConsumableCompletionTests
+        completion = CanonicalConsumableCompletionTests()
+        self.addCleanup(completion.doCleanups)
         cases = (
             ('largeRepairkit', 5, 'repairkit', True, 'engineHealth', 82),
             ('largeMedkit', 6, 'medkit', True, 'loader1', 78),
@@ -329,41 +330,27 @@ class PlayerAutomaticConsumableTests(unittest.TestCase):
             with self.subTest(name=name):
                 mounted = item(name, item_id, tags=(kind,), repairAll=all_targets,
                                reuseCount=-1, cooldownSeconds=90)
-                battle, player = battle_state([mounted])
+                unused, battle, player, entity, owner, controller, sent, restore = (
+                    completion.setup_equipment(mounted))
                 player.effective_params['critical']['activation_targets'] = [
                     {'index': 82, 'name': 'engineHealth'},
                     {'index': 78, 'name': 'loader1'}]
                 player.critical = {
-                    'devices': [{'name': 'engineHealth', 'hp': 0,
+                    'devices': [{'name': 'engineHealth', 'hp': 0, 'max_hp': 100,
                                  'state': 'destroyed'}] if kind == 'repairkit' else [],
                     'destroyed': ['engineHealth'] if kind == 'repairkit' else [],
                     'crew_ko': ['loader1'] if kind == 'medkit' else [],
                     'fire': kind == 'extinguisher'}
-                descriptor = types.SimpleNamespace(extras={
+                entity.typeDescriptor.extras = {
                     82: types.SimpleNamespace(name='engineHealth'),
-                    78: types.SimpleNamespace(name='loader1Health')})
-                entity = types.SimpleNamespace(typeDescriptor=descriptor)
-                client = lan_client.LANClient('127.0.0.1', 28782, 'Audit', player.vehicle)
-                client.ready, client.phase, client.player_id, client.round_id = True, 'battle', 1, 1
-                client.is_bot_authority = lambda: False
-                sent = []
-                def send(message):
-                    sent.append(copy.deepcopy(message))
-                    return battle.submit_equipment_intent(1, message)
-                client._send = send
-                owner = types.SimpleNamespace(
-                    client=client, _server=types.SimpleNamespace(vehicle_id=10),
-                    _records={'player:1': {'critical_state': copy.deepcopy(player.critical)}},
-                    _equipment_state=[mounted], _clock=lambda: float(battle.tick)/server.TICK_HZ,
-                    _server_entity=lambda vehicle_id: entity,
-                    _critical_extra_index=BattleRuntime._critical_extra_index,
-                    _critical_name_from_extra_index=BattleRuntime._critical_name_from_extra_index,
-                    _report_critical_presentation=mock.Mock())
-                owner._activate_equipment = lambda code: BattleRuntime._activate_equipment(owner, code)
-                owner._activate_equipment_intent = lambda code: BattleRuntime._activate_equipment_intent(owner, code)
-                controller = PlayerControl(owner, ('consumables',), notify=lambda text: None)
-                controller.record = mock.Mock()
-                controller.consumables(entity)
+                    78: types.SimpleNamespace(name='loader1Health')}
+                owner._records['player:1']['critical_state'] = copy.deepcopy(player.critical)
+                completion.poll_equipment(controller)
+                if kind in ('repairkit', 'medkit'):
+                    # Retain the copied Bot policy's first-frame observation
+                    # boundary; a simplified immediate-use wrapper is gone.
+                    self.assertFalse(sent)
+                    completion.poll_equipment(controller)
                 self.assertEqual(1, len(sent))
                 self.assertEqual((1 if all_targets or kind == 'extinguisher' else index),
                                  sent[0]['activation_code'] >> 16)
@@ -375,8 +362,9 @@ class PlayerAutomaticConsumableTests(unittest.TestCase):
                 self.assertFalse(player.critical.get('destroyed'))
                 self.assertFalse(mounted.ready(owner._clock()))
                 # Even a stale damage snapshot must not consume another use in cooldown.
+                restore()
                 battle.tick += int(3 * server.TICK_HZ)
-                controller.consumables(entity)
+                completion.poll_equipment(controller)
                 self.assertEqual(1, len(sent))
 
 

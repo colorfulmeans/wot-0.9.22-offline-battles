@@ -10028,7 +10028,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertLess(len(origins), len(aims))
         self.assertEqual({11}, set(origins))
 
-    def test_target_solution_cache_invalidates_and_burst_forces_freshness(self):
+    def test_target_solution_cache_invalidates_and_explicit_refresh_is_fresh(self):
         runtime = self.module.BotRuntime(1)
         descriptor = _combat_descriptor()
         state = {'id': 11, 'fire_seq': 0,
@@ -11888,7 +11888,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual([], runtime._pending_launches)
         self.assertNotIn(11, runtime._burst_states)
 
-    def test_active_burst_stops_without_debit_when_alignment_is_lost(self):
+    def _armed_trigger_fixture(self, loaded_clip=5):
         descriptor = _combat_descriptor(
             reload_time=4.0, clip=(5, 2.0), dispersion=0.01,
             max_ammo=20)
@@ -11898,7 +11898,9 @@ class BotRuntimeTests(unittest.TestCase):
             'turretRotation': 0.0,
         }
         runtime = self.module.BotRuntime(
-            1, friendly_lane_probe=lambda *unused: True)
+            1, friendly_lane_probe=lambda *unused: True,
+            direct_launch_origin_probe=lambda source, *unused: (
+                source['x'], source['y'] + 1.0, source['z']))
         runtime.round_id = 5
         runtime._descriptors[11] = descriptor
         state = {
@@ -11915,6 +11917,7 @@ class BotRuntimeTests(unittest.TestCase):
         solution = {'flight_time': 0.5}
         gun_state = self.module._BotGunState(descriptor)
         gun_state.elapsed = 10.0
+        gun_state.clip = loaded_clip
         ammo_state = self.module._BotAmmoState(descriptor, {}, state)
         runtime._gun_states[11] = gun_state
         runtime._ammo_states[11] = ammo_state
@@ -11925,17 +11928,314 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertTrue(runtime._fire(
             state, gun_state, 1.0, descriptor,
             ammo_state=ammo_state, launch_preview=preview))
+        return (runtime, state, gun_state, ammo_state,
+                descriptor, target, solution, initial_ammo)
+
+    def test_active_trigger_finishes_when_alignment_is_lost(self):
+        (runtime, state, gun_state, ammo_state, descriptor,
+         target, solution, initial_ammo) = self._armed_trigger_fixture()
         state['gun_aligned'] = False
-        remaining = list(ammo_state.remaining)
-        clip = gun_state.clip
-        self.assertEqual(0, runtime._advance_active_burst(
+        self.assertEqual(2, runtime._advance_active_burst(
             state, gun_state, ammo_state, 1.0, descriptor,
             target, solution, 0.2, set()))
-        self.assertEqual(remaining, ammo_state.remaining)
-        self.assertEqual(clip, gun_state.clip)
-        self.assertEqual(1, state['fire_seq'])
-        self.assertEqual(1, len(runtime._pending_launches))
+        self.assertEqual(initial_ammo - 3,
+                         ammo_state.remaining[ammo_state.loaded])
+        self.assertEqual(2, gun_state.clip)
+        self.assertEqual(3, state['fire_seq'])
+        self.assertEqual(3, len(runtime._pending_launches))
+        self.assertEqual(3, runtime._burst_states[11].next_index)
         self.assertFalse(runtime._burst_states[11].active)
+
+    def test_committed_trigger_ignores_target_and_tactical_lane_failures(self):
+        for scenario in ('dead_target', 'lost_target', 'blocked_lanes',
+                         'expired_solution', 'withdrawn_order'):
+            with self.subTest(scenario=scenario):
+                (runtime, state, gun_state, ammo_state, descriptor,
+                 target, solution, initial_ammo) = self._armed_trigger_fixture()
+                if scenario == 'dead_target':
+                    target['alive'] = False
+                elif scenario == 'lost_target':
+                    target = None
+                    solution = None
+                elif scenario == 'expired_solution':
+                    solution = {'flight_time': 0.0, 'expired': True}
+                elif scenario == 'withdrawn_order':
+                    state['fire_allowed'] = False
+                    state['combat_mode'] = 'hold'
+                    target = None
+                    solution = None
+                friendly = mock.Mock(return_value=False)
+                world = mock.Mock(return_value=False)
+                solve = mock.Mock(return_value=None)
+                runtime.friendly_lane_probe = friendly
+                runtime.firing_lane_probe = world
+                runtime._ballistic_solution = solve
+
+                self.assertEqual(2, runtime._advance_active_burst(
+                    state, gun_state, ammo_state, 1.0, descriptor,
+                    target, solution, 0.2, set()))
+
+                friendly.assert_not_called()
+                world.assert_not_called()
+                solve.assert_not_called()
+                self.assertEqual(initial_ammo - 3,
+                                 ammo_state.remaining[ammo_state.loaded])
+                self.assertEqual(2, gun_state.clip)
+                self.assertEqual(3, state['fire_seq'])
+                self.assertEqual([1, 2, 3], [
+                    launch['fire_seq'] for launch in runtime._pending_launches])
+                self.assertFalse(runtime._burst_states[11].active)
+                self.assertIsNone(runtime._burst_states[11].terminal_reason)
+
+    def test_trigger_tail_samples_current_barrel_and_freezes_each_projectile(self):
+        (runtime, state, gun_state, ammo_state, descriptor,
+         unused_target, unused_solution, unused_ammo) = self._armed_trigger_fixture()
+        first = copy.deepcopy(runtime._pending_launches[0])
+        state.update(x=4.0, z=5.0, aim_yaw=0.75, turret_yaw=0.75,
+                     gun_pitch=-0.02, gun_aligned=False)
+        self.assertEqual(1, runtime._advance_active_burst(
+            state, gun_state, ammo_state, 1.0, descriptor,
+            None, None, 0.1, set(), 0, 100000))
+        second = copy.deepcopy(runtime._pending_launches[1])
+        state.update(x=-2.0, z=8.0, aim_yaw=-0.6, turret_yaw=-0.6,
+                     gun_pitch=0.03)
+        self.assertEqual(1, runtime._advance_active_burst(
+            state, gun_state, ammo_state, 1.0, descriptor,
+            None, None, 0.1, set(), 100000, 200000))
+
+        launches = runtime._pending_launches
+        self.assertEqual(first, launches[0])
+        self.assertEqual(second, launches[1])
+        self.assertEqual([(0.0, 1.0, 0.0), (4.0, 1.0, 5.0),
+                          (-2.0, 1.0, 8.0)], [
+            launch['shot_origin'] for launch in launches])
+        self.assertEqual([0, 100000, 200000], [
+            launch['launch_time_us'] for launch in launches])
+        self.assertEqual([1, 2, 3], [launch['fire_seq'] for launch in launches])
+        self.assertEqual([1, 1, 1], [launch['burst_group_seq'] for launch in launches])
+        self.assertEqual([0, 1, 2], [launch['burst_index'] for launch in launches])
+        self.assertLess(abs(launches[1]['shot_yaw'] - 0.75), 0.1)
+        self.assertLess(abs(launches[1]['shot_pitch'] - 0.02), 0.1)
+        self.assertLess(abs(launches[2]['shot_yaw'] + 0.6), 0.1)
+        self.assertLess(abs(launches[2]['shot_pitch'] + 0.03), 0.1)
+        self.assertNotEqual(launches[1]['shot_yaw'], launches[2]['shot_yaw'])
+
+    def test_trigger_physical_failures_terminate_without_debiting_the_tail(self):
+        for scenario, reason in (
+                ('dead_actor', 'actor_destroyed'),
+                ('destroyed_gun', 'gun_unavailable'),
+                ('drowning', 'gun_unavailable'),
+                ('overturned', 'gun_unavailable'),
+                ('switching_siege', 'gun_unavailable'),
+                ('no_ammunition', 'ammunition_unavailable'),
+                ('missing_launch', 'launch_unavailable'),
+                ('failed_commit', 'native_failure')):
+            with self.subTest(scenario=scenario):
+                (runtime, state, gun_state, ammo_state, descriptor,
+                 target, solution, unused_ammo) = self._armed_trigger_fixture()
+                destroyed = set()
+                if scenario == 'dead_actor':
+                    state['alive'] = False
+                elif scenario == 'destroyed_gun':
+                    destroyed.add('gunHealth')
+                elif scenario == 'drowning':
+                    state['_drowning'] = True
+                elif scenario == 'overturned':
+                    state['_overturned'] = True
+                elif scenario == 'switching_siege':
+                    state['siege_state'] = self.module.siege_mechanics.SWITCHING_ON
+                elif scenario == 'no_ammunition':
+                    ammo_state.remaining[ammo_state.loaded] = 0
+                elif scenario == 'missing_launch':
+                    runtime._direct_launch_preview = mock.Mock(return_value=None)
+                elif scenario == 'failed_commit':
+                    runtime._commit_burst_edge = mock.Mock(return_value=False)
+                before = list(ammo_state.remaining)
+                clip = gun_state.clip
+
+                self.assertEqual(0, runtime._advance_active_burst(
+                    state, gun_state, ammo_state, 1.0, descriptor,
+                    target, solution, 0.2, destroyed))
+
+                self.assertEqual(before, ammo_state.remaining)
+                self.assertEqual(clip, gun_state.clip)
+                self.assertEqual(0, gun_state._burst_remaining)
+                self.assertEqual(1, state['fire_seq'])
+                self.assertEqual(1, len(runtime._pending_launches))
+                clock = runtime._burst_states[11]
+                self.assertFalse(clock.active)
+                self.assertEqual(reason, clock.terminal_reason)
+                self.assertEqual((1, 3, 1), (
+                    clock.group_seq, clock.count, clock.next_index))
+                self.assertEqual(0, runtime._advance_active_burst(
+                    state, gun_state, ammo_state, 1.0, descriptor,
+                    target, solution, 1.0, destroyed))
+                self.assertEqual(before, ammo_state.remaining)
+
+    def test_tactical_termination_request_cannot_cancel_committed_trigger(self):
+        (runtime, state, gun_state, ammo_state, descriptor,
+         target, solution, initial_ammo) = self._armed_trigger_fixture()
+        for reason in ('stop', 'target_destroyed', 'gun_unaligned',
+                       'friendly_blocked', 'world_blocked', 'timeout'):
+            with self.subTest(reason=reason):
+                with self.assertRaises(ValueError):
+                    runtime._terminate_active_trigger(state, reason)
+                self.assertTrue(runtime._burst_states[11].active)
+                self.assertEqual(2, gun_state._burst_remaining)
+                self.assertEqual(initial_ammo - 1,
+                                 ammo_state.remaining[ammo_state.loaded])
+        self.assertEqual(2, runtime._advance_active_burst(
+            state, gun_state, ammo_state, 1.0, descriptor,
+            target, solution, 0.2, set()))
+        self.assertEqual(initial_ammo - 3,
+                         ammo_state.remaining[ammo_state.loaded])
+
+    def test_partial_clip_trigger_fires_one_or_two_remaining_rounds(self):
+        for loaded in (1, 2):
+            with self.subTest(loaded=loaded):
+                (runtime, state, gun_state, ammo_state, descriptor,
+                 target, solution, initial_ammo) = self._armed_trigger_fixture(loaded)
+                self.assertEqual(loaded - 1, runtime._advance_active_burst(
+                    state, gun_state, ammo_state, 1.0, descriptor,
+                    target, solution, 1.0, set()))
+                self.assertEqual(initial_ammo - loaded,
+                                 ammo_state.remaining[ammo_state.loaded])
+                self.assertEqual(0, gun_state.clip)
+                self.assertEqual('full', gun_state.reload_kind)
+                self.assertEqual(loaded, state['fire_seq'])
+                self.assertEqual([loaded] * loaded, [
+                    launch['burst_count'] for launch in runtime._pending_launches])
+                self.assertEqual(list(range(loaded)), [
+                    launch['burst_index'] for launch in runtime._pending_launches])
+                self.assertFalse(runtime._burst_states[11].active)
+
+    def test_new_trigger_is_rejected_while_committed_tail_is_pending(self):
+        (runtime, state, gun_state, ammo_state, descriptor,
+         target, solution, initial_ammo) = self._armed_trigger_fixture()
+        preview = runtime._direct_launch_preview(
+            state, descriptor, ammo_state.loaded, gun_state, solution)
+
+        self.assertFalse(runtime._fire(
+            state, gun_state, 1.0, descriptor,
+            ammo_state=ammo_state, launch_preview=preview))
+
+        self.assertEqual(initial_ammo - 1,
+                         ammo_state.remaining[ammo_state.loaded])
+        self.assertEqual(4, gun_state.clip)
+        self.assertTrue(runtime._burst_states[11].active)
+        self.assertEqual(2, gun_state._burst_remaining)
+        self.assertEqual(2, runtime._advance_active_burst(
+            state, gun_state, ammo_state, 1.0, descriptor,
+            target, solution, 0.2, set()))
+        self.assertEqual(initial_ammo - 3,
+                         ammo_state.remaining[ammo_state.loaded])
+
+    def test_trigger_bad_commit_edges_do_not_debit_or_advance_any_owner(self):
+        (runtime, state, gun_state, ammo_state, descriptor,
+         target, solution, initial_ammo) = self._armed_trigger_fixture()
+        clock = runtime._burst_states[11]
+        due = clock.advance(0.2)
+        preview = runtime._direct_launch_preview(
+            state, descriptor, ammo_state.loaded, gun_state,
+            None, burst_edge=due[0])
+        bad = [dict(due[1])]
+        for name, value in (
+                ('burst_group_seq', 0), ('burst_count', 4),
+                ('shell_index', 1), ('final', True)):
+            edge = dict(due[0])
+            edge[name] = value
+            bad.append(edge)
+        for edge in bad:
+            with self.subTest(edge=edge):
+                self.assertFalse(runtime._commit_burst_edge(
+                    state, gun_state, 1.0, descriptor, edge,
+                    ammo_state, launch_preview=preview))
+                self.assertEqual(initial_ammo - 1,
+                                 ammo_state.remaining[ammo_state.loaded])
+                self.assertEqual(4, gun_state.clip)
+                self.assertEqual(2, gun_state._burst_remaining)
+                self.assertEqual(1, state['fire_seq'])
+                self.assertEqual(1, clock.next_index)
+                self.assertEqual(1, len(runtime._pending_launches))
+
+        self.assertEqual(2, runtime._advance_active_burst(
+            state, gun_state, ammo_state, 1.0, descriptor,
+            target, solution, 0.2, set(), due_edges=due))
+        self.assertEqual(initial_ammo - 3,
+                         ammo_state.remaining[ammo_state.loaded])
+        self.assertFalse(runtime._commit_burst_edge(
+            state, gun_state, 1.0, descriptor, due[-1],
+            ammo_state, launch_preview=preview))
+        self.assertEqual(initial_ammo - 3,
+                         ammo_state.remaining[ammo_state.loaded])
+        self.assertEqual(2, gun_state.clip)
+        self.assertEqual(3, len(runtime._pending_launches))
+
+    def test_rejected_first_trigger_edge_preserves_reload_and_ammunition(self):
+        descriptor = _combat_descriptor(
+            reload_time=4.0, clip=(5, 2.0), max_ammo=20)
+        descriptor.gun.burst = (3, 0.1)
+        runtime = self.module.BotRuntime(1)
+        state = {'id': 11, 'fire_seq': 0, 'gun_aligned': True,
+                 'alive': True, 'x': 0.0, 'y': 0.0, 'z': 0.0,
+                 'aim_yaw': 0.0, 'gun_pitch': 0.0,
+                 'critical': {}, 'profile': {}}
+        gun = self.module._BotGunState(descriptor)
+        gun.elapsed = 10.0
+        ammo = self.module._BotAmmoState(descriptor, {}, state)
+        before = (gun.elapsed, gun.clip, gun.reload_kind,
+                  gun.reload_duration, list(ammo.remaining), ammo.reload_pending)
+
+        self.assertFalse(runtime._fire(
+            state, gun, 1.0, descriptor, ammo_state=ammo,
+            launch_preview={'fire_seq': 999}))
+
+        self.assertEqual(before, (
+            gun.elapsed, gun.clip, gun.reload_kind, gun.reload_duration,
+            list(ammo.remaining), ammo.reload_pending))
+        self.assertEqual(0, gun._burst_remaining)
+        self.assertEqual(0, state['fire_seq'])
+        self.assertEqual([], runtime._pending_launches)
+        clock = runtime._burst_states[11]
+        self.assertFalse(clock.active)
+        self.assertEqual((0, 0, 0), (
+            clock.group_seq, clock.count, clock.next_index))
+
+    def test_following_trigger_requires_new_alignment_and_uses_remaining_clip(self):
+        (runtime, state, gun_state, ammo_state, descriptor,
+         target, solution, initial_ammo) = self._armed_trigger_fixture()
+        self.assertEqual(2, runtime._advance_active_burst(
+            state, gun_state, ammo_state, 1.0, descriptor,
+            target, solution, 0.2, set()))
+        gun_state.tick(gun_state.remaining() + 0.001)
+        reload_kind = gun_state.complete_reload()
+        self.assertEqual('intra', reload_kind)
+        ammo_state.stage(ammo_state.next, reload_kind is not None,
+                         full_reload=reload_kind == 'full')
+        state['gun_aligned'] = False
+        preview = runtime._direct_launch_preview(
+            state, descriptor, ammo_state.loaded, gun_state, solution)
+        self.assertFalse(runtime._fire(
+            state, gun_state, 1.0, descriptor,
+            ammo_state=ammo_state, launch_preview=preview))
+        self.assertEqual(initial_ammo - 3,
+                         ammo_state.remaining[ammo_state.loaded])
+        self.assertEqual(3, state['fire_seq'])
+        state['gun_aligned'] = True
+        self.assertTrue(runtime._fire(
+            state, gun_state, 1.0, descriptor,
+            ammo_state=ammo_state, launch_preview=preview))
+        self.assertEqual(1, runtime._advance_active_burst(
+            state, gun_state, ammo_state, 1.0, descriptor,
+            None, None, 0.1, set()))
+        self.assertEqual(initial_ammo - 5,
+                         ammo_state.remaining[ammo_state.loaded])
+        self.assertEqual([1, 1, 1, 4, 4], [
+            launch['burst_group_seq'] for launch in runtime._pending_launches])
+        self.assertEqual([3, 3, 3, 2, 2], [
+            launch['burst_count'] for launch in runtime._pending_launches])
+        self.assertEqual('full', gun_state.reload_kind)
+        self.assertEqual(0, gun_state.clip)
 
     def test_fire_alignment_record_is_bound_to_one_physical_launch(self):
         descriptor = _combat_descriptor(

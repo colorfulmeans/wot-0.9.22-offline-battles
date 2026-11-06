@@ -84,7 +84,7 @@ def check_long_session_timestamps(source, native, backend):
     runtime._gun_states = {actor_id: source._BotGunState(params)}
     runtime._ammo_states = {actor_id: source._BotAmmoState(params, dict(shells=(
         dict(index=0, kind='armor_piercing', penetration=100),)))}
-    runtime._burst_states = {actor_id: source.burst_mechanics.BurstClock()}
+    runtime._burst_states = {actor_id: source.burst_mechanics.TriggerClock()}
     runtime._pending_launches = []
     handle = backend.sim_open(2, 1)
     owner = native.NativeWeapons(runtime, backend, handle).install_all()
@@ -142,6 +142,123 @@ def check_long_session_timestamps(source, native, backend):
     return checks[0], len(timestamps), len(rejected)
 
 
+def check_trigger_lifecycle_gate(source, native, backend):
+    """Check the real facade/bridge without using tactical legacy tests."""
+    runtime = types.ModuleType('physical_trigger_contract_fixture')
+    actor_id = 71
+    params = descriptor(6, (3, 0.1))
+    runtime.states = {actor_id: dict(fire_seq=0)}
+    runtime._gun_states = {actor_id: source._BotGunState(params)}
+    runtime._ammo_states = {actor_id: source._BotAmmoState(params, dict(shells=(
+        dict(index=0, kind='armor_piercing', penetration=100),)))}
+    runtime._burst_states = {actor_id: source.burst_mechanics.TriggerClock()}
+    runtime._pending_launches = []
+    handle = backend.sim_open(3, 1)
+    owner = native.NativeWeapons(runtime, backend, handle).install_all()
+    checks = [0]
+
+    def check(expected, actual, label):
+        equal(expected, actual, label)
+        checks[0] += 1
+
+    def snapshot():
+        return backend.sim_weapon_snapshot(handle, 1, actor_id)
+
+    try:
+        check(source.burst_mechanics.TERMINAL_REASONS,
+              frozenset(native.TERMINATION_CODES), 'exact physical termination vocabulary')
+        owner.prepare(actor_id, 2.0, 1.0, 0)
+        ready = snapshot()
+        first = owner.begin(actor_id, 3, 0.1, 1.0)[0]
+        trigger = runtime._burst_states[actor_id]
+        check(0, trigger.next_index, 'native scheduling is not physical commit')
+        check(True, trigger.active, 'uncommitted trigger remains active')
+        check((first,), trigger.advance(0.0), 'uncommitted edge can be exposed again')
+        check(True, owner.abort(actor_id), 'precommit abort is permitted')
+        check(ready, snapshot(), 'precommit abort preserves stock and reload readiness')
+        for reason in sorted(native.TERMINATION_CODES):
+            check(1, len(owner.begin(actor_id, 3, 0.1, 1.0)),
+                  'precommit physical termination fixture arms')
+            check(True, owner.terminate(actor_id, reason),
+                  'explicit precommit physical failure is permitted')
+            check(ready, snapshot(),
+                  'precommit physical failure preserves all weapon readiness and stock')
+            check(0, len(owner.pending()),
+                  'unlaunched terminated trigger creates no projectile')
+        first = owner.begin(actor_id, 3, 0.1, 1.0)[0]
+        armed = snapshot()
+        check((), owner.begin(actor_id, 3, 0.1, 1.0), 'duplicate arm is rejected')
+        check(armed, snapshot(), 'duplicate arm does not withdraw current trigger')
+        changed = dict(first, final=True)
+        check(False, owner.commit(actor_id, launch(actor_id, 1, changed), changed, 1.0),
+              'wrong final marker rejected before all physical debits')
+        check(armed, snapshot(), 'invalid physical edge preserves whole native state')
+        check(True, owner.commit(actor_id, launch(actor_id, 1, first), first, 1.0,
+                                 runtime.states[actor_id]), 'first physical trigger commit')
+        committed = snapshot()
+        check(False, owner.abort(actor_id), 'committed trigger cannot be aborted')
+        for reason in ('stop', 'target_lost', 'friendly', 'unaligned', None):
+            for terminate in (lambda value: owner.terminate(actor_id, value),
+                              trigger.terminate,
+                              runtime._gun_states[actor_id].terminate_burst):
+                try:
+                    terminate(reason)
+                except ValueError:
+                    checks[0] += 1
+                else:
+                    raise AssertionError('tactical reason withdrew a physical trigger')
+                check(committed, snapshot(), 'rejected tactical reason preserves physical execution')
+        for opcode in (9, 17, 21):
+            for values in ((), (0,), (10,), (-1,)):
+                check(None, backend.sim_weapon_command(handle, 1, actor_id, opcode, values),
+                      'native bridge requires a known physical reason')
+                check(committed, snapshot(), 'invalid native reason is mutation-free')
+        edges = owner.after_motion(actor_id, 0.25, 0.0, 0.0, 0.0, 1.0, 1.0)
+        check([1, 2], [edge['burst_index'] for edge in edges], 'slow callback exposes all tail rounds')
+        check(1, trigger.next_index, 'due tail rounds remain uncommitted')
+        try:
+            trigger.publish({})
+        except ValueError:
+            checks[0] += 1
+        else:
+            raise AssertionError('undrained due edges were published as wire state')
+        for edge in edges:
+            check(True, owner.commit(actor_id, launch(actor_id, edge['shot_seq'], edge),
+                                     edge, 1.0, runtime.states[actor_id]),
+                  'all due physical edges commit without intermediate wire publication')
+        check(False, trigger.active, 'last physical shell ends the trigger')
+        check(3, trigger.next_index, 'all physical shells have committed')
+        check(3, runtime.states[actor_id]['burst_next_index'], 'drained batch publishes complete frontier')
+        check(3, len(owner.pending()), 'each physical shell owns an immutable launch')
+        for record in owner.pending():
+            check(True, owner.ack(actor_id, record['fire_seq']), 'physical contract outbox ack')
+        owner.prepare(actor_id, 2.0, 1.0, 0)
+        first = owner.begin(actor_id, 3, 0.1, 1.0)[0]
+        check(True, owner.commit(actor_id, launch(actor_id, first['shot_seq'], first), first, 1.0),
+              'second physical trigger starts')
+        check(True, owner.terminate(actor_id, 'actor_destroyed'), 'real actor destruction may stop execution')
+        check(1, trigger.next_index, 'physical termination preserves committed count')
+        check(1, len(owner.pending()), 'physical termination preserves accepted projectile')
+        check('actor_destroyed', trigger.terminal_reason, 'physical termination is reason coded')
+        gun = runtime._gun_states[actor_id]
+        reload_before = (gun.elapsed, gun.reload_duration, gun.clip,
+                         list(runtime._ammo_states[actor_id].remaining))
+        gun._burst_remaining = trigger.count - trigger.next_index
+        checkpoint = {}
+        trigger.publish(checkpoint)
+        check(True, trigger.restore(checkpoint, first['shot_seq']),
+              'terminated trigger checkpoint is valid history')
+        check(0, gun._burst_remaining, 'terminated restore cannot resurrect or jam a tail')
+        check(reload_before, (gun.elapsed, gun.reload_duration, gun.clip,
+                             list(runtime._ammo_states[actor_id].remaining)),
+              'terminated restore preserves real reload and inventory')
+        check(True, owner.ack(actor_id, first['shot_seq']), 'terminated trigger launch ack')
+    finally:
+        owner.detach()
+        backend.sim_close(handle)
+    return checks[0]
+
+
 def main():
     extension = os.path.abspath(sys.argv[1])
     source_path = (sys.argv[2] if len(sys.argv) > 2 else os.path.join(
@@ -171,7 +288,7 @@ def main():
             dict(index=0, kind='armor_piercing', penetration=100),
             dict(index=1, kind='armor_piercing', penetration=150),
             dict(index=2, kind='high_explosive', penetration=20))))
-        clock = source.burst_mechanics.BurstClock()
+        clock = source.burst_mechanics.TriggerClock()
         gun.tick(0.123)
         gun.tick_dispersion(0.1, 2.0, 0.3, 0.1)
         reference[actor_id] = (copy.deepcopy(gun), copy.deepcopy(ammo), copy.deepcopy(clock))
@@ -229,17 +346,20 @@ def main():
                     equal(edges, owner.begin(actor_id, amount, gun.burst_interval, factor), 'native trigger')
             for edge in edges:
                 if frame % 19 == 8 and edge['burst_index'] > 0:
-                    launched = min(max(0, fire_seq[actor_id] - burst.group_seq + 1), burst.next_index)
-                    burst.cancel(launched)
-                    gun.cancel_burst()
-                    owner.cancel(actor_id)
+                    # A synthetic physical gun failure exercises the explicit
+                    # lifecycle gate; target/friendly/Stop are never reasons.
+                    burst.terminate('gun_unavailable')
+                    gun.terminate_burst('gun_unavailable')
+                    owner.terminate(actor_id, 'gun_unavailable')
                     break
+                equal(True, burst.accepts(edge), 'reference due physical edge')
                 equal(True, gun.fire_burst_round(edge['final'], factor), 'reference clip debit')
                 equal(True, ammo.consume_loaded(edge['burst_index'] > 0), 'reference ammo debit')
                 if edge['final'] and ammo.loaded_shell_requires_full_reload():
                     gun.require_full_reload()
                 fire_seq[actor_id] = edge['shot_seq']
                 gun.commit_shot_bloom(values[3], edge['final'])
+                equal(True, burst.commit(edge), 'reference committed trigger frontier')
                 record = launch(actor_id, edge['shot_seq'], edge, actor_id == 1)
                 if actor_id == 2 and frame % 5 == 0:
                     record['class_tag'] = 'unknown'
@@ -331,8 +451,13 @@ def main():
     # Exact restore pairs, strict-ready boundary and mode descriptor adoption.
     gun, ammo, burst = reference[3]
     native_gun = runtime._gun_states[3]
-    burst.cancel(0)
-    runtime._burst_states[3].cancel(0)
+    # This is a new checkpoint fixture, not a tactical rollback of shots.
+    burst.terminate('round_changed')
+    runtime._burst_states[3].terminate('round_changed')
+    reference[3] = (gun, ammo, source.burst_mechanics.TriggerClock())
+    burst = reference[3][2]
+    runtime._burst_states[3]._actor.command(18, (
+        tuple(getattr(burst, name) for name in native.BURST_FIELDS), 7))
     restored_duration = gun.reload_full * 0.8
     args = (7, 1.2, restored_duration * 0.4, restored_duration,
             0.8, 0, gun.clip_size)
@@ -411,18 +536,26 @@ def main():
     timestamp_checks, timestamp_launches, timestamp_rejections = check_long_session_timestamps(
         source, native, backend)
     checks[0] += timestamp_checks
+    trigger_checks = check_trigger_lifecycle_gate(source, native, backend)
+    checks[0] += trigger_checks
     print(json.dumps(dict(result='pass', strict_checks=checks[0], physical_launches=count_launches,
                           remaining_pending=len(before), python=sys.version.split()[0],
+                          physical_trigger_contract_checks=trigger_checks,
                           long_session_launches=timestamp_launches,
                           rejected_timestamp_payloads=timestamp_rejections,
-                          coverage=['gun', 'ammo', 'burst', 'fused_aim', 'float32_curves',
+                          coverage=['gun', 'ammo', 'committed_trigger', 'fused_aim', 'float32_curves',
                                     'ballistics', 'scatter', 'immutable_launch_fifo',
                                     'descriptor_adoption', 'strict_ready', 'unquantized_absolute_limits',
                                     'detach', 'same_round_migration', 'closed_lifetime',
                                     'atomic_install_failure', 'unknown_class_tag',
                                     'long_session_launch_timestamps', 'exact_double_timestamp_boundary',
                                     'invalid_timestamp_bridge_rejection', 'tenth_second_custom_guns',
-                                    'pending_reload_retarget', 'unstarted_magazine_retarget'])))
+                                    'pending_reload_retarget', 'unstarted_magazine_retarget',
+                                    'physical_reason_termination', 'nonconsuming_due_edges',
+                                    'atomic_precommit_abort', 'precommit_physical_termination',
+                                    'tactical_cancellation_rejected',
+                                    'drained_trigger_snapshot_boundary',
+                                    'terminated_trigger_restore'])))
 
 
 if __name__ == '__main__':

@@ -81,6 +81,16 @@ jobs:
           python-version: "3.11"
       - name: Install pinned test dependencies
         run: python -m pip install Pillow==12.3.0 numpy==2.3.5 moderngl==5.12.0 glcontext==3.0.0
+      - name: Verify the complete independent player behavior copy
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python tools/sync_player_behavior_copy.py --check
+      - name: Run unchanged full behavior fixtures against source and player copy
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: >-
+          python tools/check_player_behavior_parity.py --jobs 2
+          --output-dir build/bot-test-results/player-behavior-parity
       - name: Check traffic, withdrawal and slope aiming independently
         env:
           PYTHONDONTWRITEBYTECODE: "1"
@@ -331,6 +341,10 @@ jobs:
               /tmp/offline_math_batch_native.so
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_simulation_weapons.py \
               /tmp/offline_math_batch_native.so /src/src/res/scripts/client
+            g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror \
+              -I native tools/check_native_trigger.cpp \
+              native/offline_simulation_weapons.cpp -o /tmp/wot-native-trigger-check
+            /tmp/wot-native-trigger-check
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_destructibles.py \
               /tmp/offline_math_batch_native.so
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_box_geometry.py \

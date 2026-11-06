@@ -8,7 +8,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src/res/scripts/client'))
 from gui.mods.offline_lan_0922 import bot_tactics as config, bot_tactics_runtime
 from gui.mods.offline_lan_0922.ai import maps
-from gui.mods.offline_lan_0922.player_control.navigation import authored_routes, route_candidates
+from gui.mods.offline_lan_0922.player_control.copied import (
+    bot_tactics as player_config, bot_tactics_runtime as player_routes)
 
 
 class PackagedDefaultRoutesTests(unittest.TestCase):
@@ -29,16 +30,19 @@ class PackagedDefaultRoutesTests(unittest.TestCase):
                 self.assertEqual(shared, static)
                 bot, outcomes = bot_tactics_runtime.default_routes(empty, name, graph)
                 self.assertEqual({'baked_route_connected'}, set(outcomes.values()))
-                player = authored_routes(empty, name, graph)
+                player, player_outcomes = player_routes.default_routes(
+                    player_config.effective_round(player_config.empty(), name), name, graph)
+                self.assertEqual(outcomes, player_outcomes)
+                self.assertEqual(bot, player)
+                self.assertIsNot(bot, player)
                 for row in settings['default_routes']:
                     team, route_id = row['team'], config.default_route_id(row)
                     self.assertEqual([p[:3] for p in row['points']],
                                      next(r['waypoints'] for r in bot[str(team)] if r['id'] == route_id))
-                    tag = row.get('class_tag', 'all')
-                    if tag != 'all':
-                        actual = route_candidates(player, team, tag)
-                        self.assertEqual(row['points'], next(r['waypoints'] for r in actual
-                                                             if r['id'] == route_id))
+                    player_row = next(r for r in player[str(team)] if r['id'] == route_id)
+                    self.assertEqual([p[:3] for p in row['points']], player_row['waypoints'])
+                    self.assertIsNot(next(r for r in bot[str(team)] if r['id'] == route_id),
+                                     player_row)
 
     def test_sparse_profile_and_failed_class_edit_use_packaged_default(self):
         name = '100_thepit'
@@ -56,6 +60,10 @@ class PackagedDefaultRoutesTests(unittest.TestCase):
             dict(profile, name='Default'), name)['maps'][name])
         self.assertEqual(30, len(round_profile['maps'][name]['default_routes']))
         catalog, status = bot_tactics_runtime.default_routes(round_profile, name, graph)
+        player, player_status = player_routes.default_routes(
+            player_config.effective_round(profile, name), name, graph)
+        self.assertEqual(catalog, player)
+        self.assertEqual(status, player_status)
         identity = config.default_route_id(wanted)
         self.assertEqual('built_in_default_fallback', status['2:' + identity])
         actual = next(r for r in catalog['2'] if r['id'] == identity)
@@ -76,6 +84,10 @@ class PackagedDefaultRoutesTests(unittest.TestCase):
         profile['maps'][name] = dict(baseline, default_routes=[edit])
         catalog, status = bot_tactics_runtime.default_routes(
             config.effective_round(profile, name), name, graph)
+        player, player_status = player_routes.default_routes(
+            player_config.effective_round(profile, name), name, graph)
+        self.assertEqual(catalog, player)
+        self.assertEqual(status, player_status)
         self.assertEqual('built_in_default_fallback', status['2:' + common['id']])
         for row in baseline['default_routes']:
             if row['team'] == 2 and row['id'] == common['id']:

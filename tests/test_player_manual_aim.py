@@ -10,7 +10,7 @@ import unittest
 from unittest import mock
 
 import test_player_control_completion as completion
-from test_player_weapon_migration import aiming_scene, descriptor
+from player_native_fixtures import aiming_scene, descriptor
 
 from gui.mods.offline_lan_0922 import shot_geometry
 from gui.mods.offline_lan_0922.player_control.manual_aim import (

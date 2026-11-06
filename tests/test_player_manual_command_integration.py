@@ -114,8 +114,7 @@ class ExplicitChannelIntegrationTests(ManualAimHarness, unittest.TestCase):
         def attempt():
             contexts.append(copy.copy(self.control.trigger_context))
             return False
-        with mock.patch('gui.mods.offline_lan_0922.player_control.weapon.Weapon.trigger',
-                        side_effect=attempt):
+        with mock.patch.object(self.control, '_native_trigger', side_effect=attempt):
             row = self.submit('fire', {}, identity='shot')
         self.assertEqual('failed', row['status'])
         self.assertEqual(42, contexts[0]['target'])
@@ -126,7 +125,7 @@ class ExplicitChannelIntegrationTests(ManualAimHarness, unittest.TestCase):
     def test_new_fire_does_not_trust_historical_aim_completion(self):
         self.complete('aim_target')
         self.target.position = (-20., 0., 100.)
-        with mock.patch('gui.mods.offline_lan_0922.player_control.weapon.Weapon.trigger') as trigger:
+        with mock.patch.object(self.control, '_native_trigger') as trigger:
             row = self.submit('fire', {}, identity='shot')
         self.assertEqual(('rejected', 'aim_not_aligned'), (row['status'], row['reason']))
         trigger.assert_not_called()
@@ -244,7 +243,7 @@ class InputSequenceReturnTests(unittest.TestCase):
 
 
 class NativeFireAuthorizationTests(unittest.TestCase):
-    """Real Weapon, shot freezing, LAN launch and ammunition commit paths."""
+    """Real Avatar entry, shot freezing, LAN launch and ammunition commits."""
     def setUp(self):
         import os
         import math
@@ -454,32 +453,42 @@ class NativeFireAuthorizationTests(unittest.TestCase):
         self.assertEqual(1, len(self.launches()))
         self.assertEqual([19, 10], self.gun.ammo)
 
-    def test_real_script_burst_keeps_authorization_until_its_final_native_round(self):
+    def test_real_script_trigger_authorizes_once_then_commits_every_native_round(self):
         self.burst()
         row = self.submit()
         self.assertEqual('accepted', row['status'])
-        for now in (30.11, 30.22):
-            self.now[0] = now
-            self.assertTrue(self.battle._advance_local_player_burst())
+        with mock.patch.object(self.control, 'authorize_trigger',
+                side_effect=AssertionError('committed tail has no tactical gate')):
+            for now in (30.11, 30.22):
+                self.now[0] = now
+                self.assertTrue(self.battle._advance_local_player_burst())
         self.assertEqual(3, len(self.launches()))
         self.assertEqual([17, 10], self.gun.ammo)
         self.assertEqual('completed', self.control.gateway.requests['fire']['receipt']['status'])
 
-    def test_stop_before_later_burst_round_preserves_the_already_committed_round(self):
+    def test_stop_before_later_trigger_round_preserves_the_complete_committed_group(self):
         self.burst()
         self.assertEqual('accepted', self.submit()['status'])
         self.assertEqual([19, 10], self.gun.ammo)
         self.battle._ammo_signature = None
         self.hud(lambda: self.control.stop('tail_stop'))
         self.now[0] = 30.11
-        self.assertFalse(self.battle._advance_local_player_burst())
-        self.assertEqual(1, len(self.launches()))
-        self.assertEqual([19, 10], self.gun.ammo)
-        self.assertEqual('cancelled', self.control.gateway.requests['fire']['receipt']['status'])
+        self.assertTrue(self.battle._advance_local_player_burst())
+        self.assertEqual(2, len(self.launches()))
+        self.assertEqual([18, 10], self.gun.ammo)
+        self.assertEqual('accepted', self.control.gateway.requests['fire']['receipt']['status'])
+        self.now[0] = 30.22
+        self.assertTrue(self.battle._advance_local_player_burst())
+        self.assertEqual(3, len(self.launches()))
+        self.assertEqual([17, 10], self.gun.ammo)
+        receipt = self.control.gateway.requests['fire']['receipt']
+        self.assertEqual('completed', receipt['status'])
+        self.assertTrue(receipt['result']['controller_detached'])
+        self.assertEqual('tail_stop', receipt['result']['stop_requested'])
         self.assertIsNone(self.battle._local_player_burst)
         self.assertIsNone(self.control.owned_burst)
 
-    def test_stop_after_wire_acceptance_keeps_committed_round_but_never_reclaims_tail(self):
+    def test_stop_inside_wire_acceptance_keeps_whole_trigger_without_reenabling_control(self):
         self.burst()
         original = self.client.send_projectile_launch
 
@@ -490,22 +499,66 @@ class NativeFireAuthorizationTests(unittest.TestCase):
 
         self.client.send_projectile_launch = accepted
         row = self.submit()
-        self.assertEqual(('cancelled', 'post_send_stop'), (row['status'], row['reason']))
+        self.assertEqual('accepted', row['status'])
         self.assertEqual(1, len(self.launches()))
         self.assertEqual([19, 10], self.gun.ammo)
+        self.assertIsNotNone(self.battle._local_player_burst)
+        self.assertFalse(self.control.active)
+        for now in (30.11, 30.22):
+            self.now[0] = now
+            self.assertTrue(self.battle._advance_local_player_burst())
+        self.assertEqual(3, len(self.launches()))
+        self.assertEqual([17, 10], self.gun.ammo)
+        receipt = self.control.gateway.requests['fire']['receipt']
+        self.assertEqual('completed', receipt['status'])
+        self.assertTrue(receipt['result']['controller_detached'])
+        self.assertEqual('post_send_stop', receipt['result']['stop_requested'])
         self.assertIsNone(self.battle._local_player_burst)
         self.assertIsNone(self.control.owned_burst)
-        self.assertEqual(1, len(self.control.shot_receipts.snapshot()))
+        self.assertEqual(3, len(self.control.shot_receipts.snapshot()))
 
-    def test_stop_in_postcommit_native_hud_neither_rolls_back_nor_restarts_tail(self):
+    def test_stop_in_postcommit_native_hud_preserves_all_remaining_physical_shells(self):
         self.burst()
         self.hud(lambda: self.control.stop('postcommit_stop'), after_commit=True)
         row = self.submit()
-        self.assertEqual(('cancelled', 'postcommit_stop'), (row['status'], row['reason']))
+        self.assertEqual('accepted', row['status'])
         self.assertEqual(1, len(self.launches()))
         self.assertEqual([19, 10], self.gun.ammo)
+        self.assertIsNotNone(self.battle._local_player_burst)
+        for now in (30.11, 30.22):
+            self.now[0] = now
+            self.assertTrue(self.battle._advance_local_player_burst())
+        self.assertEqual(3, len(self.launches()))
+        self.assertEqual([17, 10], self.gun.ammo)
+        receipt = self.control.gateway.requests['fire']['receipt']
+        self.assertEqual('completed', receipt['status'])
+        self.assertTrue(receipt['result']['controller_detached'])
         self.assertIsNone(self.battle._local_player_burst)
         self.assertIsNone(self.control.owned_burst)
+
+    def test_command_timeout_keeps_committed_trigger_and_late_tail_receipt_lineage(self):
+        self.burst()
+        row = self.submit(timeout=.1)
+        self.assertEqual('accepted', row['status'])
+        burst = self.battle._local_player_burst
+        self.assertEqual(1, burst['committed'])
+        self.now[0] = 30.11
+        self.control.gateway.tick(self.now[0])
+        row = self.control.gateway.requests['fire']['receipt']
+        self.assertEqual(('failed', 'command_timeout'), (row['status'], row['reason']))
+        self.assertIs(burst, self.battle._local_player_burst)
+        self.assertTrue(burst['player_control']['controller_detached'])
+        for now in (30.11, 30.22):
+            self.now[0] = now
+            self.assertTrue(self.battle._advance_local_player_burst())
+        self.assertIsNone(self.battle._local_player_burst)
+        self.assertEqual([17, 10], self.gun.ammo)
+        self.assertEqual(3, len(self.launches()))
+        self.assertEqual('failed', self.control.gateway.requests['fire']['receipt']['status'])
+        shots = [item for item in self.rows if item.get('type') == 'shot' and
+                 item.get('status') == 'committed']
+        self.assertEqual(3, len(shots))
+        self.assertTrue(all(item['command_id'] == 'fire' for item in shots))
 
     def test_ordinary_manual_native_fire_with_no_controller_token_is_unchanged(self):
         self.assertFalse(self.control.manual_aim.held)
@@ -514,6 +567,34 @@ class NativeFireAuthorizationTests(unittest.TestCase):
         self.assertEqual([19, 10], self.gun.ammo)
         self.assertEqual(0, self.control.automatic_commits)
         self.assertFalse(self.control.gateway.requests)
+
+    def test_owned_trigger_reaches_real_native_mailbox_while_auto_fire_owns_input(self):
+        self.control.features.add('fire')
+        self.control.active = True
+        self.battle._avatar.shoot = lambda: self.battle._sender.send_avatar_input(
+            self.entity.id, 'shoot', {})
+        # Unowned input is still suppressed; only the current trigger call
+        # may cross the native Avatar mailbox while automatic fire owns it.
+        self.assertFalse(self.battle._avatar.shoot())
+        self.assertEqual([20, 10], self.gun.ammo)
+        row = self.submit()
+        self.assertEqual('completed', row['status'])
+        self.assertEqual(1, len(self.launches()))
+        self.assertEqual([19, 10], self.gun.ammo)
+        self.assertFalse(self.control.native_triggering)
+        self.assertIsNone(self.control.trigger_context)
+
+    def test_native_entry_exception_clears_mailbox_permission_without_a_fake_commit(self):
+        self.control.features.add('fire')
+        self.control.active = True
+        self.battle._avatar.shoot = mock.Mock(side_effect=RuntimeError('native_entry_failed'))
+        with self.assertRaisesRegex(RuntimeError, 'native_entry_failed'):
+            self.submit()
+        self.assertFalse(self.control.native_triggering)
+        self.assertIsNone(self.control.trigger_context)
+        self.assertFalse(self.launches())
+        self.assertEqual([20, 10], self.gun.ammo)
+        self.assertEqual('failed', self.control.gateway.requests['fire']['receipt']['status'])
 
     def test_source_change_in_last_native_entity_query_is_not_hidden_by_fresh_aim_gate(self):
         self.hold()

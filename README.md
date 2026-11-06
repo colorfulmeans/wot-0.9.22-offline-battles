@@ -36,9 +36,10 @@ parking control. Completion requires supported full-body rest (including turn,
 vertical and lateral motion) for half a second and successful owned-resource
 cleanup; zero forward speed alone is insufficient. Halt and completion/timeout
 of a timed drive preserve independent explicit aim and setting observations.
-**Release to manual / Stop** clears all channels owned by this controller;
-manual driving and a pre-existing manual burst retain their owners. Admitted
-projectiles still settle. Closing the panel or disabling its master switch
+**Release to manual / Stop** releases the controller's movement, aim and future
+trigger decisions. Once the first physical shell has committed, the complete
+descriptor-defined trigger continues, whether initiated manually or by automatic
+control. Already launched projectiles still settle. Closing the panel or disabling its master switch
 requests release. Battle exit restores the original native input binding.
 
 Explicit missions take priority over automatic front/base retasking. Return
@@ -61,33 +62,39 @@ user replaces or releases them.
 ### Independent foreground behaviour
 
 Player automation runs on **each participant's own visible client**, including
-LAN joiners. The visible lifecycle creates no `BotRuntime` or Bot artillery
-controller. It does not construct a Bot actor, call a Bot navigator or share
-Bot targeting, traffic reservations, ammunition policy or recovery state.
-The room worker is still required for Bots and world authority. Native CPU
-pathfinding jobs, collision/physics primitives and immutable map/vehicle data
-are shared services, not a hidden game client making player decisions.
+LAN joiners. `player_control/copied/` contains a mechanical copy of the complete
+Bot behaviour dependency closure: its local decision loop, server-side planner,
+navigation, traffic, recovery, hull aiming, artillery and geometry consumers.
+`tools/sync_player_behavior_copy.py --check` verifies the copy against its
+recorded source transformations. It is not the former reduced player controller,
+and it does not call the worker's Bot behaviour objects.
+
+`FullPlayerRuntime` binds that private copy to the foreground vehicle. Its
+observations include other visible vehicles, but its controlled-actor set contains
+only the local player. Native movement, reload, dispersion, ammunition and physical
+projectiles retain their existing foreground owners; the copied decision loop
+cannot simulate those a second time or publish Bot authority. The room worker is
+still required for Bots and world authority. Immutable content and neutral
+collision, physics and networking services remain shared.
 
 | Capability | Foreground implementation |
 | --- | --- |
-| Routes and local support | Private route-catalogue projection, `PlayerPathfinder`, `PlayerTerrainGrid` and `PlayerLocalHeightLinks`; own searches, actual-floor support, shallow-water rules, failure edges and cancellation. Route choice does not call Bot matching or assume Bot slot zero. Local observed wrecks and landed turrets invalidate its own routes. |
-| Traffic and recovery | All travelling modes use local intersection/head-on rules, bounded stationary-friendly yielding, contact-normal separation and narrow-passage/rear-clearance checks. Expired/exhausted traffic and short-escape owners return control to the driver; a static encounter cannot keep renewing them. Wreck pushing includes proved steering and an own-progress deadline. |
-| Arrival | Braking uses actual stopping distance and elapsed decision time at the real destination, not every intermediate A* corner. Explicit parking, capture and authored waits retain their own protected movement ownership. |
-| Combat movement | Range hysteresis, observed support, bounded local flanking and stable stationary hull angling. Player-owned cover checks visible threats against actual muzzle/body geometry, supported peek/escape paths and exposure, rather than one fixed-height ray. Healthy-vehicle peek/return coexists with empty-magazine withdrawal; without cover, withdrawal can use an actually traversed private route anchor. |
-| Target selection | Visible close threats, base invaders and recently observed attackers can interrupt an ordinary target lock. The ordered target/ammunition engagement owner and its admitted burst retain their current target and shell stage. |
-| Fire admission | Each physical automatic round, including burst tails, checks the current source, laid muzzle, ammunition and geometry. A frozen scatter draw is proved before debit/publication; a pending query or friendly obstruction cannot silently become a successful shot or reroll that draw. |
-| Special vehicles | Independent artillery deployment/relocation, authored SPG sortie roads and ordinary-road borrowing through defense connectors. Private stalled-node/next-node/reverse/home recovery retains real authored parking and reports `sortie_recovery`; failed choices hand off to bounded capture or explicit failure. Conservative public-roster endgame checks, limited traverse and native siege/hydraulic aiming gates remain. |
-| Equipment and contact facts | Player-owned repair/crew priorities; neutral installed fitting, critical effects and physical replica readers. Contacts use public poses/ACKs and actual descriptors without asking a Bot controller to calculate player decisions or maintain local history. |
-| Local strategy | Visible pressure and observed friendly losses/support can retask an unengaged player, with a private anti-oscillation lease. Explicit missions and real capture ownership take priority; no Bot team assignment or queue is borrowed. |
+| Routes, traffic and recovery | The copied planner, route mixins and complete local loop retain their original branches, timers, progress tests, fallback paths and private state. A manifest and source comparison expose every copying adaptation. Native foreground contact observations feed the copied recovery owners. |
+| Aim and movement | Copied hull, turret, artillery, cover and firing-position laws request native input. One foreground owner arbitrates the final controls; a predicted gun angle is not a physical firing receipt. |
+| Current ammunition | New `AttackPolicy` validates the mounted shell first. The first executable penetration candidate stops travel and starts aiming without waiting for background alternatives. A still-valid current-shell penetration proof obstructed by another vehicle or the world retains its ammunition ownership. |
+| Global search | Ordinary firing-position recovery is separate from the eight-second penetration search. The latter requires complete, fresh failure evidence for all relevant enemies and points in the required ammunition domain. Blocked, mechanically unavailable, pending and unknown points are not armour failures. |
+| Background and HE | Independent bounded work compares all stocked shells, visible enemies and relevant points for the next trigger or magazine. HE penetration and fallback are separate candidates; valid zero-HP HE contact is allowed in fallback. Pose changes invalidate evidence. |
+| Trigger admission | New `TriggerAdmission` proves only a new automatic trigger's first physical launch. It freezes that launch's scatter draw through pending proof and rechecks identity and actual geometry before commit. It has no tactical burst-tail continuation or cancellation operation. |
+| Physical firing | Manual control and Bots use the same trigger contract. Every shell independently samples the actual gun pose and dispersion, consumes ammunition, receives a unique projectile identity and settles its own collision. Stop, a new blocker or target loss cannot cancel the tail of a committed trigger. |
+| Ownership | Every player has its own copied planner, navigation, targeting and recovery state. The foreground adapter reads actual vehicle and equipment state and sends ordinary native input; it never advances another actor or borrows a worker decision. |
 
-These are source and regression-tested capabilities, not a claim of completed
-Windows gameplay acceptance. Native frame cost, long-arc moving-target fire,
+Source comparison and regression tests are not Windows gameplay acceptance.
+Native frame cost, long-arc moving-target fire,
 slopes/bridges, busy narrow passages and two-machine LAN independence still need
 an observed Chinese HD #1513 client run. See `COMPATIBILITY_REVIEW.md` for the
-current test evidence and the remaining acceptance boundary. The November 6
-error report exposed an exhausted retreat that still held brake/fire control;
-its correction is a tested control handoff, not a guarantee that an actually
-blocked passage can be traversed. Real clearance and final-fire checks remain.
+current test evidence and the remaining acceptance boundary. A complete copy
+proves retained source, not a guarantee that a physically blocked passage can be
+traversed. Foreground input and lifecycle integration need their own evidence.
 
 ### Player command protocol for local tests
 
@@ -149,8 +156,9 @@ not completed or cancelled.
 
 `fire` completes when its native trigger's physical rounds have committed and
 returns their projectile IDs (including a multi-round burst); this does not
-assert a hit or damage. Cancelling a burst tail retains the already committed
-rounds. Separate `type: "shot"` receipts carry `command_id`, `projectile_id`, an
+assert a hit or damage. Stop or a command timeout cannot cancel the physical
+tail after its first commit; the fire receipt observes physical completion or
+an explicit gun/actor/battle failure. Separate `type: "shot"` receipts carry `command_id`, `projectile_id`, an
 increasing `event_seq`, local commit, flight terminal/rejection and canonical
 combat observations. `damage_total`, `hit_count` and `penetrated` are cumulative
 observed effects, not per-message values to add together. Flight termination

@@ -482,10 +482,23 @@ class GunState(object):
             self.load_started = False
         return True
 
-    def cancel_burst(self, reload_factor=1.0):
-        """End an unlaunched tail after a final physical fire gate closes."""
+    def abort_burst(self):
+        """Undo pre-launch arming without inventing a reload cycle."""
+        if self._burst_remaining != self._burst_total:
+            return False
+        changed = self._burst_remaining > 0
+        self._burst_remaining = 0
+        self._burst_total = 0
+        return changed
+
+    def terminate_burst(self, reason, reload_factor=1.0):
+        """Retire a physically impossible trigger, never a controller stop."""
+        if reason not in burst_mechanics.TERMINAL_REASONS:
+            raise ValueError('gun trigger termination requires a physical reason')
         if self._burst_remaining <= 0:
             return False
+        if self._burst_remaining == self._burst_total:
+            return self.abort_burst()
         self._burst_remaining = 0
         self._burst_total = 0
         if self.clip > 0:

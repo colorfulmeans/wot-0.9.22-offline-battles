@@ -269,37 +269,42 @@ class TestingPanelTests(unittest.TestCase):
         self.assertEqual(['stop'], [item['action'] for item in self.commands(panel)])
 
     def test_actual_client_snapshot_fields_render_ammo_mission_and_pose(self):
-        client_path = str(Path(__file__).resolve().parents[2] / 'src/res/scripts/client')
-        with mock.patch.object(sys, 'path', [client_path] + sys.path):
-            from gui.mods.offline_lan_0922.player_control import PlayerControl
-            from gui.mods.offline_lan_0922.player_control.capabilities import ammunition_state
-            from gui.mods.offline_lan_0922.player_control.missions import Mission
+        root = Path(__file__).resolve().parents[2]
+        paths = [str(root / 'src/res/scripts/client'), str(root / 'tests')]
+        with mock.patch.object(sys, 'path', paths + sys.path):
+            from test_player_limited_traverse import TraverseScene
+            scene = TraverseScene()
+            scene.setUp()
+            self.addCleanup(scene.doCleanups)
+            scene.configure(limits=None, tag='mediumTank', clip=4,
+                            burst=1, bearing=0., rate=0.)
         self.app.language = 'zh'
         panel = self.panel()
         self.launch(panel)
         panel.open_controls()
-        gun = types.SimpleNamespace(shots=[{}, {}], ammo=[0, 8], shot_index=1,
-                                    clip=2, reload_time=2.75, can_fire=lambda unused: False)
-        entity = types.SimpleNamespace(isAlive=lambda: True)
-        owner = types.SimpleNamespace(state='running', _battle_live=True, _battle_result=None,
-            _server=types.SimpleNamespace(vehicle_id=101), _server_entity=lambda unused: entity,
-            _sender=object(), _worker_mode=False, _replay_mode=False,
-            _start_message={'round_id': 'snapshot-round'}, client=types.SimpleNamespace(player_id=101),
-            local_pose=lambda: ((1.25, 0., 4.5), 1.), _local_speed=3.25)
-        control = PlayerControl(owner, ('drive', 'fire'))
-        control.ammo_state = ammunition_state(gun)
-        mission = Mission('mission-a', 'return_base', {},
-            {'now': 0., 'position': (1.25, 0., 4.5)},
-            {'point': (10., 10.), 'radius': 25., 'team': 1}, None)
-        control.navigation = types.SimpleNamespace(mission_status=mission.snapshot,
-            receipt={'status': 'mission_started', 'mission': 'mission-a'})
-        control.aim_receipt = {'target': 202, 'aligned': True, 'fire_clear': True}
+        control, owner = scene.control, scene.battle
+        gun = owner._gun_state
+        gun.ammo, gun.shot_index, gun.clip, gun.reload_time = [0, 8], 1, 2, 2.75
+        scene.position = (1.25, 0., 4.5)
+        scene.set_hull(1.)
+        owner._local_speed = 3.25
+        owner._last_snapshot = dict(round_id=owner._start_message['round_id'],
+            capture_bases={'1': [dict(id='1:0', x=10., y=0., z=10., radius=3.)],
+                           '2': [dict(id='2:0', x=0., y=0., z=40., radius=3.)]})
+        scene.observe()
+        # The real bound runtime derives its home destination from canonical
+        # base data. Its update publishes the observed gun and mission; no
+        # cached status or hand-written mission is substituted for the owner.
+        scene.runtime.set_mission('return_base', dict(command_id='mission-a'))
         def emit(record):
             with open(panel.result_path, 'a', encoding='utf8') as stream:
                 stream.write(json.dumps(record) + '\n')
             return True
         control.emit_result = emit
-        control.publish_status(1., force=True)
+        scene.tick()
+        self.assertIsNone(control.last_control_failure)
+        self.assertEqual(control._runtime_binding, control._native_binding())
+        control.publish_status(scene.now, force=True)
         panel._update_control_view()
         self.assertIn('当前弹种余弹: 8', panel.status_labels['ammo'].options['text'])
         self.assertIn('剩余装填秒数: 2.75', panel.status_labels['ammo'].options['text'])

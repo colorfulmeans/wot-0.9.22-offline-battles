@@ -1598,8 +1598,16 @@ class _BotGunState(object):
             self.reload_duration = self.reload_intra
         return True
 
-    def cancel_burst(self):
-        """Cancel only the automatic tail and enter ordinary recovery."""
+    def abort_burst(self):
+        """Release an uncommitted arm; the trigger owner checks its frontier."""
+        changed = self._burst_remaining > 0
+        self._burst_remaining = 0
+        return changed
+
+    def terminate_burst(self, reason):
+        """Finish a physically impossible trigger, not a withdrawn AI order."""
+        if reason not in burst_mechanics.TERMINAL_REASONS:
+            raise ValueError('gun termination is not a physical lifecycle reason')
         if self._burst_remaining <= 0:
             return False
         self._burst_remaining = 0
@@ -4254,16 +4262,20 @@ class BotRuntime(object):
             ammo_state.publish(state)
             burst_state = self._burst_states.get(bot_id)
             if burst_state is None:
-                burst_state = burst_mechanics.BurstClock()
+                burst_state = burst_mechanics.TriggerClock()
                 self._burst_states[bot_id] = burst_state
             if restoring_authority:
                 restored = burst_state.restore(
                     raw, state.get('fire_seq', 0))
                 if restored:
                     gun_state._burst_remaining = max(
-                        0, burst_state.count - burst_state.next_index)
+                        0, burst_state.count - burst_state.next_index
+                        ) if burst_state.active else 0
                 else:
-                    burst_state.cancel(0)
+                    burst_state.terminate('round_changed')
+                    burst_state = burst_mechanics.TriggerClock()
+                    self._burst_states[bot_id] = burst_state
+                    gun_state._burst_remaining = 0
             burst_state.publish(state)
             if authority_handoff:
                 self._apply_authority_takeover_motion(state, raw)
@@ -16390,6 +16402,9 @@ class BotRuntime(object):
                 state, gun_state, reload_factor, descriptor, edge, ammo_state,
                 launch_receipt, preview_values, fallback_direction,
                 launch_time_us)
+        trigger = self._burst_states.get(int(state['id']))
+        if trigger is None or not trigger.accepts(edge):
+            return False
         if (not ammo_state.can_fire(continuing) or
                 not gun_state.fire_burst_round(
                     final_round, reload_factor)):
@@ -16404,6 +16419,8 @@ class BotRuntime(object):
         if final_round and ammo_state.loaded_shell_requires_full_reload():
             gun_state.require_full_reload()
         state['fire_seq'] = shot_seq
+        if not trigger.commit(edge):
+            raise RuntimeError('physical bot launch lost its trigger frontier')
         state['burst_group_seq'] = group_seq
         state['burst_index'] = burst_index
         state['burst_count'] = burst_count
@@ -16480,7 +16497,7 @@ class BotRuntime(object):
             count, interval = 1, 0.0
         burst_state = self._burst_states.get(int(state['id']))
         if burst_state is None:
-            burst_state = burst_mechanics.BurstClock()
+            burst_state = burst_mechanics.TriggerClock()
             self._burst_states[int(state['id'])] = burst_state
         first_seq = int(state.get('fire_seq', 0)) + 1
         if self._native_simulation is not None:
@@ -16489,26 +16506,34 @@ class BotRuntime(object):
             if not edges:
                 return False
             edge = edges[0]
-        elif (not burst_state.start(
-                first_seq, count, interval, ammo_state.loaded) or
-                not gun_state.begin_burst(count, reload_factor)):
-            burst_state.cancel(0)
-            return False
         else:
+            if not burst_state.start(
+                    first_seq, count, interval, ammo_state.loaded):
+                # A duplicate request does not own the already armed group.
+                # In particular it must not abort an uncommitted first edge
+                # while leaving the same gun's physical group armed.
+                return False
+            if not gun_state.begin_burst(count, reload_factor):
+                burst_state.abort()
+                return False
             edge = burst_state.advance(0.0)[0]
         if not self._commit_burst_edge(
                 state, gun_state, reload_factor, descriptor, edge,
                 ammo_state, launch_receipt, launch_preview,
                 launch_time_us):
-            gun_state.cancel_burst()
-            burst_state.cancel(0)
+            if self._native_simulation is not None:
+                self._native_simulation.weapons.abort(state['id'])
+            elif burst_state.abort():
+                gun_state.abort_burst()
             return False
         burst_state.publish(state)
         return True
 
-    def _cancel_active_burst(
-            self, state, gun_state=None, ammo_state=None, burst_state=None):
-        """Cancel the unlaunched tail and begin ordinary recovery."""
+    def _terminate_active_trigger(
+            self, state, reason, gun_state=None, ammo_state=None, burst_state=None):
+        """End only an explicitly impossible physical trigger execution."""
+        if reason not in burst_mechanics.TERMINAL_REASONS:
+            raise ValueError('bot trigger termination is not a physical reason')
         bot_id = int(state.get('id', 0))
         burst_state = burst_state or self._burst_states.get(bot_id)
         gun_state = gun_state or self._gun_states.get(bot_id)
@@ -16516,14 +16541,16 @@ class BotRuntime(object):
             gun_state is not None and gun_state._burst_remaining > 0)
         if burst_state is None or (not burst_state.active and not gun_pending):
             return False
-        launched = 0
-        if burst_state.group_seq > 0:
-            launched = max(
-                0, int(state.get('fire_seq', 0)) - burst_state.group_seq + 1)
-        launched = min(launched, burst_state.next_index)
-        burst_state.cancel(launched)
-        if gun_pending:
-            gun_state.cancel_burst()
+        if self._native_simulation is not None:
+            self._native_simulation.weapons.terminate(bot_id, reason)
+        else:
+            uncommitted = burst_state.next_index == 0
+            burst_state.terminate(reason)
+            if gun_pending:
+                if uncommitted:
+                    gun_state.abort_burst()
+                else:
+                    gun_state.terminate_burst(reason)
         ammo_state = ammo_state or self._ammo_states.get(bot_id)
         if ammo_state is not None:
             ammo_state.publish(state)
@@ -16558,9 +16585,11 @@ class BotRuntime(object):
             launch_time_us = min(
                 int(step_end_time_us), int(step_start_time_us) + max(
                     0, int(round(float(edge['due_offset']) * 1000000.0))))
-            if (not state.get('alive', False) or
-                    not state.get('gun_aligned', False) or
-                    state.get('_drowning', False) or
+            if not state.get('alive', False):
+                self._terminate_active_trigger(
+                    state, 'actor_destroyed', gun_state, ammo_state, burst_state)
+                break
+            if (state.get('_drowning', False) or
                     state.get('_overturned', False) or
                     'gunHealth' in destroyed_devices or
                     int(state.get('siege_state',
@@ -16568,37 +16597,27 @@ class BotRuntime(object):
                         siege_mechanics.SWITCHING_ON,
                         siege_mechanics.SWITCHING_OFF) or
                     not ammo_state.can_fire(True)):
-                self._cancel_active_burst(
-                    state, gun_state, ammo_state, burst_state)
+                reason = ('ammunition_unavailable' if not ammo_state.can_fire(True)
+                          else 'gun_unavailable')
+                self._terminate_active_trigger(
+                    state, reason, gun_state, ammo_state, burst_state)
                 break
+            # A committed trigger samples the actual current barrel. It does
+            # not need its old target, alignment proof, or a clear friendly
+            # lane. Those gates belong exclusively to the NEXT trigger.
             preview = self._direct_launch_preview(
                 state, descriptor, burst_state.shell_index, gun_state,
-                ballistic_solution, burst_edge=edge)
+                None, burst_edge=edge)
             if preview is None:
-                self._cancel_active_burst(
-                    state, gun_state, ammo_state, burst_state)
+                self._terminate_active_trigger(
+                    state, 'launch_unavailable', gun_state, ammo_state, burst_state)
                 break
-            if not self._probe_timing_enabled():
-                lane_value = self.friendly_lane_probe(
-                    state, target if isinstance(target, dict) else {},
-                    descriptor, burst_state.shell_index, preview)
-            else:
-                probe_started = self._probe_started()
-                try:
-                    lane_value = self.friendly_lane_probe(
-                        state, target if isinstance(target, dict) else {},
-                        descriptor, burst_state.shell_index, preview)
-                finally:
-                    self._probe_finished(1, probe_started)
-            lane_clear, unused_verdict = self._friendly_lane_verdict(
-                lane_value)
-            if (not lane_clear or
-                    not self._commit_burst_edge(
-                        state, gun_state, reload_factor, descriptor, edge,
-                        ammo_state, launch_preview=preview,
-                        launch_time_us=launch_time_us)):
-                self._cancel_active_burst(
-                    state, gun_state, ammo_state, burst_state)
+            if not self._commit_burst_edge(
+                    state, gun_state, reload_factor, descriptor, edge,
+                    ammo_state, launch_preview=preview,
+                    launch_time_us=launch_time_us):
+                self._terminate_active_trigger(
+                    state, 'native_failure', gun_state, ammo_state, burst_state)
                 break
             committed += 1
         burst_state.publish(state)
@@ -17002,7 +17021,7 @@ class BotRuntime(object):
                 diagnostic.actor(state['id'])
                 diagnostic.phase('bot.prepare')
             if not state['alive']:
-                self._cancel_active_burst(state)
+                self._terminate_active_trigger(state, 'actor_destroyed')
                 if native_motion is not None:
                     timed_call(self._combat_diagnostics, 'bot.motion_prepare',
                                native_motion.prepare_actor, state['id'])
@@ -17027,7 +17046,7 @@ class BotRuntime(object):
                 native_motion.patch_external(state['id'],
                                              ('terminal', 'velocity'))
             if not state['alive']:
-                self._cancel_active_burst(state)
+                self._terminate_active_trigger(state, 'actor_destroyed')
                 if native_motion is not None:
                     timed_call(self._combat_diagnostics, 'bot.motion_prepare',
                                native_motion.prepare_actor, state['id'])
@@ -17048,7 +17067,7 @@ class BotRuntime(object):
             else:
                 self._advance_bot_drowning(state, step)
             if not state['alive']:
-                self._cancel_active_burst(state)
+                self._terminate_active_trigger(state, 'actor_destroyed')
                 if native_motion is not None:
                     timed_call(self._combat_diagnostics, 'bot.motion_advance',
                                native_motion.advance_actor, state['id'],
@@ -17059,7 +17078,7 @@ class BotRuntime(object):
             if native_motion is None:
                 self._advance_bot_overturn(state, step)
             if not state['alive']:
-                self._cancel_active_burst(state)
+                self._terminate_active_trigger(state, 'actor_destroyed')
                 if native_control is not None:
                     native_control.update_actor(state)
                 continue
@@ -17647,7 +17666,7 @@ class BotRuntime(object):
                 self._ammo_states[state['id']] = ammo_state
             burst_state = self._burst_states.get(state['id'])
             if burst_state is None:
-                burst_state = burst_mechanics.BurstClock()
+                burst_state = burst_mechanics.TriggerClock()
                 self._burst_states[state['id']] = burst_state
             reload_factor = _critical_factor(
                 state, descriptor, 'reload')

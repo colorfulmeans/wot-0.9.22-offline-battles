@@ -74,7 +74,7 @@ class ForegroundCompletionTests(unittest.TestCase):
         control = self.control()
         control.active = True
         release = mock.Mock(side_effect=[RuntimeError('first'), RuntimeError('second'), None])
-        control.weapon = types.SimpleNamespace(close=release)
+        control.runtime = types.SimpleNamespace(stop=release)
         receipt = control.gateway.submit(self.request(control, 'halt'), 0.)
         self.assertEqual('accepted', receipt['status'])
         for now in (.1, 1.1):
@@ -180,7 +180,7 @@ class ForegroundCompletionTests(unittest.TestCase):
     def test_failed_cleanup_does_not_install_new_timed_drive(self):
         control = self.control()
         control.active = True
-        control.weapon = types.SimpleNamespace(close=mock.Mock(side_effect=RuntimeError('busy')))
+        control.runtime = types.SimpleNamespace(stop=mock.Mock(side_effect=RuntimeError('busy')))
         receipt = control.gateway.submit(self.request(control, 'drive',
             args={'seconds': 1., 'forward': 1.}), 0.)
         self.assertEqual(('failed', 'release_pending'), (receipt['status'], receipt['reason']))
@@ -272,11 +272,10 @@ class ForegroundCompletionTests(unittest.TestCase):
 
     def test_delayed_rejection_of_earlier_trigger_does_not_poison_current_fire(self):
         control = self.control()
-        from gui.mods.offline_lan_0922.player_control.weapon import Weapon
         for identity in ('first', 'second'):
             control.owner._avatar.shoot = lambda identity=identity: control.shot_committed(
                 {'projectile_id': identity, 'shell_index': 0}, {})
-            self.assertTrue(control.trigger(Weapon(control.owner), self.now[0]))
+            self.assertTrue(control._issue_trigger({}, self.now[0]))
         control.fire_rejected('earlier_rejection', 'first')
         self.assertIsNone(control.last_fire_failure)
         control.fire_rejected('current_rejection', 'second')
@@ -383,11 +382,17 @@ class ShotReceiptObservationTests(unittest.TestCase):
 class CanonicalConsumableCompletionTests(unittest.TestCase):
     def setup_equipment(self, mounted):
         import test_port_0922_consumable_audit as fixture
+        from test_player_full_runtime import FullRuntimeTests
         from gui.mods.offline_lan_0922 import lan_client
         from gui.mods.offline_lan_0922.battle_runtime import BattleRuntime
-        battle, player = fixture.battle_state([mounted])
-        descriptor = types.SimpleNamespace(extras={10: types.SimpleNamespace(name='commanderHealth')})
-        entity = types.SimpleNamespace(typeDescriptor=descriptor)
+        items = list(mounted) if isinstance(mounted, (list, tuple)) else [mounted]
+        battle, player = fixture.battle_state(items)
+        physical = FullRuntimeTests()
+        physical.setUp()
+        self.addCleanup(physical.doCleanups)
+        owner, runtime = physical.battle, physical.runtime
+        entity = owner._server_entity(owner._server.vehicle_id)
+        entity.typeDescriptor.extras = {10: types.SimpleNamespace(name='commanderHealth')}
         client = lan_client.LANClient('127.0.0.1', 28782, 'Completion', player.vehicle)
         client.ready, client.phase, client.player_id, client.round_id = True, 'battle', 1, 1
         client.is_bot_authority = lambda: False
@@ -396,18 +401,19 @@ class CanonicalConsumableCompletionTests(unittest.TestCase):
             sent.append(copy.deepcopy(message))
             return battle.submit_equipment_intent(1, message)
         client._send = send
-        owner = types.SimpleNamespace(client=client, _server=types.SimpleNamespace(vehicle_id=10),
-            _records={'player:1': {'critical_state': {}, 'state': {}}},
-            _equipment_state=None, _equipment_revision=-1,
-            _clock=lambda: float(battle.tick) / fixture.server.TICK_HZ,
-            _server_entity=lambda unused: entity,
-            _critical_extra_index=BattleRuntime._critical_extra_index,
-            _critical_name_from_extra_index=BattleRuntime._critical_name_from_extra_index,
-            _report_critical_presentation=mock.Mock(), _local_speed=3., _local_airborne=False,
-            _local_support_rise_blocked=False,
-            _local_ground_plane={'gradient_x': 0., 'gradient_z': .1},
-            local_pose=lambda: ((0., 0., 0.), 0.),
-            _projectile_estimated_server_time=lambda now: battle._server_time_ms())
+        owner.client = client
+        owner._start_message['round_id'] = client.round_id
+        owner._records['player:1']['critical_state'] = {}
+        owner._equipment_state, owner._equipment_revision = None, -1
+        owner._clock = lambda: float(battle.tick) / fixture.server.TICK_HZ
+        owner._critical_extra_index = BattleRuntime._critical_extra_index
+        owner._critical_name_from_extra_index = BattleRuntime._critical_name_from_extra_index
+        owner._report_critical_presentation = mock.Mock()
+        owner._local_speed, owner._local_airborne = 3., False
+        owner._local_support_rise_blocked = False
+        owner._local_ground_plane = {'gradient_x': 0., 'gradient_z': .1}
+        owner._local_terrain_pitch = -.1
+        owner._projectile_estimated_server_time = lambda now: battle._server_time_ms()
         owner._activate_equipment = lambda code: BattleRuntime._activate_equipment(owner, code)
         owner._activate_equipment_intent = lambda code: BattleRuntime._activate_equipment_intent(owner, code)
         def restore():
@@ -418,43 +424,62 @@ class CanonicalConsumableCompletionTests(unittest.TestCase):
         restore()
         control = PlayerControl(owner, ('consumables',), notify=lambda text: None)
         control.record = mock.Mock()
+        runtime.controller = control
+        control.runtime = runtime
+        self.assertTrue(runtime.start(('consumables',)))
+        control._equipment_test_battle = battle
+        control._equipment_test_time = owner._clock()
         return fixture, battle, player, entity, owner, control, sent, restore
+
+    @staticmethod
+    def poll_equipment(control):
+        """Advance a real native-observation frame and the entire copied loop."""
+        runtime = control.runtime
+        control._equipment_test_battle.tick += 1
+        now = runtime.owner._clock()
+        dt = now - control._equipment_test_time
+        control._equipment_test_time = now
+        runtime.owner._last_frame_time = now
+        return runtime.update(dt, now)
 
     def test_governor_off_survives_real_snapshot_reconstruction_on_all_exit_conditions(self):
         import test_port_0922_consumable_audit as fixture
         for exit_condition in ('flat', 'downhill', 'engine_destroyed', 'airborne'):
             with self.subTest(exit_condition=exit_condition):
                 f, battle, player, entity, owner, control, sent, restore = self.setup_equipment(fixture.governor())
-                control.consumables(entity)
+                self.poll_equipment(control)
                 battle.tick += 2 * f.server.TICK_HZ
-                control.consumables(entity)
+                self.poll_equipment(control)
                 self.assertEqual([True], [row['requested_active'] for row in sent])
                 previous = owner._equipment_state[0]
                 restore()
                 self.assertIsNot(previous, owner._equipment_state[0])
                 if exit_condition == 'flat':
                     owner._local_ground_plane['gradient_z'] = 0.
+                    owner._local_terrain_pitch = 0.
                 elif exit_condition == 'downhill':
                     owner._local_ground_plane['gradient_z'] = -.1
+                    owner._local_terrain_pitch = .1
                 elif exit_condition == 'engine_destroyed':
                     owner._records['player:1']['critical_state']['destroyed'] = ['engineHealth']
                 else:
                     owner._local_airborne = True
                 # A changed intent cancels on even before the retry throttle.
-                control.consumables(entity)
+                self.poll_equipment(control)
                 self.assertEqual([True, False], [row['requested_active'] for row in sent])
                 self.assertFalse(player.equipment_states[0].active)
 
     def test_governor_cancels_pending_on_without_waiting_for_old_echo(self):
         import test_port_0922_consumable_audit as fixture
         f, battle, player, entity, owner, control, sent, restore = self.setup_equipment(fixture.governor())
-        control.consumables(entity)
+        self.poll_equipment(control)
         battle.tick += 2 * f.server.TICK_HZ
-        control.consumables(entity)
+        self.poll_equipment(control)
         self.assertFalse(owner._equipment_state[0].active)
         self.assertTrue(player.equipment_states[0].active)
         owner._local_ground_plane['gradient_z'] = 0.
-        control.consumables(entity)
+        owner._local_terrain_pitch = 0.
+        self.poll_equipment(control)
         self.assertEqual([True, False], [row['requested_active'] for row in sent])
         self.assertFalse(player.equipment_states[0].active)
 
@@ -463,29 +488,29 @@ class CanonicalConsumableCompletionTests(unittest.TestCase):
         f, battle, player, entity, owner, control, sent, restore = self.setup_equipment(fixture.governor())
         self.assertTrue(owner._activate_equipment((1 << 16) | 12))
         restore()
-        control.consumables(entity)
+        self.poll_equipment(control)
         battle.tick += 3 * f.server.TICK_HZ
-        control.consumables(entity)
+        self.poll_equipment(control)
         owner._local_ground_plane['gradient_z'] = 0.
-        control.consumables(entity)
-        control.release_governor()
+        owner._local_terrain_pitch = 0.
+        self.poll_equipment(control)
+        self.assertTrue(control.runtime.release_governor())
         self.assertEqual([True], [row['requested_active'] for row in sent])
         self.assertTrue(player.equipment_states[0].active)
 
     def test_failed_governor_release_preserves_ownership_for_retry(self):
         import test_port_0922_consumable_audit as fixture
         f, battle, player, entity, owner, control, sent, restore = self.setup_equipment(fixture.governor())
-        control.consumables(entity)
+        self.poll_equipment(control)
         battle.tick += 2 * f.server.TICK_HZ
-        control.consumables(entity)
-        actual = owner._activate_equipment
-        owner._activate_equipment = lambda code: False
-        with self.assertRaisesRegex(RuntimeError, 'governor_release_not_submitted'):
-            control.release_governor()
-        self.assertIsNotNone(control.owned_governor)
-        owner._activate_equipment = actual
-        control.release_governor()
-        self.assertIsNone(control.owned_governor)
+        self.poll_equipment(control)
+        actual = owner._activate_equipment_intent
+        owner._activate_equipment_intent = lambda code: False
+        self.assertFalse(control.runtime.release_governor())
+        self.assertIsNotNone(control.runtime._owned_governor)
+        owner._activate_equipment_intent = actual
+        self.assertTrue(control.runtime.release_governor())
+        self.assertIsNone(control.runtime._owned_governor)
         self.assertFalse(player.equipment_states[0].active)
 
     def test_small_medkit_clears_pure_stun_through_native_encoding_and_server(self):
@@ -493,14 +518,16 @@ class CanonicalConsumableCompletionTests(unittest.TestCase):
         f, battle, player, entity, owner, control, sent, restore = self.setup_equipment(fixture.medkit())
         player.stun_end_server_time_ms = battle._server_time_ms() + 20000
         owner._records['player:1']['state']['stun_end_server_time_ms'] = player.stun_end_server_time_ms
-        control.consumables(entity)
+        self.poll_equipment(control)
+        self.assertFalse(sent)
+        self.poll_equipment(control)
         self.assertEqual(1, len(sent))
         self.assertEqual((10, 'commander'), (sent[0]['activation_code'] >> 16, sent[0]['selected']))
         self.assertTrue(player.equipment_intent_result['accepted'])
         self.assertEqual(0, player.stun_end_server_time_ms)
         restore()
         battle.tick += 3 * f.server.TICK_HZ
-        control.consumables(entity)
+        self.poll_equipment(control)
         self.assertEqual(1, len(sent))
 
     def test_stun_without_any_real_crew_extra_is_contained_not_fabricated(self):
@@ -509,7 +536,9 @@ class CanonicalConsumableCompletionTests(unittest.TestCase):
         entity.typeDescriptor.extras = {}
         player.stun_end_server_time_ms = battle._server_time_ms() + 20000
         owner._records['player:1']['state']['stun_end_server_time_ms'] = player.stun_end_server_time_ms
-        control.consumables(entity)
+        self.poll_equipment(control)
+        self.assertFalse(sent)
+        self.poll_equipment(control)
         self.assertFalse(sent)
         self.assertGreater(player.stun_end_server_time_ms, 0)
         self.assertEqual('consumable_unavailable', control.record.call_args.args[0])
@@ -523,17 +552,140 @@ class CanonicalConsumableCompletionTests(unittest.TestCase):
         player.effective_params['critical']['activation_targets'] = [
             {'index': 82, 'name': 'engineHealth'}, {'index': 83, 'name': 'gunHealth'}]
         player.critical = {'devices': [
-            {'name': 'engineHealth', 'hp': 0, 'state': 'destroyed'},
-            {'name': 'gunHealth', 'hp': 20, 'state': 'critical'}], 'destroyed': ['engineHealth']}
+            {'name': 'engineHealth', 'hp': 0, 'max_hp': 100, 'state': 'destroyed'},
+            {'name': 'gunHealth', 'hp': 20, 'max_hp': 100, 'state': 'critical'}],
+            'destroyed': ['engineHealth']}
         owner._records['player:1']['critical_state'] = copy.deepcopy(player.critical)
         entity.typeDescriptor.extras = {82: types.SimpleNamespace(name='engineHealth'),
                                        83: types.SimpleNamespace(name='gunHealth')}
-        control.consumables(entity)
+        self.poll_equipment(control)
+        self.assertFalse(sent)
+        self.poll_equipment(control)
         self.assertEqual('engineHealth', sent[0]['selected'])
         self.assertTrue(player.equipment_intent_result['accepted'])
         self.assertNotIn('engineHealth', player.critical['destroyed'])
         gun = next(row for row in player.critical['devices'] if row['name'] == 'gunHealth')
         self.assertEqual(20, gun['hp'])
+
+
+class EquipmentReentryCompletionTests(unittest.TestCase):
+    """Native callbacks must not revive retired automatic equipment ownership."""
+
+    setup_equipment = CanonicalConsumableCompletionTests.setup_equipment
+    poll_equipment = staticmethod(CanonicalConsumableCompletionTests.poll_equipment)
+
+    def two_kits(self):
+        import test_port_0922_consumable_audit as fixture
+        items = [
+            fixture.item('largeRepairkit', 11, tags=('repairkit',),
+                         repairAll=True, reuseCount=-1, cooldownSeconds=90),
+            fixture.item('largeMedkit', 12, tags=('medkit',),
+                         repairAll=True, reuseCount=-1, cooldownSeconds=90),
+        ]
+        scene = self.setup_equipment(items)
+        unused, battle, player, entity, owner, control, sent, restore = scene
+        player.critical = dict(
+            devices=[dict(name='engineHealth', hp=0, max_hp=100, state='destroyed')],
+            destroyed=['engineHealth'], crew_ko=['commander'])
+        owner._records['player:1']['critical_state'] = copy.deepcopy(player.critical)
+        return scene
+
+    def test_actual_update_stops_before_activating_second_consumable(self):
+        unused, battle, player, entity, owner, control, sent, restore = self.two_kits()
+        activate = owner._activate_equipment_intent
+
+        def stop_after_commit(code):
+            result = activate(code)
+            control.stop('native_equipment_stop')
+            return result
+
+        owner._activate_equipment_intent = stop_after_commit
+        self.poll_equipment(control)
+        self.assertFalse(sent)
+        self.poll_equipment(control)
+        self.assertEqual([11 | (1 << 16)], [row['activation_code'] for row in sent])
+        self.assertFalse(control.active)
+        self.assertFalse(control.runtime.active)
+        self.assertNotIn(12, control.runtime._equipment_pending)
+        self.assertNotIn('engineHealth', player.critical['destroyed'])
+        self.assertEqual(['commander'], player.critical['crew_ko'])
+
+    def test_native_target_resolution_stop_cannot_activate_the_retired_kit(self):
+        import test_port_0922_consumable_audit as fixture
+        mounted = fixture.item('smallRepairkit', 11, tags=('repairkit',),
+                               reuseCount=-1, cooldownSeconds=90)
+        unused, battle, player, entity, owner, control, sent, restore = self.setup_equipment(mounted)
+        entity.typeDescriptor.extras[82] = types.SimpleNamespace(name='engineHealth')
+        player.effective_params['critical']['activation_targets'].append(
+            dict(index=82, name='engineHealth'))
+        player.critical = dict(
+            devices=[dict(name='engineHealth', hp=0, max_hp=100, state='destroyed')],
+            destroyed=['engineHealth'])
+        owner._records['player:1']['critical_state'] = copy.deepcopy(player.critical)
+        resolve = owner._critical_extra_index
+        resolved = []
+
+        def stop_during_resolution(descriptor, name):
+            result = resolve(descriptor, name)
+            resolved.append((name, result))
+            control.stop('native_extra_stop')
+            return result
+
+        owner._critical_extra_index = stop_during_resolution
+        self.poll_equipment(control)
+        self.assertFalse(sent)
+        self.poll_equipment(control)
+        self.assertEqual([('engineHealth', 82)], resolved)
+        self.assertFalse(sent)
+        self.assertFalse(control.active)
+        self.assertFalse(control.runtime.active)
+        self.assertEqual(['engineHealth'], player.critical['destroyed'])
+
+    def test_governor_callback_stop_does_not_resurrect_a_toggle_owner(self):
+        import test_port_0922_consumable_audit as fixture
+        f, battle, player, entity, owner, control, sent, restore = self.setup_equipment(fixture.governor())
+        activate = owner._activate_equipment_intent
+
+        def stop_after_activation(code):
+            result = activate(code)
+            if code >> 16:
+                restore()
+                control.stop('native_governor_stop')
+            return result
+
+        owner._activate_equipment_intent = stop_after_activation
+        self.poll_equipment(control)
+        battle.tick += 2 * f.server.TICK_HZ
+        self.poll_equipment(control)
+        self.assertEqual([True, False], [row['requested_active'] for row in sent])
+        self.assertFalse(control.active)
+        self.assertFalse(control.runtime.active)
+        self.assertFalse(player.equipment_states[0].active)
+        self.assertIsNone(control.runtime._owned_governor)
+
+    def test_snapshot_replacement_after_first_kit_cannot_reuse_old_mount_list(self):
+        unused, battle, player, entity, owner, control, sent, restore = self.two_kits()
+        activate = owner._activate_equipment_intent
+        original = owner._equipment_state
+
+        def restore_after_commit(code):
+            result = activate(code)
+            restore()
+            return result
+
+        owner._activate_equipment_intent = restore_after_commit
+        self.poll_equipment(control)
+        self.assertFalse(sent)
+        self.poll_equipment(control)
+        self.assertIsNot(original, owner._equipment_state)
+        self.assertEqual([11 | (1 << 16)], [row['activation_code'] for row in sent])
+        self.assertTrue(control.runtime.active)
+        self.assertEqual(['commander'], player.critical['crew_ko'])
+        # A new observation may consume the second kit. Invalidating the old
+        # mount list must not permanently suppress a still-valid consumable.
+        self.poll_equipment(control)
+        self.assertEqual([11, 12], [row['equipment_id'] for row in sent])
+        self.assertFalse(player.critical['crew_ko'])
 
 
 class NativeShotCompletionTests(unittest.TestCase):
@@ -572,7 +724,8 @@ class NativeShotCompletionTests(unittest.TestCase):
 
     def test_inactive_panel_shot_reports_real_terminal_without_ammo_policy(self):
         battle, gun, control, transport, identity, launch = self.fire()
-        self.assertIsNone(control.ammo_policy)
+        self.assertIsNone(control.runtime)
+        self.assertIsNone(control.trigger_admission)
         pid = launch['projectile_id']
         self.assertTrue(battle._apply_projectile_terminal_event({'projectile_id': pid,
             'hit_vehicle': False, 'resolved_time_ms': 1000, 'round_id': 7}))

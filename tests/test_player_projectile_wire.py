@@ -1,4 +1,4 @@
-"""Foreground shot admission must not load the Bot networking/policy graph."""
+"""Foreground shot admission uses its copy, never the original Bot owner."""
 import decimal
 import math
 import os
@@ -25,17 +25,24 @@ class PlayerProjectileWireTests(unittest.TestCase):
 
             class NoBotPolicy(object):
                 def find_spec(self, fullname, path=None, target=None):
-                    leaf = fullname.rsplit('.', 1)[-1]
-                    if (fullname.startswith('gui.mods.offline_lan_0922.') and
-                            (leaf == 'bots' or leaf.startswith('bot_'))):
-                        raise ImportError('foreground loaded Bot dependency: ' + fullname)
+                    prefix = 'gui.mods.offline_lan_0922.'
+                    if not fullname.startswith(prefix):
+                        return None
+                    root = fullname[len(prefix):].split('.', 1)[0]
+                    if (root in ('ai', 'bots', 'lan_client') or
+                            root.startswith('bot_') and root not in (
+                                'bot_state_codec', 'bot_editor_maps',
+                                'bot_tactics_default_data', 'bot_fitting_data')):
+                        raise ImportError('foreground loaded original Bot owner: ' + fullname)
                     return None
 
             sys.meta_path.insert(0, NoBotPolicy())
             prefix = 'gui.mods.offline_lan_0922.'
-            for name in ('aiming', 'direct_engagement', 'fire_admission'):
+            for name in ('native_aim', 'attack_policy', 'trigger_admission', 'full_runtime'):
                 importlib.import_module(prefix + 'player_control.' + name)
             assert prefix + 'lan_client' not in sys.modules
+            assert prefix + 'bot_runtime' not in sys.modules
+            assert prefix + 'player_control.copied.bot_runtime' in sys.modules
         ''')
         env = dict(os.environ, PYTHONPATH=str(CLIENT), PYTHONDONTWRITEBYTECODE='1')
         result = subprocess.run([sys.executable, '-c', script], env=env,

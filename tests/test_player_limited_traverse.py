@@ -1,644 +1,518 @@
-"""Independent player hull laying retains a mechanically unlaid target.
+"""Limited-arc regressions through the complete foreground runtime.
 
-Report 183205, WZ round 3, visible-client lines 20593/20594: the player has
-ammunition and fifteen visible contacts while yaw_limit comparisons return
-unavailable, no selected target reaches combat_facing, and capture holds the
-tracks still. The report does not expose the mounted yaw limits. The bands
-below are explicit narrow/fixed/limited-turret test descriptors, not invented
-measurements of that WZ. Native angle and world probes are explicit seams;
-Aiming, DirectEngagement, navigation, weapon readiness and the final player
-sender are production consumers.
+Synthetic installed arcs below are not measured WZ data. Native bodies, barrel
+actuation, BSP and component collision are observations; the copied planner and
+driver, attack policy, trigger admission and physical ammunition are production
+consumers. No retired player Aiming/Weapon/DirectEngagement/HullAlignment runs.
 """
 import copy
 import math
-from pathlib import Path
-import sys
+import os
 import types
 import unittest
 from unittest import mock
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'src/res/scripts/client'))
-from gui.mods.offline_lan_0922.player_control.aiming import (
-    Aiming, NATIVE_ANGLE_TOLERANCE, _direction, mechanical_reach)
-from gui.mods.offline_lan_0922.player_control.direct_engagement import (
-    DirectEngagement, PENETRATION_FACTOR_65)
-from gui.mods.offline_lan_0922.player_control.weapon import Weapon, hull_traverse_error
-from gui.mods.offline_lan_0922.player_control.traffic import TurnClearance
-from gui.mods.offline_lan_0922.player_control.ammunition import policy_from_gun
-import test_player_control as control_tests
 import test_player_fire_admission_complete as fire_tests
+from player_native_fixtures import descriptor
 from gui.mods.offline_lan_0922 import gun_mechanics, shot_geometry
-from test_player_navigation_migration import controller as navigation_controller
-from test_player_weapon_migration import aiming_scene, descriptor
+from gui.mods.offline_lan_0922.player_control import PlayerControl
+from gui.mods.offline_lan_0922.player_control import attack_policy
+from gui.mods.offline_lan_0922.player_control.native_aim import (
+    NATIVE_ANGLE_TOLERANCE, _direction, mechanical_reach)
+from gui.mods.offline_lan_0922.player_control.copied.ai import driver
 
 
-class LimitedTraverseScene(object):
-    def __init__(self, test, limits=(-.2, .2), tag='AT-SPG', clip=1,
-                 bearing=.7, capture=False):
-        self.control, unused = control_tests.PlayerRegressionTests().aim_controller()
-        control, owner = self.control, self.control.owner
-        self.descriptor = descriptor(yaw_limits=limits)
-        self.descriptor.maxHealth = 1000
-        self.descriptor.type.tags = (tag,)
-        self.entity = owner._server_entity(1)
-        self.entity.typeDescriptor = self.descriptor
-        native, self.target, shot, self.body = aiming_scene(
-            speed=1000., own_descriptor=self.descriptor)
-        self.now = 0.
-        self.position = (0., 0., 100. if capture else 0.)
-        self.target.position = (self.position[0] + math.sin(bearing)*100., 0.,
-                                self.position[2] + math.cos(bearing)*100.)
-        self.records = {self.target.id: self.target}
-        owner._server_entity = lambda identity: (self.entity if identity == self.entity.id
-                                                 else self.records.get(identity))
-        owner._records = {'test-target': dict(engine_id=self.target.id, ready=True,
-            spot_visible=True, state=dict(team=2, alive=True, health=1000))}
-        owner._runtime = native._runtime
-        owner._avatar = native._avatar
-        owner._avatar.autoAim = lambda unused: None
-        owner._avatar.gunRotator._VehicleGunRotator__shotPointSourceFunctor = lambda: None
-        owner._vector = tuple
-        owner._local_stabilised_pose = lambda: self.body
-        owner._clock = lambda: self.now
-        owner.local_pose = lambda: (self.position, self.body.yaw)
-        owner._mutable_shot_ray = lambda: (
-            (self.position[0], 1., self.position[2]),
-            (math.sin(self.body.yaw), 0., math.cos(self.body.yaw)))
-        owner._local_turn_speed = 0.
-        owner._gun_state.shots = [shot]
-        owner._gun_state.clip_size = owner._gun_state.clip = clip
-        owner._gun_state.ammo = [10]
-        control.weapon = Weapon(owner)
-        control.aiming = Aiming(owner)
-        control.direct_engagement = DirectEngagement(self.descriptor)
-        control.ammo_policy = types.SimpleNamespace(main=0, context=lambda *args: None,
-            shells=[dict(index=0, kind='ARMOR_PIERCING')])
-        control.navigation = navigation_controller(tag)
-        test.addCleanup(control.navigation.close)
-        control.navigation.route = control.navigation.routes[0]
-        control.navigation.index = 1
-        control.emit_result = mock.Mock(return_value=True)
-        control.publish_status = mock.Mock()
-        control._contacts = lambda unused: ([], [], self.records)
-        control.lane_from = lambda *args: True
-        control.trigger = mock.Mock(return_value=False)
-        control.rotation_clear = lambda *args: True
+class TraverseScene(fire_tests.AutomaticFireScene):
+    """Full control loop with explicit physical body/barrel feedback."""
+    def configure(self, limits=(-.2, .2), tag='AT-SPG', clip=1,
+                  bearing=.7, burst=1, rate=.8, capture=False):
+        self.control.close()
+        self.entity.typeDescriptor.gun.turretYawLimits = limits
+        self.entity.typeDescriptor.type.tags = (tag,)
+        self.entity.typeDescriptor.gun.clip = (clip, .5)
+        self.entity.typeDescriptor.gun.burst = (burst, .1)
+        self.battle._gun_state = gun_mechanics.GunState(
+            self.entity.typeDescriptor, ammo_layout={101: 20, 102: 10})
+        self.battle._gun_state.reload_time = 0.
+        self.battle._gun_state.clip = clip
+        self.position = (0., 0., 0.)
+        self.bearing, self.rate = bearing, rate
+        self.rotator_enabled = False
+        self.source_enabled = True
+        self.source_queries, self.trace = [], []
+        self.set_hull(0.)
+        self.origin = (0., 2., 0.)
+        self.pose(self.target, (math.sin(bearing)*40., 0., math.cos(bearing)*40.))
+        self.battle.local_pose = lambda: (self.position, self.body.yaw)
+        self.battle._avatar.inputHandler.handleKeyEvent = lambda *args: None
+        self.battle._local_speed = self.battle._local_turn_speed = 0.
+        self.battle._runtime.get_shot_angles = self.source_angles
+        session = mock.patch.dict(os.environ, {'WOT_OFFLINE_TEST_CONTROL_SESSION': 'limited-traverse'})
+        session.start()
+        self.addCleanup(session.stop)
+        self.control = PlayerControl(self.battle, ('drive', 'fire'), notify=lambda text: None)
+        self.control.record = lambda *args, **kwargs: None
+        self.control.emit_result = lambda *args, **kwargs: True
+        self.control.gateway.emit = self.control.emit_result
+        self.battle._player_control = self.control
+        self.assertTrue(self.control.toggle(), self.control.last_control_failure)
+        self.addCleanup(self.control.close)
+        self.runtime = self.control.runtime
+        self.admission = self.control._admission()
+        self.trigger = mock.Mock(wraps=self.control._native_trigger)
+        self.control._native_trigger = self.trigger
         if capture:
-            control.navigation._automatic_capture(dict(position=self.position,
-                speed=0., yaw=self.body.yaw, now=0.), 'route_terminal_capture')
+            # Canonical observed circles feed the complete copied planner.
+            self.battle._last_snapshot = dict(capture_bases={
+                '1': [dict(id='1:0', x=0., y=0., z=-40., radius=12.)],
+                '2': [dict(id='2:0', x=0., y=0., z=0., radius=12.)]},
+                capture_contributors={'2:0': [1]})
+        return self
 
-    def step(self, now):
-        self.now = now
-        self.control.update(.1, now)
-        return self.control.last_order
+    def set_hull(self, yaw):
+        self.body.setRotateY(yaw)
+        self.body.translation = getattr(self, 'position', (0., 0., 0.))
+        self.entity.matrix = self.body
+        self.battle._local_matrix = self.battle._local_pose_matrix = self.body
+        self.battle._local_yaw = float(yaw)
 
+    def source_angles(self, *args):
+        self.source_queries.append((self.now, self.body.yaw, args[-1]))
+        if not self.source_enabled:
+            raise RuntimeError('native source temporarily unavailable')
+        return self.get_angles(*args)
 
-class MovingTraverseScene(object):
-    """Real controller/fire chain with an explicit native pose/rotator seam.
+    def evaluate(self, sample_index=0, complete=True, mode='penetration'):
+        policy = self.runtime.attack_policy
+        for unused in range(80 if complete else 1):
+            self.observe()
+            policy.frame = policy.evaluator.snapshot(self.now)
+            jobs = [job for job in policy._jobs(mode, self.battle._gun_state.shot_index)
+                    if job[2]['entity'] is self.target and job[3] == sample_index]
+            self.assertEqual(1, len(jobs))
+            row = policy._evaluate(jobs[0], self.now, 'foreground')
+            if row.get('line') != 'pending':
+                return row
+            self.fixture.now += .1
+        return row
 
-    The chassis advances by commanded yaw at the supplied mounted rate. The
-    native rotator reads the installed point source and clamps its local yaw
-    to the installed arc. This does not model Windows track dynamics. Native
-    world/vehicle hit-test seams are the geometric adapters already used by
-    the full physical-shot tests; no player readiness or admission is mocked.
-    """
-    def __init__(self, test, limits=(-.2, .2), tag='AT-SPG', clip=1,
-                 bearing=.7, rate=.75, burst=1):
-        self.native = fire_tests.AutomaticFireAdmissionTests()
-        self.native.setUp()
-        test.addCleanup(self.native.doCleanups)
-        self.control, self.owner = self.native.control, self.native.battle
-        self.entity, self.target = self.native.entity, self.native.target
-        self.body = self.native.body
-        # The native report's strongest failure is a settled automatic
-        # capture. Hold that real navigation owner while the target scan
-        # finishes, so incidental route steering cannot lay the gun first.
-        self.position = (0., 0., 100.)
-        self.native.origin = (0., 2., 100.)
-        self.rate, self.rotator_enabled, self.source_enabled = rate, False, True
-        descriptor = self.entity.typeDescriptor
-        descriptor.type.tags = (tag,)
-        descriptor.gun.turretYawLimits = limits
-        descriptor.gun.clip = (clip, .5) if clip > 1 else (1,)
-        descriptor.gun.burst = (burst, .1)
-        self.owner._gun_state = gun_mechanics.GunState(descriptor,
-                                                      ammo_layout={101: 20, 102: 10})
-        self.owner._gun_state.reload_time = 0.
-        self.owner._gun_state.clip = clip
-        self.native.pose(self.target, (self.position[0] + math.sin(bearing)*100., 0.,
-                                      self.position[2] + math.cos(bearing)*100.))
-        self.records = {self.target.id: self.target}
-        self.owner.local_pose = lambda: (self.position, self.body.yaw)
-        self.owner._local_speed = self.owner._local_turn_speed = 0.
-        self.owner._local_physics = dict(rotSpd=rate)
-        self.owner._local_pitch = self.owner._local_roll = 0.
-        self.owner._rules_state = {}
-        self.control.features.add('drive')
-        self.control.bind_input = lambda: None
-        self.control.poll_commands = lambda unused: None
-        self.control.publish_status = mock.Mock()
-        self.control.select_ammo = lambda unused: None
-        self.control._contacts = lambda unused: ([], [], self.records)
-        self.control.direction_clear = lambda *args: True
-        self.control.rotation_clear = mock.Mock(return_value=True)
-        self.control.strategy = types.SimpleNamespace(mode='front', decide=lambda *args, **kw: None)
-        self.control.turn_clearance = TurnClearance()
-        self.control.navigation = navigation_controller(tag)
-        test.addCleanup(self.control.navigation.close)
-        self.control.navigation.route = self.control.navigation.routes[0]
-        self.control.navigation.index = 1
-        self.control.navigation._automatic_capture(dict(position=self.position,
-            speed=0., yaw=0., now=self.native.now), 'route_terminal_capture')
-        self.control.emit_result = mock.Mock(return_value=True)
-        self.control.weapon.close()
-        self.control.weapon = Weapon(self.owner)
-        self.control.aiming = Aiming(self.owner)
-        self.control.direct_engagement = DirectEngagement(descriptor)
-        self.control.ammo_policy = policy_from_gun(self.owner._gun_state, descriptor)
-        self.trigger = mock.Mock(wraps=self.control.trigger)
-        self.control.trigger = self.trigger
-        self.source_queries = []
-        def source_angles(desc, body, previous, point):
-            self.source_queries.append((self.native.now, body.yaw, tuple(point)))
-            if not self.source_enabled:
-                raise ValueError('native angle source unavailable')
-            return self.native.get_angles(desc, body, previous, point)
-        self.owner._runtime.get_shot_angles = source_angles
-        self.trace = []
+    def lay_current(self, sample_index=0, move_barrel=True):
+        row = self.evaluate(sample_index)
+        solution = row['solution']
+        self.runtime.attack_policy._choose('aim', 'selected_native_fixture_sample', row)
+        reach = mechanical_reach(self.entity.typeDescriptor, solution['direction'],
+                                 (self.body.yaw, self.body.pitch, self.body.roll))
+        rotator = self.battle._avatar.gunRotator
+        if move_barrel:
+            rotator.turretYaw, rotator.gunPitch = reach['local_yaw'], reach['local_pitch']
+            self.direction = tuple(solution['direction'])
+            self.observe()
+            # Physical barrel changes invalidate the previous pose evidence.
+            row = self.evaluate(sample_index)
+            solution = row['solution']
+            self.runtime.attack_policy._choose('aim', 'selected_native_fixture_sample', row)
+        self.runtime.weapon.aim(self.runtime.state, row['target'],
+            dict(aim_position=solution['point']),
+            dict(turret_yaw=reach['local_yaw'], gun_pitch=reach['local_pitch']))
+        self.runtime.state['gun_aligned'] = bool(
+            self.runtime.weapon.verified and reach['reachable'] and
+            abs(rotator.turretYaw-reach['local_yaw']) <= 1.e-6 and
+            abs(rotator.gunPitch-reach['local_pitch']) <= 1.e-6)
+        self.candidate = row
+        return row
 
-    def step(self, seconds=.11):
-        sender = self.owner._sender
-        turn = 0. if sender.handbrake else sender.turn
-        yaw = self.body.yaw + turn*self.rate*seconds
-        self.body.setRotateYPR((yaw, 0., 0.))
-        self.body.translation = self.position
-        self.entity.matrix = fire_tests.Pose(self.body)
-        self.entity.position = self.owner._vector(self.position)
-        self.owner._local_turn_speed = turn*self.rate
-        self.native.fixture.now += seconds
-        if self.rotator_enabled and self.control.weapon.point is not None:
-            rotator = self.owner._avatar.gunRotator
-            point = rotator.shotPointSourceFunctor()
-            local_yaw, pitch = self.native.get_angles(self.entity.typeDescriptor,
-                self.body, (rotator.turretYaw, rotator.gunPitch), point)
-            limits = self.entity.typeDescriptor.gun.turretYawLimits
-            local_yaw = max(limits[0], min(limits[1], local_yaw)) if limits is not None else local_yaw
-            rotator.turretYaw, rotator.gunPitch = local_yaw, pitch
-            self.native.direction = _direction(self.body.yaw + local_yaw, pitch)
-        self.control.update(seconds, self.native.now)
-        self.trace.append(dict(time=self.native.now, yaw=self.body.yaw,
-            sender=(sender.forward, sender.turn, sender.handbrake),
-            facing=self.control.last_order.get('combat_facing'),
-            aim=self.control.aim_receipt,
-            ammo=tuple(self.owner._gun_state.ammo)))
-        return self.control.last_order
+    def actuate(self, seconds):
+        sender = self.battle._sender
+        turn = float(sender.turn)
+        # Explicit A/D still owns traverse with longitudinal brake, matching
+        # battle._local_autorotation_turn's first branch.
+        self.set_hull(self.body.yaw + turn*self.rate*seconds)
+        self.battle._local_turn_speed = turn*self.rate
+        if not self.rotator_enabled:
+            return
+        source = self.battle._avatar.gunRotator.shotPointSourceFunctor
+        if not callable(source) or source() is None:
+            return
+        angles = self.get_angles(self.entity.typeDescriptor, self.body, (0., 0.), source())
+        limits = self.entity.typeDescriptor.gun.turretYawLimits
+        yaw = angles[0] if limits is None else min(limits[1], max(limits[0], angles[0]))
+        rotator = self.battle._avatar.gunRotator
+        rotator.turretYaw, rotator.gunPitch = yaw, angles[1]
+        self.direction = shot_geometry.transform_vehicle_vector(
+            _direction(yaw, angles[1]), self.body.yaw, self.body.pitch, self.body.roll)
 
+    def tick(self, seconds=.11):
+        self.actuate(seconds)
+        self.fixture.now += seconds
+        self.battle._last_frame_time = self.now
+        self.control.update(seconds, self.now)
+        self.trace.append(dict(now=self.now, yaw=self.body.yaw,
+            sender=(self.battle._sender.forward, self.battle._sender.turn,
+                    self.battle._sender.handbrake),
+            hull_aiming=self.runtime.state.get('hull_aiming'),
+            action=self.runtime.attack_policy.decision.get('action'),
+            reason=self.runtime.attack_policy.decision.get('reason'),
+            order=dict(self.control.last_order),
+            aim=dict(self.control.aim_receipt or {}),
+            failure=self.control.last_control_failure))
+        return self.trace[-1]
 
-class LimitedTraverseGeometryTests(unittest.TestCase):
-    def compare(self, limits=(-.2, .2), bearing=.7, lane=True,
-                pitch_limits=(-1.5, .5), height=0., tag='AT-SPG'):
-        own = descriptor(*pitch_limits, yaw_limits=limits)
-        own.type.tags = (tag,)
-        owner, target, unused_shot, unused_body = aiming_scene(
-            speed=1000., own_descriptor=own)
-        target.position = (math.sin(bearing)*100., height, math.cos(bearing)*100.)
-        planner = Aiming(owner)
-        planner.begin([target], 0.)
-        verdict, solution = planner.compare_direct(target, 0, 0, 0.,
-            lambda *args: lane, PENETRATION_FACTOR_65)
-        return verdict, solution, planner
-
-    def test_completed_yaw_only_proof_survives_the_direct_comparison_boundary(self):
-        for limits, bearing in (((-.2, .2), .7), ((-.2, .2), -.7),
-                ((-.8, .8), 1.2), ((-.1, .6), -.5), ((0., 0.), .2)):
-            with self.subTest(limits=limits, bearing=bearing):
-                verdict, solution, planner = self.compare(limits, bearing)
-                self.assertEqual('needs_hull', verdict)
-                self.assertEqual('yaw_limit', solution['reason'])
-                self.assertTrue(solution['geometry_clear'])
-                self.assertTrue(solution['needs_hull'])
-                self.assertFalse(solution['reachable'])
-                self.assertFalse(solution['source_verified'])
-                self.assertFalse(solution['clear'])
-                self.assertNotIn('penetration_ok', solution)
-                self.assertEqual(0, solution['sample'])
-                self.assertEqual(12, planner._angles)
-
-    def test_wall_or_pitch_refusal_is_not_a_hull_laying_candidate(self):
-        for fields in (dict(lane=False),
-                       dict(pitch_limits=(-.01, .01), height=50.),
-                       dict(limits=None, pitch_limits=(-.01, .01), height=50.)):
-            with self.subTest(fields=fields):
-                verdict, solution, unused = self.compare(**fields)
-                self.assertEqual('unavailable', verdict)
-                self.assertFalse(solution['needs_hull'])
-                self.assertFalse(solution['clear'])
-
-    def test_full_or_already_in_arc_gun_does_not_acquire_a_hull_request(self):
-        # Native armour is unavailable in this geometry-only fixture. That
-        # may withhold fire, but it must not become a hull turning request.
-        for limits, bearing in ((None, .7), ((-.8, .8), .7)):
-            with self.subTest(limits=limits):
-                verdict, solution, unused = self.compare(limits, bearing)
-                self.assertNotEqual('needs_hull', verdict)
-                self.assertTrue(solution['reachable'])
-                self.assertFalse(solution['needs_hull'])
-
-    def test_spg_direct_comparison_and_generic_candidate_contracts_are_unchanged(self):
-        verdict, solution, unused = self.compare(tag='SPG')
-        self.assertEqual('unavailable', verdict)
-        self.assertTrue(solution['needs_hull'])
-        self.assertFalse(solution['reachable'])
-        owner, target, unused_shot, unused_body = aiming_scene(
-            speed=1000., own_descriptor=descriptor(yaw_limits=(-.2, .2)))
-        target.position = (100., 0., 0.)
-        planner = Aiming(owner)
-        planner.begin([target], 0.)
-        generic = planner.update(target, 0., lambda *args: True, artillery=True)
-        self.assertTrue(generic['needs_hull'])
-        self.assertFalse(generic['clear'])
-
-    def test_unfinished_world_proof_cannot_admit_the_hull_request(self):
-        owner, target, unused_shot, unused_body = aiming_scene(
-            speed=1000., own_descriptor=descriptor(yaw_limits=(-.2, .2)))
-        target.position = (100., 0., 0.)
-        planner = Aiming(owner)
-        planner.begin([target], 0.)
-        planner._segments = 0
-        self.assertEqual(('pending', None), planner.compare_direct(target, 0, 0, 0.,
-            lambda *args: True, PENETRATION_FACTOR_65))
-
-    def test_actual_hull_change_rebuilds_native_source_before_firing_proof(self):
-        verdict, unlaid, planner = self.compare()
-        self.assertEqual('needs_hull', verdict)
-        owner = planner.owner
-        target = next(iter(planner.targets.values()))
-        getter = owner._runtime.get_shot_angles
-        owner._runtime.get_shot_angles = mock.Mock(wraps=getter)
-        owner._local_stabilised_pose().yaw = .58
-        planner.begin([target], .1)
-        verdict, laid = planner.compare_direct(target, 0, 0, .1,
-            lambda *args: True, PENETRATION_FACTOR_65)
-        self.assertNotEqual('needs_hull', verdict)
-        self.assertTrue(laid['reachable'])
-        self.assertTrue(laid['source_verified'])
-        self.assertFalse(laid['needs_hull'])
-        self.assertEqual(unlaid['point'], laid['point'])
-        self.assertGreater(owner._runtime.get_shot_angles.call_count, 0)
-
-    def test_nonfiring_hull_proposal_cannot_pass_weapon_or_fresh_barrel_admission(self):
-        verdict, solution, planner = self.compare()
-        self.assertEqual('needs_hull', verdict)
-        owner = planner.owner
-        target = next(iter(planner.targets.values()))
-        owner._avatar.autoAim = lambda unused: None
-        owner._avatar.gunRotator._VehicleGunRotator__shotPointSourceFunctor = lambda: None
-        weapon = Weapon(owner)
-        weapon.aim_solution(target.id, solution, 0.)
-        self.assertFalse(weapon.ready(100., 1.))
-        reason, fresh = planner.fire_preflight(target, solution, owner._mutable_shot_ray(),
-                                              owner._gun_state.shots[0], 0.)
-        self.assertIsNotNone(reason)
-        self.assertIsNone(fresh)
-
-    def test_required_hull_error_obeys_installed_asymmetric_and_zero_width_arcs(self):
-        owner, unused_target, unused_shot, body = aiming_scene()
-        for limits, relative, expected in (
-                ((-.2, .4), .5, .18), ((-.2, .4), -.3, -.18),
-                ((0., 0.), .015, .015), ((-.2, .4), .35, 0.)):
-            with self.subTest(limits=limits, relative=relative):
-                desc = descriptor(yaw_limits=limits)
-                direction = (math.sin(relative), 0., math.cos(relative))
-                actual = hull_traverse_error(owner, desc, None, relative,
-                                             solution=dict(direction=direction))
-                self.assertAlmostEqual(expected, actual)
-        self.assertIsNone(hull_traverse_error(owner, descriptor(), None, .7))
-
-    def test_zero_width_gun_accepts_its_exact_transformed_heading(self):
-        # sin/cos plus the inverse body transform produces a residual
-        # 2.78e-17 rad here, despite the world ray and body having one yaw.
-        # A zero-width installed arc must not ask the hull to chase that.
-        owner, unused_target, unused_shot, body = aiming_scene()
-        desc = descriptor(yaw_limits=(0., 0.))
-        desc.type.tags = ('AT-SPG',)
-        body.yaw = .2
-        direction = _direction(body.yaw, -.07)
-        reach = mechanical_reach(desc, direction, (.2, 0., 0.))
-        self.assertTrue(reach['reachable'], reach)
-        self.assertFalse(reach['needs_hull'])
-        self.assertEqual(0., hull_traverse_error(owner, desc, None, 0.,
-                                                dict(direction=direction)))
-
-    def test_yaw_precision_matches_source_solver_without_widening_pitch_or_spg(self):
-        owner, unused_target, unused_shot, unused_body = aiming_scene()
-        tolerance = NATIVE_ANGLE_TOLERANCE
-        for limits in ((0., 0.), (-.2, .4)):
-            for edge, sign in ((limits[0], -1.), (limits[1], 1.)):
-                for tag in ('AT-SPG', 'heavyTank', 'SPG'):
-                    for residual in (tolerance*.5, tolerance*2.):
-                        with self.subTest(limits=limits, edge=edge, tag=tag,
-                                          residual=residual):
-                            desc = descriptor(yaw_limits=limits)
-                            desc.type.tags = (tag,)
-                            relative = edge + sign*residual
-                            direction = _direction(relative, 0.)
-                            reach = mechanical_reach(desc, direction, (0., 0., 0.))
-                            expected = tag != 'SPG' and residual < tolerance
-                            self.assertEqual(expected, reach['reachable'], reach)
-                            self.assertEqual(not expected, reach['needs_hull'])
-                            error = hull_traverse_error(owner, desc, None, relative,
-                                                        dict(direction=direction))
-                            self.assertEqual(expected, error == 0., error)
-        desc = descriptor(-.01, .01, yaw_limits=(0., 0.))
-        reach = mechanical_reach(desc, _direction(tolerance*.5, .02), (0., 0., 0.))
-        self.assertFalse(reach['reachable'])
-        self.assertFalse(reach['needs_hull'])
-        self.assertEqual('pitch_limit', reach['reason'])
+    def native_flat_drive(self):
+        """Use the real foreground physics with explicit flat-world I/O."""
+        from test_port_0922_bot_runtime import _plain_attribute_factors
+        battle = self.battle
+        battle._local_matrix = None
+        battle._local_descriptor = self.entity.typeDescriptor
+        battle._local_factors_cache = _plain_attribute_factors(self.entity.typeDescriptor)
+        battle._prepare_local_presentation(self.entity)
+        self.body = battle._local_matrix
+        battle._local_physics.update(rotationIsAroundCenter=False, trackCenter=1.5)
+        battle._smoothed_drive_pitch = lambda *args: 0.
+        battle._ensure_local_suspension_params = lambda *args: None
+        battle._update_vertical_motion = lambda entity, position, yaw, dt: position
+        battle._ground_pitch = lambda *args: 0.
+        battle._apply_slope_slide = lambda position, yaw, dt, entity=None: position
+        battle._resolve_local_tank_contacts = lambda entity, position, yaw, dt: position
+        battle._contact_tanks = lambda *args, **kwargs: []
+        # Rendering is not under test; pose integration and all rotation
+        # guards, including capture-circle track arcs, remain real consumers.
+        battle._update_local_presentation = lambda entity, dt: battle._local_position
+        battle._destructible_pose_sweep = lambda *args, **kwargs: dict(status='clear', token=None)
+        battle._destructibles = types.SimpleNamespace(
+            native_replacement_bsp_active=lambda: False,
+            _vehicle_body_bbox=lambda descriptor: ((-1.5, -.8, -3.5), (1.5, 2., 3.5)))
 
 
-class LimitedTraverseConsumerTests(unittest.TestCase):
-    def test_loaded_casemate_and_limited_turret_clip_variants_reach_final_sender(self):
-        for limits, tag, bearing in (((-.2, .2), 'AT-SPG', .7),
-                ((-.8, .8), 'heavyTank', 1.2), ((0., 0.), 'AT-SPG', .015)):
-            for clip in (1, 4):
-                with self.subTest(limits=limits, tag=tag, clip=clip):
-                    scene = LimitedTraverseScene(self, limits, tag, clip, bearing)
-                    evidence = []
-                    for tick in range(60):
-                        order = scene.step(tick*.11)
-                        sender = scene.control.owner._sender
-                        evidence.append((scene.control.target_engine, sender.forward,
-                                         sender.turn, order.get('combat_facing')))
-                        if order.get('combat_facing', {}).get('state') == 'turning':
-                            break
-                    self.assertTrue(any(row[0] == scene.target.id and row[1] == 0. and
-                                        row[2] * bearing > 0. and row[3] for row in evidence), evidence[-5:])
-                    scene.control.trigger.assert_not_called()
-                    self.assertFalse(scene.control.weapon.ready(scene.now+20., 1.))
+class TraverseHarness(object):
+    def scene(self, **kwargs):
+        scene = TraverseScene()
+        scene.setUp()
+        self.addCleanup(scene.doCleanups)
+        return scene.configure(**kwargs)
 
-    def test_automatic_capture_hold_can_lay_limited_gun_without_a_fireable_target(self):
-        scene = LimitedTraverseScene(self, capture=True)
-        evidence = []
-        for tick in range(60):
-            order = scene.step(tick*.11)
-            sender = scene.control.owner._sender
-            evidence.append((order.get('combat_mode'), sender.forward, sender.turn,
-                             order.get('combat_facing')))
-            if order.get('combat_facing', {}).get('state') == 'turning':
-                break
-        self.assertTrue(any(mode == 'base_capture' and forward == 0. and turn > 0. and facing
-                            for mode, forward, turn, facing in evidence), evidence[-5:])
-        self.assertFalse(scene.control.navigation.mission.explicit)
-        scene.control.trigger.assert_not_called()
-
-
-class MovingTraverseConsumerTests(unittest.TestCase):
-    def advance_until(self, scene, predicate, limit=160):
+    def advance_until(self, scene, predicate, limit=180):
         for unused in range(limit):
-            scene.step()
+            scene.tick()
             if predicate():
                 return
         self.fail('state did not complete: %r' % scene.trace[-3:])
 
+
+class LimitedTraverseGeometryTests(TraverseHarness, unittest.TestCase):
+    def test_completed_yaw_only_proof_survives_the_direct_comparison_boundary(self):
+        for limits, bearing in (((-.2, .2), .7), ((-.2, .2), -.7),
+                ((-.8, .8), 1.2), ((-.1, .6), -.5), ((0., 0.), .2)):
+            with self.subTest(limits=limits, bearing=bearing):
+                scene = self.scene(limits=limits, bearing=bearing)
+                row = scene.evaluate()
+                self.assertEqual(('hull_laying', 'clear', 'unknown'),
+                    (row['mechanical'], row['line'], row['armor']))
+                self.assertTrue(row['solution']['needs_hull'])
+                self.assertFalse(row['solution']['reachable'])
+                self.assertFalse(row['solution']['source_verified'])
+                self.assertIsNone(scene.runtime.attack_policy.search_started)
+
+    def test_wall_or_pitch_refusal_is_not_a_fireable_candidate(self):
+        scene = self.scene()
+        scene.world = [((-100., -100., 5.), (100., 100., 25.))]
+        row = scene.evaluate()
+        self.assertEqual('world_blocked', row['line'])
+        self.assertNotEqual('passed', row['armor'])
+        desc = descriptor(-.01, .01, yaw_limits=(-.2, .2))
+        reach = mechanical_reach(desc, _direction(.7, .2), (0., 0., 0.))
+        self.assertEqual('pitch_limit', reach['reason'])
+        self.assertFalse(reach['needs_hull'])
+        self.assertEqual('mechanical_limited', attack_policy._mechanical(
+            desc, _direction(.7, .2), (0., 0., 0.))['status'])
+
+    def test_full_or_already_in_arc_gun_does_not_acquire_a_hull_request(self):
+        for limits in (None, (-.8, .8)):
+            with self.subTest(limits=limits):
+                scene = self.scene(limits=limits)
+                row = scene.evaluate()
+                self.assertEqual('reachable', row['mechanical'])
+                self.assertFalse(row['solution']['needs_hull'])
+
+    def test_spg_retains_the_complete_copied_artillery_owner(self):
+        scene = self.scene(tag='SPG')
+        scene.observe()
+        decision = scene.runtime.attack_policy.update(scene.now)
+        self.assertEqual(('unchanged', 'copied_artillery_owner'),
+                         (decision['action'], decision['reason']))
+        self.assertIsNone(scene.runtime.attack_policy.search_started)
+        reach = mechanical_reach(scene.entity.typeDescriptor,
+                                 _direction(.7, 0.), (0., 0., 0.))
+        self.assertTrue(reach['needs_hull'])
+
+    def test_unfinished_world_proof_cannot_admit_fire_or_global_failure(self):
+        scene = self.scene()
+        with mock.patch.object(attack_policy, 'WORLD_CHORDS_PER_FRONTIER', 0):
+            row = scene.evaluate(complete=False)
+        self.assertEqual('pending', row['line'])
+        self.assertEqual('unknown', row['armor'])
+        self.assertFalse(scene.fire())
+        self.assertIsNone(scene.runtime.attack_policy.search_started)
+        self.assertFalse(scene.battle._projectile_meta)
+
+    def test_actual_hull_change_rebuilds_native_source_before_firing_proof(self):
+        scene = self.scene()
+        before = scene.evaluate()
+        scene.set_hull(.58)
+        after = scene.lay_current()
+        self.assertNotEqual(before['pose_stamp'], after['pose_stamp'])
+        self.assertEqual('reachable', after['mechanical'])
+        self.assertEqual(before['solution']['point'], after['solution']['point'])
+        self.assertTrue(scene.runtime.weapon.verified)
+        self.assertTrue(scene.runtime.state['gun_aligned'])
+        self.assertTrue(scene.fire(), scene.admission.receipt)
+        self.assertEqual(1, scene.control.automatic_commits)
+
+    def test_nonfiring_hull_proposal_cannot_pass_first_trigger_admission(self):
+        scene = self.scene()
+        row = scene.evaluate()
+        scene.runtime.attack_policy._choose('aim', 'fixture_candidate', row)
+        scene.runtime.weapon.target = row['target']
+        scene.runtime.weapon.solution = row['solution']
+        self.assertFalse(scene.fire())
+        self.assertFalse(scene.battle._projectile_meta)
+        self.assertEqual([20, 10], scene.battle._gun_state.ammo)
+
+    def test_installed_asymmetric_and_zero_width_arcs_use_the_copied_hull_law(self):
+        for limits, bearing, expected in (((-.2, .4), .5, 1),
+                ((-.2, .4), -.3, -1), ((0., 0.), .015, 1),
+                ((-.2, .4), .35, 0), ((-math.pi, math.pi), 1.2, 0)):
+            with self.subTest(limits=limits, bearing=bearing):
+                turn, throttle, aiming = driver.combat_hull_aim(
+                    0., bearing, limits[0], limits[1], 0., 0., 'drive',
+                    combat_mode='engage', movement_intent=False)
+                self.assertEqual(expected, 1 if turn > 0. else -1 if turn < 0. else 0)
+                self.assertEqual(bool(expected), aiming)
+                self.assertEqual(0., throttle)
+
+    def test_zero_width_gun_accepts_its_exact_transformed_heading(self):
+        desc = descriptor(yaw_limits=(0., 0.))
+        direction = shot_geometry.transform_vehicle_vector(_direction(0., 0.), .2, 0., 0.)
+        reach = mechanical_reach(desc, direction, (.2, 0., 0.))
+        self.assertTrue(reach['reachable'], reach)
+        self.assertFalse(reach['needs_hull'])
+        self.assertEqual('reachable', attack_policy._mechanical(desc, direction, (.2, 0., 0.))['status'])
+
+    def test_yaw_precision_matches_native_solver_without_widening_pitch(self):
+        tolerance = NATIVE_ANGLE_TOLERANCE
+        for limits in ((0., 0.), (-.2, .4)):
+            for edge, sign in ((limits[0], -1.), (limits[1], 1.)):
+                for residual in (tolerance*.5, tolerance*2.):
+                    with self.subTest(limits=limits, edge=edge, residual=residual):
+                        desc = descriptor(yaw_limits=limits)
+                        direction = _direction(edge + sign*residual, 0.)
+                        reach = mechanical_reach(desc, direction, (0., 0., 0.))
+                        native = attack_policy._mechanical(desc, direction, (0., 0., 0.))
+                        self.assertEqual(residual < tolerance, reach['reachable'])
+                        self.assertEqual(reach['reachable'], native['status'] == 'reachable')
+        desc = descriptor(-.01, .01, yaw_limits=(0., 0.))
+        reach = mechanical_reach(desc, _direction(tolerance*.5, .02), (0., 0., 0.))
+        self.assertEqual('pitch_limit', reach['reason'])
+        self.assertFalse(reach['needs_hull'])
+
+
+class LimitedTraverseConsumerTests(TraverseHarness, unittest.TestCase):
+    def test_loaded_casemate_and_limited_turret_clip_variants_reach_final_sender(self):
+        for limits, tag, bearing in (((-.2, .2), 'AT-SPG', .7),
+                ((-.8, .8), 'heavyTank', -1.2), ((0., 0.), 'AT-SPG', .015)):
+            for clip in (1, 4):
+                with self.subTest(limits=limits, tag=tag, clip=clip):
+                    scene = self.scene(limits=limits, tag=tag, clip=clip, bearing=bearing)
+                    self.advance_until(scene, lambda: bool(scene.runtime.state.get('hull_aiming')))
+                    self.assertEqual(0., scene.battle._sender.forward)
+                    solution = scene.runtime.attack_policy.decision['candidate']['solution']
+                    residual = (solution['yaw']-scene.body.yaw+math.pi)%(2.*math.pi)-math.pi
+                    self.assertGreater(scene.battle._sender.turn*residual, 0.)
+                    self.assertEqual(0, scene.control.automatic_commits)
+                    scene.trigger.assert_not_called()
+
+    def test_capture_circle_can_lay_limited_gun_without_claiming_a_fireable_target(self):
+        scene = self.scene(capture=True)
+        self.advance_until(scene, lambda: bool(scene.runtime.state.get('hull_aiming')))
+        self.assertEqual((0., 0., 0.), scene.position)
+        self.assertEqual(0., scene.battle._sender.forward)
+        self.assertGreater(scene.battle._sender.turn, 0.)
+        self.assertIsNone(scene.runtime._mission)
+        self.assertEqual(0, scene.control.automatic_commits)
+        self.assertIsNone(scene.runtime.attack_policy.search_started)
+
+    def test_real_capture_order_reaches_track_arc_guard_at_circle_edge_and_inside(self):
+        for edge in (False, True):
+            with self.subTest(edge=edge):
+                scene = self.scene(capture=True)
+                scene.native_flat_drive()
+                center = -29.999 if edge else 0.
+                circle = scene.battle._last_snapshot['capture_bases']['2'][0]
+                circle.update(z=center, radius=30.)
+                request = dict(scene.control.identity(), id='capture', action='capture_base',
+                    args={}, timeout_seconds=15., replace=True,
+                    expires_at=scene.control.gateway.wall_clock()+15.)
+                self.assertEqual('accepted', scene.control.gateway.submit(request, scene.now)['status'])
+                self.advance_until(scene, lambda: bool(scene.runtime.state.get('hull_aiming')))
+                self.assertEqual(((0., center), 30.), scene.control.last_order['capture_pivot_circle'])
+                self.assertEqual(0., scene.battle._sender.forward)
+                self.assertGreater(scene.battle._sender.turn, 0.)
+                before = tuple(scene.battle._local_position), scene.battle._local_yaw
+                scene.battle._drive_local_step(.04)
+                after = tuple(scene.battle._local_position), scene.battle._local_yaw
+                if edge:
+                    self.assertEqual(before, after)
+                else:
+                    self.assertGreater(after[1], before[1])
+                    self.assertGreater(after[0][2], before[0][2])
+                self.assertEqual(0, scene.control.automatic_commits)
+
+
+class MovingTraverseConsumerTests(TraverseHarness, unittest.TestCase):
     def test_pose_enters_arc_then_source_barrel_and_armor_gate_the_real_shot(self):
         for limits, tag, bearing, clip in (((-.2, .2), 'AT-SPG', .7, 1),
-                                         ((-.2, .2), 'AT-SPG', .7, 4),
-                                         ((-.8, .8), 'heavyTank', -1.2, 1),
-                                         ((-.8, .8), 'heavyTank', -1.2, 4)):
+                ((-.2, .2), 'AT-SPG', .7, 4), ((-.8, .8), 'heavyTank', -1.2, 1),
+                ((-.8, .8), 'heavyTank', -1.2, 4)):
             with self.subTest(limits=limits, clip=clip):
-                scene = MovingTraverseScene(self, limits, tag, clip, bearing)
-                initial_ammo = tuple(scene.owner._gun_state.ammo)
-                scene.source_enabled = False
-                self.advance_until(scene, lambda: bool(scene.source_queries))
-                self.assertTrue(any(row['facing'] and row['facing']['state'] == 'turning'
-                                    for row in scene.trace))
+                scene = self.scene(limits=limits, tag=tag, bearing=bearing, clip=clip)
+                initial = tuple(scene.battle._gun_state.ammo)
+                self.advance_until(scene, lambda: scene.runtime.weapon.verified and
+                    scene.runtime.attack_policy.decision['action'] == 'aim')
+                self.assertTrue(any(row['hull_aiming'] for row in scene.trace))
                 self.assertGreater(scene.body.yaw*bearing, 0.)
-                self.assertEqual(initial_ammo, tuple(scene.owner._gun_state.ammo))
-                self.assertEqual(0, scene.control.automatic_commits)
-                self.assertFalse(scene.owner._projectile_meta)
+                self.assertEqual(initial, tuple(scene.battle._gun_state.ammo))
+                self.assertFalse(scene.runtime.state['gun_aligned'])
                 scene.trigger.assert_not_called()
-
-                # The hull is mechanically in range. Native source failure
-                # still forbids fire, then an unlaid physical barrel must too.
-                queries = len(scene.source_queries)
-                scene.source_enabled = True
-                self.advance_until(scene, lambda: bool(scene.control.weapon.solution and
-                    scene.control.weapon.solution.get('source_verified') and
-                    scene.control.weapon.solution.get('reachable')))
-                self.assertGreater(len(scene.source_queries), queries)
-                self.assertFalse(scene.control.aim_receipt['aligned'])
-                self.assertEqual(initial_ammo, tuple(scene.owner._gun_state.ammo))
-                scene.trigger.assert_not_called()
-
-                def unavailable_hit_tester():
+                def unavailable():
                     raise RuntimeError('native target hit tester unavailable')
                 for component in ('chassis', 'hull', 'turret', 'gun'):
-                    getattr(scene.target.typeDescriptor, component).hitTester.on_hit = unavailable_hit_tester
+                    getattr(scene.target.typeDescriptor, component).hitTester.on_hit = unavailable
                 scene.rotator_enabled = True
-                for unused in range(4):
-                    scene.step()
-                self.assertEqual(initial_ammo, tuple(scene.owner._gun_state.ammo))
-                self.assertFalse(scene.owner._projectile_meta)
-                scene.trigger.assert_not_called()
+                for unused in range(5):
+                    scene.tick()
+                self.assertEqual(initial, tuple(scene.battle._gun_state.ammo))
+                self.assertFalse(scene.battle._projectile_meta)
                 for component in ('chassis', 'hull', 'turret', 'gun'):
                     getattr(scene.target.typeDescriptor, component).hitTester.on_hit = None
                 self.advance_until(scene, lambda: scene.control.automatic_commits == 1)
-                self.assertEqual(initial_ammo[0]-1, scene.owner._gun_state.ammo[0])
-                self.assertEqual(1, len(scene.owner._projectile_meta))
-                self.assertGreater(scene.trigger.call_count, 0)
-                proof = scene.control.fire_admission.receipt
-                self.assertEqual('committed', proof['status'])
-                self.assertEqual(scene.target.id, proof['terminal_vehicle'])
-                self.assertEqual('structural', proof['terminal_layer'])
-                self.assertGreater(proof['world_chords'], 0)
-                self.assertFalse(scene.control.weapon.solution['needs_hull'])
+                self.assertEqual(initial[0]-1, scene.battle._gun_state.ammo[0])
+                self.assertEqual(1, len(scene.battle._projectile_meta))
+                self.assertEqual('committed', scene.admission.receipt['status'])
 
     def test_slow_zero_width_gun_can_finish_its_actual_pose_alignment(self):
         for clip in (1, 4):
             with self.subTest(clip=clip):
-                scene = MovingTraverseScene(self, limits=(0., 0.), clip=clip, bearing=.015, rate=.2)
+                scene = self.scene(limits=(0., 0.), clip=clip, bearing=.015, rate=.2)
                 scene.rotator_enabled = True
-                self.advance_until(scene, lambda: scene.control.automatic_commits == 1, limit=250)
-                self.assertFalse(any(row['facing'] and row['facing']['state'] == 'stalled'
-                                     for row in scene.trace), scene.trace[-3:])
-                self.assertEqual(1, len(scene.owner._projectile_meta))
+                self.advance_until(scene, lambda: scene.control.automatic_commits == 1, limit=360)
+                self.assertEqual(1, len(scene.battle._projectile_meta))
 
-    def test_limited_clip_burst_lays_once_then_commits_exactly_three_physical_rounds(self):
-        for limits, tag, bearing in (((-.2, .2), 'AT-SPG', .7),
-                                     ((-.8, .8), 'heavyTank', -1.2)):
-            with self.subTest(limits=limits, tag=tag):
-                scene = MovingTraverseScene(self, limits, tag, clip=6, bearing=bearing, burst=3)
-                scene.rotator_enabled = True
-                gun = scene.owner._gun_state
-                initial_ammo, initial_clip = tuple(gun.ammo), gun.clip
-                self.advance_until(scene, lambda: scene.control.automatic_commits == 1)
-                self.assertTrue(any(row['facing'] and row['facing']['state'] == 'turning'
-                                    for row in scene.trace))
-                burst = scene.owner._local_player_burst
-                self.assertIsNotNone(burst)
-                self.assertEqual(1, burst['committed'])
-                trigger_calls = scene.trigger.call_count
-                laid_yaw = scene.body.yaw
-                for committed in (2, 3):
-                    scene.step()
-                    self.assertEqual((0., 0., True), scene.trace[-1]['sender'])
-                    self.assertAlmostEqual(laid_yaw, scene.body.yaw)
-                    self.assertEqual(trigger_calls, scene.trigger.call_count)
-                    self.assertIs(gun, scene.owner._gun_state)
-                    self.assertEqual(0, gun.shot_index)
-                    self.assertIsNone(gun.pending_index)
-                    self.assertTrue(scene.owner._advance_local_player_burst(),
-                                    scene.control.fire_admission.receipt)
-                    self.assertEqual(committed, scene.control.automatic_commits)
-                self.assertIsNone(scene.owner._local_player_burst)
-                self.assertEqual(initial_ammo[0]-3, gun.ammo[0])
-                self.assertEqual(initial_ammo[1:], tuple(gun.ammo[1:]))
-                self.assertEqual(initial_clip-3, gun.clip)
-                launches = sorted(scene.owner._projectile_meta.values(),
-                                  key=lambda row: row['shot_seq'])
-                self.assertEqual([0, 1, 2], [row['burst_index'] for row in launches])
-                self.assertEqual([0, 0, 0], [row['shell_index'] for row in launches])
-                self.assertEqual(1, len({row['burst_group_seq'] for row in launches}))
+    def test_unchanged_native_pose_hands_failed_hull_laying_to_bounded_copied_navigation(self):
+        scene = self.scene(rate=0.)
+        self.advance_until(scene, lambda: bool(scene.runtime.state.get('hull_aiming')))
+        admitted = scene.now
+        # A clear proposed input is not physical progress. The existing Bot
+        # angle recovery owns a bounded face/move attempt; repeatedly polling
+        # the same candidate cannot retain a stationary turn forever.
+        self.advance_until(scene, lambda: abs(scene.battle._sender.forward) > .01,
+                           limit=150)
+        self.assertLess(scene.now-admitted, 16.6)
+        self.assertEqual(0., scene.body.yaw)
+        self.assertEqual(0, scene.control.automatic_commits)
+        self.assertIsNone(scene.runtime.attack_policy.search_started)
 
-    def test_target_replacement_during_rotation_query_cannot_publish_old_turn(self):
-        scene = MovingTraverseScene(self)
-        original = scene.target
+    def test_limited_clip_trigger_commits_three_rounds_without_revalidating_tails(self):
+        scene = self.scene(clip=6, burst=3)
+        scene.rotator_enabled = True
+        self.advance_until(scene, lambda: scene.control.automatic_commits == 1)
+        self.assertTrue(any(row['hull_aiming'] for row in scene.trace))
+        calls = scene.trigger.call_count
+        with mock.patch.object(scene.control, 'authorize_trigger', side_effect=AssertionError('tail gate')):
+            scene.control.stop('after_first_round')
+            self.assertTrue(scene.advance(.1))
+            self.assertTrue(scene.advance(.1))
+        self.assertEqual(calls, scene.trigger.call_count)
+        self.assertEqual([17, 10], scene.battle._gun_state.ammo)
+        self.assertEqual([0, 1, 2], [row['burst_index'] for row in scene.launches()])
+        self.assertEqual(1, len({row['burst_group_seq'] for row in scene.launches()}))
+
+    def test_target_replacement_during_world_query_cannot_publish_stale_fire(self):
+        scene = self.scene()
         replaced = []
-        def replace_during_native_query(*unused):
-            replacement = scene.native.vehicle(original.id, (-80., 0., 60.), team=2)
-            scene.records[original.id] = replacement
-            replaced.append(replacement)
-            return True
-        scene.control.rotation_clear.side_effect = replace_during_native_query
-        self.advance_until(scene, lambda: bool(replaced))
-        self.assertIs(scene.owner._server_entity(original.id), replaced[-1])
-        self.assertEqual(0., scene.owner._sender.turn, scene.trace[-1])
-        self.assertEqual(0., scene.owner._sender.forward)
+        def replace():
+            scene.on_probe = None
+            replaced.append(scene.vehicle(scene.target.id, (-30., 0., 30.), team=2))
+        scene.on_probe = replace
+        scene.tick()
+        self.assertTrue(replaced)
+        self.assertIs(scene.battle._server_entity(scene.target.id), replaced[-1])
         self.assertEqual(0, scene.control.automatic_commits)
+        self.assertFalse(scene.battle._projectile_meta)
 
-    def test_pending_geometry_brakes_the_old_turn_until_same_point_is_reproved(self):
-        scene = MovingTraverseScene(self)
-        self.advance_until(scene, lambda: scene.control.last_order.get(
-            'combat_facing', {}).get('state') == 'turning')
-        key = scene.control.last_order['combat_facing']['key']
-        with mock.patch('gui.mods.offline_lan_0922.player_control.aiming.SEGMENTS_PER_TICK', 0):
-            scene.step()
-        self.assertTrue(scene.control.direct_engagement.locked_wait)
-        self.assertEqual('checking', scene.control.last_order['combat_facing']['state'])
-        self.assertEqual((0., 0., True), scene.trace[-1]['sender'])
-        scene.step()
-        self.assertEqual(key, scene.control.last_order['combat_facing']['key'])
-        self.assertEqual('turning', scene.control.last_order['combat_facing']['state'])
-        self.assertGreater(scene.owner._sender.turn, 0.)
+    def test_pending_geometry_never_authorizes_a_first_trigger(self):
+        scene = self.scene()
+        with mock.patch.object(attack_policy, 'WORLD_CHORDS_PER_FRONTIER', 0):
+            scene.tick()
         self.assertEqual(0, scene.control.automatic_commits)
+        self.assertFalse(scene.battle._projectile_meta)
+        self.assertIsNone(scene.runtime.attack_policy.search_started)
 
-    def test_world_blocked_candidates_do_not_acquire_capture_hull_owner(self):
-        scene = MovingTraverseScene(self)
-        scene.native.world = [((-100., -100., 110.), (100., 100., 190.))]
+    def test_world_blocked_candidates_do_not_acquire_a_firing_hull_owner(self):
+        scene = self.scene(capture=True)
+        scene.world = [((-100., -100., 5.), (100., 100., 25.))]
         for unused in range(25):
-            scene.step()
-        self.assertTrue(scene.native.world_queries)
-        self.assertFalse(any(row['facing'] for row in scene.trace))
-        self.assertEqual((0., 0., True), scene.trace[-1]['sender'])
-        self.assertIsNone(scene.control.hull_alignment.attempt)
+            scene.tick()
+        self.assertTrue(scene.world_queries)
+        self.assertFalse(any(row['hull_aiming'] for row in scene.trace))
+        self.assertEqual(0, scene.control.automatic_commits)
+        self.assertIsNone(scene.runtime.attack_policy.search_started)
+
+    def test_explicit_drive_retires_limited_hull_and_native_source_ownership(self):
+        scene = self.scene()
+        self.advance_until(scene, lambda: bool(scene.runtime.state.get('hull_aiming')))
+        request = dict(scene.control.identity(), id='takeover', action='drive',
+            args=dict(seconds=1., forward=1., turn=0.), timeout_seconds=15., replace=True,
+            expires_at=scene.control.gateway.wall_clock()+15.)
+        receipt = scene.control.gateway.submit(request, scene.now)
+        self.assertEqual('accepted', receipt['status'])
+        scene.tick()
+        self.assertFalse(scene.runtime.active)
+        self.assertEqual((1., 0., False), scene.trace[-1]['sender'])
+        self.assertIsNone(scene.runtime.weapon.bound_source)
         self.assertEqual(0, scene.control.automatic_commits)
 
-    def test_rotation_sweep_requires_all_existing_native_pose_guards(self):
-        for blocked in ('static', 'arena', 'turret', 'destructible', 'missing'):
-            with self.subTest(blocked=blocked):
-                scene = MovingTraverseScene(self)
-                owner = scene.owner
-                owner._native_world_rotation_is_clear = mock.Mock(return_value=blocked != 'static')
-                owner._arena_rotation_is_clear = mock.Mock(return_value=blocked != 'arena')
-                owner._turret_pose_is_clear = mock.Mock(return_value=blocked != 'turret')
-                owner._destructible_pose_sweep = mock.Mock(return_value=dict(
-                    status='clear', requires_commit=blocked == 'destructible'))
-                owner._destructibles = types.SimpleNamespace(
-                    _vehicle_body_bbox=lambda unused: ((-1., 0., -3.), (1., 2., 3.)))
-                if blocked == 'missing':
-                    owner._native_world_rotation_is_clear = None
-                scene.control.rotation_clear = types.MethodType(
-                    type(scene.control).rotation_clear, scene.control)
-                self.advance_until(scene, lambda: scene.control.last_order.get(
-                    'combat_facing', {}).get('state') == 'blocked')
-                self.assertEqual((0., 0., True), scene.trace[-1]['sender'])
-                self.assertEqual(0, scene.control.automatic_commits)
-                if blocked == 'static':
-                    owner._native_world_rotation_is_clear.assert_called_once()
-                    self.assertTrue(owner._native_world_rotation_is_clear.call_args.kwargs['include_static'])
-
-    def test_explicit_move_retires_the_limited_hull_owner(self):
-        scene = MovingTraverseScene(self)
-        self.advance_until(scene, lambda: scene.control.last_order.get(
-            'combat_facing', {}).get('state') == 'turning')
-        scene.control.navigation.start_mission('hold_position', dict(position=(0., 0., 140.)),
-            dict(now=scene.native.now, position=scene.position, speed=0., yaw=scene.body.yaw))
-        scene.step()
-        self.assertEqual('hold_position', scene.control.navigation.mission_status()['action'])
-        self.assertIsNone(scene.control.hull_alignment.attempt)
-        self.assertNotIn('combat_facing', scene.control.last_order)
-        self.assertTrue(scene.owner._sender.forward or scene.owner._sender.turn)
-        self.assertEqual(0, scene.control.automatic_commits)
-
-    def test_stop_during_native_rotation_query_cannot_restore_turn_or_source(self):
-        scene = MovingTraverseScene(self)
+    def test_stop_during_native_world_query_cannot_restore_turn_or_source(self):
+        scene = self.scene()
         stopped = []
-        def stop_during_native_query(*unused):
-            scene.control.stop('test_stop_during_hull_query')
+        def stop():
+            scene.on_probe = None
+            scene.control.stop('test_stop_during_native_query')
             stopped.append(True)
-            return True
-        scene.control.rotation_clear.side_effect = stop_during_native_query
-        self.advance_until(scene, lambda: bool(stopped))
+        scene.on_probe = stop
+        scene.tick()
+        self.assertTrue(stopped)
         self.assertFalse(scene.control.active)
-        self.assertIsNone(scene.control.hull_alignment.attempt)
-        self.assertIsNone(scene.control.weapon)
+        self.assertIsNone(scene.runtime.weapon.bound_source)
         self.assertEqual((0., 0.), scene.trace[-1]['sender'][:2])
         self.assertEqual(0, scene.control.automatic_commits)
-        self.assertFalse(scene.owner._projectile_meta)
+        self.assertFalse(scene.battle._projectile_meta)
 
-    def test_descriptor_or_gun_replacement_during_query_retires_old_laying(self):
+    def test_descriptor_or_gun_replacement_retires_old_penetration_evidence(self):
         for changed in ('descriptor', 'gun'):
-            for already_turning in (False, True):
-                with self.subTest(changed=changed, already_turning=already_turning):
-                    scene = MovingTraverseScene(self)
-                    if already_turning:
-                        self.advance_until(scene, lambda: scene.control.last_order.get(
-                            'combat_facing', {}).get('state') == 'turning')
-                        self.assertGreater(scene.owner._sender.turn, 0.)
-                    replaced = []
-                    def replace_during_native_query(*unused):
-                        descriptor = copy.deepcopy(scene.entity.typeDescriptor)
-                        descriptor.gun.turretYawLimits = (-.1, .1)
-                        if changed == 'descriptor':
-                            scene.entity.typeDescriptor = descriptor
-                        else:
-                            scene.owner._gun_state = gun_mechanics.GunState(descriptor,
-                                ammo_layout={101: 20, 102: 10})
-                        replaced.append(True)
-                        return True
-                    scene.control.rotation_clear.side_effect = replace_during_native_query
-                    self.advance_until(scene, lambda: bool(replaced))
-                    self.assertEqual((0., 0.), scene.trace[-1]['sender'][:2], scene.trace[-1])
-                    self.assertEqual(0, scene.control.automatic_commits)
-
-    def test_unchanged_actual_pose_cannot_renew_the_alignment_progress_lease(self):
-        scene = MovingTraverseScene(self)
-        self.advance_until(scene, lambda: scene.control.last_order.get(
-            'combat_facing', {}).get('state') == 'turning')
-        acquired = scene.native.now
-        # A clear proposed turn is not observed movement. Keep the native
-        # body fixed while the controller keeps requesting a turn.
-        scene.rate = 0.
-        self.advance_until(scene, lambda: scene.control.last_order.get(
-            'combat_facing', {}).get('state') == 'stalled', limit=30)
-        receipt = scene.control.last_order['combat_facing']
-        self.assertGreaterEqual(receipt['progress_age'], 2.4)
-        self.assertLess(scene.native.now-acquired, 2.6)
-        self.assertEqual((0., 0., True), scene.trace[-1]['sender'])
-        self.assertIsNone(scene.control.hull_alignment.attempt)
-        self.assertTrue(scene.control.aiming.comparison_deferrals)
-        self.assertEqual(0, scene.control.automatic_commits)
+            with self.subTest(changed=changed):
+                scene = self.scene(limits=(-.8, .8))
+                scene.lay_current()
+                before = scene.candidate['pose_stamp']
+                desc = copy.deepcopy(scene.entity.typeDescriptor)
+                desc.gun.turretYawLimits = (-.1, .1)
+                if changed == 'descriptor':
+                    scene.entity.typeDescriptor = desc
+                else:
+                    scene.battle._gun_state = gun_mechanics.GunState(desc,
+                        ammo_layout={101: 20, 102: 10})
+                self.assertFalse(scene.fire())
+                self.assertFalse(scene.battle._projectile_meta)
+                if changed == 'descriptor':
+                    self.assertNotEqual(before, scene.evaluate()['pose_stamp'])
 
 
 if __name__ == '__main__':

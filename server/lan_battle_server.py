@@ -4524,6 +4524,9 @@ class BattleState:
                 "bot_manifest": list(self.bot_manifest),
                 "bot_order_revision": self.bot_orders["revision"],
                 "rules": self.rules_state,
+                # Foreground planners consume the same committed capture
+                # facts as Bots, never inferred instantaneous membership.
+                "defense": self._bot_defense_context(),
                 "battle_result": self.battle_result,
                 "destructible_revision": self.destructible_revision,
                 "destructibles": list(self.destructibles.values()),
@@ -6677,7 +6680,7 @@ class BattleState:
     @staticmethod
     def _sanitize_bot_burst(raw, fire_seq, shell_index):
         """Validate one complete physical-burst clock publication."""
-        fields = burst_mechanics.BurstClock.WIRE_FIELDS
+        fields = burst_mechanics.TriggerClock.WIRE_FIELDS
         present = tuple(name in raw for name in fields)
         if not any(present):
             return BattleState._ordinary_bot_burst(fire_seq, shell_index)
@@ -6734,7 +6737,7 @@ class BattleState:
             raise ValueError("bot burst fire sequence moved backwards")
         previous_burst = dict(previous or {})
         if not all(name in previous_burst for name in
-                   burst_mechanics.BurstClock.WIRE_FIELDS):
+                   burst_mechanics.TriggerClock.WIRE_FIELDS):
             previous_burst.update(BattleState._ordinary_bot_burst(
                 previous_fire, previous_burst.get("shell_index", 0)))
         current_group = int(current["burst_group_seq"])
@@ -15910,6 +15913,9 @@ class BattleState:
                 "timing": self._timing_payload(),
             }
             snapshot.update({
+                # This is the same committed producer used by BotPlanner;
+                # foreground control only receives a detached observation.
+                "defense": self._bot_defense_context(),
                 "authority_epoch": self.authority_epoch,
                 "server_time_ms": tick_server_time_ms,
                 "motion_time_us": self._logical_motion_time_us(),

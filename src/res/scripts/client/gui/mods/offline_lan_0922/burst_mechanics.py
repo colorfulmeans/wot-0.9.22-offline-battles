@@ -1,13 +1,19 @@
 from __future__ import print_function
 
-"""Physical multi-projectile burst clocks for the pinned #1513 gun law.
+"""Controller-independent trigger execution for the pinned #1513 gun law.
 
 ``gun.burst`` is already decoded by the client as ``(count, interval)``.
 Every element in the group is a real shell: it has its own ammunition debit,
 dispersion sample, projectile ledger entry and terminal.  ``shot_seq`` remains
 a strictly increasing physical-shell sequence for the existing LAN fences;
 ``group_seq`` plus ``burst_index`` preserves the native trigger grouping used
-by presentation and server-side projectile reconstruction.
+by presentation and server-side projectile reconstruction. A clock is owned by
+the weapon, not the controller that requested its first shot. Losing a target,
+alignment or controller never withdraws a committed trigger.
+
+Scheduling and committing are deliberately separate. Asking which rounds are
+due does not spend ammunition, advance the committed sequence, or finish the
+trigger. Only the physical launch transaction may commit an edge.
 """
 
 import math
@@ -16,6 +22,12 @@ import math
 MAX_BURST_COUNT = 64
 MAX_BURST_INTERVAL_SECONDS = 10.0
 _EPSILON = 1.0e-9
+
+TERMINAL_REASONS = frozenset((
+    'actor_destroyed', 'battle_ended', 'round_changed', 'gun_unavailable',
+    'weapon_replaced', 'ammunition_unavailable', 'launch_unavailable',
+    'transport_unavailable', 'native_failure',
+))
 
 
 def _field(value, name, default=None):
@@ -66,8 +78,13 @@ def after_shot_factor(gun, final_round):
     return value
 
 
-class BurstClock(object):
-    """Sub-frame schedule and wire state for one physical burst group."""
+class TriggerClock(object):
+    """One admitted trigger, with a physical-shell commit frontier.
+
+    ``next_index`` counts committed shells, never speculative due events.
+    ``time_left`` may be negative while overdue edges are being drained in the
+    current simulation step. Published snapshots must follow their commits.
+    """
 
     WIRE_FIELDS = (
         'burst_active', 'burst_group_seq', 'burst_count',
@@ -83,9 +100,10 @@ class BurstClock(object):
         self.interval = 0.0
         self.time_left = 0.0
         self.shell_index = 0
+        self.terminal_reason = None
 
     def start(self, first_shot_seq, count, interval, shell_index):
-        """Arm a group whose index zero is due immediately."""
+        """Prepare a trigger whose first physical edge is due immediately."""
         if self.active:
             return False
         try:
@@ -108,15 +126,11 @@ class BurstClock(object):
         self.interval = interval if count > 1 else 0.0
         self.time_left = 0.0
         self.shell_index = shell_index
+        self.terminal_reason = None
         return True
 
     def advance(self, dt):
-        """Return every subshot due in ``dt``, retaining fractional cadence.
-
-        A slow render callback may cross more than one 0.1-second native gun
-        interval.  Returning all crossed indices avoids lowering the physical
-        rate; callers publish each returned shell independently.
-        """
+        """Advance weapon time and expose every due, uncommitted shell."""
         if not self.active:
             return ()
         try:
@@ -125,11 +139,13 @@ class BurstClock(object):
             return ()
         if math.isnan(dt) or math.isinf(dt):
             return ()
-        due_offset = max(0.0, self.time_left)
+        previous_time_left = self.time_left
         self.time_left -= dt
         due = []
-        while self.active and self.time_left <= _EPSILON:
-            index = self.next_index
+        index = self.next_index
+        while (index < self.count and
+               self.time_left + (index - self.next_index) * self.interval <= _EPSILON):
+            offset = previous_time_left + (index - self.next_index) * self.interval
             due.append({
                 'shot_seq': self.group_seq + index,
                 'burst_group_seq': self.group_seq,
@@ -139,44 +155,69 @@ class BurstClock(object):
                 'final': index + 1 >= self.count,
                 # This is the physical edge inside the caller's elapsed
                 # interval, not the render callback receipt time.
-                'due_offset': min(dt, due_offset),
+                'due_offset': min(dt, max(0.0, offset)),
             })
-            self.next_index += 1
-            if self.next_index >= self.count:
-                self.active = False
-                self.time_left = 0.0
-            else:
-                self.time_left += self.interval
-                due_offset += self.interval
+            index += 1
         return tuple(due)
 
-    def cancel(self, launched_count=None):
-        """Cancel only the still-unlaunched tail of a group.
-
-        ``advance`` can expose several overdue indices at once.  If a final
-        physical gate closes part-way through that tuple, ``launched_count``
-        rewinds the speculative tail to the number actually committed.
-        """
-        changed = self.active or self.count > 0
-        if launched_count is None:
-            launched_count = self.next_index
+    def accepts(self, edge):
+        """Validate identity/cadence only; tactical approval is not an input."""
+        if not self.active or self.time_left > _EPSILON or not isinstance(edge, dict):
+            return False
         try:
-            launched_count = int(launched_count)
-        except (TypeError, ValueError, OverflowError):
+            return bool(
+                edge['shot_seq'] == self.group_seq + self.next_index and
+                edge['burst_group_seq'] == self.group_seq and
+                edge['burst_index'] == self.next_index and
+                edge['burst_count'] == self.count and
+                edge['shell_index'] == self.shell_index and
+                bool(edge['final']) == (self.next_index + 1 == self.count))
+        except (KeyError, TypeError, ValueError, OverflowError):
             return False
-        if launched_count < 0 or launched_count > self.next_index:
+
+    def commit(self, edge):
+        """Advance exactly once after the corresponding physical launch."""
+        if not self.accepts(edge):
             return False
+        self.next_index += 1
+        if self.next_index == self.count:
+            self.active = False
+            self.time_left = 0.0
+        else:
+            self.time_left += self.interval
+        return True
+
+    def abort(self):
+        """Withdraw a request only before its first physical shell commits."""
+        if self.next_index != 0:
+            return False
+        changed = self.active or self.count > 0
         self.active = False
-        self.next_index = launched_count
-        if launched_count == 0:
-            self.group_seq = 0
-            self.count = 0
-            self.interval = 0.0
-            self.shell_index = 0
+        self.group_seq = 0
+        self.count = 0
+        self.interval = 0.0
+        self.shell_index = 0
         self.time_left = 0.0
         return changed
 
+    def terminate(self, reason):
+        """End an impossible physical execution, never a tactical decision."""
+        if reason not in TERMINAL_REASONS:
+            raise ValueError('trigger termination is not a physical lifecycle reason')
+        if not self.active:
+            return False
+        if self.next_index == 0:
+            changed = self.abort()
+        else:
+            changed = True
+            self.active = False
+            self.time_left = 0.0
+        self.terminal_reason = reason
+        return changed
+
     def publish(self, target):
+        if self.active and (self.next_index == 0 or self.time_left < -_EPSILON):
+            raise ValueError('trigger snapshot precedes due physical commits')
         target.update({
             'burst_active': bool(self.active),
             'burst_group_seq': int(self.group_seq),
@@ -236,4 +277,5 @@ class BurstClock(object):
         self.interval = interval
         self.time_left = time_left
         self.shell_index = shell_index
+        self.terminal_reason = None
         return True

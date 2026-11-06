@@ -1950,7 +1950,8 @@ class _LANInputSender(object):
             if kind in ('move', 'cruise') and control.owns_drive():
                 return True
             if (kind == 'shoot' and control.active and 'fire' in control.features and
-                    not (control.weapon is not None and control.weapon.triggering)):
+                    not (getattr(control, 'native_triggering', False) and
+                         isinstance(control.trigger_context, dict))):
                 return False
         if kind == 'move':
             flags = int(payload.get('flags', 0))
@@ -10909,7 +10910,10 @@ class BattleRuntime(object):
             now = self._clock()
             team_changed = self._apply_team_observation(message, now)
             enemy_changed = self._observe_local_vehicle(message, now)
-            return bool(team_changed or enemy_changed)
+            control = getattr(self, '_player_control', None)
+            observe = getattr(control, 'bot_observation', None)
+            control_changed = observe(message, now) if callable(observe) else False
+            return bool(team_changed or enemy_changed or control_changed)
         except Exception as error:
             self._fail(error)
             return False
@@ -11079,12 +11083,8 @@ class BattleRuntime(object):
         self._discard_provisional_projectile(projectile_id)
         self._stop_projectile_visual(projectile_id, {})
         self._projectile_visual_terminals.add(projectile_id)
-        # Local gun state was committed when the transport accepted the shot.
-        # A delayed rejection cannot rewind ammunition or permit refiring.
-        burst = self._local_player_burst
-        if (burst is not None and
-                burst.get('group_seq') == meta.get('burst_group_seq')):
-            self._cancel_local_player_burst(apply_settings=True)
+        # A delayed rejection belongs to this projectile, not to the physical
+        # trigger. It cannot refund the shot or withdraw its remaining shells.
         return True
 
     def _discard_provisional_projectile(self, projectile_id):
@@ -13831,6 +13831,8 @@ class BattleRuntime(object):
         if not isinstance(result, dict):
             return False
         self._battle_result = dict(result)
+        if not self._worker_mode and self._local_player_burst is not None:
+            self._terminate_local_player_trigger('battle_ended')
         control = getattr(self, '_player_control', None)
         if control is not None and not self._worker_mode:
             self._run_optional_feature('player control result',
@@ -13951,6 +13953,10 @@ class BattleRuntime(object):
             if burst is not None:
                 if burst is not self._local_player_burst:
                     raise RuntimeError('local shot lost its burst owner')
+                trigger = burst['clock']
+                edge = pending['trigger_edge']
+                if not trigger.accepts(edge):
+                    raise RuntimeError('local shot has no due trigger edge')
                 if burst['committed'] == 0 and not gun.begin_burst(burst['count']):
                     raise RuntimeError('local player burst is not ready')
                 final_round = burst['committed'] + 1 == burst['count']
@@ -13962,7 +13968,9 @@ class BattleRuntime(object):
                 raise RuntimeError(
                     'local shot violates presented gun state')
             if burst is not None:
-                burst['committed'] += 1
+                if not trigger.commit(edge):
+                    raise RuntimeError('local shot failed its trigger commit')
+                burst['committed'] = trigger.next_index
                 if final_round:
                     self._local_player_burst = None
                     self._apply_deferred_gun_settings(gun, burst)
@@ -26883,7 +26891,7 @@ class BattleRuntime(object):
             position, yaw, candidate_yaw, pivot_offset)
         inside_capture = True
         if capture_circle and abs(_angle_delta(candidate_yaw, yaw)) > 1.0e-9:
-            from .player_control.tactics import capture_pivot_allows
+            from .player_control.native_drive import capture_pivot_allows
             inside_capture = capture_pivot_allows(capture_circle, position,
                 candidate_position, pivot_offset, _angle_delta(candidate_yaw, yaw))
         if not inside_capture:
@@ -31592,6 +31600,9 @@ class BattleRuntime(object):
 
     def _reject_local_fire(self, reason):
         state = self._gun_state
+        burst = self._local_player_burst
+        if burst is not None:
+            burst['last_failure'] = str(reason)
         remaining = (-1.0 if state is None else float(state.reload_time))
         sys.stdout.write(
             '[Offline LAN 0.9.22] LOCAL FIRE rejected reason=%s '
@@ -31603,12 +31614,35 @@ class BattleRuntime(object):
             control.fire_rejected(reason)
         return False
 
-    def _cancel_local_player_burst(self, apply_settings=False):
+    def _abort_local_player_trigger(self, burst):
+        """Discard only an uncommitted request and apply queued user settings."""
+        if (burst is None or burst is not self._local_player_burst or
+                not burst['clock'].abort()):
+            return False
+        self._local_player_burst = None
+        gun = self._gun_state
+        if gun is burst.get('gun'):
+            gun.abort_burst()
+            self._apply_deferred_gun_settings(gun, burst)
+        return True
+
+    def _terminate_local_player_trigger(self, reason, apply_settings=False):
+        """End a physical/lifecycle failure, not a revoked control request."""
+        if reason not in burst_mechanics.TERMINAL_REASONS:
+            raise ValueError('local trigger termination requires a physical reason')
         burst = self._local_player_burst
         self._local_player_burst = None
-        if burst is not None and self._gun_state is not None:
+        if burst is not None:
+            burst['clock'].terminate(reason)
+            burst['terminal_reason'] = reason
+            sys.stdout.write(
+                '[Offline LAN 0.9.22] TRIGGER TERMINAL group=%d '
+                'committed=%d count=%d reason=%s\n' % (
+                    burst['group_seq'], burst['committed'],
+                    burst['count'], reason))
+        if burst is not None and burst.get('gun') is self._gun_state:
             gun = self._gun_state
-            gun.cancel_burst()
+            gun.terminate_burst(reason)
             if burst['committed'] > 0 and self._server is not None:
                 entity = self._server_entity(self._server.vehicle_id)
                 extras = getattr(getattr(entity, 'typeDescriptor', None),
@@ -31636,38 +31670,61 @@ class BattleRuntime(object):
         return burst
 
     def _advance_local_player_burst(self):
-        """Continue a released trigger's locally owned physical burst."""
+        """Drain due physical shells; tactical control owns no tail gates."""
         burst = self._local_player_burst
         if burst is None or self._local_fire_intent is not None:
             return False
         if burst['generation'] != self._generation:
-            self._cancel_local_player_burst()
+            self._terminate_local_player_trigger('round_changed')
             return False
-        due = burst['started_at'] + burst['committed'] * burst['interval']
-        if self._clock() + 1.0e-9 < due:
+        if burst.get('gun') is not self._gun_state:
+            self._terminate_local_player_trigger('weapon_replaced')
             return False
-        # shoot freezes a fresh native gun ray for every real subshot. Its
-        # local gun transaction remains the only ammunition debit.
-        if not self.shoot(0.0, 0.0, player_burst=burst):
-            context = burst.get('player_control')
-            if (isinstance(context, dict) and context.get('automatic') and
-                    context.get('automatic_wait') and
-                    self._local_player_burst is burst):
-                # A fresh geometry proof or temporary friendly obstruction
-                # has not admitted a round. Preserve its random candidate,
-                # burst lineage and ammunition until a later exact check.
-                return False
-            self._cancel_local_player_burst(apply_settings=True)
+        if (self._server is None or
+                int(self._server.vehicle_id) != burst['vehicle_id']):
+            self._terminate_local_player_trigger('actor_destroyed')
             return False
-        return True
+        now = float(self._clock())
+        elapsed = max(0.0, now - burst['clock_at'])
+        burst['clock_at'] = now
+        edges = burst['clock'].advance(elapsed)
+        committed = False
+        for edge in edges:
+            if self._local_player_burst is not burst:
+                break
+            # Freeze the actual native barrel at execution, never fabricate
+            # a historical barrel pose after a delayed frame. Drain every due
+            # edge in this callback so render cadence cannot drop burst rounds.
+            if not self.shoot(0.0, 0.0, player_burst=burst, trigger_edge=edge):
+                failure = burst.get('last_failure')
+                if failure == 'player_dead':
+                    reason = 'actor_destroyed'
+                elif failure == 'battle_not_live':
+                    reason = 'battle_ended'
+                elif failure in ('sender_unavailable', 'input_send_failed',
+                                 'server_unavailable', 'launch_send_failed'):
+                    reason = 'transport_unavailable'
+                elif failure in ('gun_destroyed', 'barrel_under_water',
+                                 'siege_switching', 'vehicle_unavailable'):
+                    reason = 'gun_unavailable'
+                elif failure in ('gun_not_ready', 'ammunition_unavailable'):
+                    reason = 'ammunition_unavailable'
+                else:
+                    reason = 'launch_unavailable'
+                self._terminate_local_player_trigger(reason, apply_settings=True)
+                break
+            committed = True
+        return committed
 
-    def shoot(self, aim_yaw, gun_pitch, player_burst=None):
-        """Keep one controller authorization across the native shot callback."""
+    def shoot(self, aim_yaw, gun_pitch, player_burst=None, trigger_edge=None):
+        """Authorize a new trigger; a committed trigger owns its own tail."""
         control = getattr(self, '_player_control', None)
         authorize = getattr(control, 'authorize_trigger', None)
         context = getattr(control, 'trigger_context', None)
-        if context is None and isinstance(player_burst, dict):
-            context = player_burst.get('player_control')
+        if player_burst is not None:
+            # The context remains on the trigger for receipts only. Neither
+            # Stop nor changed aim/target can re-authorize physical subshots.
+            context = None
         guard = None
         if isinstance(context, dict) and callable(authorize):
             context.pop('automatic_wait', None)
@@ -31677,7 +31734,8 @@ class BattleRuntime(object):
             context['native_attempt'] = attempt
             guard = (control, context, attempt)
         try:
-            return self._shoot_authorized(aim_yaw, gun_pitch, player_burst, guard)
+            return self._shoot_authorized(aim_yaw, gun_pitch, player_burst, guard,
+                                          trigger_edge=trigger_edge)
         finally:
             if guard is not None and context.get('native_attempt') is guard[2]:
                 context.pop('native_attempt', None)
@@ -31701,26 +31759,25 @@ class BattleRuntime(object):
             context.pop('automatic_wait', None)
             context.pop('automatic_wait_reason', None)
             return self._reject_local_fire(reason)
-        admission = getattr(control, 'fire_admission', None)
-        if admission is not None and admission.terminal_reason(reason):
-            context.pop('automatic_wait', None)
-            context.pop('automatic_wait_reason', None)
-            admission.rejected(reason)
-            return self._reject_local_fire(reason)
         context['automatic_wait'] = True
         context['automatic_wait_reason'] = reason
         control.last_fire_failure = reason
-        if admission is not None:
-            admission.deferred(reason)
         return False
 
     def _shoot_authorized(self, aim_yaw, gun_pitch, player_burst=None,
-                          player_control_guard=None):
+                          player_control_guard=None, trigger_edge=None):
         if self._replay_mode or self._worker_mode:
             return False
         if (self._local_player_burst is not None and
                 player_burst is not self._local_player_burst):
             return False
+        if player_burst is not None:
+            if (player_burst is not self._local_player_burst or
+                    player_burst['generation'] != self._generation or
+                    player_burst.get('gun') is not self._gun_state or
+                    player_burst['committed'] <= 0 or
+                    not player_burst['clock'].accepts(trigger_edge)):
+                return self._reject_local_fire('trigger_edge_unavailable')
         if (self.state != 'running' or not self._battle_live or
                 self._battle_result is not None or
                 self._drown_level == 2 or self._overturn_level == 2):
@@ -31820,13 +31877,13 @@ class BattleRuntime(object):
             return self._reject_local_fire(reason)
         admission = None
         admission_token = None
-        admission_burst = player_burst
         if player_control_guard is not None and player_control_guard[1].get('automatic'):
-            admission = getattr(player_control_guard[0], 'fire_admission', None)
-            if admission is None:
+            admission = player_control_guard[0]
+            prepare = getattr(admission, 'prepare_trigger', None)
+            if not callable(prepare):
                 return self._reject_local_fire('auto_admission_unavailable')
-            verdict = admission.prepare(player_control_guard[1], entity, state,
-                frozen_ray, dispersion_angle, source_shot, now, player_burst,
+            verdict = prepare(player_control_guard[1], entity, state,
+                frozen_ray, dispersion_angle, source_shot, now,
                 range_origin=local_position)
             if verdict['status'] == 'pending':
                 return self._defer_automatic_player_fire(player_control_guard, verdict['reason'])
@@ -31836,13 +31893,14 @@ class BattleRuntime(object):
             origin = verdict['origin']
             velocity = verdict['velocity']
             penetration_factor = verdict['penetration_factor']
-            reason = admission.validate(admission_token, player_control_guard[1],
-                entity, state, now, admission_burst)
+            reason = admission.validate_trigger(admission_token, player_control_guard[1],
+                entity, state, now)
             if reason is not None:
                 return self._defer_automatic_player_fire(player_control_guard, reason)
         else:
-            # A normal manual Avatar trigger retains its original sampler and
-            # burst contract. Automatic admission never filters manual shots.
+            # Manual triggers and committed physical tails use the actual
+            # native gun dispersion. Tactical admission applies only before
+            # the first physical shell of an automatic trigger.
             state.scatter(
                 shot_direction,
                 bool(self._config and self._config.get('perfect_accuracy', False)),
@@ -31857,13 +31915,22 @@ class BattleRuntime(object):
         if player_burst is None:
             count, interval = burst_mechanics.planned_count(
                 entity.typeDescriptor.gun, state.ammo[shell_index], state.clip)
-            if count > 1:
-                player_burst = {
-                    'count': count, 'interval': interval, 'committed': 0,
-                    'started_at': float(now), 'shell_index': shell_index,
-                    'generation': self._generation, 'group_seq': shot_seq,
-                }
-                self._local_player_burst = player_burst
+            trigger = burst_mechanics.TriggerClock()
+            if not trigger.start(shot_seq, count, interval, shell_index):
+                return self._reject_local_fire('ammunition_unavailable')
+            trigger_edge = trigger.advance(0.0)[0]
+            player_burst = {
+                'count': count, 'interval': interval, 'committed': 0,
+                'started_at': float(now), 'shell_index': shell_index,
+                'generation': self._generation, 'group_seq': shot_seq,
+                'clock': trigger, 'clock_at': float(now), 'gun': state,
+                'vehicle_id': int(record['engine_id']),
+            }
+            if player_control_guard is not None:
+                player_burst['player_control'] = player_control_guard[1]
+            self._local_player_burst = player_burst
+        elif shot_seq != trigger_edge['shot_seq']:
+            return self._reject_local_fire('trigger_sequence_changed')
         intent = {
             'player_id': int(self.client.player_id),
             'shot_seq': shot_seq, 'intent_seq': shot_seq,
@@ -31883,22 +31950,23 @@ class BattleRuntime(object):
         }
         if player_burst is not None:
             intent['player_burst'] = player_burst
-        if player_control_guard is not None:
-            intent['player_control'] = player_control_guard[1]
+            intent['trigger_edge'] = dict(trigger_edge)
+            if player_burst.get('player_control') is not None:
+                intent['player_control'] = player_burst['player_control']
         reason = self._player_control_fire_reason(player_control_guard,
             entity=entity, state=state, shot_ray=frozen_ray, player_burst=player_burst)
         if reason is not None:
             if (player_burst is not None and player_burst['committed'] == 0 and
                     self._local_player_burst is player_burst):
-                self._local_player_burst = None
+                self._abort_local_player_trigger(player_burst)
             return self._reject_local_fire(reason)
         if admission is not None:
-            reason = admission.validate(admission_token, player_control_guard[1],
-                entity, state, now, admission_burst)
+            reason = admission.validate_trigger(admission_token, player_control_guard[1],
+                entity, state, now)
             if reason is not None:
                 if (player_burst is not None and player_burst['committed'] == 0 and
                         self._local_player_burst is player_burst):
-                    self._local_player_burst = None
+                    self._abort_local_player_trigger(player_burst)
                 return self._defer_automatic_player_fire(player_control_guard, reason)
         projectile_id = self._preinstall_player_projectile(
             intent, record, origin, velocity, gravity, maximum,
@@ -31906,7 +31974,7 @@ class BattleRuntime(object):
             penetration_factor, source_shot, now)
         if projectile_id is None:
             if player_burst is not None and player_burst['committed'] == 0:
-                self._local_player_burst = None
+                self._abort_local_player_trigger(player_burst)
             return self._reject_local_fire('projectile_admission_failed')
         meta = self._projectile_meta[projectile_id]
         reason = self._player_control_fire_reason(player_control_guard,
@@ -31917,16 +31985,16 @@ class BattleRuntime(object):
             self._discard_provisional_projectile(projectile_id)
             if (player_burst is not None and player_burst['committed'] == 0 and
                     self._local_player_burst is player_burst):
-                self._local_player_burst = None
+                self._abort_local_player_trigger(player_burst)
             return self._reject_local_fire(reason)
         if admission is not None:
-            reason = admission.validate(admission_token, player_control_guard[1],
-                entity, state, now, admission_burst, launch=meta)
+            reason = admission.validate_trigger(admission_token, player_control_guard[1],
+                entity, state, now, launch=meta)
             if reason is not None:
                 self._discard_provisional_projectile(projectile_id)
                 if (player_burst is not None and player_burst['committed'] == 0 and
                         self._local_player_burst is player_burst):
-                    self._local_player_burst = None
+                    self._abort_local_player_trigger(player_burst)
                 return self._defer_automatic_player_fire(player_control_guard, reason)
             # Exact plate/pose reads above can enter native callbacks too.
             # A final owner fence must follow those reads, not precede them.
@@ -31936,8 +32004,11 @@ class BattleRuntime(object):
                 self._discard_provisional_projectile(projectile_id)
                 if (player_burst is not None and player_burst['committed'] == 0 and
                         self._local_player_burst is player_burst):
-                    self._local_player_burst = None
+                    self._abort_local_player_trigger(player_burst)
                 return self._reject_local_fire(reason)
+        submission_context = intent.get('player_control')
+        if isinstance(submission_context, dict):
+            submission_context['submission_in_progress'] = True
         try:
             accepted = sender(
                 'player', self.client.player_id, shot_seq, shell_index,
@@ -31957,10 +32028,13 @@ class BattleRuntime(object):
             self._report_projectile_terminal_failure(
                 meta, {}, 'local_launch', 'send_exception', error)
             accepted = None
+        finally:
+            if isinstance(submission_context, dict):
+                submission_context.pop('submission_in_progress', None)
         if accepted != shot_seq:
             self._discard_provisional_projectile(projectile_id)
             if player_burst is not None and player_burst['committed'] == 0:
-                self._local_player_burst = None
+                self._abort_local_player_trigger(player_burst)
             return self._reject_local_fire('launch_send_failed')
         self._local_fire_intent = intent
         event = dict(meta)
@@ -31972,14 +32046,7 @@ class BattleRuntime(object):
         })
         self._commit_local_player_fire(event, record, intent)
         if admission is not None:
-            admission.committed(admission_token)
-        if (player_control_guard is not None and player_burst is not None and
-                self._local_player_burst is player_burst and
-                self._player_control_fire_reason(player_control_guard,
-                    entity=entity, state=state, player_burst=player_burst) is not None):
-            # A native callback after the wire boundary may revoke the tail,
-            # but cannot roll back the round that was already sent/committed.
-            player_control_guard[0].release_burst(player_burst)
+            admission.trigger_committed(admission_token)
         # Avatar.shoot starts its wait token after this mailbox returns.
         # Gameplay is already committed; only the native visual waits for
         # the next local callback, never for the worker or server echo.
@@ -32473,6 +32540,8 @@ class BattleRuntime(object):
             raise cleanup_error
 
     def _cleanup(self):
+        if self._local_player_burst is not None:
+            self._terminate_local_player_trigger('battle_ended')
         control = getattr(self, '_player_control', None)
         if control is not None:
             control.close()
