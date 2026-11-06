@@ -2,6 +2,7 @@
 import copy
 import json
 import math
+import struct
 from pathlib import Path
 import sys
 import types
@@ -124,6 +125,71 @@ class FullRuntimeTests(unittest.TestCase):
         self.assertIsInstance(self.runtime.planner,full_runtime.BotPlanner)
         self.assertIsNotNone(self.runtime.engine.adapter.driver)
         self.assertIsNotNone(self.runtime.engine.navigator)
+
+    def test_copied_map_routes_preserve_x_z_and_hold_in_public_planner_manifest(self):
+        self.assertTrue(self.runtime.start(('drive',)))
+        route = dict(id='class_mt_rim_west',
+            waypoints=((-34., -130., False), (-78.808, -98.953, False),
+                       (44., 97., True)), capacity=4,
+            role_weights=dict(frontline=1.))
+        self.runtime.state['route'] = route
+        self.runtime._observe(.1)
+        published = next(row for row in self.runtime._manifest
+                         if row['id'] == self.runtime.actor_id)['route']
+        self.assertEqual('class_mt_rim_west', published['id'])
+        self.assertEqual([dict(x=-34., y=0., z=-130., hold=False),
+                          dict(x=-78.808, y=0., z=-98.953, hold=False),
+                          dict(x=44., y=0., z=97., hold=True)],
+                         published['waypoints'])
+        self.assertEqual(4, published['capacity'])
+        self.assertEqual(route['role_weights'], published['role_weights'])
+        self.assertEqual(route['waypoints'], self.runtime.state['route']['waypoints'])
+        peer = dict(id='peer', waypoints=[dict(x=12., y=3., z=-81., hold=True)])
+        self.assertEqual(peer, self.runtime._server_route(peer))
+
+    def test_original_one_hertz_strategy_keeps_per_frame_native_control(self):
+        self.add_peer(2, 1)
+        self.add_peer(3, 2)
+        self.assertTrue(self.runtime.start(('drive',)))
+        with mock.patch.object(self.runtime.planner, 'build_orders',
+                               wraps=self.runtime.planner.build_orders) as build:
+            for now in (.1, .2, .5, .9, 1.1, 1.21):
+                self.tick(now)
+            self.assertEqual(2, build.call_count)
+            self.assertEqual(6, self.battle._sender.send_current.call_count)
+            self.runtime.set_mission('attack', dict(position=(0., 0., 30.)))
+            self.tick(1.31)
+            self.assertEqual(3, build.call_count)
+            self.runtime.stop('manual')
+            self.native_position((18., 0., 40.))
+            self.assertTrue(self.runtime.start(('drive',)))
+            self.tick(1.41)
+            self.assertEqual(4, build.call_count)
+            self.assertEqual((18., 0., 40.), self.runtime.state['position'])
+            self.assertEqual((18., 0., 40.), next(row for row in
+                self.runtime._manifest if row['id'] == self.runtime.actor_id)['position'])
+
+    def test_native_ground_plane_and_rotation_preview_reach_copied_planner(self):
+        self.battle._local_ground_plane = dict(pitch=0., roll=0.)
+        self.battle._local_support_rise_blocked = True
+        self.assertTrue(self.runtime.start(('drive',)))
+        self.assertTrue(self.runtime.state['grounded_once'])
+        self.assertTrue(self.runtime.state['_foreground_support_blocked'])
+        self.assertIs(self.runtime.engine.rotation_resolver.__self__, self.runtime.geometry)
+        self.assertEqual(self.runtime.engine.rotation_resolver.__name__, '_resolve_bot_rotation')
+        with mock.patch.object(self.runtime.geometry, '_probe_bot_local_motion',
+                               return_value=dict(clear=True, proved=True, reason='native')) as probe:
+            self.runtime.engine.local_sweep_probe = self.runtime.geometry._probe_bot_local_motion
+            proof = self.runtime.engine._planning_local_sweep(
+                self.runtime.state, self.runtime.state['position'], .25, None, .1)
+        self.assertTrue(proof['clear'])
+        self.assertTrue(proof['proved'])
+        self.assertTrue(probe.called)
+        self.battle._local_airborne = True
+        self.battle._local_support_rise_blocked = False
+        self.runtime._observe(.2)
+        self.assertTrue(self.runtime.state['grounded_once'])
+        self.assertFalse(self.runtime.state['_foreground_support_blocked'])
 
     def test_real_player_consumable_slot_order_does_not_use_bot_contract(self):
         # A real #1513 player can mount medkit, repairkit, extinguisher in
@@ -493,6 +559,33 @@ class NativeAimLoopBoundaryTests(unittest.TestCase):
         scene.control.update(seconds, scene.now)
         self.assertIsNone(scene.control.last_control_failure)
 
+    def test_player_render_frame_reports_measured_local_substages(self):
+        scene = self.scene()
+        timings = {}
+        scene.battle._local_frame_stages = timings
+        self.native_tick(scene)
+        expected = ('player_observe', 'player_attack', 'player_strategy',
+                    'player_traffic', 'player_copied', 'player_refresh',
+                    'player_post')
+        self.assertEqual(set(expected), set(timings))
+        self.assertTrue(all(timings[name] >= 0. for name in expected))
+        self.assertGreater(sum(timings.values()), 0.)
+        scene.battle._local_frame_stages = None
+
+    def test_player_profiling_emits_bounded_stage_costs_without_bot_changes(self):
+        scene = self.scene()
+        stage = dict((name, .002) for name in full_runtime.PLAYER_PROFILE_STAGES)
+        with mock.patch('builtins.print') as output:
+            scene.runtime._profile_capture(stage, 10.)
+            scene.runtime._profile_capture(stage, 40.1)
+        self.assertEqual(1, output.call_count)
+        message = output.call_args[0][0]
+        self.assertTrue(message.startswith('[Offline LAN 0.9.22] PLAYER LOOP PERF '))
+        data = json.loads(message.split('PLAYER LOOP PERF ', 1)[1])
+        self.assertEqual(2, data['frames'])
+        self.assertEqual(2., data['avg_ms']['player_copied'])
+        self.assertEqual(2., data['max_ms']['player_traffic'])
+
     def test_new_direct_curved_path_reaches_real_trigger_despite_old_straight_lane_wall(self):
         scene = self.scene()
         gun = scene.battle._gun_state
@@ -562,6 +655,65 @@ class NativeAimLoopBoundaryTests(unittest.TestCase):
         self.assertEqual(6, proofs[-1]['solution']['sample'])
         self.assertEqual(chosen['point'], proofs[-1]['solution']['point'])
         self.assertEqual([19, 10], scene.battle._gun_state.ammo)
+
+    def test_real_sloped_pose_float32_native_angles_reach_physical_trigger(self):
+        """The #1513 native rotator returns float32, not ideal doubles."""
+        from test_player_fire_admission_complete import SpatialPose, f
+        scene = self.scene()
+        pose = SpatialPose()
+        pose.setRotateYPR((-.5840495368789683, -.005689774639904499,
+                           .0063408236019313335))
+        pose.translation = (-7.680574830966606, .37770437513733085,
+                             24.23240222029504)
+        scene.body = pose
+        scene.battle._local_matrix = scene.battle._local_pose_matrix = pose
+        scene.battle._local_position = pose.translation
+        scene.battle._local_yaw = pose.yaw
+        scene.entity.matrix = pose
+        scene.entity.position = f._Vector(pose.translation)
+        scene.origin = (-8.32070541381836, 2.155810832977295,
+                         25.23844146728516)
+        scene.target.position = f._Vector((-30., .2989, 58.))
+        scene.target.matrix.translation = tuple(scene.target.position)
+        scene.battle._runtime.math.Matrix = SpatialPose
+
+        def native_float(value):
+            return struct.unpack('f', struct.pack('f', float(value)))[0]
+
+        scene.battle._vector = lambda value: f._Vector(
+            tuple(native_float(component) for component in value))
+        scene.battle._runtime.get_shot_angles = lambda *args: tuple(
+            native_float(component) for component in scene.get_angles(*args))
+        rotator = scene.battle._avatar.gunRotator
+        rotator.turretYaw = rotator.gunPitch = 0.
+        scene.runtime.attack_policy.reset()
+        scene.lay(move_barrel=False)
+        for unused in range(120):
+            self.native_tick(scene)
+            if scene.launches():
+                break
+        self.assertTrue(scene.launches(), scene.runtime.status())
+        self.assertEqual(scene.launches()[-1]['shot_seq'],
+                         scene.runtime.state['fire_seq'])
+        self.assertGreater(scene.runtime.state['fire_seq'], 0)
+
+    def test_only_a_committed_native_shot_advances_copied_aim_receipt(self):
+        scene = self.scene()
+        state = scene.runtime.state
+        scene.battle._local_projectile_sequence = 4  # A provisional ID is not a shot.
+        scene.runtime._sync_weapon_observation()
+        self.assertEqual(0, state['fire_seq'])
+        for unused in range(80):
+            self.native_tick(scene)
+            if scene.launches():
+                break
+        self.assertTrue(scene.launches(), scene.runtime.status())
+        committed = scene.launches()[-1]['shot_seq']
+        self.assertGreater(committed, 4)
+        self.assertEqual(committed, state['fire_seq'])
+        scene.battle._local_projectile_sequence += 1
+        scene.runtime._sync_weapon_observation()
+        self.assertEqual(committed, state['fire_seq'])
 
     def test_stop_inside_native_angle_callback_cannot_resurrect_old_aim_lease(self):
         scene = self.scene()

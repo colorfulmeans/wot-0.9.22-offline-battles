@@ -9,7 +9,9 @@ No message returned by the copied worker loop is published as Bot authority.
 from __future__ import print_function
 
 import copy
+import json
 import math
+import time
 
 from .. import equipment_mechanics
 from .. import shot_geometry
@@ -22,7 +24,21 @@ from .copied.ai import traffic as copied_traffic
 from .copied.artillery_controller import ArtilleryController
 from .copied.battle_geometry import CopiedBattleGeometry
 from .copied.server_bot_ai import BotPlanner
+from .native_aim import NATIVE_ANGLE_TOLERANCE
 from .settling import HaltObservation
+
+
+# The original LAN authority builds full-roster strategic orders every 30
+# ticks at 30 Hz. Foreground tactical input and native safety proofs continue
+# every physical frame; only the complete roster assignment has this cadence.
+STRATEGY_SECONDS = 1.0
+PLAYER_PROFILE_SECONDS = 30.0
+PLAYER_PROFILE_STAGES = (
+    'player_observe', 'player_attack', 'player_strategy', 'player_traffic',
+    'player_copied', 'player_refresh', 'player_post')
+_PROFILE_CLOCK = getattr(time, 'perf_counter', None)
+if _PROFILE_CLOCK is None:
+    _PROFILE_CLOCK = time.clock
 
 try:
     _INTEGER_TYPES = (int, long)
@@ -426,6 +442,12 @@ class _NativeAimInput(object):
         if None in desired:
             return False
         descriptor = runtime.entity.typeDescriptor
+        # Copied artillery fire admission intentionally requires an exact
+        # world-ballistic barrel (1e-7). Letting its native source settle at
+        # ordinary float32 tolerance would deadlock that unchanged proof.
+        # Ordinary tanks use the observed #1513 native-angle precision.
+        type_tags = getattr(getattr(descriptor, 'type', None), 'tags', ()) or ()
+        tolerance = 1.e-8 if 'SPG' in type_tags else NATIVE_ANGLE_TOLERANCE
         stabilised = getattr(battle, '_local_stabilised_pose', battle._local_body_pose)
         body = battle._runtime.math.Matrix(stabilised())
         rotator = battle._avatar.gunRotator
@@ -456,7 +478,7 @@ class _NativeAimInput(object):
                 return False
             dy = _angle(desired[0] - float(actual_yaw))
             dp = float(desired[1]) - float(actual_pitch)
-            if max(abs(dy), abs(dp)) <= 1.e-8:
+            if max(abs(dy), abs(dp)) <= tolerance:
                 self.source_point, self.verified = tuple(source), True
                 return True
             if attempt:
@@ -467,7 +489,9 @@ class _NativeAimInput(object):
             world = shot_geometry.transform_vehicle_vector(
                 direction, state['yaw'], state.get('pitch', 0.), state.get('roll', 0.))
             source = tuple(origin[index] + world[index] * distance for index in range(3))
-        self.source_point = self.point
+        # Do not replace the last native-bound, proven input with an
+        # unverified world impact point. At float32 precision an inversion may
+        # hit its numerical floor before our bounded solve converges.
         return False
 
 
@@ -814,8 +838,8 @@ class _PlayerBehaviorEngine(copied_runtime.BotRuntime):
         desired_yaw, desired_pitch = intention.get('turret_yaw'), intention.get('gun_pitch')
         state['gun_aligned'] = bool(target is not None and runtime.weapon.verified and
             desired_yaw is not None and desired_pitch is not None and
-            abs(_angle(state['turret_yaw'] - desired_yaw)) <= 1.e-6 and
-            abs(state['gun_pitch'] - desired_pitch) <= 1.e-6)
+            abs(_angle(state['turret_yaw'] - desired_yaw)) <= NATIVE_ANGLE_TOLERANCE and
+            abs(state['gun_pitch'] - desired_pitch) <= NATIVE_ANGLE_TOLERANCE)
         return result
 
     def _direct_launch_preview(self, state, descriptor, shell_index, gun_state,
@@ -910,6 +934,11 @@ class FullPlayerRuntime(object):
         self._mission_halt = HaltObservation()
         self._implicit_retry = None
         self._implicit_failures = 0
+        self._strategic_result = None
+        self._strategic_due = 0.
+        self._strategic_contact_signature = None
+        self._last_committed_shot_seq = 0
+        self._profile_window = None
 
     @property
     def gun(self):
@@ -1012,15 +1041,26 @@ class FullPlayerRuntime(object):
 
     @staticmethod
     def _server_route(route):
-        """Translate the copied client tuple route into server JSON points."""
+        """Publish the copied Bot's (x, z, hold) route without XYZ confusion."""
         if not isinstance(route, dict):
             return route
         result = dict(route)
         for name in ('waypoints', 'points'):
             if name not in result:
                 continue
-            result[name] = [dict(point) if isinstance(point, dict) else
-                dict(zip(('x', 'y', 'z'), _point(point))) for point in result[name]]
+            converted = []
+            for point in result[name]:
+                if isinstance(point, dict):
+                    # A peer already supplied the canonical public format.
+                    converted.append(dict(point))
+                else:
+                    # Copied BotRuntime._prepare_user_routes stores only map
+                    # horizontal coordinates and the terminal hold flag.
+                    if len(point) not in (2, 3):
+                        raise ValueError('invalid copied Bot route waypoint')
+                    converted.append(dict(x=float(point[0]), y=0.,
+                        z=float(point[1]), hold=bool(point[2]) if len(point) > 2 else False))
+            result[name] = converted
         return result
 
     def _binding(self):
@@ -1090,6 +1130,7 @@ class FullPlayerRuntime(object):
             navigation_height_columns=geometry._navigation_height_columns,
             bounds=bounds, arena_bounds=bounds, cover_probe=geometry._sample_bot_cover,
             turret_motion_probe=geometry._turret_motion_is_clear,
+            rotation_resolver=geometry._resolve_bot_rotation,
             local_sweep_probe=geometry._probe_bot_local_motion,
             world_receipt_probe=geometry._direction_world_receipt,
             water_depth_probe=geometry._water_depth,
@@ -1120,6 +1161,8 @@ class FullPlayerRuntime(object):
         token = self.generation
         self.features = set(features) & set(('drive', 'fire', 'consumables'))
         self.active = True
+        self._strategic_due = 0.
+        self._profile_window = None
         if (mission is None and self._mission is not None and
                 self._mission['status'] != 'running' and not self._mission.get('holding')):
             # A new activation does not inherit a retired command's hold.
@@ -1149,6 +1192,8 @@ class FullPlayerRuntime(object):
         self._move_episode = None
         self._native_hull_laying = None
         self._implicit_retry = None
+        self._strategic_due = 0.
+        self._profile_window = None
         if self._mission is not None and self._mission['status'] == 'running':
             self._mission.update(status='cancelled', phase='cancelled', reason=reason)
         if self._mission is not None:
@@ -1224,10 +1269,13 @@ class FullPlayerRuntime(object):
                        speed=float(self.owner._local_speed),
                        terrain_pitch=float(getattr(self.owner, '_local_terrain_pitch', matrix.pitch)),
                        airborne=bool(getattr(self.owner, '_local_airborne', False)),
-                       siege_state=int(getattr(entity, 'siegeState', 0)))
+                       siege_state=int(getattr(entity, 'siegeState', 0)),
+                       _foreground_support_blocked=bool(getattr(
+                           self.owner, '_local_support_rise_blocked', False)))
         return raw
 
-    def _observe(self, now):
+    def _observe_local(self, now):
+        """Refresh the one native actor without replaying all peer geometry."""
         local_record = self.owner._records.get(self._local_record_key)
         if local_record is None:
             raise RuntimeError('local_vehicle_record_retired')
@@ -1239,8 +1287,16 @@ class FullPlayerRuntime(object):
                     'gun_pitch', 'speed', 'terrain_pitch', 'airborne', 'alive', 'health',
                     'max_health', 'critical', 'siege_state', 'siege_time_left_ms',
                     'siege_transition_total_ms', 'stun_end_server_time_ms',
-                    'combat_revision', 'engine_id', 'world_pose')
+                    'combat_revision', 'engine_id', 'world_pose',
+                    '_foreground_support_blocked')
         self.state.update((key, local[key]) for key in physical if key in local)
+        # The copied vertical integrator never runs for the foreground actor.
+        # Latch an actually accepted native ground plane instead of leaving
+        # the private planner forever at its ungrounded spawn checkpoint.
+        if not self.state.get('grounded_once', False):
+            plane = getattr(self.owner, '_local_ground_plane', None)
+            if not local['airborne'] and isinstance(plane, dict):
+                self.state['grounded_once'] = True
         self.state['now'] = float(now)
         self.state['kind'], self.state['network_id'] = 'bot', self.actor_id
         self.state['aim_yaw'] = _angle(local['yaw'] + local['turret_yaw'])
@@ -1253,6 +1309,10 @@ class FullPlayerRuntime(object):
         server_now = estimate(now) if callable(estimate) else None
         if server_now is not None:
             self.engine._observe_bot_stun(self.state, local, server_now)
+        return local_record, local
+
+    def _observe(self, now):
+        local_record, local = self._observe_local(now)
         records, targets, players, peers = {}, [], [], {}
         own_alias = dict(local_record, kind='bot', network_id=self.actor_id, state=dict(self.state))
         records['bot:%d' % self.actor_id] = own_alias
@@ -1309,7 +1369,9 @@ class FullPlayerRuntime(object):
                           reload_time=float(gun.reload_time),
                           reload_duration=float(gun.reload_duration),
                           ammo_magazine_started=gun.clip_size > 1 and 0 < gun.clip < gun.clip_size)
-        self.state['fire_seq'] = int(getattr(self.owner, '_local_fire_seq', self.state.get('fire_seq', 0)))
+        # The native allocator sequence may advance on a rejected launch.
+        # Only shot_committed is a physical shot receipt.
+        self.state['fire_seq'] = self._last_committed_shot_seq
 
     def _observe_traffic(self, now):
         """Project public peer inputs into the unchanged local coordinator.
@@ -1624,8 +1686,26 @@ class FullPlayerRuntime(object):
                 threatened_bot_ids=threatened,
                 pending_lane_by_bot_ids=[] if clear else [self.actor_id]))
         self.planner.report_contacts(contacts, known, now)
-        result = self.planner.build_orders(self._manifest, states, self._players, now,
-            defense=self._defense_context(), team_orders=self._team_orders(now))
+        # A peer's certified firing lane can disappear inside the one-second
+        # strategic interval. Replan that *change* immediately so copied
+        # flanking decisions do not continue relying on a stale ally; native
+        # target tracking and ordinary motion never trigger a global rebuild.
+        contact_signature = tuple((row['observing_team'], row['target_kind'],
+            row['target_id'], tuple(identity for identity in
+                row['shootable_by_bot_ids'] if identity != self.actor_id),
+            tuple(row['threatened_bot_ids'])) for row in contacts)
+        if (self._strategic_result is None or now >= self._strategic_due or
+                now < self._strategic_due - STRATEGY_SECONDS or
+                contact_signature != self._strategic_contact_signature):
+            # Full-roster assignment originally ran at one hertz on the LAN
+            # authority. A foreground render callback must not rerun both
+            # teams' global planning dozens of times for one player input.
+            self._strategic_result = self.planner.build_orders(
+                self._manifest, states, self._players, now,
+                defense=self._defense_context(), team_orders=self._team_orders(now))
+            self._strategic_due = float(now) + STRATEGY_SECONDS
+            self._strategic_contact_signature = contact_signature
+        result = self._strategic_result
         orders = result.get('orders') or ()
         order = next((dict(value) for value in orders if int(value.get('id', 0)) == self.actor_id), None)
         if order is None:
@@ -1820,6 +1900,47 @@ class FullPlayerRuntime(object):
             sender.handbrake = False
             sender.send_current()
 
+    @staticmethod
+    def _profile_stage(stages, previous, name):
+        if stages is None:
+            return previous
+        stamp = _PROFILE_CLOCK()
+        stages[name] = stages.get(name, 0.) + max(0., stamp - previous)
+        return stamp
+
+    def _profile_capture(self, stages, now):
+        """Append player-only details to the existing optional error-report log.
+
+        Full-roster Bot source files and the shared native frame-profiler ABI
+        stay untouched. The recorder is inert without battle diagnostics.
+        """
+        if stages is None:
+            return
+        window = self._profile_window
+        if window is None or now < window['since']:
+            window = dict(since=float(now), samples=0,
+                sums=dict((name, 0.) for name in PLAYER_PROFILE_STAGES),
+                maxima=dict((name, 0.) for name in PLAYER_PROFILE_STAGES))
+            self._profile_window = window
+        window['samples'] += 1
+        for name in PLAYER_PROFILE_STAGES:
+            duration = max(0., float(stages.get(name, 0.)))
+            window['sums'][name] += duration
+            window['maxima'][name] = max(window['maxima'][name], duration)
+        elapsed = float(now) - window['since']
+        if elapsed < PLAYER_PROFILE_SECONDS:
+            return
+        samples = window['samples']
+        report = dict(seconds=round(elapsed, 2), frames=samples,
+            avg_ms=dict((name, round(window['sums'][name]*1000./samples, 3))
+                for name in PLAYER_PROFILE_STAGES),
+            max_ms=dict((name, round(window['maxima'][name]*1000., 3))
+                for name in PLAYER_PROFILE_STAGES),
+            parent='battle_local')
+        print('[Offline LAN 0.9.22] PLAYER LOOP PERF ' +
+              json.dumps(report, separators=(',', ':'), sort_keys=True))
+        self._profile_window = None
+
     def update(self, dt, now):
         self.now = float(now)
         if not self.active:
@@ -1831,7 +1952,13 @@ class FullPlayerRuntime(object):
             self.stop('native_aim_owner_changed')
             return self.status()
         token = self.generation
+        # These are inclusive subsets of BattleRuntime's existing `local`
+        # phase. Their only purpose is to make the next user error report
+        # identify which copied-player operation dominates the render frame.
+        stages = getattr(self.owner, '_local_frame_stages', None)
+        marker = _PROFILE_CLOCK() if stages is not None else None
         self._observe(now)
+        marker = self._profile_stage(stages, marker, 'player_observe')
         if not self.state['alive']:
             self.stop('actor_destroyed')
             return self.status()
@@ -1842,9 +1969,12 @@ class FullPlayerRuntime(object):
                 return self.status()
         if 'fire' in self.features:
             self.attack_policy.update(now)
+        marker = self._profile_stage(stages, marker, 'player_attack')
         self._planner_order(now)
+        marker = self._profile_stage(stages, marker, 'player_strategy')
         self._observe_traffic(now)
         self.geometry._artillery.advance(now, 4, self.geometry._artillery_arc_probe)
+        marker = self._profile_stage(stages, marker, 'player_traffic')
         # This is the unchanged complete copy, including navigation, recovery,
         # traffic, hull aiming, firing gates, cover queue and route handoffs.
         outgoing = self.engine.update(float(dt), float(now), list(self._players))
@@ -1853,9 +1983,14 @@ class FullPlayerRuntime(object):
                 self.planner.report_affordances(message['affordances'],
                     self.planner.known_bots(self._manifest, list(self.engine.states.values())),
                     self.planner.known_targets(list(self.engine.states.values()), self._players), now)
-        # Canonical pose wins even if a retained copied diagnostic settlement
-        # wrote a private prediction. No private physical result is published.
-        self._observe(now)
+        marker = self._profile_stage(stages, marker, 'player_copied')
+        # Only the foreground actor may have changed in this copied control
+        # slice. Preserve the native-source correction without re-reading,
+        # re-registering and re-serializing every unrelated public peer.
+        self._observe_local(now)
+        self._sync_weapon_observation()
+        self._sync_equipments()
+        marker = self._profile_stage(stages, marker, 'player_refresh')
         if self.active and self.generation == token and self._binding() == self._identity:
             self._send_drive()
             if self._live(token) and 'fire' in self.features:
@@ -1866,6 +2001,8 @@ class FullPlayerRuntime(object):
             if self._live(token) and 'fire' in self.features:
                 self.attack_policy.background(now)
                 self._apply_next_shell()
+        self._profile_stage(stages, marker, 'player_post')
+        self._profile_capture(stages, now)
         return self.status()
 
     def _live(self, token=None):
@@ -2115,6 +2252,12 @@ class FullPlayerRuntime(object):
     def shot_committed(self, event, pending):
         if self.attack_policy is not None:
             self.attack_policy.shot_committed(event, pending)
+        try:
+            committed = int(event['shot_seq'])
+        except (KeyError, TypeError, ValueError):
+            committed = 0
+        if committed > self._last_committed_shot_seq:
+            self._last_committed_shot_seq = committed
         self._sync_weapon_observation()
         identity = event.get('projectile_id')
         if identity is not None:
@@ -2187,6 +2330,7 @@ class FullPlayerRuntime(object):
             return dict(status='rejected', reason='unknown_mission')
         payload = dict(payload or {})
         self._mission_sequence += 1
+        self._strategic_due = 0.
         self._mission = dict(id=payload.get('command_id', 'player-mission-%d' % self._mission_sequence),
             action=kind, status='running', phase='travelling', reason=None, explicit=True,
             started=float(payload.get('requested_at', self.now)),
