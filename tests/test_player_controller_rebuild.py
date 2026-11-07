@@ -1091,6 +1091,28 @@ class FullRuntimeMissionOwnershipTests(unittest.TestCase):
         request.assert_called_once_with(True, mock.ANY)
         self.assertEqual(0, scene.control.automatic_commits)
 
+    def test_unproved_udes_contact_keeps_the_existing_siege_travel_boundary(self):
+        for distance, has_contact, requests_mode in (
+                (35., True, True), (35.01, True, False), (24., False, False)):
+            with self.subTest(distance=distance, contact=has_contact):
+                scene = self.scene(siege=True, siege_vehicle='sweden:S21_UDES_03')
+                engine, state = scene.runtime.engine, scene.runtime.state
+                request = mock.Mock(wraps=scene.battle._request_player_control_siege)
+                scene.battle._request_player_control_siege = request
+                x, y, z = state['position']
+                contact = dict(alive=True, position=(x, y, z+24.)) if has_contact else None
+                for unused in range(6):
+                    command = dict(move_position=(x, y, z+distance),
+                        movement_intent=True, throttle=1., fire_allowed=False,
+                        _player_siege_contact=contact)
+                    engine._update_bot_siege_intent(state, command, None, .1)
+                    self.assertNotIn('_player_siege_contact', command)
+                    self.assertFalse(command['fire_allowed'])
+                if requests_mode:
+                    request.assert_called_once_with(True, mock.ANY)
+                else:
+                    request.assert_not_called()
+
     def test_failed_or_cancelled_mission_cannot_admit_a_new_native_siege_transition(self):
         for cancelled in (False, True):
             with self.subTest(cancelled=cancelled):
