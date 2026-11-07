@@ -35,7 +35,7 @@ class FullShellSettingsTests(unittest.TestCase):
             gun.shots = tuple(gun.shots) + (extra,)
             gun.ammo.append(10)
             row = copy.deepcopy(scene.battle.client.effective_params['gun']['shots'][1])
-            row['source_shot']['shell']['compactDescr'] = 103
+            row['compact_descr'] = 103
             scene.battle.client.effective_params['gun']['shots'].append(row)
         scene.settings = scene.battle._runtime.constants.VEHICLE_SETTING
         scene.setting_calls = []
@@ -142,6 +142,61 @@ class FullShellSettingsTests(unittest.TestCase):
         self.assertEqual([(scene.settings.CURRENT_SHELLS, 102)],
             [call for call in scene.setting_calls if call[0] == scene.settings.CURRENT_SHELLS])
 
+    def test_manual_current_ap_still_accepts_a_verified_he_for_the_very_next_load(self):
+        scene = self.scene(clip=1, burst=1, third=True)
+        gun = scene.battle._gun_state
+        he = gun.shots[2]
+        he.shell.kind, he.shell.explosionRadius = 'HIGH_EXPLOSIVE', 5.
+        he.piercingPower = (1000., 1000.)
+        source = scene.battle.client.effective_params['gun']['shots'][2]['source_shot']
+        source['shell'].update(kind='HIGH_EXPLOSIVE', explosionRadius=5.)
+        source['piercingPower'] = he.piercingPower
+        gun.reload = 1.5
+        self.assertTrue(gun.sync_shell_index(1, instant=True))
+        self.assertTrue(scene.battle._sender.change_vehicle_setting(
+            scene.entity.id, scene.settings.CURRENT_SHELLS, 101))
+        self.assertEqual((0, None), (gun.shot_index, gun.pending_index))
+        scene.rotator_enabled = True
+        for unused in range(100):
+            self.tick_weapon(scene)
+            if scene.launches():
+                break
+        self.assertEqual([0], [row['shell_index'] for row in scene.launches()])
+        self.assertEqual((2, 0, None), (gun.shot_index, gun.clip, gun.pending_index))
+        self.assertEqual(2, scene.runtime.attack_policy.loading_plan['shell_index'])
+        self.assertIn((scene.settings.NEXT_SHELLS, 103), scene.setting_calls)
+        for unused in range(100):
+            self.tick_weapon(scene)
+            if len(scene.launches()) == 2:
+                break
+        self.assertEqual([0, 2], [row['shell_index'] for row in scene.launches()])
+        self.assertEqual([19, 10, 9], gun.ammo)
+
+    def test_trigger_refreshes_current_frame_before_releasing_an_owned_next_shell(self):
+        from test_player_rebuilt_attack_policy import Observations
+
+        scene = self.scene(clip=1, burst=1, third=True)
+        gun = scene.battle._gun_state
+        runtime = scene.runtime
+        observations = Observations(targets=1, points=1)
+        observations.frame['ammo'] = tuple(gun.ammo)
+        observations.passed(0)
+        observations.passed(2)
+        observations.prime()
+        runtime.attack_policy = observations.policy
+        observations.tick(runtime.now)
+        runtime._apply_next_shell()
+        self.assertEqual(2, gun.pending_index)
+
+        observations.frame['line_revision'] += 1
+        runtime.now += .11
+        observations.tick(runtime.now, background=False)
+        self.assertIsNone(observations.policy.current_row(observations.policy.next_plan))
+        plan = runtime._apply_next_shell(at_trigger=True)
+        self.assertEqual(2, plan['shell_index'])
+        self.assertEqual(2, gun.pending_index)
+        self.assertEqual([(scene.settings.NEXT_SHELLS, 103)], scene.setting_calls)
+
     def test_next_clip_plan_can_change_and_cancel_without_unloading_current_clip(self):
         scene = self.scene(third=True)
         gun = scene.battle._gun_state
@@ -210,7 +265,8 @@ class FullShellSettingsTests(unittest.TestCase):
     def test_last_physical_tail_promotes_next_clip_after_stop_not_at_intra_clip_boundary(self):
         scene = self.scene(clip=4, burst=2)
         gun = scene.battle._gun_state
-        self.queue(scene, 1)
+        self.assertTrue(scene.battle._sender.change_vehicle_setting(
+            scene.entity.id, scene.settings.NEXT_SHELLS, 102))
         scene.lay_current()
         self.assertTrue(scene.fire())
         self.assertEqual((0, 3, 1), (gun.shot_index, gun.clip, gun.pending_index))
@@ -537,12 +593,13 @@ class FullShellSettingsTests(unittest.TestCase):
         policy.reset()
         self.assertIsInstance(policy.evaluator, attack_policy.NativeAttackEvaluator)
         search_started = None
-        # No native actuator is invoked while the real bounded evaluator and
-        # policy establish the all-target failure and alternate-shell proof.
+        # Use the actual route-attempt boundary without actuating the vehicle.
         for unused in range(140):
             scene.step(.11)
             decision = policy.update(scene.now)
             policy.background(scene.now)
+            if decision['action'] == 'search_penetration':
+                scene.runtime._move_order({}, scene.now)
             if policy.search_started is not None and search_started is None:
                 search_started = policy.search_started
             self.assertEqual((0, 3, 0.), (gun.shot_index, gun.clip, gun.reload_time))

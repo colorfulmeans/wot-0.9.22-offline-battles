@@ -91,8 +91,11 @@ class Observations(object):
             self.on_evaluate(channel)
         return value
 
-    def tick(self, now, background=True):
+    def tick(self, now, background=True, navigation='accepted'):
         result = self.policy.update(now)
+        if result['action'] == 'search_penetration' and navigation is not None:
+            self.policy.navigation_result(dict(action='search_penetration', at=now,
+                episode_id=result['move_request']['episode_id'], status=navigation, attempted=True))
         if background:
             self.policy.background(now)
         return result
@@ -213,6 +216,28 @@ class RebuiltForegroundTests(unittest.TestCase):
         scene.tick(.1)
         self.assertEqual(1, scene.policy.next_shell)
 
+    def test_ranked_scan_keeps_current_fire_and_does_not_publish_lower_pending_plan(self):
+        scene = Observations(targets=2, points=2)
+        scene.passed(0)
+        scene.passed(2, target=2, sample=1)
+        first = scene.tick(0.)
+        self.assertEqual('aim', first['action'])
+        self.assertEqual(0, first['candidate']['shell_index'])
+        self.assertIsNone(scene.policy.next_shell)
+        self.assertEqual('higher_rank_pending', scene.policy.next_status)
+        scene.tick(.1)
+        self.assertEqual(2, scene.policy.next_shell)
+        self.assertEqual(('bot', 2), scene.policy.next_plan['target_key'])
+
+    def test_last_stocked_current_round_is_not_ranked_for_the_next_load(self):
+        scene = Observations(targets=1, points=1)
+        scene.frame['ammo'] = (1, 10, 10)
+        scene.passed(0)
+        scene.passed(1)
+        scene.prime()
+        self.assertEqual(0, scene.tick(0.)['candidate']['shell_index'])
+        self.assertEqual(1, scene.policy.next_shell)
+
     def test_background_visits_all_ammo_targets_points_and_he_independently(self):
         scene = Observations()
         scene.passed()
@@ -295,6 +320,18 @@ class RebuiltForegroundTests(unittest.TestCase):
 
 
 class RebuiltEvidenceTests(unittest.TestCase):
+    def test_expired_blocker_cannot_create_a_firing_position_request(self):
+        scene = Observations(targets=1, points=3)
+        scene.value(0, sample=2, armor='passed', line='friendly_blocked',
+                    blocker=dict(blocker_kind='bot', blocker_id=22))
+        scene.prime(index=0)
+        scene.frame['line_revision'] = 1
+        scene.value(0, sample=2, armor='unknown', line='pending')
+        result = scene.tick(.1, background=False)
+        self.assertEqual('wait', result['action'])
+        self.assertNotIn('move_request', result)
+        self.assertIsNone(scene.policy.search_started)
+
     def test_positive_proof_expires_for_each_source_and_target_pose_change(self):
         for change in ('source_position', 'source_hull', 'source_turret',
                        'target_hull', 'target_turret', 'ammo_geometry'):
@@ -321,7 +358,7 @@ class RebuiltEvidenceTests(unittest.TestCase):
         scene.value(0, armor='unknown', line='pending')
         result = scene.tick(.1)
         candidate = result['candidate']
-        self.assertEqual('firing_position', result['action'])
+        self.assertEqual('preaim', result['action'])
         self.assertEqual(first['pose_stamp'], candidate['pose_stamp'])
         self.assertNotEqual(first['line_stamp'], candidate['line_stamp'])
         self.assertEqual(('passed', 'pending'), (candidate['armor'], candidate['line']))
@@ -380,7 +417,7 @@ class RebuiltEvidenceTests(unittest.TestCase):
         scene.frame['line_revision'] += 1
         scene.value(0, armor='unknown', line='pending')
         result = scene.tick(.1)
-        self.assertEqual('firing_position', result['action'])
+        self.assertEqual('preaim', result['action'])
         self.assertEqual(first['pose_stamp'], result['candidate']['pose_stamp'])
         self.assertEqual('passed', result['candidate']['armor'])
         self.assertIsNone(scene.policy.search_started)
@@ -413,6 +450,21 @@ class RebuiltEvidenceTests(unittest.TestCase):
 
 
 class RebuiltSearchAndClipTests(unittest.TestCase):
+    def test_qualification_does_not_start_clock_and_real_route_refusal_does(self):
+        scene = Observations(targets=1, points=1, he=False)
+        first = scene.tick(0., navigation=None)
+        self.assertEqual('search_penetration', first['action'])
+        request = first['move_request']['episode_id']
+        for now in (1., 8., 12.):
+            scene.policy.navigation_result(dict(action='search_penetration', at=now,
+                episode_id=request, status='refused', reason='drive_authority_unavailable'))
+            self.assertEqual('search_penetration', scene.tick(now, navigation=None)['action'])
+            self.assertIsNone(scene.policy.search_started)
+        scene.tick(13., navigation='path_refused')
+        self.assertEqual(13., scene.policy.search_started)
+        self.assertEqual('search_penetration', scene.tick(20.)['action'])
+        self.assertEqual('retreat', scene.tick(21.)['action'])
+
     def test_committed_next_shell_preaims_its_proved_point_until_load_completion(self):
         for clip_size in (1, 4):
             with self.subTest(clip_size=clip_size):
@@ -425,6 +477,12 @@ class RebuiltSearchAndClipTests(unittest.TestCase):
                 plan = scene.policy.next_plan
                 self.assertEqual((2, ('bot', 2), 1, 'penetration'), plan['key'])
                 scene.policy.shot_committed(dict(burst_index=0, burst_count=1), {})
+                scene.policy.load_started(2, plan)
+                scene.policy._plan_next(scene.policy._best_penetration(exclude=2))
+                scene.passed(2, 1, 0)
+                other = next(job for job in scene.policy._jobs(shell_index=2)
+                             if job[0] == (2, ('bot', 1), 0, 'penetration'))
+                scene.policy._evaluate(other, .05, 'background')
                 scene.frame.update(loaded=2, clip=0, reloading=True)
                 preaim = scene.tick(.1)
                 self.assertEqual('preaiming', preaim['phase'])
@@ -509,9 +567,7 @@ class RebuiltSearchAndClipTests(unittest.TestCase):
                 for target in (1, 2):
                     for sample in (0, 1):
                         scene.value(index, target, sample, armor='unknown', line='pending')
-            scene.policy.navigation_result(dict(status='rejected', route=step,
-                                                 collision=True, progress=False))
-            result = scene.tick(now)
+            result = scene.tick(now, navigation='path_refused')
             self.assertEqual('search_penetration', result['action'])
             self.assertEqual(deadline, result['move_request']['deadline'])
             self.assertEqual(0., scene.policy.search_started)
@@ -751,6 +807,28 @@ import test_player_fire_admission_complete as native_fire
 
 
 class NativeAtomicClosureTests(native_fire.AutomaticFireScene):
+    def test_remote_ally_outside_lane_region_keeps_proof_until_it_enters(self):
+        self.pose(self.target, (0., 0., 100.))
+        friend = self.vehicle(71, (85., 0., 45.), 1)
+        policy = self.runtime.attack_policy
+        self.step(.1)
+        policy.frame = policy.evaluator.snapshot(self.now)
+        job = next(job for job in policy._jobs(shell_index=0) if job[2]['entity'] is self.target)
+        proof = policy._evaluate(job, self.now, 'foreground')
+        self.assertTrue(policy._executable(proof), proof)
+        self.pose(friend, (100., 0., 45.))
+        self.step(.1)
+        policy.frame = policy.evaluator.snapshot(self.now)
+        self.assertIs(proof, policy.current_row(proof))
+        self.pose(friend, (0., 0., 45.))
+        self.step(.1)
+        policy.frame = policy.evaluator.snapshot(self.now)
+        self.assertIsNone(policy.current_row(proof))
+        job = next(job for job in policy._jobs(shell_index=0) if job[0] == proof['key'])
+        blocked = policy._evaluate(job, self.now, 'foreground')
+        self.assertEqual('friendly_blocked', blocked['line'])
+        self.assertEqual('passed', blocked['armor'])
+
     def hardened_target(self):
         for name in ('chassis', 'hull', 'turret', 'gun'):
             for material in getattr(self.target.typeDescriptor, name).materials.values():
@@ -767,6 +845,7 @@ class NativeAtomicClosureTests(native_fire.AutomaticFireScene):
 
     def test_actual_turret_keeps_rotating_between_frames_but_negative_domain_closes(self):
         policy = self.hardened_target()
+        self.runtime.features.add('drive')
         for step in range(25):
             self.target.appearance.turretMatrix.setRotateY(.01 * step)
             self.step(.1)
@@ -774,6 +853,8 @@ class NativeAtomicClosureTests(native_fire.AutomaticFireScene):
             if step == 0:
                 self.assertEqual('search_penetration', result['action'],
                                  (result, policy.status(), policy.rows))
+                self.assertIsNone(policy.search_started)
+                self.runtime._move_order({}, self.now)
                 started = policy.search_started
                 receipt = policy.status()['atomic']
                 self.assertEqual('all_failed', receipt['status'])
@@ -839,7 +920,7 @@ class NativeAtomicClosureTests(native_fire.AutomaticFireScene):
         frame = policy.evaluator.snapshot(self.now)
         policy.frame = frame
         jobs = policy._jobs(shell_index=frame['loaded'])
-        required = sum(len(policy.evaluator._prediction(frame, shell, target, sample, mode)['path']) - 1
+        required = sum(len(policy.evaluator._prediction(frame, shell, target, sample)['path']) - 1
                        for key, shell, target, sample, mode in jobs)
         self.assertTrue(policy.evaluator.begin_atomic(frame, jobs, self.now))
         self.assertEqual(required, policy.evaluator.atomic_receipt['world_budget'])
@@ -865,6 +946,7 @@ class NativeAtomicClosureTests(native_fire.AutomaticFireScene):
                 for material in getattr(target.typeDescriptor, name).materials.values():
                     material.armor = 10000.
         policy = self.runtime.attack_policy
+        self.runtime.features.add('drive')
         policy.reset()
         policy.atomic_time_budget = ATOMIC_WALL_SECONDS
         policy.evaluator.jobs.clear()
@@ -882,6 +964,8 @@ class NativeAtomicClosureTests(native_fire.AutomaticFireScene):
                 ordinary_navigation_requests += 1
                 self.assertIn('move_request', result)
             policy.background(self.now)
+            if result['action'] == 'search_penetration':
+                self.runtime._move_order({}, self.now)
             if policy.search_started is not None:
                 break
         self.assertIsNotNone(policy.search_started, policy.status())

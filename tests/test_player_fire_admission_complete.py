@@ -1046,8 +1046,8 @@ class AutomaticFireAdmissionTests(AutomaticFireScene):
                 proof['shot'] = dict(shell=dict(kind='ARMOR_PIERCING', caliber=caliber),
                                     piercingPower=(300., 300.), maxDistance=400.,
                                     speed=1000., gravity=0.)
-                scored = evaluator._armour(frame, dict(shot=proof['shot'], is_he=False), target,
-                    (0., 2., 96.), (0., 0., 1.), .096, 'penetration')
+                scored = evaluator._armour_geometry(frame, dict(shot=proof['shot'], is_he=False),
+                    target, (0., 2., 96.), (0., 0., 1.), .096)['penetration']
                 self.assertEqual('failed' if caliber == 90. else 'passed', scored['armor'])
                 hit = self.admission._contact(proof, (0., 2., 90.), (0., 2., 100.), .09, .1,
                                               centre=True)
@@ -1071,13 +1071,15 @@ class AutomaticFireAdmissionTests(AutomaticFireScene):
         evaluator = self.runtime.attack_policy.evaluator
         frame = evaluator.snapshot(self.now)
         target = next(row for row in frame['targets'] if row['entity'] is self.target)
-        with mock.patch(module, return_value=(track, hull)), \
+        shell = dict(shot=shot, is_he=True)
+        with mock.patch(module, return_value=(track, hull)) as collide, \
                 mock.patch.object(self.battle, '_projectile_he_blast_contact',
                     side_effect=(None, dict(nominal_armor=40., damage=65.))) as blast:
-            first = evaluator._armour(frame, dict(shot=shot, is_he=True), target,
-                (0., 2., 96.), (0., 0., 1.), .096, 'he_fallback')
-            second = evaluator._armour(frame, dict(shot=shot, is_he=True), target,
-                (0., 2., 96.), (0., 0., 1.), .096, 'he_fallback')
+            geometry = evaluator._armour_geometry(frame, shell, target,
+                (0., 2., 96.), (0., 0., 1.), .096)
+            first = evaluator._he_damage(shell, target, geometry)
+            second = evaluator._he_damage(shell, target, geometry)
+        self.assertEqual(1, collide.call_count)
         self.assertIsNone(first['contact'])
         self.assertIsNone(first['expected_damage'])
         self.assertIs(second['contact'], True)

@@ -889,12 +889,13 @@ class _PlayerBehaviorEngine(copied_runtime.BotRuntime):
         candidate = runtime.attack_policy.decision.get('candidate')
         solution = (candidate or {}).get('solution') or runtime.weapon.solution
         artillery = (state.get('profile') or {}).get('class_tag') == 'SPG'
+        load_plan = None
         if not artillery:
             policy = runtime.attack_policy
             if policy.decision['action'] != 'aim' or candidate is None:
                 return False
             token = runtime.generation
-            runtime._apply_next_shell(at_trigger=True)
+            load_plan = runtime._apply_next_shell(at_trigger=True)
             if not runtime._live(token):
                 return False
             # Rebind the exact observed barrel at this edge. The ideal path
@@ -916,6 +917,7 @@ class _PlayerBehaviorEngine(copied_runtime.BotRuntime):
                        solution=solution,
                        source_pose=runtime.pose_stamp(),
                        artillery=artillery,
+                       load_plan=load_plan, load_epoch=runtime._manual_shell_epoch,
                        artillery_receipt=launch_receipt)
         accepted = runtime.controller.issue_automatic_trigger(context, runtime.now)
         runtime._sync_weapon_observation()
@@ -962,6 +964,7 @@ class FullPlayerRuntime(object):
         self._manual_shell = None
         self._loading_switch = None
         self._shell_receipt = None
+        self._shell_log_at = float('-inf')
         self._attack_lay = None
         self._attack_log_key = None
         self._attack_log_at = float('-inf')
@@ -1249,13 +1252,14 @@ class FullPlayerRuntime(object):
         self.active = False
         self._neutral_drive()
         self.weapon.close()
-        self._release_next_shell()
+        self._release_next_shell(reason=reason)
         if self.attack_policy is not None:
             self.attack_policy.reset()
         self._loading_switch = self._shell_receipt = self._attack_lay = None
         self._manual_shell = None
         self._attack_log_key = None
         self._attack_log_at = float('-inf')
+        self._shell_log_at = float('-inf')
         if not self.release_governor():
             raise RuntimeError('owned_governor_release_pending')
         if self._siege_pending is not None:
@@ -2132,9 +2136,25 @@ class FullPlayerRuntime(object):
         self._owned_next_shell = None
         if self.active and self.gun is gun:
             pending = self.owner._local_player_burst or self.owner._local_fire_intent
-            self._manual_shell = (gun, pending)
+            name = 'NEXT_SHELLS' if code == getattr(settings, 'NEXT_SHELLS', None) else 'CURRENT_SHELLS'
+            self._manual_shell = (gun, pending, name)
+            if name == 'CURRENT_SHELLS':
+                self.attack_policy.load_started(gun.shot_index)
+            self._record_shell('manual', name, gun.pending_index if name == 'NEXT_SHELLS'
+                               else gun.shot_index, True, 'manual_input', force=True)
 
-    def _release_next_shell(self):
+    def _record_shell(self, event, setting, requested, accepted, reason, force=False, plan=None):
+        gun = self.gun
+        self._shell_receipt = dict(event=event, setting=setting, requested=requested,
+            accepted=bool(accepted), reason=reason, loaded=int(gun.shot_index),
+            pending=gun.pending_index, clip=int(gun.clip), reload=float(gun.reload_time),
+            plan=(plan or {}).get('key'), proof_at=(plan or {}).get('observed_at'),
+            shot_seq=self._last_committed_shot_seq, at=self.now)
+        if self.controller is not None and (force or self.now - self._shell_log_at >= .25):
+            self._shell_log_at = self.now
+            self.controller.record('shell_transition', **self._shell_receipt)
+
+    def _release_next_shell(self, reason='control_released', required=True, at_trigger=False):
         lease = self._owned_next_shell
         if lease is None:
             return
@@ -2168,8 +2188,15 @@ class FullPlayerRuntime(object):
             # A refused setter is not a cleanup receipt. The lifecycle owner
             # retries this exact obligation; it must not cancel a later manual
             # selection or a replacement gun when that retry eventually runs.
-            raise RuntimeError('owned_next_shell_release_pending')
+            self._record_shell('queue_release', 'NEXT_SHELLS', lease['index'], False,
+                               reason, force=at_trigger, plan=lease.get('plan'))
+            if required:
+                raise RuntimeError('owned_next_shell_release_pending')
+            return
         self._owned_next_shell = None
+        if self.gun is gun and self._binding() == lease['identity']:
+            self._record_shell('queue_release', 'NEXT_SHELLS', lease['index'], True,
+                               reason, force=at_trigger, plan=lease.get('plan'))
 
     def _apply_next_shell(self, at_trigger=False):
         if not self._live() or self._mission_brakes() or 'fire' not in self.features:
@@ -2178,7 +2205,9 @@ class FullPlayerRuntime(object):
                 getattr(self.owner, '_local_fire_intent', None) is not None):
             return
         gun = self.gun
-        if self._manual_shell is not None and self._manual_shell[0] is gun:
+        manual = self._manual_shell
+        if (manual is not None and manual[0] is gun and
+                (manual[2] == 'NEXT_SHELLS' or manual[1] is not None)):
             return
         if at_trigger and min(gun.clip, gun.ammo[int(gun.shot_index)]) > gun.burst_count:
             return
@@ -2190,36 +2219,47 @@ class FullPlayerRuntime(object):
             # A manually queued shell is a real input, not a policy suggestion.
             return
         policy = self.attack_policy
-        index = policy.next_shell
-        plan = policy.next_plan
-        if plan is not None:
-            frame = policy.frame
-            if (frame is None or policy._frame_invalid or frame['loaded'] != gun.shot_index or
-                    frame['ammo'] != tuple(gun.ammo)):
+        frame = policy.frame
+        reason = policy.next_status
+        if at_trigger:
+            # Finish this observation's bounded frontier before freezing the
+            # last trigger of a load. Current-shot approval is independent.
+            policy.background(self.now)
+        index, plan = policy.next_shell, policy.next_plan
+        if plan is not None and (frame is None or policy._frame_invalid or
+                frame['loaded'] != gun.shot_index or frame['ammo'] != tuple(gun.ammo)):
+            if not at_trigger:
                 return
+            index, plan, reason = None, None, 'observation_changed'
+        elif at_trigger and (plan is not None or index is None):
+            plan, reason = policy.next_at_edge()
+            index = plan['shell_index'] if plan is not None else None
+        elif plan is not None:
             current = policy.current_row(plan)
-            if (not policy._executable(current, plan['mode']) or
-                    at_trigger and not policy.evaluator.fence(frame)):
-                index = None
+            if not policy._executable(current, plan['mode']):
+                index, plan, reason = None, None, 'candidate_expired'
         if index is None:
             if lease is not None:
-                self._release_next_shell()
+                self._release_next_shell(reason, required=False, at_trigger=at_trigger)
+            elif at_trigger:
+                self._record_shell('queue_unavailable', 'NEXT_SHELLS', None, False, reason, force=True)
             return
         index = int(index)
         if index < 0 or index >= len(gun.ammo) or gun.ammo[index] <= 0:
             return
         if index == int(gun.shot_index):
             if lease is not None:
-                self._release_next_shell()
-            return
+                self._release_next_shell('ranked_current_shell', required=False, at_trigger=at_trigger)
+            return plan if self._live() and gun.pending_index is None else None
         if gun.ammo[int(gun.shot_index)] <= 0 and gun.reload_time > 0.:
             return
         if gun.pending_index == index:
-            return
+            lease['plan'] = plan
+            return plan
         token = self.generation
         epoch = self._manual_shell_epoch
         loaded_before = int(gun.shot_index)
-        lease = dict(index=index, gun=gun, identity=self._identity, generation=token)
+        lease = dict(index=index, gun=gun, identity=self._identity, generation=token, plan=plan)
         self._owned_next_shell = lease
         accepted = self._shell_setting('NEXT_SHELLS', index)
         if not self._live(token):
@@ -2234,11 +2274,16 @@ class FullPlayerRuntime(object):
         if not accepted or gun.pending_index != index:
             if self._owned_next_shell is lease:
                 self._owned_next_shell = None
+        if self._manual_shell_epoch != epoch or self.gun is not gun:
+            return
         applied = accepted and (gun.pending_index == index or
                                 gun.shot_index == index != loaded_before)
-        self._shell_receipt = dict(setting='NEXT_SHELLS', requested=index,
-            accepted=bool(applied), loaded=int(gun.shot_index),
-            pending=gun.pending_index, reload=float(gun.reload_time), at=self.now)
+        if applied and gun.shot_index != loaded_before:
+            policy.load_started(int(gun.shot_index), plan)
+        self._record_shell('queue', 'NEXT_SHELLS', index, applied,
+                           'ranked_plan' if applied else 'native_setting_refused',
+                           force=at_trigger, plan=plan)
+        return plan if applied else None
 
     def _reload_order(self, order, now):
         decision = self.attack_policy.decision
@@ -2300,7 +2345,8 @@ class FullPlayerRuntime(object):
             return
         gun = self.gun
         reloading = float(gun.reload_time) > 0.
-        if reloading and self._manual_shell is not None and self._manual_shell[0] is gun:
+        manual = self._manual_shell
+        if manual is not None and manual[0] is gun and (reloading or manual[2] == 'NEXT_SHELLS'):
             return
         # Stock CURRENT may restart an ordinary load (or transfer progress
         # with Intuition). Only the policy's proved replacement for this
@@ -2339,9 +2385,10 @@ class FullPlayerRuntime(object):
             return
         if applied and setting == 'CURRENT_SHELLS' and gun.reload_time > 0.:
             self._loading_switch = gun
-        self._shell_receipt = dict(setting=setting, requested=index, accepted=applied,
-            loaded=int(gun.shot_index), pending=gun.pending_index,
-            reload=float(gun.reload_time), at=self.now)
+        if applied:
+            self.attack_policy.load_started(int(gun.shot_index), decision.get('candidate'))
+        self._record_shell('setting', setting, index, applied, decision['reason'],
+                           plan=decision.get('candidate'))
 
     def authorize_trigger(self, context, entity, gun, shot_ray):
         if not self.active or 'fire' not in self.features or self._binding() != self._identity:
@@ -2365,6 +2412,7 @@ class FullPlayerRuntime(object):
         gun, state = self.gun, self.state
         key = (policy['phase'], policy['reason'], policy['shell'], policy['target'],
                policy['sample'], policy['next_shell'], policy['next_target'], policy['next_sample'],
+               policy['next_status'], policy['background_coverage'],
                state.get('gun_aligned'), self.weapon.verified, gun.shot_index, gun.pending_index,
                self._last_committed_shot_seq, (self._shell_receipt or {}).get('at'))
         if key == self._attack_log_key:
@@ -2442,14 +2490,35 @@ class FullPlayerRuntime(object):
             committed = 0
         if committed > self._last_committed_shot_seq:
             self._last_committed_shot_seq = committed
-            if (self._manual_shell is not None and
-                    int(event.get('burst_index', 0)) + 1 >= int(event.get('burst_count', 1))):
+            final = int(event.get('burst_index', 0)) + 1 >= int(event.get('burst_count', 1))
+            manual = self._manual_shell
+            if manual is not None and final:
                 pending_manual = self._manual_shell[1]
                 if (pending_manual is None or
                         pending_manual is not pending and pending_manual is not pending.get('player_burst')):
                     self._manual_shell = None
             if self.active and self.attack_policy is not None:
                 self.attack_policy.shot_committed(event, pending)
+                gun = self.gun
+                if final and gun is not None and gun.clip == 0 and gun.reload_time > 0.:
+                    burst = pending.get('player_burst') or {}
+                    context = (pending.get('player_control') or burst.get('player_control') or
+                               getattr(self.controller, 'trigger_context', None) or {})
+                    plan = None
+                    lease = self._owned_next_shell
+                    if context.get('gun') is gun and context.get('load_epoch') == self._manual_shell_epoch:
+                        plan = context.get('load_plan')
+                    if (plan is None and manual is None and lease is not None and
+                            lease['gun'] is gun and lease['index'] == gun.shot_index):
+                        plan = lease.get('plan')
+                    self.attack_policy.load_started(int(gun.shot_index), plan)
+                    if lease is not None and gun.pending_index != lease['index']:
+                        self._owned_next_shell = None
+                    loaded_plan = self.attack_policy.loading_plan
+                    self._record_shell('load_committed', None, int(gun.shot_index), True,
+                        'automatic_plan' if loaded_plan is not None else
+                        'manual_selection' if manual is not None else 'native_reload',
+                        force=True, plan=loaded_plan)
         self._sync_weapon_observation()
         identity = event.get('projectile_id')
         if identity is not None:
@@ -2647,6 +2716,12 @@ class FullPlayerRuntime(object):
             (mission['status'] in ('failed', 'cancelled') or
              mission.get('phase') == 'arriving'))
 
+    def attack_search_drive_available(self):
+        mission = self._mission or {}
+        return bool('drive' in self.features and not self._mission_brakes() and
+                    self._implicit_retry is None and not mission.get('capture_started') and
+                    not (mission.get('explicit') and mission.get('destination') is not None))
+
     def _observe_mission(self, now):
         mission = self._mission
         if mission is None or mission['status'] != 'running':
@@ -2740,7 +2815,8 @@ class FullPlayerRuntime(object):
             self._move_episode = None
             return self._ordinary_firing_order(order, now)
         if action != 'search_penetration':
-            if self._move_episode is not None and now >= self._move_episode['deadline']:
+            deadline = (self._move_episode or {}).get('deadline')
+            if deadline is not None and now >= deadline:
                 self.attack_policy.navigation_result(dict(self._last_navigation,
                     action='search_penetration', status='expired', at=now))
             self._move_episode = None
@@ -2749,24 +2825,27 @@ class FullPlayerRuntime(object):
                 return self._unusable_ammo_retreat(order, now)
             return order
         request = decision.get('move_request') or {}
+        identity = request.get('episode_id')
+        if not self.attack_search_drive_available():
+            self._last_navigation = dict(action=action, episode_id=identity, at=now,
+                status='refused', reason='drive_authority_unavailable')
+            self.attack_policy.navigation_result(self._last_navigation)
+            return order
         target = request.get('target') or (decision.get('candidate') or {}).get('target')
         if target is None:
             target = next(iter(self._targets), None)
         if target is None:
             return order
-        identity = request.get('episode_id')
         source = self.state['position']
         episode = self._move_episode
         if episode is None or episode['identity'] != identity:
             retry = self._move_retry
             if retry is not None and retry['identity'] == identity and now < retry['until'] and _distance(source, retry['source']) < 2.:
                 return order
-            deadline = request.get('deadline')
-            if deadline is None:
-                deadline = now + copied_runtime.FRIENDLY_REPOSITION_MAX_SECONDS
             episode = self._move_episode = dict(identity=identity, source=tuple(source),
-                deadline=float(deadline), cursor=0, goal=None, tried=[], target=dict(target))
-        if now >= episode['deadline']:
+                deadline=None, cursor=0, goal=None, tried=[], target=dict(target))
+        episode['deadline'] = request.get('deadline')
+        if episode['deadline'] is not None and now >= episode['deadline']:
             self._last_navigation = dict(status='timeout', reason='firing_position_exhausted',
                                          action=action, fallback='ordinary_navigation')
             self._move_retry = dict(identity=identity, source=tuple(source), until=now + 1.)
@@ -2777,6 +2856,7 @@ class FullPlayerRuntime(object):
         if goal is not None and _distance(source, goal) < 1.5:
             episode['tried'].append(goal)
             episode['goal'] = goal = None
+        attempted = False
         if goal is None:
             # These are requests, not invented reachable receipts. The copied
             # navigator proves and executes the route; native sweeps own the
@@ -2786,6 +2866,7 @@ class FullPlayerRuntime(object):
             offsets = (math.pi / 2., -math.pi / 2., math.pi / 4., -math.pi / 4., math.pi)
             cursor = episode['cursor']
             if cursor < len(offsets) * 2:
+                attempted = True
                 distance = 8. if cursor < len(offsets) else 16.
                 yaw = bearing + offsets[cursor % len(offsets)]
                 candidate = (episode['source'][0] + math.sin(yaw) * distance,
@@ -2796,14 +2877,17 @@ class FullPlayerRuntime(object):
                     candidate = (candidate[0], float(ground), candidate[2])
                     if self.engine.navigator.grid.segment_clear(source, candidate):
                         episode['goal'] = goal = candidate
+        self._last_navigation = dict(
+            status='moving' if goal is not None else 'path_refused' if attempted else 'searching',
+            action=action, episode_id=identity, attempted=attempted, at=now,
+            goal=goal, candidates=episode['cursor'])
+        self.attack_policy.navigation_result(self._last_navigation)
+        episode['deadline'] = request.get('deadline')
+        self._last_navigation['deadline'] = episode['deadline']
         if goal is None:
-            self._last_navigation = dict(status='searching', action=action,
-                                        candidates=episode['cursor'], deadline=episode['deadline'])
             return self._resume_firing_approach(order, target)
         result = dict(order, move_position=goal, throttle_override=None,
                       fire_allowed=False, combat_mode='player_' + action)
-        self._last_navigation = dict(status='moving', action=action, goal=goal,
-                                    deadline=episode['deadline'])
         return result
 
     def _ordinary_firing_order(self, order, now):
