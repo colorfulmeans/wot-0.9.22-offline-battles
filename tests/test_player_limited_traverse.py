@@ -1,9 +1,9 @@
 """Limited-arc regressions through the complete foreground runtime.
 
-Synthetic installed arcs below are not measured WZ data. Native bodies, barrel
-actuation, BSP and component collision are observations; the copied planner and
-driver, attack policy, trigger admission and physical ammunition are production
-consumers. No retired player Aiming/Weapon/DirectEngagement/HullAlignment runs.
+Fixtures use synthetic poses and include verified #1513 turret limits. Native
+bodies, barrel actuation, BSP and component collision are observations. The
+copied planner, driver, attack policy, trigger admission and ammunition are
+production consumers. No retired player Aiming/Weapon/DirectEngagement/HullAlignment runs.
 """
 import copy
 import math
@@ -368,6 +368,29 @@ class LimitedTraverseConsumerTests(TraverseHarness, unittest.TestCase):
 
 
 class MovingTraverseConsumerTests(TraverseHarness, unittest.TestCase):
+    def test_restricted_turrets_use_the_installed_arc_before_firing(self):
+        # #1513 ELC AMX 90 mm, Grille 15 15 cm, FV4005 183 mm and T28 Prototype.
+        for limit_degrees in (15., 50., 90., 143.):
+            limit = math.radians(limit_degrees)
+            for side in (-1., 1.):
+                for outside in (False, True):
+                    with self.subTest(limit=limit_degrees, side=side, outside=outside):
+                        bearing = math.radians(side * (limit_degrees + (4. if outside else -4.)))
+                        scene = self.scene(limits=(-limit, limit), bearing=bearing)
+                        scene.rotator_enabled = True
+                        if outside:
+                            self.advance_until(scene, lambda: bool(scene.runtime.state.get('hull_aiming')))
+                            self.assertGreater(side * scene.battle._sender.turn, 0.)
+                            scene.trigger.assert_not_called()
+                        self.advance_until(scene, lambda: scene.control.automatic_commits == 1)
+                        if outside:
+                            self.assertGreater(side * scene.body.yaw, 0.)
+                        else:
+                            self.assertFalse(any(row['hull_aiming'] for row in scene.trace))
+                            self.assertEqual(0., scene.body.yaw)
+                        self.assertGreater(side * scene.battle._avatar.gunRotator.turretYaw, 0.)
+                        self.assertEqual(1, len(scene.launches()))
+
     def test_pose_enters_arc_then_source_barrel_and_armor_gate_the_real_shot(self):
         for limits, tag, bearing, clip in (((-.2, .2), 'AT-SPG', .7, 1),
                 ((-.2, .2), 'AT-SPG', .7, 4), ((-.8, .8), 'heavyTank', -1.2, 1),
@@ -407,18 +430,20 @@ class MovingTraverseConsumerTests(TraverseHarness, unittest.TestCase):
                 self.assertEqual(1, len(scene.battle._projectile_meta))
 
     def test_unchanged_native_pose_hands_failed_hull_laying_to_bounded_copied_navigation(self):
-        scene = self.scene(rate=0.)
-        self.advance_until(scene, lambda: bool(scene.runtime.state.get('hull_aiming')))
-        admitted = scene.now
-        # A clear proposed input is not physical progress. The existing Bot
-        # angle recovery owns a bounded face/move attempt; repeatedly polling
-        # the same candidate cannot retain a stationary turn forever.
-        self.advance_until(scene, lambda: abs(scene.battle._sender.forward) > .01,
-                           limit=150)
-        self.assertLess(scene.now-admitted, 16.6)
-        self.assertEqual(0., scene.body.yaw)
-        self.assertEqual(0, scene.control.automatic_commits)
-        self.assertIsNone(scene.runtime.attack_policy.search_started)
+        grille_limit = math.radians(50.)
+        for limits, bearing in (((-.2, .2), .7),
+                ((-grille_limit, grille_limit), math.radians(54.))):
+            with self.subTest(limits=limits):
+                scene = self.scene(rate=0., limits=limits, bearing=bearing)
+                self.advance_until(scene, lambda: bool(scene.runtime.state.get('hull_aiming')))
+                admitted = scene.now
+                # Only physical progress can extend the bounded laying attempt.
+                self.advance_until(scene, lambda: abs(scene.battle._sender.forward) > .01,
+                                   limit=150)
+                self.assertLess(scene.now-admitted, 16.6)
+                self.assertEqual(0., scene.body.yaw)
+                self.assertEqual(0, scene.control.automatic_commits)
+                self.assertIsNone(scene.runtime.attack_policy.search_started)
 
     def test_limited_clip_trigger_commits_three_rounds_without_revalidating_tails(self):
         scene = self.scene(clip=6, burst=3)
