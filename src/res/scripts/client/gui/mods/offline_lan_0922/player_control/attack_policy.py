@@ -13,6 +13,7 @@ import time
 from .. import ballistics, combat_rules, gun_pitch_limits, shot_geometry
 from ..gun_mechanics import _field
 from ..projectile_runtime import PROJECTILE_BROADPHASE_RADIUS
+from .copied.ai.driver import NAVIGATION_WAIT_RECOVERY_SECONDS, WAYPOINT_ARRIVAL_RADIUS
 
 
 PENETRATION_PROBABILITY = .65
@@ -862,7 +863,16 @@ class AttackPolicy(object):
             self._lay_recovery = None
         lane_wait = self._native_lane_wait
         if lane_wait is not None and lane_wait['move_until'] is not None:
-            if now < lane_wait['move_until'] and not frame.get('reloading'):
+            retry_at = lane_wait['move_until']
+            if frame.get('search_drive'):
+                position, origin = frame['position'], lane_wait['position']
+                displacement = math.hypot(position[0] - origin[0], position[2] - origin[2])
+                if displacement < WAYPOINT_ARRIVAL_RADIUS:
+                    # An accepted turn can leave the hull in the same pocket.
+                    # Give ordinary navigation its wait and escape window
+                    # before a speculative aim can replace the route.
+                    retry_at += NAVIGATION_WAIT_RECOVERY_SECONDS
+            if now < retry_at and not frame.get('reloading'):
                 return self._choose('firing_position', 'native_lane_stalled')
             self._native_lane_wait = None
         current = self._frontier(now)

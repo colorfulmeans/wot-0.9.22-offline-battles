@@ -241,6 +241,37 @@ class RebuiltForegroundTests(unittest.TestCase):
         scene.policy.admission_failed(point, 'auto_front_vehicle')
         self.assertEqual('aim', scene.tick(2.3)['action'])
 
+    def test_lane_recovery_waits_for_displacement_even_after_commands_are_accepted(self):
+        for departed in (False, True):
+            with self.subTest(departed=departed):
+                scene = Observations(targets=2, points=9)
+                scene.frame['search_drive'] = True
+                for target in (1, 2):
+                    for sample in range(9):
+                        scene.passed(target=target, sample=sample)
+                for now in (0., ATOMIC_CLOSE_INTERVAL):
+                    point = scene.tick(now)['candidate']
+                    scene.policy.admission_failed(point, 'auto_front_vehicle')
+
+                release_at = 2. * ATOMIC_CLOSE_INTERVAL
+                entered = scene.tick(release_at - .1)
+                self.assertEqual('native_lane_stalled', entered['reason'])
+                scene.policy.navigation_result(dict(
+                    action='firing_position', status='accepted', turn=1.,
+                    position=(0., 0., 0.), at=release_at - .1))
+                parked = scene.tick(release_at + .1)
+                self.assertEqual('firing_position', parked['action'])
+                self.assertEqual(entered['move_request']['episode_id'],
+                                 parked['move_request']['episode_id'])
+                self.assertFalse(scene.policy.apply_order({})['fire_allowed'])
+                if departed:
+                    scene.frame['position'] = (2., 0., 0.)
+                    scene.frame['pose'] = ('source', 1)
+                    self.assertEqual('aim', scene.tick(release_at + .2)['action'])
+                else:
+                    self.assertEqual('aim', scene.tick(release_at + 4.)['action'])
+                self.assertIsNone(scene.policy.search_started)
+
     def test_copied_other_sample_refusal_does_not_override_verified_sample(self):
         scene = Observations()
         scene.passed(0, sample=1)
