@@ -920,15 +920,15 @@
       "methods": [
         {
           "calls": [],
-          "end_line": 3501,
-          "line": 3491,
+          "end_line": 3509,
+          "line": 3499,
           "name": "_bounded_failure_reason",
           "source_sha256": "cf30c35cea8523fc501a9287e6853a1d86dc4430b8fb3d32533a91d6ad49528f"
         },
         {
           "calls": [],
-          "end_line": 3568,
-          "line": 3563,
+          "end_line": 3576,
+          "line": 3571,
           "name": "_optional_feature_enabled",
           "source_sha256": "50f14d5c59bffa2eeb42111a4d18f55f11544123295e84dd0f79a4522cb20d59"
         },
@@ -936,43 +936,43 @@
           "calls": [
             "_bounded_failure_reason"
           ],
-          "end_line": 3591,
-          "line": 3570,
+          "end_line": 3599,
+          "line": 3578,
           "name": "_warn_optional_failure",
           "source_sha256": "84a28d8d10554b317b1f54d653f8eb8c0d8f895306a2ca7e4ac32d1098ef7551"
         },
         {
           "calls": [],
-          "end_line": 3690,
-          "line": 3683,
+          "end_line": 3698,
+          "line": 3691,
           "name": "_clock",
           "source_sha256": "9803bb4837df7a53cd6599120895cf12ffc85304643609dad3fe72c178dd2702"
         },
         {
           "calls": [],
-          "end_line": 3708,
-          "line": 3702,
+          "end_line": 3716,
+          "line": 3710,
           "name": "_server_entity",
           "source_sha256": "c600674eb2b99f11463df4600a711d79be77c5da6926b349be8794dcc75ecc35"
         },
         {
           "calls": [],
-          "end_line": 5404,
-          "line": 5390,
+          "end_line": 5412,
+          "line": 5398,
           "name": "_destructible_drive_speed_cap",
           "source_sha256": "c93ba99ef20b9b9bc057b01e0214e362a73d5654903d8e20cf5b87ebdc8675d5"
         },
         {
           "calls": [],
-          "end_line": 5408,
-          "line": 5406,
+          "end_line": 5416,
+          "line": 5414,
           "name": "_bot_destructible_travel_descriptor",
           "source_sha256": "0ff0ec83ffe9234afaf923bf082aaa13e3e071745ffd4fd122b262edb363852f"
         },
         {
           "calls": [],
-          "end_line": 5950,
-          "line": 5948,
+          "end_line": 5958,
+          "line": 5956,
           "name": "_vector",
           "source_sha256": "cfec7047385df6a57ed3ae7bcb3cd86decc53851c622f8a6734124110f3e0524"
         },
@@ -980,15 +980,15 @@
           "calls": [
             "_ground_filter_impl"
           ],
-          "end_line": 5958,
-          "line": 5952,
+          "end_line": 5966,
+          "line": 5960,
           "name": "_ground_filter",
           "source_sha256": "b6bfc55aa689cca8422db01942db0790b5c58bbccbc6c4b0a896edff3266306a"
         },
         {
           "calls": [],
-          "end_line": 5980,
-          "line": 5960,
+          "end_line": 5988,
+          "line": 5968,
           "name": "_ground_filter_impl",
           "source_sha256": "f049af4e1e655abf16218566ba1e0346eee7f90f406bea1ab8f4dc611364e617"
         },
@@ -996,8 +996,8 @@
           "calls": [
             "_ram_pose_matrix"
           ],
-          "end_line": 6150,
-          "line": 6139,
+          "end_line": 6158,
+          "line": 6147,
           "name": "_prepare_stack_target",
           "source_sha256": "674e4457dd552f379a8d6a7b3b9bd5e91fbfed8349bc89a801e4bb5a117b275c"
         },
@@ -1005,8 +1005,8 @@
           "calls": [
             "_stack_ground_hit_impl"
           ],
-          "end_line": 6160,
-          "line": 6152,
+          "end_line": 6168,
+          "line": 6160,
           "name": "_stack_ground_hit",
           "source_sha256": "c250bd88dbd61b984fe05b1c06c940352efad8d0d24e5f154e22e6d84b7c88af"
         },
@@ -1018,8 +1018,8 @@
             "_vector",
             "_warn_optional_failure"
           ],
-          "end_line": 6241,
-          "line": 6162,
+          "end_line": 6249,
+          "line": 6170,
           "name": "_stack_ground_hit_impl",
           "source_sha256": "51db69be148cecb6786136210477cb95b84cde81d564401e2e423cc4f1bf927f"
         },
@@ -1028,8 +1028,8 @@
             "_collide_static_down",
             "_stack_ground_hit"
           ],
-          "end_line": 6491,
-          "line": 6481,
+          "end_line": 6499,
+          "line": 6489,
           "name": "_collide_down",
           "source_sha256": "d69cf3dfd876463809fd2081c4b3d5917015224b5c555f67e00dea269cb97ed0"
         },
@@ -1037,15 +1037,15 @@
           "calls": [
             "_vector"
           ],
-          "end_line": 6517,
-          "line": 6493,
+          "end_line": 6525,
+          "line": 6501,
           "name": "_navigation_surface_observation",
           "source_sha256": "90f994c351af0057c644f14532f590f85c544869452d847d6b9fd01459edd874"
         },
         {
           "calls": [],
-          "end_line": 6530,
-          "line": 6519,
+          "end_line": 6538,
+          "line": 6527,
           "name": "_collide_static_down",
           "source_sha256": "46517e7e600ded392d6c055efcdcb7b0a98b9fe26361d76bf53c254ed12c2ce1"
         },
@@ -1055,15 +1055,15 @@
             "_ground_filter",
             "_vector"
           ],
-          "end_line": 6577,
-          "line": 6532,
+          "end_line": 6585,
+          "line": 6540,
           "name": "_ground_y",
           "source_sha256": "b3806ed033cb74a862a72a132186211cb7e4bd75d2cd796d758d013e5599037b"
         },
         {
           "calls": [],
-          "end_line": 6672,
-          "line": 6668,
+          "end_line": 6680,
+          "line": 6676,
           "name": "_navigation_collision_filter",
           "source_sha256": "436db59d698d3d8f01872bbfa1b0d220e5b6d76f1086f8abdacd2969901cf208"
         },
@@ -1071,15 +1071,15 @@
           "calls": [
             "_navigation_collision_filter"
           ],
-          "end_line": 6692,
-          "line": 6674,
+          "end_line": 6700,
+          "line": 6682,
           "name": "_collide_navigation",
           "source_sha256": "44a8fa2efaae3e448901e44ea1ce33b13e04e1b2e1f3901fc0a71db1c03b411c"
         },
         {
           "calls": [],
-          "end_line": 6702,
-          "line": 6694,
+          "end_line": 6710,
+          "line": 6702,
           "name": "_record_navigation_hit",
           "source_sha256": "853f6c080795e849c88c4ef3853a395c7eb5874dda229d5cc98ac69a710e8ff6"
         },
@@ -1089,8 +1089,8 @@
             "_vector",
             "_water_depth"
           ],
-          "end_line": 6730,
-          "line": 6704,
+          "end_line": 6738,
+          "line": 6712,
           "name": "_navigation_height_columns",
           "source_sha256": "ae1b76e8120792dfb051ab4ac615f8c7576f56a1334373856027f287e1cb9713"
         },
@@ -1100,8 +1100,8 @@
             "_vector",
             "_water_depth"
           ],
-          "end_line": 6757,
-          "line": 6732,
+          "end_line": 6765,
+          "line": 6740,
           "name": "_navigation_ground",
           "source_sha256": "787f683a9024ce7a5df6ca64a7ca36d388894a4b936d3a9e7756b032d8430a78"
         },
@@ -1115,8 +1115,8 @@
             "_vector",
             "_water_depth"
           ],
-          "end_line": 6995,
-          "line": 6829,
+          "end_line": 7003,
+          "line": 6837,
           "name": "_direction_probe",
           "source_sha256": "15027794b5ebb9f3a268340428bb6c427062e1712cf4240fd127ba25dad68490"
         },
@@ -1124,8 +1124,8 @@
           "calls": [
             "_vector"
           ],
-          "end_line": 7071,
-          "line": 6997,
+          "end_line": 7079,
+          "line": 7005,
           "name": "_direction_world_receipt",
           "source_sha256": "da13ea61982a556b4f983ed7d2e1fcb20c52b8d743259016b4473c8e3745d595"
         },
@@ -1135,8 +1135,8 @@
             "_navigation_ground",
             "_vector"
           ],
-          "end_line": 7144,
-          "line": 7073,
+          "end_line": 7152,
+          "line": 7081,
           "name": "_navigation_slope_lane_is_clear",
           "source_sha256": "4f5496a311eb660309bd8f0ac683d75ef379804e36472733e44cdd328e924447"
         },
@@ -1146,8 +1146,8 @@
             "_navigation_slope_lane_is_clear",
             "_vector"
           ],
-          "end_line": 7184,
-          "line": 7146,
+          "end_line": 7192,
+          "line": 7154,
           "name": "_navigation_obstacle",
           "source_sha256": "07f94e867f4e7497e9237825efd5209c918e45cd530b0c52567e93767eea8aea"
         },
@@ -1155,8 +1155,8 @@
           "calls": [
             "_vector"
           ],
-          "end_line": 7241,
-          "line": 7214,
+          "end_line": 7249,
+          "line": 7222,
           "name": "_water_depth",
           "source_sha256": "65a2972ed8737605c18d0fba1d0ebf4c937fd509698deaeb210995c0a575fa6c"
         },
@@ -1164,15 +1164,15 @@
           "calls": [
             "_vector"
           ],
-          "end_line": 7384,
-          "line": 7371,
+          "end_line": 7392,
+          "line": 7379,
           "name": "_barrel_under_water",
           "source_sha256": "25b042710f60405be5f57c99f1608b53b873b9b73c4cdba73e68944fb6cbffd6"
         },
         {
           "calls": [],
-          "end_line": 7405,
-          "line": 7386,
+          "end_line": 7413,
+          "line": 7394,
           "name": "_bot_barrel_point",
           "source_sha256": "5d40f322d26e2efd2079f8e988a9d4010e9cda03a864209272d2bbaf8e7a4bb0"
         },
@@ -1180,8 +1180,8 @@
           "calls": [
             "_ground_y"
           ],
-          "end_line": 7707,
-          "line": 7706,
+          "end_line": 7715,
+          "line": 7714,
           "name": "_cover_ground",
           "source_sha256": "2932d0a67e9151b12fa5c7d3890c0cc52a4dc08d670768b69afb86ea1e15683b"
         },
@@ -1189,8 +1189,8 @@
           "calls": [
             "_server_entity"
           ],
-          "end_line": 7732,
-          "line": 7721,
+          "end_line": 7740,
+          "line": 7729,
           "name": "_observed_vehicle_descriptor",
           "source_sha256": "fb178b7a434f8155c2c7865695ae8728263134faf367732c1813afb19812742d"
         },
@@ -1198,8 +1198,8 @@
           "calls": [
             "_observed_vehicle_descriptor"
           ],
-          "end_line": 7744,
-          "line": 7734,
+          "end_line": 7752,
+          "line": 7742,
           "name": "_observed_gun_origin",
           "source_sha256": "4d5eea276626bae77dce8e11c557f909f3739276698e9c09ebe64170bd476d58"
         },
@@ -1207,8 +1207,8 @@
           "calls": [
             "_vector"
           ],
-          "end_line": 7749,
-          "line": 7746,
+          "end_line": 7757,
+          "line": 7754,
           "name": "_tactical_ray_clear",
           "source_sha256": "1b8d1eba416af7c2583f360d496117d9cead5c7a4dacb99caab268b9772158cd"
         },
@@ -1218,8 +1218,8 @@
             "_observed_vehicle_descriptor",
             "_tactical_ray_clear"
           ],
-          "end_line": 7766,
-          "line": 7751,
+          "end_line": 7774,
+          "line": 7759,
           "name": "_bot_incoming_lane",
           "source_sha256": "04089cd3e1bdcc01445513c269c48e79817d67607aeabe5e6ec7ed697b9b441e"
         },
@@ -1227,8 +1227,8 @@
           "calls": [
             "_sample_ground_plane"
           ],
-          "end_line": 7777,
-          "line": 7768,
+          "end_line": 7785,
+          "line": 7776,
           "name": "_cover_surface_pose",
           "source_sha256": "2e5f9814ebcf8da0c18cc7d17e93f7edc025c63f0aa028958cd41e710da0e936"
         },
@@ -1236,8 +1236,8 @@
           "calls": [
             "_observed_vehicle_descriptor"
           ],
-          "end_line": 7807,
-          "line": 7779,
+          "end_line": 7815,
+          "line": 7787,
           "name": "_cover_gun_lane",
           "source_sha256": "0fa844b9508fff75ead038f44e054628f4de5dab20e1c6da23b05c8a92ff2ea3"
         },
@@ -1252,29 +1252,29 @@
             "_tactical_ray_clear",
             "_water_depth"
           ],
-          "end_line": 7940,
-          "line": 7809,
+          "end_line": 7948,
+          "line": 7817,
           "name": "_sample_bot_cover",
           "source_sha256": "f0b05b15d81b03ecebc48d83c5a39493f592e856830bf86fd46a6b5fc18ccd6f"
         },
         {
           "calls": [],
-          "end_line": 7979,
-          "line": 7978,
+          "end_line": 7987,
+          "line": 7986,
           "name": "_local_body_pose",
           "source_sha256": "fbe61df10a4dfe2e5a6140f5c9cbad2b77e2f1e8975e985d63954d1c081cc134"
         },
         {
           "calls": [],
-          "end_line": 15925,
-          "line": 15898,
+          "end_line": 15933,
+          "line": 15906,
           "name": "_projectile_vehicle_matrices",
           "source_sha256": "e23c8f66044ebc5b2ba1ea1874e7a6b75cab798fa557538b7281c01670154c7c"
         },
         {
           "calls": [],
-          "end_line": 15947,
-          "line": 15931,
+          "end_line": 15955,
+          "line": 15939,
           "name": "_projectile_plain_pose",
           "source_sha256": "7d7a748134cd60fde5a4a4d40bde32c2b5ea89a9bfb348b5c8421b03e32391a3"
         },
@@ -1282,15 +1282,15 @@
           "calls": [
             "_ground_y"
           ],
-          "end_line": 21278,
-          "line": 21241,
+          "end_line": 21286,
+          "line": 21249,
           "name": "_sample_ground_plane",
           "source_sha256": "3682fdda674f8eb3155a207ab07533c8c1ee5363b201229ac3cfcabe85b097dd"
         },
         {
           "calls": [],
-          "end_line": 21427,
-          "line": 21391,
+          "end_line": 21435,
+          "line": 21399,
           "name": "_report_local_tree_motion",
           "source_sha256": "056bcfc254acea796d4cd3fb50acf33d848b100fbb1576b316321005f16e241d"
         },
@@ -1300,8 +1300,8 @@
             "_report_local_tree_motion",
             "_vector"
           ],
-          "end_line": 21486,
-          "line": 21429,
+          "end_line": 21494,
+          "line": 21437,
           "name": "_tree_motion_proposal",
           "source_sha256": "2081e21a074172425424f3636c87bf59b4b735cfd25f24da0c28f7c5cd0f6214"
         },
@@ -1310,8 +1310,8 @@
             "_destructible_contact_token",
             "_vector"
           ],
-          "end_line": 21890,
-          "line": 21672,
+          "end_line": 21898,
+          "line": 21680,
           "name": "_destructible_pose_sweep",
           "source_sha256": "9607ea96106cc65a1660a56cdd6a43ea3d27cc1e323bfb6032b187c14dd9f288"
         },
@@ -1319,8 +1319,8 @@
           "calls": [
             "_turret_server_time_ms"
           ],
-          "end_line": 21898,
-          "line": 21892,
+          "end_line": 21906,
+          "line": 21900,
           "name": "_turret_motion_is_clear",
           "source_sha256": "7385b6fcd424f70c7e69bfcd83e730a8bf245b0cc01a3843a0c854086f990ed7"
         },
@@ -1328,8 +1328,8 @@
           "calls": [
             "_vector"
           ],
-          "end_line": 22350,
-          "line": 22206,
+          "end_line": 22358,
+          "line": 22214,
           "name": "_native_world_rotation_is_clear",
           "source_sha256": "c8ae43644ce55063abcb8e8271fd7ff82c6640073f506b5fbc8ca91391da0fc5"
         },
@@ -1338,8 +1338,8 @@
             "_destructible_contact_token",
             "_vector"
           ],
-          "end_line": 22597,
-          "line": 22562,
+          "end_line": 22605,
+          "line": 22570,
           "name": "_complete_bot_tree_contact",
           "source_sha256": "087db5fe4e409c5aefbc637373168dd356de8eae1161ef2f902f8612e3c23cea"
         },
@@ -1348,8 +1348,8 @@
             "_resolve_bot_motion",
             "_resolve_bot_rotation"
           ],
-          "end_line": 22713,
-          "line": 22617,
+          "end_line": 22721,
+          "line": 22625,
           "name": "_probe_bot_local_motion",
           "source_sha256": "7371cc863d16a5f1af636c1b9f04c4b53b3a5bea51b1306a00047e9f137fad5f"
         },
@@ -1363,8 +1363,8 @@
             "_native_world_rotation_is_clear",
             "_tree_motion_proposal"
           ],
-          "end_line": 22810,
-          "line": 22715,
+          "end_line": 22818,
+          "line": 22723,
           "name": "_resolve_bot_rotation",
           "source_sha256": "ccdc8ae47ac15965fad99fd6fe01a5058ab6ec41857d97b2f1944208bfdada25"
         },
@@ -1377,15 +1377,15 @@
             "_turret_motion_is_clear",
             "_vector"
           ],
-          "end_line": 23009,
-          "line": 22812,
+          "end_line": 23017,
+          "line": 22820,
           "name": "_resolve_bot_motion",
           "source_sha256": "6e670368007e6522d37ea2d7733c8ed109a27423e009d9ac2c2172717a755d73"
         },
         {
           "calls": [],
-          "end_line": 23014,
-          "line": 23011,
+          "end_line": 23022,
+          "line": 23019,
           "name": "_collision_shape",
           "source_sha256": "06554b5ca58cf3d1a39bca718ac3a31604419b016f5dda34d84b3f5e6bb3cc54"
         },
@@ -1393,15 +1393,15 @@
           "calls": [
             "_vector"
           ],
-          "end_line": 23560,
-          "line": 23556,
+          "end_line": 23568,
+          "line": 23564,
           "name": "_ram_pose_matrix",
           "source_sha256": "281c2659066d998ce1c290d7b1f5b2381dfd29aa7c3f3f282ae8b36328077836"
         },
         {
           "calls": [],
-          "end_line": 24650,
-          "line": 24629,
+          "end_line": 24658,
+          "line": 24637,
           "name": "_destructible_contact_token",
           "source_sha256": "44e91a45345ae9890215cd35c28abf73a38e81676440a3247bf234a750192265"
         },
@@ -1409,8 +1409,8 @@
           "calls": [
             "_clock"
           ],
-          "end_line": 27503,
-          "line": 27473,
+          "end_line": 27511,
+          "line": 27481,
           "name": "_sight_collision_filter",
           "source_sha256": "366a419b564793fda15ce2be4d0ddf2ebc8499cdcde26fa3813d60dd7e8dbdd0"
         },
@@ -1421,8 +1421,8 @@
             "_turret_server_time_ms",
             "_vector"
           ],
-          "end_line": 27594,
-          "line": 27556,
+          "end_line": 27602,
+          "line": 27564,
           "name": "_spot_geometry",
           "source_sha256": "0c97ecc9bf793406b4beb06538deea0f7e6202ee9f19bf6920ab723b051d3f64"
         },
@@ -1431,8 +1431,8 @@
             "_server_entity",
             "_spot_geometry"
           ],
-          "end_line": 27605,
-          "line": 27596,
+          "end_line": 27613,
+          "line": 27604,
           "name": "_bot_visibility",
           "source_sha256": "d59f8f95847d0e08a82423e0dfb5ce31a7f29fad1800a543bb63481843f22ad9"
         },
@@ -1440,8 +1440,8 @@
           "calls": [
             "_server_entity"
           ],
-          "end_line": 27720,
-          "line": 27663,
+          "end_line": 27728,
+          "line": 27671,
           "name": "_bot_aim_context",
           "source_sha256": "6d4db0070a8cbdff1aee4e6d307c58741b43481aa3b7f65d3150a1a30d9b31bc"
         },
@@ -1449,8 +1449,8 @@
           "calls": [
             "_bot_aim_context"
           ],
-          "end_line": 27749,
-          "line": 27722,
+          "end_line": 27757,
+          "line": 27730,
           "name": "_bot_aim_point",
           "source_sha256": "bd02be26fa67a4f6c49d9b058fead11a6ce1fe383b7b5c118908e487d5497ca2"
         },
@@ -1459,8 +1459,8 @@
             "_descriptor_shot",
             "_vector"
           ],
-          "end_line": 27797,
-          "line": 27751,
+          "end_line": 27805,
+          "line": 27759,
           "name": "_bot_aim_damage_score",
           "source_sha256": "17a14d65d8912c0a5121a1d9eba3be7ba8ab4331de698c0360519f04d09e7122"
         },
@@ -1474,8 +1474,8 @@
             "_vector",
             "_wreck_blocks_bot_path"
           ],
-          "end_line": 27930,
-          "line": 27799,
+          "end_line": 27938,
+          "line": 27807,
           "name": "_bot_firing_lane",
           "source_sha256": "98ffb986c0a6651066914a82c69034878b74d44189d9bdc5dfdb05ebbf96fe2e"
         },
@@ -1483,15 +1483,15 @@
           "calls": [
             "_server_entity"
           ],
-          "end_line": 27967,
-          "line": 27932,
+          "end_line": 27975,
+          "line": 27940,
           "name": "_bot_lane_rows",
           "source_sha256": "c32e7cec295cb1dd4b3b5fbddac4ddae4edb2f3ded3b93308f66099a0118e8ca"
         },
         {
           "calls": [],
-          "end_line": 27993,
-          "line": 27969,
+          "end_line": 28001,
+          "line": 27977,
           "name": "_wreck_lane_evidence",
           "source_sha256": "9372686f3ab761169fde88ca8fdb4916518db23d88ff62c73bf3cec7f8c632dc"
         },
@@ -1502,8 +1502,8 @@
             "_vector",
             "_wreck_lane_evidence"
           ],
-          "end_line": 28082,
-          "line": 28024,
+          "end_line": 28090,
+          "line": 28032,
           "name": "_bot_lane_row_contact",
           "source_sha256": "1843ab6e38c086184770e8c22c17a70f0de4b855db1da92a5d4590f1e4e69984"
         },
@@ -1515,8 +1515,8 @@
             "_record_alive",
             "_wreck_blocks_bot_path"
           ],
-          "end_line": 28141,
-          "line": 28084,
+          "end_line": 28149,
+          "line": 28092,
           "name": "_bot_friendly_path_verdict",
           "source_sha256": "67127f88fd0281513b154e63e37f524a40edb4728f5850767e98d6be2e24fe34"
         },
@@ -1525,8 +1525,8 @@
             "_bot_lane_rows",
             "_record_alive"
           ],
-          "end_line": 28164,
-          "line": 28143,
+          "end_line": 28172,
+          "line": 28151,
           "name": "_bot_lane_wreck_rows",
           "source_sha256": "5f5304dd469daf668dfef9fe2178a988fa63844b5b20bb83117d1203db48a34d"
         },
@@ -1536,8 +1536,8 @@
             "_turret_server_time_ms",
             "_vector"
           ],
-          "end_line": 28179,
-          "line": 28166,
+          "end_line": 28187,
+          "line": 28174,
           "name": "_wreck_blocks_bot_path",
           "source_sha256": "1ead5cafdcd47284f5eab226c5fe77a3b93ebdc0a9be77207039872b4870fdcf"
         },
@@ -1546,8 +1546,8 @@
             "_bot_friendly_path_verdict",
             "_descriptor_shot"
           ],
-          "end_line": 28221,
-          "line": 28181,
+          "end_line": 28229,
+          "line": 28189,
           "name": "_bot_friendly_firing_lane",
           "source_sha256": "c90e5a356ea3561ce1267d081a626301d5972421a9e01eacceff04a0a043d1a9"
         },
@@ -1558,8 +1558,8 @@
             "_projectile_plain_pose",
             "_server_entity"
           ],
-          "end_line": 28257,
-          "line": 28223,
+          "end_line": 28265,
+          "line": 28231,
           "name": "_bot_direct_launch_origin",
           "source_sha256": "7bb018439b05584aa2486a2863d7d822c85d022594e8d555b33a02a20a03496c"
         },
@@ -1567,8 +1567,8 @@
           "calls": [
             "_bot_direct_launch_origin"
           ],
-          "end_line": 28262,
-          "line": 28259,
+          "end_line": 28270,
+          "line": 28267,
           "name": "_bot_artillery_planning_origin",
           "source_sha256": "6940412a9f7ceb50074a4e6043d6ca158213fdf882bc488e9bb771a31e82cb7c"
         },
@@ -1576,22 +1576,22 @@
           "calls": [
             "_bot_aim_context"
           ],
-          "end_line": 28272,
-          "line": 28264,
+          "end_line": 28280,
+          "line": 28272,
           "name": "_bot_artillery_aim_samples",
           "source_sha256": "d6667952a5837b9b7db31844cc8c317155b613bcedd70bfbf21a301b97a98ef1"
         },
         {
           "calls": [],
-          "end_line": 28275,
-          "line": 28274,
+          "end_line": 28283,
+          "line": 28282,
           "name": "_bot_artillery_status",
           "source_sha256": "497af13b1c576b62935c3e1bf7c4aa5422f82f3b81f6e01ba0314427ca3825d3"
         },
         {
           "calls": [],
-          "end_line": 28283,
-          "line": 28277,
+          "end_line": 28291,
+          "line": 28285,
           "name": "_bot_ballistic_solution",
           "source_sha256": "d20c4e0e82b5c51d96dc6f572f593df5baf240c8205e4f2a1ebbebf9d93fb159"
         },
@@ -1600,8 +1600,8 @@
             "_bot_direct_launch_origin",
             "_server_entity"
           ],
-          "end_line": 28323,
-          "line": 28285,
+          "end_line": 28331,
+          "line": 28293,
           "name": "_bot_artillery_launch",
           "source_sha256": "cbfca503d1aece18f5f36739ccef9e16ceaa04b0b49d646868f88f3676c8230c"
         },
@@ -1610,15 +1610,15 @@
             "_bot_friendly_path_verdict",
             "_descriptor_shot"
           ],
-          "end_line": 28352,
-          "line": 28325,
+          "end_line": 28360,
+          "line": 28333,
           "name": "_bot_artillery_friendly_lane",
           "source_sha256": "ef26b620d2091cda3461189f9514305c4e5ff6f227421fa997e8ef16ed74b7f7"
         },
         {
           "calls": [],
-          "end_line": 28358,
-          "line": 28354,
+          "end_line": 28366,
+          "line": 28362,
           "name": "_bot_artillery_cancel",
           "source_sha256": "0b4a330192929f4d7825c593a5cb9d800d390a4407eddf5fdb4f4ebe148ca8bb"
         },
@@ -1628,15 +1628,15 @@
             "_vector",
             "_wreck_blocks_bot_path"
           ],
-          "end_line": 28373,
-          "line": 28360,
+          "end_line": 28381,
+          "line": 28368,
           "name": "_artillery_arc_probe",
           "source_sha256": "07bc5cd129091e315128ebbf625e91e6293e86f99ea6b10a569d5efd4d69b44d"
         },
         {
           "calls": [],
-          "end_line": 29924,
-          "line": 29917,
+          "end_line": 29932,
+          "line": 29925,
           "name": "_record_alive",
           "source_sha256": "e5eb206cc54c0847d6328beed6301705d45b68938124d3145b3de272a59cd0fa"
         },
@@ -1645,8 +1645,8 @@
             "_optional_feature_enabled",
             "_warn_optional_failure"
           ],
-          "end_line": 30082,
-          "line": 30068,
+          "end_line": 30090,
+          "line": 30076,
           "name": "_foliage_camouflage_bonus",
           "source_sha256": "094addf21e8f8d0257361d070eea2168500bec7e0173e36a3f80eb4205e4565d"
         },
@@ -1654,15 +1654,15 @@
           "calls": [
             "_clock"
           ],
-          "end_line": 30860,
-          "line": 30852,
+          "end_line": 30868,
+          "line": 30860,
           "name": "_turret_server_time_ms",
           "source_sha256": "b29c4fbecfd3bf524cdfa4608a01b28375cb153967b98111e8b80cdf46f8685f"
         },
         {
           "calls": [],
-          "end_line": 32068,
-          "line": 32062,
+          "end_line": 32076,
+          "line": 32070,
           "name": "_descriptor_shot",
           "source_sha256": "49c08fb41cc6152601ff03ffff7c9196f587e0cd004570ccfb29a532134a4697"
         }
@@ -1736,7 +1736,7 @@
         "_navigation_obstacle"
       ],
       "source": "src/res/scripts/client/gui/mods/offline_lan_0922/battle_runtime.py",
-      "source_sha256": "28edae058d6459b5b27ae24e11e3a463a704c1fcd02da03224fccc4e2f8e18b0",
+      "source_sha256": "97546e4a2b4c5e9b5308c040144307c7cb32469e81d014012ec11156ec98cfc5",
       "target": "src/res/scripts/client/gui/mods/offline_lan_0922/player_control/copied/battle_geometry.py"
     },
     {

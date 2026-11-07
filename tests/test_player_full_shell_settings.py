@@ -633,6 +633,30 @@ class FullShellSettingsTests(unittest.TestCase):
         self.assertGreater(gun.reload_time, 0.)
         self.assertFalse(scene.launches())
 
+    def test_no_verified_shot_and_no_he_yields_to_copied_withdrawal(self):
+        scene = self.scene(clip=1, burst=1)
+        gun = scene.battle._gun_state
+        before = list(gun.ammo)
+        for index in range(len(gun.shots)):
+            gun.shots[index].piercingPower = (1., 1.)
+            scene.battle.client.effective_params['gun']['shots'][index]['source_shot'][
+                'piercingPower'] = (1., 1.)
+        started = None
+        for unused in range(180):
+            row = self.tick_weapon(scene)
+            policy = scene.runtime.attack_policy
+            if started is None:
+                started = policy.search_started
+            if row['order'].get('combat_mode') == 'withdraw':
+                break
+        else:
+            self.fail('The expired search never reached withdrawal: %r' % scene.trace[-3:])
+        self.assertIsNotNone(started)
+        self.assertGreaterEqual(scene.now - started, attack_policy.SEARCH_SECONDS)
+        self.assertEqual('no_he_or_verified_penetration', policy.decision['reason'])
+        self.assertEqual(before, gun.ammo)
+        self.assertFalse(scene.launches())
+
 
 if __name__ == '__main__':
     unittest.main()

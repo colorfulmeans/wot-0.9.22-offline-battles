@@ -2218,6 +2218,7 @@ class FullPlayerRuntime(object):
             return
         token = self.generation
         epoch = self._manual_shell_epoch
+        loaded_before = int(gun.shot_index)
         lease = dict(index=index, gun=gun, identity=self._identity, generation=token)
         self._owned_next_shell = lease
         accepted = self._shell_setting('NEXT_SHELLS', index)
@@ -2233,8 +2234,10 @@ class FullPlayerRuntime(object):
         if not accepted or gun.pending_index != index:
             if self._owned_next_shell is lease:
                 self._owned_next_shell = None
+        applied = accepted and (gun.pending_index == index or
+                                gun.shot_index == index != loaded_before)
         self._shell_receipt = dict(setting='NEXT_SHELLS', requested=index,
-            accepted=bool(accepted and gun.pending_index == index), loaded=int(gun.shot_index),
+            accepted=bool(applied), loaded=int(gun.shot_index),
             pending=gun.pending_index, reload=float(gun.reload_time), at=self.now)
 
     def _reload_order(self, order, now):
@@ -2742,6 +2745,8 @@ class FullPlayerRuntime(object):
                     action='search_penetration', status='expired', at=now))
             self._move_episode = None
             self._native_hull_laying = None
+            if action == 'retreat' and decision['reason'] == 'no_he_or_verified_penetration':
+                return self._unusable_ammo_retreat(order, now)
             return order
         request = decision.get('move_request') or {}
         target = request.get('target') or (decision.get('candidate') or {}).get('target')
@@ -2873,6 +2878,25 @@ class FullPlayerRuntime(object):
         self._last_navigation = dict(status='waiting', action='firing_position',
             reason=decision.get('reason'), owner='copied_ordinary_navigation')
         return order if protected else self._resume_firing_approach(order, target)
+
+    def _unusable_ammo_retreat(self, order, now):
+        mission = self._mission or {}
+        if ('drive' not in self.features or self._mission_brakes() or
+                mission.get('explicit') and mission.get('action') != 'attack' or
+                mission.get('capture_started') or order.get('parking_phase') or
+                order.get('combat_mode') == 'base_defense'):
+            return order
+        bot = self._planner_bot()
+        if bot is None:
+            return order
+        position = self.state['position']
+        anchor = dict(zip(('x', 'y', 'z'), _point(
+            order.get('_route_position') or order.get('move_position') or position)))
+        retreat = order.get('_turnback_position') or self.planner._retreat_point(bot, anchor)
+        face = dict(zip(('x', 'y', 'z'), _point(order.get('face_position') or position)))
+        result = dict(order, fire_allowed=False)
+        return self.planner._apply_retreat_order(result, bot, retreat, face, now,
+                                                'withdraw', 'unusable_ammunition_hold')
 
     def _resume_firing_approach(self, order, target):
         # Keep existing route, cover, traffic and recovery control when it
