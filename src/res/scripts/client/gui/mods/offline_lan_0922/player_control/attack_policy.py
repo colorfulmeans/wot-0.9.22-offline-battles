@@ -31,7 +31,8 @@ ATOMIC_ARMOUR_BATCHES = 32
 ATOMIC_CANDIDATES = 48
 NEXT_EDGE_WALL_SECONDS = .004
 NEXT_EDGE_CANDIDATES = 8
-NATIVE_UNVERIFIED_LANE = ('auto_lane_geometry_unknown', 'auto_world_geometry_unknown')
+NATIVE_LINE_RETRY_REASONS = ('auto_front_vehicle', 'auto_lane_geometry_unknown',
+                             'auto_world_geometry_unknown')
 _WALL_CLOCK = getattr(time, 'perf_counter', time.time)
 # A retail battle has fewer than 30 opponents, three shell slots and nine
 # finite native aim samples. Custom data exceeding this explicitly reported
@@ -295,17 +296,17 @@ class AttackPolicy(object):
     @staticmethod
     def _matching_admission_block(blocked, stamp):
         previous = blocked['pose_stamp']
-        # An unconfirmed native lane briefly steers the search away from its
+        # A native lane refusal briefly steers the search away from its
         # point. Source-only refreshes still retire every positive proof, but
         # must not erase this bounded retry on the very next observation.
-        return (previous == stamp or (blocked['reason'] in NATIVE_UNVERIFIED_LANE and
+        return (previous == stamp or (blocked['reason'] in NATIVE_LINE_RETRY_REASONS and
                 previous[0] == stamp[0] and previous[2:] == stamp[2:]))
 
     @staticmethod
     def _needs_firing_position(row):
         return (row.get('line') in ('friendly_blocked', 'world_blocked') or
                 row.get('mechanical') in ('hull_laying', 'mechanical_limited') or
-                row.get('reason') in NATIVE_UNVERIFIED_LANE)
+                row.get('reason') in NATIVE_LINE_RETRY_REASONS)
 
     def _evaluate(self, job, now, channel, ranked_recheck=False):
         key, shell, target, sample, mode = job
@@ -332,10 +333,11 @@ class AttackPolicy(object):
             self.proof_revocations['lane_rechecks'] += 1
         blocked = self._admission_blocks.get(key)
         if (blocked is not None and self._matching_admission_block(blocked, row['pose_stamp']) and
-                blocked['line_stamp'] == row['line_stamp'] and
-                (blocked['line'] != 'unknown' or row['line'] not in ('friendly_blocked', 'world_blocked'))):
-            row.update(line=blocked['line'], reason=blocked['reason'],
-                       blocker=blocked['blocker'])
+                blocked['line_stamp'] == row['line_stamp']):
+            # A previous front vehicle is only a retry hint from a new pose.
+            line = blocked['line'] if blocked['pose_stamp'] == row['pose_stamp'] else 'unknown'
+            if line != 'unknown' or row['line'] not in ('friendly_blocked', 'world_blocked'):
+                row.update(line=line, reason=blocked['reason'], blocker=blocked['blocker'])
         # A new friendly obstruction cannot erase a still-valid plate proof.
         # Neither a pose change nor an explicit failed recalculation uses this
         # preservation path: _current has already fenced the exact geometry.
@@ -1065,7 +1067,7 @@ class AttackPolicy(object):
             self._admission_blocks[row['key']] = dict(line=line, reason=reason,
                 blocker=dict(blocker or {}), pose_stamp=row['pose_stamp'],
                 line_stamp=row['line_stamp'], line_region=row.get('line_region'))
-            if reason == 'auto_front_vehicle' or reason in NATIVE_UNVERIFIED_LANE:
+            if reason in NATIVE_LINE_RETRY_REASONS:
                 # A live front vehicle or unavailable native contact can
                 # clear before either of the planning stamps changes.
                 self._admission_blocks[row['key']]['retry_at'] = (

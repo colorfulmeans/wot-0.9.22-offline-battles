@@ -325,6 +325,9 @@ class TriggerAdmission(object):
                 if centre:
                     proof['centre_path'] = tuple(path[:index + 1]) + (target['point'],)
                     proof['refusal'] = self._centre_verdict(proof, target)
+                    if proof['refusal'] == 'auto_front_vehicle':
+                        proof['blocker'] = dict(kind='vehicle', point=target['point'],
+                            vehicle_id=target['row']['target'].id)
                     proof['stage'], proof['cursor'] = 1, 0
                     continue
                 proof['path'] = tuple(path[:index + 1]) + (target['point'],)
@@ -470,7 +473,8 @@ class TriggerAdmission(object):
                     return self._result('pending', 'auto_world_changed', world_chords=used)
                 if proof.get('refusal') is not None:
                     self._feedback(context, proof['refusal'], proof.get('blocker'))
-                    return self._result('pending', proof['refusal'], candidate, world_chords=used)
+                    return self._result('pending', proof['refusal'], candidate, world_chords=used,
+                                        blocker=proof.get('blocker'))
                 if not proof['done']:
                     return self._result('pending', 'auto_proof_pending', candidate, world_chords=used)
                 proof['completed'] = float(self.owner._clock())

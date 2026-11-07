@@ -611,6 +611,7 @@ class AutomaticFireAdmissionTests(AutomaticFireScene):
         self.assertTrue(self.friendly_verdict()['clear'])
         self.assertFalse(self.fire())
         self.assertEqual('auto_front_vehicle', self.control.last_fire_failure)
+        self.assertEqual(blocker.id, self.admission.receipt['blocker']['vehicle_id'])
         self.assert_unspent()
         record['state'].update(alive=False, health=0)
         blocker.health = 0
