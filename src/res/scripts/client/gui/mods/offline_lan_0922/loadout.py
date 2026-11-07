@@ -155,6 +155,16 @@ def _collect_battle_crew_factors(descriptor_crew):
     if not isinstance(processors, dict):
         return {}
     descriptor_crew._skillProcessors = dict(processors)
+    native_recon = processors.get('commander_eagleEye')
+
+    def recon(self, index, level, increase, active, fire, config):
+        if native_recon is not None:
+            native_recon(self, index, level, increase, active, fire, config)
+        if active and not fire:
+            trained = level + increase
+            result['offline/damaged_optics_recon_ratio'] = (
+                (1.0 + trained * config.distanceFactorPerLevelWhenDeviceDestroyed) /
+                (1.0 + trained * config.distanceFactorPerLevelWhenDeviceWorking))
 
     def smooth_driving(unused_self, unused_index, level, increase,
                        active, fire, config):
@@ -191,6 +201,7 @@ def _collect_battle_crew_factors(descriptor_crew):
                 0.01, 1.0 - (level + increase) * config.shotDispersionFactorPerLevel)
 
     descriptor_crew._skillProcessors.update({
+        'commander_eagleEye': recon,
         'driver_smoothDriving': smooth_driving,
         'gunner_smoothTurret': smooth_turret,
         'loader_pedant': pedant,
@@ -309,8 +320,8 @@ def attribute_factors(
         return None
     (utils, tankmen, vehicles_module, aspects, qualifier_type, crew_class,
      qualifiers_class) = modules
-    from gui.mods.offline_lan_0922 import bot_fittings
-    fitting = bot_fittings.context(descriptor) if crew is None else None
+    from gui.mods.offline_lan_0922 import vehicle_fitting_context
+    fitting = vehicle_fitting_context.context(descriptor) if crew is None else None
     compact_descrs = fitting['crew'] if fitting is not None else crew_compact_descrs(crew)
     if fitting is not None:
         equipments = tuple(equipments or ()) + fitting['directives']
@@ -494,8 +505,8 @@ def modifiers(descriptor=None, equipments=(), crew_skills=None, factors=None):
     and artefact contribution below comes from it, including the level a Bot
     skill tier trained the generated default crew to.
     """
-    from gui.mods.offline_lan_0922 import bot_fittings
-    fitting = bot_fittings.context(descriptor)
+    from gui.mods.offline_lan_0922 import vehicle_fitting_context
+    fitting = vehicle_fitting_context.context(descriptor)
     if crew_skills is None and fitting is not None:
         crew_skills = fitting['crew_skills']
     devices = device_names(descriptor) if descriptor is not None else ()

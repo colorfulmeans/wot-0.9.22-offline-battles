@@ -60,15 +60,43 @@ Replay preflight uses the same 8-GiB cumulative decompressed bound as recording
 and playback. Data is streamed; the 2-MiB record limit, footer/count and gzip
 integrity checks still apply. Compressed file size is not the replay size bound.
 
-Use the launcher's built-in vehicle editor and error-report controls. The player
-download includes START_DIAGNOSTIC_TEST.bat for detailed gameplay diagnostics,
-and the normal EXE for regular play. The normal EXE
+Use the launcher’s Testing tab to enable detailed diagnostics or select a
+single-player test scene before starting a battle. The ordinary launcher is
+the package’s only entry. With diagnostics off, it
 uses small key-event logs. Detailed geometry logs are limited to 2 MiB/minute
 and 32 MiB per client process, with explicit suppression notices. Exhausted
 budgets skip further JSON encoding; motion histories also skip construction
 until the budget reopens. Test captures split rotation catalog/native costs
 without changing collision queries. Errors and
 lifecycle messages remain enabled after the diagnostic budget is exhausted.
+
+The same Testing tab enables optional player automation and its mouse control
+panel. Every battle starts manual; the grave key left of 1 toggles takeover
+outside chat, menu and text input. Driving, aim/fire and consumables are
+independent switches. The panel offers Attack, Return to base, Defend base,
+Hold position, Capture base, Halt, Release to manual and the existing bounded
+drive, gun, held-aim, equipment and siege test commands. A submitted command is
+not complete until its matching visible-client receipt says so; fire completion
+means committed physical rounds, not a proved hit.
+
+Each LAN participant computes their own player navigation, traffic, target and
+fire-admission decisions in their visible client. The required room worker still
+owns Bots and world simulation, but does not execute player commands. Player
+route searches, recovery, ammunition and command ownership are independent of
+Bot actors. The visible lifecycle creates its own mechanically copied complete
+planner and decision loop, bound only to the local player's native input and
+observations. It does not invoke the worker's Bot behaviour objects or advance
+shadow player physics. Copied traffic, route, cover and recovery laws retain
+their bounded failure handoffs; real collision checks still apply. New player
+attack planning validates current ammunition first and budgets other candidates
+independently. Obstruction is not proof that armour cannot be penetrated.
+Releasing control stops future decisions without cancelling any unlaunched
+shells in an already committed multi-shell trigger. Each physical shell still
+uses the current native barrel and dispersion and settles separately. Manual
+firing and Bots use this same trigger contract. Install matching packages on all
+participants and restart the room before testing a changed build. Python/CI
+results are not a substitute for observing native #1513 driving and dual-LAN
+handover; see README.md and COMPATIBILITY_REVIEW.md for the current boundary.
 
 Customize save -> Appearance inventory has My style and Preset styles pages,
 with nation/type/vehicle filters, garage-only targets and vehicle-name search.

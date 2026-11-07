@@ -563,7 +563,7 @@ class TankCollisionTests(unittest.TestCase):
 
         touching = tank_collision.resolve_tank(
             light, (heavy,), now=10.0)
-        light['vx'] = 10.0
+        light['vx'] = 20.0
         impact = tank_collision.resolve_tank(
             light, (heavy,), now=10.1,
             ram_cooldowns=touching['cooldowns'],
@@ -576,15 +576,15 @@ class TankCollisionTests(unittest.TestCase):
         self.assertGreater(impact['ram_events'][0]['damage_to_self'], 0)
 
     def test_light_into_heavy_diagnostic_preserves_zero_target_damage(self):
-        light = _tank(4, 0.0, 0.0, mass=10000.0, vx=4.5)
-        heavy = _tank(9, 0.8, 0.0, mass=60000.0)
+        light = _tank(4, 0.0, 0.0, mass=10000.0, vx=4.5, contact_armor=20.0)
+        heavy = _tank(9, 0.8, 0.0, mass=60000.0, contact_armor=20.0)
         light['vehicle'] = 'ussr:T-50'
         heavy['vehicle'] = 'germany:Maus'
 
         result = tank_collision.resolve_tank(light, (heavy,), now=10.0)
         event = result['ram_events'][0]
 
-        self.assertEqual((0, 48), (
+        self.assertEqual((0, 53), (
             event['damage_to_other'], event['damage_to_self']))
         self.assertEqual(('ussr:T-50', 'germany:Maus'), (
             event['self_vehicle'], event['other_vehicle']))
@@ -598,8 +598,8 @@ class TankCollisionTests(unittest.TestCase):
 
     def test_ram_uses_normal_closing_speed_not_tangential_scrape(self):
         light = _tank(
-            4, 0.0, 0.0, mass=10000.0, vx=3.0, vz=30.0)
-        heavy = _tank(9, 2.9, 0.0, mass=60000.0)
+            4, 0.0, 0.0, mass=10000.0, vx=3.0, vz=30.0, contact_armor=20.0)
+        heavy = _tank(9, 2.9, 0.0, mass=60000.0, contact_armor=20.0)
 
         result = tank_collision.resolve_tank(light, (heavy,), now=10.0)
 
@@ -610,15 +610,15 @@ class TankCollisionTests(unittest.TestCase):
         self.assertEqual(3.0, event['impact_speed'])
         self.assertEqual(
             tank_collision.ram_damage(
-                3.0, 10000.0, 60000.0, 100.0, 100.0),
+                3.0, 10000.0, 60000.0, 20.0, 20.0),
             (event['damage_to_other'], event['damage_to_self']))
         self.assertGreater(event['damage_to_self'], 0)
 
     def test_ram_ignores_vertical_relative_speed_for_hull_damage(self):
         falling = _tank(
-            4, 0.0, 0.0, mass=10000.0, vx=3.0, vz=0.0)
+            4, 0.0, 0.0, mass=10000.0, vx=3.0, vz=0.0, contact_armor=20.0)
         falling['vy'] = -12.0
-        heavy = _tank(9, 0.8, 0.0, mass=60000.0)
+        heavy = _tank(9, 0.8, 0.0, mass=60000.0, contact_armor=20.0)
 
         event = tank_collision.resolve_tank(
             falling, (heavy,), now=10.0)['ram_events'][0]
@@ -628,7 +628,7 @@ class TankCollisionTests(unittest.TestCase):
         self.assertEqual(3.0, event['impact_speed'])
         self.assertEqual(
             tank_collision.ram_damage(
-                3.0, 10000.0, 60000.0, 100.0, 100.0),
+                3.0, 10000.0, 60000.0, 20.0, 20.0),
             (event['damage_to_other'], event['damage_to_self']))
         self.assertEqual(-12.0, event['velocity_y_self'])
         self.assertEqual(0.0, event['velocity_y_other'])
@@ -728,12 +728,12 @@ class TankCollisionTests(unittest.TestCase):
         self.assertEqual((156, 468), light_owner)
         self.assertEqual(heavy_owner, tuple(reversed(light_owner)))
 
-    def test_documented_he_reduction_uses_1_1_and_spall_liner(self):
+    def test_community_calibration_preserves_full_armour_absorption(self):
         damage = tank_collision.ram_damage(
             10.0, 75000.0, 25000.0,
             100.0, 200.0, spall_self=1.5, spall_other=1.0)
 
-        self.assertEqual((413, 115), damage)
+        self.assertEqual((248, 0), damage)
 
     def test_controlled_impact_modifies_final_damage_only_while_moving(self):
         stationary = tank_collision.ram_damage(
@@ -743,8 +743,8 @@ class TankCollisionTests(unittest.TestCase):
             10.0, 50000.0, 50000.0, 100.0, 100.0,
             bonus_self=0.15, moving_self=True, moving_other=False)
 
-        self.assertEqual((285, 285), stationary)
-        self.assertEqual((327, 242), moving)
+        self.assertEqual((202, 202), stationary)
+        self.assertEqual((232, 172), moving)
 
     def test_ram_has_no_safe_speed_cap_or_mass_ratio_clamp(self):
         low_speed = tank_collision.ram_damage(
@@ -761,7 +761,7 @@ class TankCollisionTests(unittest.TestCase):
         damage_to_kv2, damage_to_type62 = tank_collision.ram_damage(
             5.77736, 21300.0, 53100.0, 30.0, 75.0)
 
-        self.assertEqual((23, 102), (
+        self.assertEqual((0, 77), (
             damage_to_kv2, damage_to_type62))
 
     def test_type62_v_k3002db_ram_is_owner_invariant(self):

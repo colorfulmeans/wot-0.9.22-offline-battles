@@ -23,3 +23,11 @@ def verify_archive(archive, source_dir=None):
         if actual.replace(b'\r\n', b'\n') != expected.replace(b'\r\n', b'\n'):
             raise ValueError('launch entry differs from reviewed source: %s' % name)
     return ENTRIES
+
+
+def verify_current_archive(archive):
+    """Current launchers expose diagnostics through the Testing tab."""
+    launchers = [name for name in archive.namelist() if '/' not in name and
+                 name.lower().endswith(('.exe', '.bat', '.cmd', '.ps1'))]
+    if launchers != [NORMAL_ENTRY]:
+        raise ValueError('Package must contain only the normal launcher: %s' % launchers)

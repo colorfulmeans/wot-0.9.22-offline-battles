@@ -11,6 +11,15 @@ BigWorld nor battle runtime code, so the server and desktop tests can use it.
 import math
 
 
+def governor_wear(elapsed, seconds, rate, speed, forward_limit):
+    """One-second low-speed wear, identical for human and Bot owners."""
+    if rate <= 0 or forward_limit <= 0 or abs(speed) >= forward_limit * 0.5:
+        return 0.0, 0.0
+    elapsed = max(0.0, float(elapsed)) + max(0.0, float(seconds))
+    whole = int(elapsed + 1.e-9)
+    return max(0.0, elapsed - whole), float(rate) * whole
+
+
 # The exact activation-target vocabulary shared by both wire endpoints.
 # Crew extra names retain their native numbered identity; UI labels are not
 # accepted here. Keep unrelated critical-damage compatibility aliases local.
@@ -320,8 +329,15 @@ def bot_consumable_contracts(descriptor, snapshot=None):
         raise ValueError('bot consumable contract count is invalid')
     result = tuple(_validate_contract(dict(value)) for value in raw)
     names = tuple(value['name'] for value in result)
+    if names == DEFAULT_BOT_CONSUMABLE_NAMES[:2] + ('removedRpmLimiter',):
+        from . import equipment_test
+        if (equipment_test.governor_mode() and
+                tuple(value['kind'] for value in result) ==
+                ('extinguisher', 'medkit', 'rpm_limiter') and
+                result[0]['autoactivate'] and result[1]['repairAll']):
+            return result
     if names not in (DEFAULT_BOT_CONSUMABLE_NAMES, BOT_SMALL_CONSUMABLE_NAMES):
-        raise ValueError('bot consumable contract order is invalid')
+        raise ValueError('bot consumable contract order is invalid: %r' % (names,))
     if tuple(value['kind'] for value in result) != (
             'extinguisher', 'medkit', 'repairkit'):
         raise ValueError('bot consumable contract kinds are invalid')

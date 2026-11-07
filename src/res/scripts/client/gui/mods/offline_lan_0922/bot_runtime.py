@@ -3,7 +3,7 @@ from __future__ import print_function
 """Authority-side, engine-free bridge from v5 bots to the local AI package."""
 
 from gui.mods.offline_lan_0922.worker_diagnostics import (
-    detailed_observed,
+    detailed_observed, PROBE_KINDS,
     observed, observed_call, current as current_combat, count as combat_count)
 
 import copy
@@ -208,7 +208,6 @@ SPG_SHOT_LANE_QUERY_DISTANCE = 2500.0
 # through its first half. Visibility reports continue independently.
 COVER_REFRESH_SECONDS = TACTICAL_REFRESH_SECONDS
 COVER_JOB_WINDOW_SECONDS = COVER_REFRESH_SECONDS * 0.5
-PROBE_KINDS = ('visibility', 'lane', 'cover', 'ground', 'motion')
 DECISION_SECONDS = 0.150
 # Distance tiers for planner and suspension sampling.  Physical integration is
 # globally capped by PUBLICATION_SECONDS; MatrixAnimation interpolates the
@@ -254,7 +253,7 @@ FRIENDLY_REPOSITION_RETRY_SECONDS = 8.0
 # exact hard receipt still vetoes motion immediately.
 MAX_WORLD_RECEIPTS_PER_FRAME = 13
 FIRE_DURATION_SECONDS = 10.0
-FIRE_TICK_SECONDS = 1.0
+FIRE_TICK_SECONDS = 10.000001
 SIEGE_ENABLE_DEBOUNCE_SECONDS = 0.30
 SIEGE_DISABLE_DEBOUNCE_SECONDS = 0.80
 SIEGE_LONG_TRAVEL_METRES = 35.0
@@ -602,10 +601,10 @@ def _bot_default_crew_factors(descriptor, crew_level=None):
     return factors
 
 
-def _bot_profile(descriptor, crew_level=None, critical=None):
+def _bot_profile(descriptor, crew_level=None, critical=None, equipments=()):
     """Spotting inputs for a vehicle whose crew is the #1513 default crew."""
     from gui.mods.offline_lan_0922 import bot_fittings
-    factors = (bot_fittings.native_factors(descriptor, critical)
+    factors = (bot_fittings.native_factors(descriptor, critical, equipments=equipments)
                if bot_fittings.context(descriptor) is not None else
                _bot_default_crew_factors(descriptor, crew_level))
     return loadout.spotting_profile(descriptor, None, factors=factors)
@@ -616,6 +615,35 @@ def _bot_physics_params(descriptor, crew_level=None):
     return vehicle_physics.derive_params(
         descriptor,
         factors=_bot_default_crew_factors(descriptor, crew_level))
+
+
+def _bot_ram_profile(descriptor, critical=None):
+    from gui.mods.offline_lan_0922 import bot_fittings
+    return tank_collision.descriptor_ram_profile(descriptor,
+        bot_fittings.skill_level(descriptor, 'driver_rammingmaster', critical) * 0.0015)
+
+
+def _bot_intuition(state, descriptor, gun, ammo, burst, requested):
+    """One old-perk roll per new shell decision, never per update or burst."""
+    from gui.mods.offline_lan_0922 import bot_fittings
+    if burst.active or gun.clip_size > 1 or gun.burst_count > 1 or ammo.plan_pending:
+        return False
+    selected = ammo._available(gun.shell_index(requested))
+    if selected in (ammo.loaded, ammo.next) or ammo.remaining[selected] <= 0:
+        return False
+    chances = bot_fittings.skill_count(descriptor, 'loader_intuition', state.get('critical'))
+    success = any(random.random() < loadout.INTUITION_CHANCE for unused in range(chances))
+    if success:
+        # The projectile's physical round is frozen separately. Changing the
+        # next round neither spends ammunition nor completes an active reload.
+        ammo.restore(dict(ammo_remaining=list(ammo.remaining), shell_index=selected,
+                          next_shell_index=selected, ammo_reload_pending=ammo.reload_pending))
+    if chances:
+        from gui.mods.offline_lan_0922.native_input_diagnostics import validation_event
+        validation_event('bot_intuition', bot=state.get('id'), chances=chances,
+                         success=success, selected=selected,
+                         elapsed=gun.elapsed, duration=gun.reload_duration)
+    return success
 
 
 def _view_range(descriptor, still_seconds=0.0, crew_level=None):
@@ -863,12 +891,7 @@ def slope_pose(probe, position, yaw, half_length, half_width,
 
 def ground_pose_for_yaw(pitch, roll, old_yaw, new_yaw):
     """Preserve the sampled world-space plane under a hull yaw change."""
-    nx, ny, nz = vehicle_physics.suspension_point_offset(
-        dict(x=0.0, y=1.0, z=0.0), pitch, roll)
-    delta = _angle_delta(new_yaw, old_yaw)
-    local_x = math.cos(delta)*nx - math.sin(delta)*nz
-    local_z = math.sin(delta)*nx + math.cos(delta)*nz
-    return math.atan2(local_z, ny), math.atan2(-local_x, math.hypot(ny, local_z))
+    return vehicle_physics.ground_pose_for_yaw(pitch, roll, old_yaw, new_yaw)
 
 
 def _gun_pitch_limits(descriptor, turret_yaw=0.0):
@@ -973,7 +996,11 @@ def _critical_factor(state, descriptor, stat):
     if bot_fittings.context(descriptor) is None:
         return device_damage.crew_stat_factor(crew_ko, stat) * module_factor
     base = bot_fittings.native_factors(descriptor)
-    current = bot_fittings.native_factors(descriptor, state.get('critical'))
+    mounted = state.get('_factor_consumables', ())
+    current = (bot_fittings.native_factors(descriptor, state.get('critical'), equipments=mounted)
+               if mounted else bot_fittings.native_factors(descriptor, state.get('critical')))
+    if stat == 'vision' and 'surveyingDeviceHealth' in destroyed:
+        module_factor *= crew_battle.from_native(current)['damaged_optics_recon_ratio']
     keys = {'reload': 'gun/reloadTime', 'aim_time': 'gun/aimingTime',
             'turret_speed': 'turret/rotationSpeed', 'vision': 'circularVisionRadius',
             'signal': 'radio/distance'}
@@ -1191,29 +1218,9 @@ class _BotCriticalVehicle(object):
 
 def _descriptor_crew_roster(descriptor):
     """Return the exact #1513 health-instance names for one real crew."""
-    roles = getattr(getattr(descriptor, 'type', None), 'crewRoles', None)
-    if not isinstance(roles, (list, tuple)) or not roles:
-        return ()
-    counters = {'gunner': 1, 'loader': 1, 'radioman': 1}
-    allowed = frozenset(
-        ('commander', 'driver', 'gunner', 'loader', 'radioman'))
-    roster = []
-    for crewman_roles in roles:
-        if (not isinstance(crewman_roles, (list, tuple)) or
-                not crewman_roles):
-            return ()
-        main_role = str(crewman_roles[0])
-        if main_role not in allowed:
-            return ()
-        if main_role in counters:
-            name = main_role + str(counters[main_role])
-            counters[main_role] += 1
-        else:
-            name = main_role
-        if name in roster:
-            return ()
-        roster.append(name)
-    return tuple(roster)
+    from gui.mods.offline_lan_0922.vehicle_fitting_context import (
+        descriptor_crew_roster)
+    return descriptor_crew_roster(descriptor)
 
 
 def _terminal_critical(state, descriptor, cause):
@@ -1591,8 +1598,16 @@ class _BotGunState(object):
             self.reload_duration = self.reload_intra
         return True
 
-    def cancel_burst(self):
-        """Cancel only the automatic tail and enter ordinary recovery."""
+    def abort_burst(self):
+        """Release an uncommitted arm; the trigger owner checks its frontier."""
+        changed = self._burst_remaining > 0
+        self._burst_remaining = 0
+        return changed
+
+    def terminate_burst(self, reason):
+        """Finish a physically impossible trigger, not a withdrawn AI order."""
+        if reason not in burst_mechanics.TERMINAL_REASONS:
+            raise ValueError('gun termination is not a physical lifecycle reason')
         if self._burst_remaining <= 0:
             return False
         self._burst_remaining = 0
@@ -1665,6 +1680,15 @@ class _BotAmmoState(object):
         self.plan_pending = True
         if isinstance(raw, dict):
             self.restore(raw)
+
+        if profile.get('bot_tier'):
+            from gui.mods.offline_lan_0922.native_input_diagnostics import validation_event
+            validation_event('bot_ammunition_initialized',
+                vehicle=profile.get('vehicle_name'), gun=profile.get('gun_name'),
+                tier=profile.get('bot_tier'), manual='ammo_ratios' in profile,
+                shells=[s.get('name') for s in profile.get('shells', ())],
+                remaining=list(self.remaining), loaded=self.loaded,
+                stages=sorted(self.categories), restored=isinstance(raw, dict))
 
     def _standard_fallback(self):
         candidates = [index for index in range(self.shell_count)
@@ -1831,10 +1855,8 @@ def _dispersed_barrel_angles(bot_id, round_id, fire_seq, yaw, pitch,
     # #1513's aiming circle is a hard two-sigma angular boundary.  The former
     # three independent world-axis Gaussians were unbounded and could publish
     # a bot shell outside the circle used by the player gun and marker.
-    sigma = dispersion_angle / 2.0
-    radius = abs(generator.gauss(0.0, sigma))
-    if radius > dispersion_angle:
-        radius = dispersion_angle * generator.uniform(0.0, 1.0)
+    from gui.mods.offline_lan_0922 import shot_dispersion
+    radius = shot_dispersion.radius(dispersion_angle, generator.gauss, generator.uniform)
     azimuth = generator.uniform(0.0, 2.0 * math.pi)
 
     dx, dy, dz = direction
@@ -2836,7 +2858,7 @@ class BotRuntime(object):
         params = self._physics_params.get(bot_id)
         if params is not None:
             combat_count('physics_parameters_cached')
-            return params
+            return self._governor_physics(bot_id, params)
         combat_count('physics_parameters_rebuilt')
         descriptor = self._descriptors.get(bot_id)
         if descriptor is None or (isinstance(descriptor, dict) and
@@ -2846,7 +2868,29 @@ class BotRuntime(object):
             params = _bot_physics_params(
                 descriptor, self.bot_crew_level(bot_id))
         self._physics_params[bot_id] = params
-        return params
+        return self._governor_physics(bot_id, params)
+
+    def _factor_consumables(self, bot_id):
+        return tuple(item.contract['compactDescr'] for item in
+                     self._equipment_states.get(int(bot_id), ())
+                     if item.contract['kind'] in ('fuel', 'stimulator'))
+
+    def _governor_physics(self, bot_id, params):
+        items = tuple(item for item in self._equipment_states.get(bot_id, ())
+                      if item.contract['kind'] == 'rpm_limiter')
+        factor = equipment_mechanics.passive_effects(items)['enginePowerFactor']
+        from gui.mods.offline_lan_0922 import bot_fittings
+        descriptor = self._descriptors.get(bot_id)
+        mounted = self._factor_consumables(bot_id)
+        if mounted and bot_fittings.context(descriptor) is not None:
+            base = bot_fittings.native_factors(descriptor)
+            current = bot_fittings.native_factors(descriptor, equipments=mounted)
+            factor *= current.get('engine/power', 1.) / base.get('engine/power', 1.)
+        if factor == 1.0:
+            return params
+        result = dict(params)
+        result['powerW'] *= factor
+        return result
 
     def replica_contact_params(self, raw, descriptor):
         """Derive contact forces without an authority-owned descriptor cache.
@@ -3313,8 +3357,7 @@ class BotRuntime(object):
             state['half_width'] = half_width
             state['collision_shape'] = _collision_shape(descriptor)
             state['mass'] = self._physics_params[bot_id]['mass']
-            state['ram_profile'] = tank_collision.descriptor_ram_profile(
-                descriptor)
+            state['ram_profile'] = _bot_ram_profile(descriptor, state.get('critical'))
         motion = self._native_motion_for(bot_id)
         if motion is not None:
             motion.descriptor_patch(bot_id)
@@ -3384,6 +3427,12 @@ class BotRuntime(object):
             equipment_mechanics.passive_effects(
                 self._equipment_states.get(bot_id, ()))
         self._repair_factors.pop(bot_id, None)
+        state = self.states.get(bot_id)
+        if state is not None:
+            state['_factor_consumables'] = self._factor_consumables(bot_id)
+        # The installed descriptor cache excludes consumables. Live fuel and
+        # governor factors are applied to a copy by _governor_physics; changing
+        # the ledger must not discard the installed mass/contact parameters.
         return self._equipment_passives[bot_id]
 
     def _advance_equipment_clock(self, step):
@@ -4118,8 +4167,7 @@ class BotRuntime(object):
                 'half_length': half_length, 'half_width': half_width,
                 'collision_shape': _collision_shape(descriptor),
                 'mass': self._physics_params[bot_id]['mass'],
-                'ram_profile': tank_collision.descriptor_ram_profile(
-                    descriptor),
+                'ram_profile': _bot_ram_profile(descriptor, raw.get('critical')),
                 'ram_motion': ram_motion.normalize(raw.get('ram_motion', [])),
                 '_ram_motion_seq': max([r[1] for r in raw.get('ram_motion', [])] or [0]),
                 'push_x': 0.0, 'push_z': 0.0,
@@ -4214,16 +4262,20 @@ class BotRuntime(object):
             ammo_state.publish(state)
             burst_state = self._burst_states.get(bot_id)
             if burst_state is None:
-                burst_state = burst_mechanics.BurstClock()
+                burst_state = burst_mechanics.TriggerClock()
                 self._burst_states[bot_id] = burst_state
             if restoring_authority:
                 restored = burst_state.restore(
                     raw, state.get('fire_seq', 0))
                 if restored:
                     gun_state._burst_remaining = max(
-                        0, burst_state.count - burst_state.next_index)
+                        0, burst_state.count - burst_state.next_index
+                        ) if burst_state.active else 0
                 else:
-                    burst_state.cancel(0)
+                    burst_state.terminate('round_changed')
+                    burst_state = burst_mechanics.TriggerClock()
+                    self._burst_states[bot_id] = burst_state
+                    gun_state._burst_remaining = 0
             burst_state.publish(state)
             if authority_handoff:
                 self._apply_authority_takeover_motion(state, raw)
@@ -4720,6 +4772,12 @@ class BotRuntime(object):
                                     strict=False):
         """Apply one already-authorized bot consumable through shared law."""
         action = str((effect or {}).get('action') or '')
+        if action == 'set_rpm_limiter':
+            for item in self._equipment_states.get(int(state['id']), ()):
+                if item.contract['kind'] == 'rpm_limiter':
+                    item.active = bool(effect['active'])
+            self._refresh_equipment_passives(state['id'])
+            return True
         shadow = _BotCriticalVehicle(
             state, descriptor, None,
             _number(state.get('combat_fire_timer')),
@@ -4769,11 +4827,64 @@ class BotRuntime(object):
                 stun_cleared = True
         return payload is not None or stun_cleared
 
+    @staticmethod
+    def _bot_governor_wanted(state):
+        """Use the accepted terrain plane, excluding suspension rocking.
+
+        Native pitch is negative nose-up. Reverse travel reverses the grade.
+        A half-degree ground tolerance excludes sampling noise; level,
+        downhill, airborne, stopped and damaged-engine states always stop it.
+        """
+        speed = _number(state.get('speed'))
+        pitch = _number(state.get('terrain_pitch'),
+                        _number(state.get('pitch')) -
+                        _number(state.get('suspension_pitch')))
+        grade = -pitch if speed > 0.0 else pitch
+        return (abs(speed) > 0.1 and not state.get('airborne', False) and
+                grade > math.radians(0.5) and
+                equipment_mechanics.bot_device_states(
+                    state.get('critical')).get('engineHealth') not in
+                ('critical', 'destroyed'))
+
+    def _bot_governor_request(self, state):
+        """Require two continuous simulation seconds of uphill movement."""
+        push = state.get('_governor_push_evidence') or {}
+        peer = self.states.get(push.get('peer_id')) if push else None
+        if push.get('in_contact') and peer is not None and not peer.get('alive', True):
+            state.pop('_governor_uphill_since', None)
+            point = (peer['x'], peer['z'])
+            previous = state.get('_governor_push_progress')
+            now = self._equipment_now
+            if (previous is None or previous[0] != push.get('peer_id') or
+                    now < previous[2] or math.hypot(
+                        point[0]-previous[1][0], point[1]-previous[1][1]) >= 0.1):
+                previous = (push['peer_id'], point, now)
+                state['_governor_push_progress'] = previous
+            return (now-previous[2] < 2.0 and not state.get('airborne', False) and
+                    equipment_mechanics.bot_device_states(
+                        state.get('critical')).get('engineHealth') not in
+                    ('critical', 'destroyed'))
+        state.pop('_governor_push_progress', None)
+        if not self._bot_governor_wanted(state):
+            state.pop('_governor_uphill_since', None)
+            return False
+        now = self._equipment_now
+        since = state.setdefault('_governor_uphill_since', now)
+        if since > now:  # A restored simulation clock starts a fresh wait.
+            since = state['_governor_uphill_since'] = now
+        return now - since >= 2.0
+
     def _poll_bot_equipments(self, state, descriptor):
         """Run fixed bot kit policy and return replayable effect records."""
         effects = []
         for equipment in self._equipment_states.get(int(state['id']), ()):
-            effect = equipment.poll_bot(
+            if equipment.contract['kind'] == 'rpm_limiter':
+                wanted = self._bot_governor_request(state)
+                effect = (equipment.activate(self._equipment_now,
+                          state.get('critical'), requested_active=wanted)
+                          if wanted != equipment.active else None)
+            else:
+                effect = equipment.poll_bot(
                 self._equipment_now, state.get('critical'),
                 stunned=self._bot_stunned(state), skill=self.bot_consumable_skill(state['id']))
             if effect is None:
@@ -4789,7 +4900,13 @@ class BotRuntime(object):
             write_json_record('BOT CONSUMABLE', dict(round=self.round_id,
                 bot=state['id'], skill=self.bot_skill(state['id']), at=self._equipment_now,
                 item=equipment.contract['name'], uses_left=equipment.uses_left,
-                cooldown=equipment.contract['cooldownSeconds'], effect=effect))
+                cooldown=equipment.contract['cooldownSeconds'], effect=effect,
+                governor_context=(dict(speed=state.get('speed'),
+                    terrain_pitch=state.get('terrain_pitch'), airborne=state.get('airborne'),
+                    uphill_since=state.get('_governor_uphill_since'),
+                    push=state.get('_governor_push_evidence'),
+                    push_progress=state.get('_governor_push_progress'))
+                    if equipment.contract['kind'] == 'rpm_limiter' else None)))
         if effects:
             self._refresh_equipment_passives(state['id'])
         self._publish_equipment_state(state)
@@ -4801,10 +4918,14 @@ class BotRuntime(object):
         # Repair, consumables and fire may replace the canonical payload. Never
         # carry a parsed view across that mutation boundary.
         _clear_critical_parts_tick_cache(state)
+        state['_factor_consumables'] = self._factor_consumables(state['id'])
         payload = state.get('critical')
+        has_governor = any(item.contract['kind'] == 'rpm_limiter' for item in
+                           self._equipment_states.get(int(state['id']), ()))
         if ((not isinstance(payload, dict) or not payload) and
-                not self._bot_stunned(state)):
+                not self._bot_stunned(state) and not has_governor):
             return False
+        payload = payload or {}
         before_signature = _combat_signature(state)
         was_on_fire = bool(payload.get('fire', False))
         sync = self._combat_sync_state(state)
@@ -4834,11 +4955,29 @@ class BotRuntime(object):
         repair_payload = critical_damage.tick_repair(
             shadow, step,
             repair_factor=self._bot_repair_factor(state['id'], descriptor))
+        passives = self._equipment_passives.get(int(state['id']), {})
+        wear = passives.get('engineHpLossPerSecond', 0.0)
+        state['_governor_wear_elapsed'], wear_loss = equipment_mechanics.governor_wear(
+            state.get('_governor_wear_elapsed', 0.0), step, wear,
+            _number(state.get('speed')), _forward_speed(descriptor))
+        if wear_loss > 0:
+            wear_payload = critical_damage.damage_device_over_time(
+                shadow, 'engineHealth', wear_loss, 'equipment')
+            if wear_payload is not None:
+                repair_payload = wear_payload
         fire_damage = 0
         fire_payload = None
         if advance_fire:
+            from gui.mods.offline_lan_0922 import bot_fittings, fire_model
+            decay = (bot_fittings.battle_factors(descriptor, state.get('critical'),
+                         equipments=self._factor_consumables(state['id']))['fire_decay_factor']
+                     if bot_fittings.context(descriptor) is not None else 0.57)
+            if was_on_fire and fire_elapsed == 0.0:
+                state['_fire_initial_scale'] = fire_model.ignition_scale()
+                critical_damage.report_fire_model(shadow, decay)
             fire_damage, fire_payload = critical_damage.tick_fire(
-                shadow, step, now=now)
+                shadow, step, now=now, native_decay_factor=decay,
+                initial_scale=state.get('_fire_initial_scale', 1.0))
             if state.get('_environment_fire') and fire_payload is not None:
                 critical_statistics.accumulate(self._environment_critical_totals,
                     state['id'], 'fire', repair_payload or state.get('critical'), fire_payload)
@@ -5315,7 +5454,7 @@ class BotRuntime(object):
             if bot_fittings.context(descriptor) is not None:
                 critical = target.get('critical') or {}
                 dynamic_key = (tuple(sorted(critical.get('crew_ko') or ())),
-                               bool(critical.get('fire', False)))
+                               bool(critical.get('fire', False)), self._factor_consumables(target_id))
         key = ((kind, int(target_id), dynamic_key) if kind == 'bot' and dynamic_key is not None else
                (kind, int(target_id)) if kind == 'bot' else
                (kind, int(target_id), dynamic_key))
@@ -5325,7 +5464,8 @@ class BotRuntime(object):
         if kind == 'bot':
             descriptor = self._descriptors.get(int(target_id), {})
             profile = _bot_profile(
-                descriptor, self.bot_crew_level(target_id), target.get('critical'))
+                descriptor, self.bot_crew_level(target_id), target.get('critical'),
+                equipments=self._factor_consumables(target_id))
             cached = (_base_invisibility(descriptor, profile),
                       _shot_invisibility_factor(descriptor), profile)
         else:
@@ -8954,6 +9094,8 @@ class BotRuntime(object):
         if (witnesses or ground_observed) and callable(self.impact_contacts_resolver):
             from gui.mods.offline_lan_0922 import environment_modules
             contacts = self.impact_contacts_resolver(state, witnesses, normal, impact_speed)
+            damage = environment_modules.suspension_hull_damage(
+                damage, self._descriptors.get(state['id'], {}), contacts, normal)
             shadow = _BotCriticalVehicle(state, self._descriptors.get(state['id'], {}),
                 None, _number(state.get('combat_fire_timer')))
             terminal_damage, payload = environment_modules.apply_impact(shadow, impact_speed, contacts)
@@ -12636,19 +12778,9 @@ class BotRuntime(object):
 
     @staticmethod
     def _turret_state_pose(state, position=None, yaw=None):
-        pose = dict((name, state.get(name, 0.0))
-                    for name in ('x', 'y', 'z', 'yaw', 'pitch', 'roll'))
-        if position is not None:
-            pose.update(x=position[0], y=position[1], z=position[2])
-        if yaw is not None:
-            pose['yaw'] = yaw
-        if 'id' in state:
-            pose['actor_key'] = 'bot:%d' % state['id']
-        chassis = dict(pose)
-        chassis['pitch'] = state.get(
-            'terrain_pitch', pose['pitch'] - state.get('suspension_pitch', 0.0))
-        pose['chassis'] = chassis
-        return pose
+        return vehicle_physics.collision_state_pose(
+            state, position, yaw,
+            'bot:%d' % state['id'] if 'id' in state else None)
 
     def _turret_pose_is_clear(self, state, start, start_yaw, end, end_yaw):
         """Keep turns and contact pushes outside the same landed turret body."""
@@ -16270,6 +16402,9 @@ class BotRuntime(object):
                 state, gun_state, reload_factor, descriptor, edge, ammo_state,
                 launch_receipt, preview_values, fallback_direction,
                 launch_time_us)
+        trigger = self._burst_states.get(int(state['id']))
+        if trigger is None or not trigger.accepts(edge):
+            return False
         if (not ammo_state.can_fire(continuing) or
                 not gun_state.fire_burst_round(
                     final_round, reload_factor)):
@@ -16284,6 +16419,8 @@ class BotRuntime(object):
         if final_round and ammo_state.loaded_shell_requires_full_reload():
             gun_state.require_full_reload()
         state['fire_seq'] = shot_seq
+        if not trigger.commit(edge):
+            raise RuntimeError('physical bot launch lost its trigger frontier')
         state['burst_group_seq'] = group_seq
         state['burst_index'] = burst_index
         state['burst_count'] = burst_count
@@ -16360,7 +16497,7 @@ class BotRuntime(object):
             count, interval = 1, 0.0
         burst_state = self._burst_states.get(int(state['id']))
         if burst_state is None:
-            burst_state = burst_mechanics.BurstClock()
+            burst_state = burst_mechanics.TriggerClock()
             self._burst_states[int(state['id'])] = burst_state
         first_seq = int(state.get('fire_seq', 0)) + 1
         if self._native_simulation is not None:
@@ -16369,26 +16506,34 @@ class BotRuntime(object):
             if not edges:
                 return False
             edge = edges[0]
-        elif (not burst_state.start(
-                first_seq, count, interval, ammo_state.loaded) or
-                not gun_state.begin_burst(count, reload_factor)):
-            burst_state.cancel(0)
-            return False
         else:
+            if not burst_state.start(
+                    first_seq, count, interval, ammo_state.loaded):
+                # A duplicate request does not own the already armed group.
+                # In particular it must not abort an uncommitted first edge
+                # while leaving the same gun's physical group armed.
+                return False
+            if not gun_state.begin_burst(count, reload_factor):
+                burst_state.abort()
+                return False
             edge = burst_state.advance(0.0)[0]
         if not self._commit_burst_edge(
                 state, gun_state, reload_factor, descriptor, edge,
                 ammo_state, launch_receipt, launch_preview,
                 launch_time_us):
-            gun_state.cancel_burst()
-            burst_state.cancel(0)
+            if self._native_simulation is not None:
+                self._native_simulation.weapons.abort(state['id'])
+            elif burst_state.abort():
+                gun_state.abort_burst()
             return False
         burst_state.publish(state)
         return True
 
-    def _cancel_active_burst(
-            self, state, gun_state=None, ammo_state=None, burst_state=None):
-        """Cancel the unlaunched tail and begin ordinary recovery."""
+    def _terminate_active_trigger(
+            self, state, reason, gun_state=None, ammo_state=None, burst_state=None):
+        """End only an explicitly impossible physical trigger execution."""
+        if reason not in burst_mechanics.TERMINAL_REASONS:
+            raise ValueError('bot trigger termination is not a physical reason')
         bot_id = int(state.get('id', 0))
         burst_state = burst_state or self._burst_states.get(bot_id)
         gun_state = gun_state or self._gun_states.get(bot_id)
@@ -16396,14 +16541,16 @@ class BotRuntime(object):
             gun_state is not None and gun_state._burst_remaining > 0)
         if burst_state is None or (not burst_state.active and not gun_pending):
             return False
-        launched = 0
-        if burst_state.group_seq > 0:
-            launched = max(
-                0, int(state.get('fire_seq', 0)) - burst_state.group_seq + 1)
-        launched = min(launched, burst_state.next_index)
-        burst_state.cancel(launched)
-        if gun_pending:
-            gun_state.cancel_burst()
+        if self._native_simulation is not None:
+            self._native_simulation.weapons.terminate(bot_id, reason)
+        else:
+            uncommitted = burst_state.next_index == 0
+            burst_state.terminate(reason)
+            if gun_pending:
+                if uncommitted:
+                    gun_state.abort_burst()
+                else:
+                    gun_state.terminate_burst(reason)
         ammo_state = ammo_state or self._ammo_states.get(bot_id)
         if ammo_state is not None:
             ammo_state.publish(state)
@@ -16438,9 +16585,11 @@ class BotRuntime(object):
             launch_time_us = min(
                 int(step_end_time_us), int(step_start_time_us) + max(
                     0, int(round(float(edge['due_offset']) * 1000000.0))))
-            if (not state.get('alive', False) or
-                    not state.get('gun_aligned', False) or
-                    state.get('_drowning', False) or
+            if not state.get('alive', False):
+                self._terminate_active_trigger(
+                    state, 'actor_destroyed', gun_state, ammo_state, burst_state)
+                break
+            if (state.get('_drowning', False) or
                     state.get('_overturned', False) or
                     'gunHealth' in destroyed_devices or
                     int(state.get('siege_state',
@@ -16448,37 +16597,27 @@ class BotRuntime(object):
                         siege_mechanics.SWITCHING_ON,
                         siege_mechanics.SWITCHING_OFF) or
                     not ammo_state.can_fire(True)):
-                self._cancel_active_burst(
-                    state, gun_state, ammo_state, burst_state)
+                reason = ('ammunition_unavailable' if not ammo_state.can_fire(True)
+                          else 'gun_unavailable')
+                self._terminate_active_trigger(
+                    state, reason, gun_state, ammo_state, burst_state)
                 break
+            # A committed trigger samples the actual current barrel. It does
+            # not need its old target, alignment proof, or a clear friendly
+            # lane. Those gates belong exclusively to the NEXT trigger.
             preview = self._direct_launch_preview(
                 state, descriptor, burst_state.shell_index, gun_state,
-                ballistic_solution, burst_edge=edge)
+                None, burst_edge=edge)
             if preview is None:
-                self._cancel_active_burst(
-                    state, gun_state, ammo_state, burst_state)
+                self._terminate_active_trigger(
+                    state, 'launch_unavailable', gun_state, ammo_state, burst_state)
                 break
-            if not self._probe_timing_enabled():
-                lane_value = self.friendly_lane_probe(
-                    state, target if isinstance(target, dict) else {},
-                    descriptor, burst_state.shell_index, preview)
-            else:
-                probe_started = self._probe_started()
-                try:
-                    lane_value = self.friendly_lane_probe(
-                        state, target if isinstance(target, dict) else {},
-                        descriptor, burst_state.shell_index, preview)
-                finally:
-                    self._probe_finished(1, probe_started)
-            lane_clear, unused_verdict = self._friendly_lane_verdict(
-                lane_value)
-            if (not lane_clear or
-                    not self._commit_burst_edge(
-                        state, gun_state, reload_factor, descriptor, edge,
-                        ammo_state, launch_preview=preview,
-                        launch_time_us=launch_time_us)):
-                self._cancel_active_burst(
-                    state, gun_state, ammo_state, burst_state)
+            if not self._commit_burst_edge(
+                    state, gun_state, reload_factor, descriptor, edge,
+                    ammo_state, launch_preview=preview,
+                    launch_time_us=launch_time_us):
+                self._terminate_active_trigger(
+                    state, 'native_failure', gun_state, ammo_state, burst_state)
                 break
             committed += 1
         burst_state.publish(state)
@@ -16770,6 +16909,13 @@ class BotRuntime(object):
         self._advance_probe_timing(now)
         self._advance_equipment_clock(frame_step)
         players = list(players or [])
+        from . import roof_crush_test
+        if roof_crush_test.shot_drop_enabled():
+            queue = getattr(self, '_roof_shot_drop_queue', None)
+            if queue is None or getattr(self, '_roof_shot_drop_round', None) != self.round_id:
+                queue = self._roof_shot_drop_queue = roof_crush_test.ShotDropQueue()
+                self._roof_shot_drop_round = self.round_id
+            queue.observe(players, self.states)
         if refresh_control:
             planning_now = (self._control_evaluation_time
                             if self._control_evaluation_time is not None else now)
@@ -16875,7 +17021,7 @@ class BotRuntime(object):
                 diagnostic.actor(state['id'])
                 diagnostic.phase('bot.prepare')
             if not state['alive']:
-                self._cancel_active_burst(state)
+                self._terminate_active_trigger(state, 'actor_destroyed')
                 if native_motion is not None:
                     timed_call(self._combat_diagnostics, 'bot.motion_prepare',
                                native_motion.prepare_actor, state['id'])
@@ -16900,7 +17046,7 @@ class BotRuntime(object):
                 native_motion.patch_external(state['id'],
                                              ('terminal', 'velocity'))
             if not state['alive']:
-                self._cancel_active_burst(state)
+                self._terminate_active_trigger(state, 'actor_destroyed')
                 if native_motion is not None:
                     timed_call(self._combat_diagnostics, 'bot.motion_prepare',
                                native_motion.prepare_actor, state['id'])
@@ -16921,7 +17067,7 @@ class BotRuntime(object):
             else:
                 self._advance_bot_drowning(state, step)
             if not state['alive']:
-                self._cancel_active_burst(state)
+                self._terminate_active_trigger(state, 'actor_destroyed')
                 if native_motion is not None:
                     timed_call(self._combat_diagnostics, 'bot.motion_advance',
                                native_motion.advance_actor, state['id'],
@@ -16932,7 +17078,7 @@ class BotRuntime(object):
             if native_motion is None:
                 self._advance_bot_overturn(state, step)
             if not state['alive']:
-                self._cancel_active_burst(state)
+                self._terminate_active_trigger(state, 'actor_destroyed')
                 if native_control is not None:
                     native_control.update_actor(state)
                 continue
@@ -17506,6 +17652,7 @@ class BotRuntime(object):
             descriptor = self._descriptors.get(state['id'], {})
             profile = state.get('profile')
             profile = profile if isinstance(profile, dict) else {}
+            state['ram_profile'] = _bot_ram_profile(descriptor, state.get('critical'))
             gun_state = self._gun_states.get(state['id'])
             if gun_state is None:
                 gun_state = _BotGunState(
@@ -17519,10 +17666,12 @@ class BotRuntime(object):
                 self._ammo_states[state['id']] = ammo_state
             burst_state = self._burst_states.get(state['id'])
             if burst_state is None:
-                burst_state = burst_mechanics.BurstClock()
+                burst_state = burst_mechanics.TriggerClock()
                 self._burst_states[state['id']] = burst_state
             reload_factor = _critical_factor(
                 state, descriptor, 'reload')
+            _bot_intuition(state, descriptor, gun_state, ammo_state, burst_state,
+                           command.get('shell_index', 0))
             if self._native_simulation is not None:
                 gun_state, ammo_state, burst_state = \
                     self._native_simulation.weapons.prepare(
@@ -17575,6 +17724,17 @@ class BotRuntime(object):
                     command['throttle'] = 0.0
                     command['turn'] = 0.0
                     command['movement_intent'] = False
+            from . import roof_crush_test
+            if roof_crush_test.enabled():
+                if roof_crush_test.shot_drop_enabled():
+                    command = self._roof_shot_drop_queue.command(command, state)
+                    from .native_input_diagnostics import write_json_record
+                    for event in self._roof_shot_drop_queue.drain_events():
+                        event['round'] = self.round_id
+                        write_json_record('ROOF SHOT DROP', event)
+                else:
+                    command = roof_crush_test.hold_command(command, position)
+                target = None
             if diagnostic is not None:
                 diagnostic.phase('bot.motion_plan')
             state['_motion_control_gates'] = []
@@ -17583,6 +17743,10 @@ class BotRuntime(object):
             state['_committed_corridor'] = dict(reason='integration_not_run')
             throttle = max(-1.0, min(1.0, command['throttle']))
             turn = max(-1.0, min(1.0, command.get('turn', 0.0)))
+            state['_governor_push_evidence'] = (
+                dict(command.get('wreck_push') or {})
+                if command.get('recovery_mode') == 'wreck_push' and throttle > 0.0
+                else {})
             aim_fallback = (target.get('position') if target is not None
                             else _position(state))
             aim_position = _point(command.get('aim_position'), aim_fallback)
@@ -18036,7 +18200,12 @@ class BotRuntime(object):
                 motion_probe.get('collision', False) and
                 not motion_probe.get('water', False) and
                 abs(_number(motion_probe.get('slope', 0.0))) <= 0.55)
+            # The drop fixture intentionally drives off a cliff. Its scripted
+            # input bypasses only the anticipatory driving veto; the exact
+            # hull sweep, support, gravity and contact response still run.
             path_clear = (True if (catchup_motion_hold or probe_deferred or
+                                   (roof_crush_test.shot_drop_enabled() and
+                                    command.get('recovery_mode') == 'roof_shot_drop') or
                                    motion_probe is None or
                                    exact_motion_owns_collision or
                                    (abs(throttle) <= 0.01 and

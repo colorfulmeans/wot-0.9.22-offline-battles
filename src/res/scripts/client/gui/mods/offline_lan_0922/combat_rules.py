@@ -682,6 +682,21 @@ def nominal_piercing_after_loss(shot, distance, pierce_loss=0.0):
                float(pierce_loss or 0.0))
 
 
+def vehicle_material_trace_end(shot, first_distance):
+    """The physical material trace extends ten calibres after first contact."""
+    try:
+        caliber = float((legacy_shot(shot).get('shell') or {}).get('caliber', 0.0))
+        if math.isnan(caliber) or math.isinf(caliber):
+            caliber = 0.0
+    except (TypeError, ValueError):
+        caliber = 0.0
+    return float(first_distance) + max(0.0, caliber) / 100.0
+
+
+def vehicle_material_hits(collisions, trace_end):
+    return tuple(hit for hit in collisions if float(hit.dist) <= trace_end + 0.000001)
+
+
 def resolve_armor_contact(shot, distance, collisions, random_gauss=None,
                           pierce_loss=0.0, penetration_factor=None,
                           base_penetration_multiplier=1.0):

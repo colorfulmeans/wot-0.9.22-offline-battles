@@ -6,14 +6,64 @@ This module is shared by the Python 2 worker and Python 3 server. No policy
 decision consumes ammunition or restarts a reload timer.
 """
 
-from gui.mods.offline_lan_0922.default_loadouts import GOLD_SHELLS, profile_roles
+from gui.mods.offline_lan_0922.default_loadouts import (
+    GOLD_SHELLS, ELITE_PENETRATION_EXCEPTIONS, profile_roles)
 
 
 def is_he(shell):
     return str(shell.get('kind', '')).upper() == 'HIGH_EXPLOSIVE'
 
 
+def _elite_loadout(profile):
+    """Upgrade native default rounds without losing HE-primary backups."""
+    if profile.get('bot_tier') != 'elite' or 'ammo_ratios' in profile:
+        return None
+    base = dict(profile)
+    base.pop('bot_tier', None)
+    shells = stages(base)
+    proportions = weights(base, shells)
+    nation = str(profile.get('vehicle_name', '')).split(':')[0]
+    def premium(shell):
+        return nation + ':' + shell.get('name', '') in GOLD_SHELLS
+    keep_penetration = (bool(shells and is_he(shells[0])) or
+                        (profile.get('vehicle_name'), profile.get('gun_name'))
+                        in ELITE_PENETRATION_EXCEPTIONS)
+    candidates = [s for s in shells if not is_he(s) and premium(s)]
+    if not candidates:
+        candidates = [s for s in profile.get('shells', ())
+                      if not is_he(s) and premium(s)]
+    he_candidates = [s for s in shells if is_he(s) and premium(s)]
+    if not he_candidates:
+        he_candidates = [s for s in profile.get('shells', ())
+                         if is_he(s) and premium(s)]
+    replacement = candidates[0] if candidates and not keep_penetration else None
+    he_replacement = he_candidates[0] if he_candidates else None
+    quotas = {}
+    result = []
+    changed = False
+    for shell, proportion in zip(shells, proportions):
+        chosen = shell
+        if not premium(shell):
+            upgrade = he_replacement if is_he(shell) else replacement
+            if upgrade is not None:
+                chosen = upgrade
+                changed = True
+        index = int(chosen['index'])
+        if index not in quotas:
+            result.append(chosen)
+            quotas[index] = 0
+        quotas[index] += proportion
+    return (result, quotas) if changed else None
+
+
 def ordered(profile, remaining=None):
+    elite = _elite_loadout(profile)
+    if elite is not None:
+        shells = elite[0]
+        if remaining is not None:
+            shells = [s for s in shells if int(s['index']) < len(remaining)
+                      and remaining[int(s['index'])] > 0]
+        return shells
     shells = list(profile.get('shells') or ())
     manual = 'ammo_ratios' in profile
     roles = None if manual else profile_roles(profile)
@@ -52,6 +102,17 @@ def stages(profile, remaining=None):
     if remaining is not None:
         shells = [s for s in shells if int(s['index']) < len(remaining)
                   and remaining[int(s['index'])] > 0]
+        # Runtime stocks, including explicitly mounted/custom HE, are distinct
+        # from default allocation. Do not alter any loadout or quota here.
+        nation = str(profile.get('vehicle_name', '')).split(':')[0]
+        he = [s for s in profile.get('shells', ()) if is_he(s)
+              and int(s['index']) < len(remaining) and remaining[int(s['index'])] > 0]
+        if he:
+            preferred = max(he, key=lambda s: (
+                nation+':'+s.get('name', '') in GOLD_SHELLS, -int(s['index'])))
+            he_primary = bool(ordered(profile) and is_he(ordered(profile)[0]))
+            shells = [s for s in shells if not is_he(s)]
+            shells = [preferred]+shells if he_primary else shells+[preferred]
     return shells
 
 
@@ -60,6 +121,9 @@ def clip_size(profile):
 
 
 def weights(profile, shells):
+    elite = _elite_loadout(profile)
+    if elite is not None:
+        return tuple(elite[1][int(s['index'])] for s in shells)
     if 'ammo_ratios' in profile:
         raw = dict(profile)
         raw.pop('ammo_ratios')
@@ -143,6 +207,12 @@ class ShotPolicy(object):
         if target is not None:
             self.target = target
 
+    def _same_phase(self, left, right):
+        if left == right:
+            return True
+        rows = dict((int(s['index']), s) for s in self.profile.get('shells', ()))
+        return left in rows and right in rows and is_he(rows[left]) and is_he(rows[right])
+
     def _close_group(self, group, count):
         if count <= 0:
             return
@@ -160,8 +230,7 @@ class ShotPolicy(object):
         if not available:
             return self.phase
         indices = [int(s['index']) for s in available]
-        if self.desired not in indices:
-            self.desired = indices[0]
+        self.desired = next((i for i in indices if self._same_phase(i, self.desired)), indices[0])
         main = indices[0]
         if self.desired != self.phase:
             return self.desired
@@ -171,7 +240,7 @@ class ShotPolicy(object):
         actual = next(s for s in available if int(s['index']) == loaded)
         first_he = is_he(available[0])
         arty = self.profile.get('class_tag') == 'SPG'
-        automatic = loaded != main and (arty or first_he or is_he(actual) or clip_size(self.profile) > 1)
+        automatic = not self._same_phase(loaded, main) and (arty or first_he or is_he(actual) or clip_size(self.profile) > 1)
         if automatic:
             size = clip_size(self.profile)
             if size > 1:
@@ -195,12 +264,13 @@ class ShotPolicy(object):
         if shell != self.phase:
             old = self.phase
             self.phase = shell
-            self.phase_id += 1
-            self.failures.clear()
+            if not self._same_phase(old, shell):
+                self.phase_id += 1
+                self.failures.clear()
+                self.phase_fired = 0
+                self.used = 0
             if self.desired in (old, shell):
                 self.desired = shell
-            self.phase_fired = 0
-            self.used = 0
         if self.used == 0 or self.used >= clip_size(self.profile):
             self.magazine += 1
             self.used = 0
@@ -240,13 +310,13 @@ class ShotPolicy(object):
         if not known:
             self.failures.clear()
             return
-        if row['epoch'] != self.epoch or row['shell'] != self.phase or row['phase_id'] != self.phase_id:
+        if row['epoch'] != self.epoch or not self._same_phase(row['shell'], self.phase) or row['phase_id'] != self.phase_id:
             return
         if self.desired != self.phase:
             return  # An admitted upgrade remains latched.
         if not self.shells:
             return
-        shell = next((s for s in self.shells if int(s['index']) == row['shell']), None)
+        shell = next((s for s in self.profile.get('shells', ()) if int(s['index']) == row['shell']), None)
         arty = self.profile.get('class_tag') == 'SPG'
         active = stages(self.profile, self.inventory)
         first_he = bool(active and is_he(active[0])) and not arty
@@ -266,8 +336,9 @@ class ShotPolicy(object):
         threshold = 1 if row['count'] > 1 else 2
         if self.failures.get(key, 0) >= threshold:
             indices = [int(s['index']) for s in stages(self.profile, self.inventory)]
-            if row['shell'] not in indices or len(indices) < 2:
+            current = next((i for i in indices if self._same_phase(i, row['shell'])), None)
+            if current is None or len(indices) < 2:
                 return
-            offset = indices.index(row['shell'])
+            offset = indices.index(current)
             self.desired = indices[(offset + 1) % len(indices)]
             self.failures.clear()

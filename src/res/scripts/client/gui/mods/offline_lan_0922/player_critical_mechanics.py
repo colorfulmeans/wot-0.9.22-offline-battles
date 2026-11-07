@@ -17,6 +17,7 @@ TRACK_DEVICE_NAMES = frozenset(('leftTrackHealth', 'rightTrackHealth'))
 CREW_NAMES = frozenset((
     'commander', 'driver', 'gunner', 'gunner1', 'gunner2', 'loader',
     'loader1', 'loader2', 'radioman', 'radioman1', 'radioman2'))
+PROTECTION_FIELDS = ('crewChanceToHitFactor', 'vehicleByChassisDamageFactor')
 
 
 def project_profile(descriptor, factors=None):
@@ -84,6 +85,9 @@ def project_profile(descriptor, factors=None):
         'devices': devices,
         'activation_targets': activation_targets,
         'crew_roster': crew_roster,
+        'repair_speed_factor': device_damage._misc_factor(descriptor, 'repairSpeedFactor'),
+        'protection': dict((name, device_damage._misc_factor(descriptor, name))
+                           for name in PROTECTION_FIELDS),
     }
 
 
@@ -125,6 +129,8 @@ def descriptor_from_profile(profile):
     if not values:
         return None
     descriptor = _Projection(miscAttrs=_Projection())
+    descriptor.miscAttrs.update(profile.get('protection') or {})
+    descriptor.miscAttrs['repairSpeedFactor'] = profile.get('repair_speed_factor', 1.0)
     descriptor.engine = values.get('engineHealth')
     descriptor.fuelTank = values.get('fuelTankHealth')
     descriptor.radio = values.get('radioHealth')
@@ -227,6 +233,10 @@ def advance_critical(player, dt, now):
     params = getattr(player, 'effective_params', None) or {}
     loadout = params.get('loadout') or {}
     repair_factor = max(0.0, float(loadout.get('repair_factor', 1.0)))
+    from . import crew_battle
+    if (params.get('crew') or {}).get('dynamic_spotting'):
+        repair_factor = crew_battle.for_critical(
+            params, player.critical)['repair_speed_factor']
     passives = equipment_mechanics.passive_effects(
         getattr(player, 'equipment_states', ()) or ())
     # #1513 keeps Repairkit.bonusValue out of every mounted factor, so the
@@ -240,17 +250,8 @@ def advance_critical(player, dt, now):
     rpm_rate = max(0.0, float(passives.get('engineHpLossPerSecond', 0.0)))
     base_speed = float((params.get('physics') or {}).get('speedFwd', 0.0))
     speed = abs(float(getattr(player, 'speed', 0.0)))
-    rpm_loss = 0.0
-    if rpm_rate > 0.0 and base_speed > 0.0 and speed < base_speed * 0.5:
-        elapsed = float(getattr(player, 'rpm_damage_elapsed', 0.0)) + float(dt)
-        # The real server uses 1/30 s, unlike the decimal test intervals.
-        # Rounding each tick down delays a nominal whole-second boundary
-        # by one tick. Tolerate only floating-point noise at that boundary.
-        seconds = int(elapsed + 1.0e-9)
-        player.rpm_damage_elapsed = max(0.0, elapsed - seconds)
-        rpm_loss = rpm_rate * seconds
-    else:
-        player.rpm_damage_elapsed = 0.0
+    player.rpm_damage_elapsed, rpm_loss = equipment_mechanics.governor_wear(
+        getattr(player, 'rpm_damage_elapsed', 0.0), dt, rpm_rate, speed, base_speed)
     rpm_payload = (critical_damage.damage_device_over_time(
         target, 'engineHealth', rpm_loss, 'equipment')
         if rpm_loss > 0.0 else None)
@@ -275,9 +276,13 @@ def advance_critical(player, dt, now):
                 bool(getattr(target, 'is_on_fire', False))):
             continue
         if devices[name] < cap:
+            previous_hp = devices[name]
             devices[name] = device_damage.repair_step_hp(
                 devices[name], name, descriptor, float(dt),
-                repair_factor=repair_factor)
+                repair_factor=repair_factor, crew_ko=player.critical.get('crew_ko', ()))
+            device_damage.report_repair_step(player, name, descriptor,
+                previous_hp, devices[name], dt, repair_factor,
+                player.critical.get('crew_ko', ()))
         if name in destroyed and devices[name] >= cap:
             destroyed.discard(name)
             critical.add(name)
@@ -304,8 +309,15 @@ def advance_fire(player, dt, now):
     elapsed = max(0.0, float(getattr(player, 'combat_fire_elapsed', 0.0)))
     target = _CriticalTarget(player, descriptor, now)
     step = max(0.0, float(dt))
+    from gui.mods.offline_lan_0922 import crew_battle, fire_model
+    decay = crew_battle.for_critical(
+        getattr(player, 'effective_params', None), player.critical)['fire_decay_factor']
+    if elapsed == 0.0:
+        player._fire_initial_scale = fire_model.ignition_scale()
+        critical_damage.report_fire_model(target, decay)
     target._fire_started = float(now) - (elapsed + step)
-    damage, payload = critical_damage.tick_fire(target, step, now=float(now))
+    damage, payload = critical_damage.tick_fire(target, step, now=float(now), native_decay_factor=decay,
+        initial_scale=getattr(player, '_fire_initial_scale', 1.0))
     burning = bool(target.is_on_fire and damage < int(player.health))
     if damage >= int(player.health) and target.is_on_fire:
         # Publish the terminal fire edge in the same canonical HP commit.

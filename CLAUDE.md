@@ -77,6 +77,53 @@ committed; remove only exact generated targets after verifying what they are.
 
 ## Evidence ladder
 
+### Gameplay reconstruction source priority
+
+Select the base rule set in this order: official, community, then explicitly
+custom. Prefer a coherent model over selecting favourable pieces from several
+models. The source of a missing parameter and the source of a conflicting rule
+are different questions:
+
+- With an official base, official rules resolve every conflict. For genuine
+  gaps, consult community research as a reference, but adopt a supplement only
+  when it is reasonable and compatible with the official base. If it is missing
+  or incompatible, use explicitly labelled custom reconstruction that preserves
+  the base model's rules.
+- With a community base, that community model resolves every conflict, including
+  conflicts with official descriptions. For genuine gaps, consult official data
+  as a reference, but adopt a supplement only when it is reasonable and compatible
+  with that community base. If it is missing or incompatible, use explicitly
+  labelled custom reconstruction that preserves the base model's rules.
+- A custom base may deliberately combine rules, but must be identified as custom.
+
+Compatibility with the selected base and internal rule consistency take
+precedence over mechanically importing a supplement from another source.
+A rule already specified by the selected base is not a gap merely because a
+different source disagrees or appears more convenient. Do not replace it with
+that source's rule. State the selected base, each genuine gap filled, and the
+source/confidence of the supplement. Record source dates, version differences
+and controlled measurements. User instructions take precedence over this
+source priority, including an explicitly selected base for a particular model.
+Leaving a known broken effect unimplemented is the last resort: investigate the
+allowed supplements and labelled reconstruction first, and state what is still
+missing. Apply this consistently to earnings, collision, fire, crew skills,
+equipment, consumables, directives and other gameplay calculations.
+An absent official number, unavailable original server, conflicting community
+estimates or a previously recorded "unresolved" status is not permission to
+stop at the existing value. Evaluate the applicable community evidence and,
+where needed, a reasonable, explicitly labelled reconstruction compatible with
+the selected base. Document the choice, alternatives, confidence and validation.
+Keep a genuine implementation gap visible until that work is completed; neither
+an unchanged default nor diagnostic logging constitutes a fix.
+
+These rules govern current work even when older compatibility notes, source
+comments or release records describe an official-data-only stopping point.
+Historical records describe what that version did, not a prohibition on future
+community supplementation or custom reconstruction. Preserve explicit user scope
+exclusions, including instructions to leave an existing reward unchanged.
+Do not treat successful installation, factor donation, diagnostics or passing
+synthetic tests as proof that the battle consumer actually applies an effect.
+
 Use the lowest layer that answers the question, but never claim that it proves
 a higher layer:
 
@@ -207,8 +254,13 @@ temporary output and diff it before replacing tracked catalogs.
   permits immediate refiring is a bug.
 - Use exact client descriptors and client-owned input for the vehicle, gun,
   shell, crew, equipment, muzzle, pose, and control state the client already
-  knows. Do not invent coefficients, clamps, fallback parameters, or simplified
-  formulas to make a result look plausible.
+  knows. Do not silently fabricate coefficients, clamps or fallback parameters,
+  or present reconstruction as retrieved native data. Missing gameplay laws and
+  parameters must follow the source-selection and compatible-gap process above;
+  explicitly labelled community supplementation, custom reconstruction and
+  calibration are permitted and must be evaluated before leaving a known defect
+  unchanged. This does not authorize fabricating native interface contracts,
+  collision receipts or historical events that were never observed.
 
 ## Runtime lessons from Windows playtesting
 

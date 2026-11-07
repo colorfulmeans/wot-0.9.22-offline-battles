@@ -214,44 +214,16 @@ class CompiledSpace0922Test(unittest.TestCase):
             self.assertEqual(
                 digest, hashlib.sha256(baseline_path.read_bytes()).hexdigest())
 
-    def test_reviewed_gate_uses_decoded_team_starts_not_tactical_bases(self):
-        graph = json.loads((ROOT / 'navgraphs' / '84_winter.json').read_text())
-        objectives = tuple(tuple(point) for point in graph['objective_bases'])
-        route_starts = tuple(tuple(point) for point in graph['spawn_anchors'])
-        legacy = baker._legacy_baker()
-
-        exact = baker._target_tactical_config(
-            legacy, '84_winter', objectives, route_starts)
-        regression_fixture = baker._target_tactical_config(
-            legacy, '84_winter', objectives,
-            ((-410.0, -350.0), (410.0, 350.0)))
-
-        def ice_road_gate(config):
-            route = next(record for record in config['routes']
-                         if record['team'] == 1 and
-                         record['id'] == 'ice_road')
-            held = [point[:2] for point in route['points'] if point[2]]
-            self.assertEqual(1, len(held))
-            return held[0]
-
-        self.assertEqual(objectives, exact['bases'])
-        self.assertEqual((150.0, 318.0), ice_road_gate(exact))
-        self.assertEqual(
-            (-250.0, -22.0), ice_road_gate(regression_fixture))
-
-    def test_baker_applies_reviewed_route_removal_once_from_raw_authoring(self):
-        graph = json.loads((ROOT / 'navgraphs' / '06_ensk.json').read_text())
-        objectives = tuple(tuple(point) for point in graph['objective_bases'])
-        route_starts = tuple(tuple(point) for point in graph['spawn_anchors'])
-        config = baker._target_tactical_config(
-            baker._legacy_baker(), '06_ensk', objectives, route_starts)
-        for team in (1, 2):
-            routes = [route for route in config['routes']
-                      if route['team'] == team]
-            self.assertEqual(
-                {'west_city', 'east_field'},
-                {route['id'] for route in routes})
-            self.assertEqual([7, 7], [route['capacity'] for route in routes])
+    def test_baker_uses_the_same_route_points_as_default_for_both_teams(self):
+        from gui.mods.offline_lan_0922 import bot_tactics
+        for name in ('84_winter', '06_ensk', '100_thepit'):
+            graph = json.loads((ROOT / 'navgraphs' / (name + '.json')).read_text())
+            objectives = tuple(tuple(point) for point in graph['objective_bases'])
+            config = baker._target_tactical_config(baker._legacy_baker(), name, objectives)
+            shared = bot_tactics.shared_route_points(bot_tactics.default_map(name))
+            self.assertEqual(objectives, config['bases'])
+            self.assertEqual(shared, {(r['team'], r['id']): [list(p) for p in r['points']]
+                                      for r in config['routes']})
 
     @staticmethod
     def _vehicle_chassis_visual(minimum, maximum):
@@ -439,7 +411,7 @@ class CompiledSpace0922Test(unittest.TestCase):
                          if value['id'] == 'rear_guard')
             self.assertGreaterEqual(len(route['waypoints']), 2)
             self.assertLessEqual(len(route['waypoints']), 16)
-            self.assertTrue(route['waypoints'][-1][2])
+            self.assertFalse(route['waypoints'][-1][2])
             start = route['waypoints'][0]
             anchor = data['spawn_anchors'][int(team) - 1]
             self.assertLessEqual(
@@ -476,9 +448,11 @@ class CompiledSpace0922Test(unittest.TestCase):
             self.assertEqual({'beach', 'village', 'cliff'},
                              {route['id'] for route in data['routes'][team]})
             for route in data['routes'][team]:
-                self.assertEqual(16, len(route['waypoints']))
+                self.assertGreaterEqual(len(route['waypoints']), 2)
                 self.assertEqual(start, route['waypoints'][0][:2])
-                self.assertEqual(finish, route['waypoints'][-1][:2])
+                from gui.mods.offline_lan_0922 import bot_tactics
+                shared = bot_tactics.shared_route_points(bot_tactics.default_map(data['map']))
+                self.assertEqual(shared[(int(team), route['id'])], route['waypoints'])
 
     def test_real_thepit_routes_start_after_verified_one_way_ingress(self):
         graph = ROOT / 'navgraphs' / '100_thepit.json'
@@ -498,9 +472,11 @@ class CompiledSpace0922Test(unittest.TestCase):
                 {'rim_west', 'pit', 'rim_east'},
                 {route['id'] for route in data['routes'][team]})
             for route in data['routes'][team]:
-                self.assertEqual(16, len(route['waypoints']))
+                self.assertGreaterEqual(len(route['waypoints']), 2)
                 self.assertEqual(start, route['waypoints'][0][:2])
-                self.assertEqual(finish, route['waypoints'][-1][:2])
+                from gui.mods.offline_lan_0922 import bot_tactics
+                shared = bot_tactics.shared_route_points(bot_tactics.default_map(data['map']))
+                self.assertEqual(shared[(int(team), route['id'])], route['waypoints'])
 
     def test_real_eiffel_graph_uses_ctf_objectives_and_mature_obstacle_rules(self):
         graph = (ROOT / 'navgraphs' /
@@ -548,9 +524,11 @@ class CompiledSpace0922Test(unittest.TestCase):
             self.assertEqual({'tower_west', 'center', 'tower_east'},
                              {route['id'] for route in data['routes'][team]})
             for route in data['routes'][team]:
-                self.assertEqual(16, len(route['waypoints']))
+                self.assertGreaterEqual(len(route['waypoints']), 2)
                 self.assertEqual(start, route['waypoints'][0][:2])
-                self.assertEqual(finish, route['waypoints'][-1][:2])
+                from gui.mods.offline_lan_0922 import bot_tactics
+                shared = bot_tactics.shared_route_points(bot_tactics.default_map(data['map']))
+                self.assertEqual(shared[(int(team), route['id'])], route['waypoints'])
 
     def test_every_shipped_map_has_a_complete_validated_spawn_formation(self):
         graph_root = ROOT / 'navgraphs'
@@ -713,7 +691,7 @@ class CompiledSpace0922Test(unittest.TestCase):
                     sum(len(route['waypoints']) - 1
                         for team in ('1', '2')
                         for route in data['routes'][team]),
-                    data['validation']['route_segments'])
+                    data['validation']['authored_default_route_segments'])
 
                 soft_routes = set(data['bake']['soft_route_fallbacks'])
                 self.assertEqual(
@@ -742,12 +720,17 @@ class CompiledSpace0922Test(unittest.TestCase):
                         self.assertEqual(3, len(routes))
                     self.assertEqual(len(route_ids), len(set(route_ids)))
                     own = data['spawn_anchors'][int(team) - 1]
-                    enemy = data['spawn_anchors'][2 - int(team)]
+                    from gui.mods.offline_lan_0922 import bot_tactics, bot_tactics_runtime
+                    shared = bot_tactics.shared_route_points(bot_tactics.default_map(path.stem))
+                    grid = bot_tactics_runtime.graph_view(path.stem, data)
                     metadata = []
                     for route in routes:
                         route_key = '%s:%s' % (team, route['id'])
                         route_keys.add(route_key)
                         self.assertEqual(own, route['waypoints'][0][:2])
+                        self.assertEqual(shared[(int(team), route['id'])], route['waypoints'])
+                        self.assertIsNone(bot_tactics_runtime.validate_route(
+                            grid, dict(team=int(team), points=route['waypoints'])))
                         self.assertGreaterEqual(route['capacity'], 1)
                         self.assertGreaterEqual(route['risk'], 0.0)
                         self.assertLessEqual(route['risk'], 1.0)
@@ -757,33 +740,6 @@ class CompiledSpace0922Test(unittest.TestCase):
                             for value in route['role_weights'].values()))
                         self.assertGreaterEqual(len(route['waypoints']), 2)
                         self.assertLessEqual(len(route['waypoints']), 16)
-                        for x, z, unused_hold in route['waypoints']:
-                            column = int(round(
-                                (x - data['origin'][0]) / data['cell_size']))
-                            row = int(round(
-                                (z - data['origin'][1]) / data['cell_size']))
-                            self.assertGreaterEqual(column, 0)
-                            self.assertLess(column, data['width'])
-                            self.assertGreaterEqual(row, 0)
-                            self.assertLess(row, data['height'])
-                            index = row * data['width'] + column
-                            if data['heights_mm'][index] is None:
-                                # A former waypoint cell may now be occupied by
-                                # solid railway stock. Existing projection must
-                                # still find support within the arrival radius.
-                                removed=data['bake']['railway_obstacles']['layers'][0]['removed_node_indices']
-                                self.assertIn(index,removed)
-                                from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
-                                grid=TerrainGrid(lambda *a:None,baked_graph=data)
-                                safe=grid._nearest_baked_cell((column,row),3)
-                                self.assertIsNotNone(safe)
-                                self.assertLessEqual(math.hypot(safe[0]-column,safe[1]-row)*data['cell_size'],12.)
-                            self.assertEqual(0, data['hazards'][index] & 3)
-                        if (route.get('terminal_hold', False) or
-                                route['id'] == 'rear_guard'):
-                            self.assertTrue(route['waypoints'][-1][2])
-                        else:
-                            self.assertEqual(enemy, route['waypoints'][-1][:2])
                         metadata.append((
                             route['id'], route['capacity'], route['risk'],
                             route['role_weights'],

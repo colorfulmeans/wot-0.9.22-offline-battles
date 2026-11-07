@@ -33,6 +33,7 @@ def _bake_one(client_root, output_root, map_name, existing_root=None):
         existing = json.loads(previous)
     graph = baker.bake_map_graph(client_root, map_name, existing_graph=existing)
     if existing is not None:
+        baker.publish_default_routes(graph)
         graph['terrain_edge_previous_sha256'] = hashlib.sha256(previous).hexdigest()
     baker._legacy_baker().write_graph(path, graph)
     schema.validate_graph(graph, map_name)

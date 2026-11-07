@@ -560,6 +560,7 @@ class NativeControl(object):
 
     def _project_actor_config(self, source, tick):
         from gui.mods.offline_lan_0922 import bot_runtime as laws
+        from gui.mods.offline_lan_0922 import crew_battle
         runtime = self.runtime
         key = _key(source)
         base, shot_factor, profile = runtime._spotting_profile(source, tick)
@@ -578,7 +579,9 @@ class NativeControl(object):
             unused_key, dynamic = laws._player_dynamic_spotting(snapshot, source)
             devices, destroyed, unused_crew, yellow = laws._critical_parts(source)
             module_factor = laws.device_damage.module_stat_factor(
-                devices, destroyed, descriptor, 'vision', yellow)
+                devices, destroyed, descriptor, 'vision', yellow,
+                crew_battle.for_critical(snapshot, source.get('critical'))[
+                    'damaged_optics_recon_ratio'])
             damage = laws.device_damage.clamp_vision_factor(
                 dynamic.get('vision', 1.0) * module_factor)
             kwargs = dict(misc_factor=(laws._value(
@@ -614,6 +617,16 @@ class NativeControl(object):
                     laws._critical_factor(source, descriptor, 'vision'))
                 view_moving *= factor
                 view_still *= factor
+                from gui.mods.offline_lan_0922 import bot_fittings
+                critical = source.get('critical') or {}
+                relay = bot_fittings.skill_level(
+                    descriptor, 'radioman_retransmitter', critical) * 0.001
+                last_effort = bool(bot_fittings.skill_count(
+                    descriptor, 'radioman_lasteffort', critical))
+                designated = bool(bot_fittings.skill_count(
+                    descriptor, 'gunner_rancorous', critical))
+                if designated:
+                    designated_duration = laws.spotting.SPOT_MEMORY_SECONDS + 2.0
         values = (int(source.get('team', 0)), int(source.get('slot', 0)),
             3.5, 1.7, float(view_moving), float(view_still),
             -1.0 if delay is None else float(delay), float(base[1]), float(base[0]),

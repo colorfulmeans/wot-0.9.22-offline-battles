@@ -60,15 +60,17 @@ def _verify_maintenance_controls(root, tk):
     reference.pack(side='bottom')
     panel = tk.Frame(window)
     panel.pack(fill='both', expand=True)
-    owner = SimpleNamespace(_tk=tk, repair_panel=panel,
+    owner = SimpleNamespace(_tk=tk, repair_panel=panel, language='en',
         _repair_startup=lambda: None, _reset_offline_client_settings=lambda: None,
         _reset_all_state=lambda: None, _factory_reset=lambda: None)
+    owner._t = lambda text: wot_launcher._CHINESE.get(text, text) if owner.language == 'zh' else text
     wot_launcher.LauncherWindow._build_maintenance_controls(owner)
     buttons = (owner.repair_button, owner.offline_preferences_button,
                owner.reset_button, owner.factory_reset_button)
     labels = ('Repair mod installation', 'Reset all offline client settings',
               'Clear all offline saves', 'Delete all data and restore factory defaults')
     for language in ('en', 'zh'):
+        owner.language = language
         for button, text in zip(buttons, labels):
             button.config(text=wot_launcher._CHINESE[text] if language == 'zh' else text)
         owner.maintenance_help.config(text='\n'.join(

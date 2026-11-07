@@ -10,6 +10,15 @@
 
 namespace offline_simulation { namespace weapons {
 
+// Tactical state is deliberately absent: once one physical shell commits,
+// only a real weapon/actor/round failure may terminate its finite trigger.
+enum class TerminationReason : int {
+    None=0, ActorDestroyed=1, BattleEnded=2, RoundChanged=3,
+    GunUnavailable=4, WeaponReplaced=5, AmmunitionUnavailable=6,
+    LaunchUnavailable=7, TransportUnavailable=8, NativeFailure=9
+};
+bool valid_termination_reason(TerminationReason);
+
 // All coefficients are installed by the existing exact-client readers.
 // Zero initialization is storage initialization, never a physical fallback.
 struct GunConfig {
@@ -47,7 +56,9 @@ struct GunState {
     void require_full();
     bool begin(int count, double factor);
     bool consume(bool final_round);
-    bool cancel();
+    // Only the enclosing uncommitted TriggerClock/Store may authorize this.
+    bool abort();
+    bool terminate(TerminationReason);
 };
 
 struct AmmoState {
@@ -75,9 +86,14 @@ struct BurstState {
     std::int64_t group_seq=0;
     int count=0, next_index=0, shell=0;
     double interval=0., time_left=0.;
+    TerminationReason terminal_reason=TerminationReason::None;
     bool start(std::int64_t first, int count, double interval, int shell);
+    // Exposure does not advance the committed physical-shell frontier.
     std::vector<BurstEdge> advance(double dt);
-    bool cancel(int launched=-1);
+    bool accepts(const BurstEdge &) const;
+    bool commit(const BurstEdge &);
+    bool abort();
+    bool terminate(TerminationReason);
     void validate(std::int64_t fire_seq) const;
 };
 
@@ -164,12 +180,14 @@ public:
     bool remove(ActorKey);
     ActorState &at(ActorKey);
     const ActorState &at(ActorKey) const;
+    void restore_trigger(ActorKey, const BurstState &, std::int64_t fire_seq);
     void prepare(ActorKey, double dt, double reload_factor, int requested_shell);
     std::vector<BurstEdge> after_motion(ActorKey, const AimInput &,
         double movement, double rotation, double actual_turret_speed,
         double dispersion_factor, double aim_factor, bool apply_aim);
     bool begin(ActorKey, int count, double interval, double reload_factor);
-    bool cancel(ActorKey);
+    bool abort(ActorKey);
+    bool terminate(ActorKey, TerminationReason);
     bool commit(ActorKey, const LaunchRecord &, double dispersion_factor);
     bool enqueue(const LaunchRecord &);
     bool ack(ActorKey, std::int64_t fire_seq);

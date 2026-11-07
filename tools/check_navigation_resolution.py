@@ -82,10 +82,25 @@ def write_native_input(path, graph, cases):
     path.write_text('\n'.join(rows)+'\n', encoding='ascii')
 
 
+def verify_default_routes(old, new, name):
+    from gui.mods.offline_lan_0922 import bot_tactics
+
+    def metadata(graph):
+        return {team: [{key: value for key, value in row.items() if key != 'waypoints'}
+                       for row in rows] for team, rows in graph['routes'].items()}
+
+    assert metadata(old) == metadata(new), (name, 'route metadata')
+    expected = bot_tactics.shared_route_points(bot_tactics.default_map(name))
+    actual = {(int(team), row['id']): row['waypoints']
+              for team, rows in new['routes'].items() for row in rows}
+    assert actual == expected, (name, 'Default waypoints')
+
+
 def verify_retained_gameplay(old, new, name):
     from rebake_navigation_resolution import GAMEPLAY_FIELDS
+    verify_default_routes(old, new, name)
     for key in GAMEPLAY_FIELDS:
-        if key != 'spawn_formations':
+        if key not in ('routes', 'spawn_formations'):
             assert old.get(key) == new.get(key), (name, key)
     expected=copy.deepcopy(old.get('spawn_formations'))
     if expected != new.get('spawn_formations'):
@@ -113,7 +128,7 @@ def main():
         old = json.loads(raw)
         new = json.loads(Path('navgraphs', name+'.json').read_bytes())
         verify_retained_gameplay(old,new,name)
-        cases = route_cases(old)
+        cases = route_cases(new)
         report['maps'][name] = {}
         for tag, graph in [('4m', old), ('4m-local', new)]:
             rows = inspect(graph, cases)

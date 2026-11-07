@@ -1788,8 +1788,9 @@ class BootstrapLifecycleTests(unittest.TestCase):
                                      auto_settings=None, friendly_fire_facts=None,
                                      vehicle_type_name=None, battle_start=0,
                                      daily_facts=None, training=False,
-                                     campaign_receipt=None):
+                                     campaign_receipt=None, crew_injuries=None):
                 applied.append(snapshot)
+                assert crew_injuries == {'roster':['commander','driver'], 'wounded':['driver']}
                 self.assert_not_used = tankmen_module
                 # The vehicle's own repair/reload/restock switches are settled
                 # inside the same transaction, so their flag values travel
@@ -1840,6 +1841,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
                 'health': 40,
                 'shells_fired': {0: 12},
                 'equipment_used': [11001],
+                'crew_injuries': {'roster':['commander','driver'], 'wounded':['driver']},
                 'friendly_fire': {'victims': [], 'received_damage': 10, 'xp_penalty': 0},
             })
 

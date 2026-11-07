@@ -1,6 +1,17 @@
+"""Keep historical route-review evidence separate from the current Default.
+
+7cb26548 made the owner's reviewed Default authoritative. Its directed roads,
+parking groups and edited gates must not be replaced by the older round-two /
+round-four polylines. Historical shape assertions remain pinned to the last
+pre-migration source; shipping graphs are checked exactly against Default.
+"""
+from functools import lru_cache
 import importlib.util
 import json
 import math
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,6 +22,7 @@ from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parents[1]
 NAVGRAPHS = ROOT / 'navgraphs'
+REVIEW_BASELINE = '19d79b1a08e03deb0635373bd1eebc4346ab42b3'
 
 
 def load_tool(name):
@@ -28,6 +40,17 @@ extractor = load_tool('extract_tactical_annotations')
 def load_graph(map_name):
     return json.loads(
         (NAVGRAPHS / (map_name + '.json')).read_text(encoding='utf-8'))
+
+
+@lru_cache(maxsize=None)
+def load_review_graph(map_name):
+    # The existing geometry suites and CI's fetch-depth: 0 retain this source.
+    # Never fetch missing objects while running a test in a partial checkout.
+    raw = subprocess.check_output(
+        ['git', 'show', REVIEW_BASELINE + ':navgraphs/' + map_name + '.json'],
+        cwd=ROOT, env=dict(os.environ, GIT_NO_LAZY_FETCH='1'))
+    graph=json.loads(raw)
+    return dict(map=map_name,routes=graph['routes'])
 
 
 def route_points(graph, route_id, team):
@@ -127,6 +150,8 @@ def sample_graph():
 class TacticalRouteReviewTest(unittest.TestCase):
 
     def test_pinned_graph_inventory_and_review_route_counts(self):
+        sys.path[:0] = [str(ROOT/'tools'), str(ROOT/'src/res/scripts/client')]
+        from check_navigation_resolution import verify_default_routes
         paths = sorted(
             (path for path in NAVGRAPHS.glob('*.json')
              if path.name != 'manifest.json'),
@@ -157,8 +182,13 @@ class TacticalRouteReviewTest(unittest.TestCase):
             self.assertEqual(expected, len(team_2), path.stem)
             self.assertEqual([route['id'] for route in team_1],
                              [route['id'] for route in team_2])
-            team_2_by_id = {route['id']: route for route in team_2}
-            for route in team_1:
+            historical = load_review_graph(path.stem)
+            # All installed points (including asymmetric teams and no-stop
+            # flags) must equal the current authoritative Default exactly;
+            # metadata and route membership still match the reviewed source.
+            verify_default_routes(historical, graph, path.stem)
+            team_2_by_id = {route['id']: route for route in historical['routes']['2']}
+            for route in historical['routes']['1']:
                 if (route['id'] == 'rear_guard' or
                         route.get('terminal_hold', False)):
                     continue
@@ -205,7 +235,7 @@ class TacticalRouteReviewTest(unittest.TestCase):
         self.assertEqual(8, len(contracts))
         self.assertEqual(15, sum(len(routes) for routes in contracts.values()))
         for map_name, routes in sorted(contracts.items()):
-            graph = load_graph(map_name)
+            graph = load_review_graph(map_name)
             for team in ('1', '2'):
                 by_id = {route['id']: route
                          for route in graph['routes'][team]}
@@ -317,7 +347,7 @@ class TacticalRouteReviewTest(unittest.TestCase):
         self.assertEqual([90.0, 90.0], result['routes'][0]['world'][-1])
 
     def test_round_two_himmelsdorf_lanes_stay_separate_and_smooth(self):
-        graph = load_graph('04_himmelsdorf')
+        graph = load_review_graph('04_himmelsdorf')
         for team in ('1', '2'):
             with self.subTest(team=team):
                 banana = route_points(graph, 'banana', team)
@@ -343,7 +373,7 @@ class TacticalRouteReviewTest(unittest.TestCase):
                     1)
 
     def test_round_four_ensk_has_only_two_balanced_reviewed_corridors(self):
-        graph = load_graph('06_ensk')
+        graph = load_review_graph('06_ensk')
         for team in ('1', '2'):
             with self.subTest(team=team):
                 routes = graph['routes'][team]
@@ -354,7 +384,7 @@ class TacticalRouteReviewTest(unittest.TestCase):
                                  [route['capacity'] for route in routes])
 
     def test_round_two_lakeville_lake_road_does_not_fall_into_west_valley(self):
-        graph = load_graph('07_lakeville')
+        graph = load_review_graph('07_lakeville')
         for team in ('1', '2'):
             with self.subTest(team=team):
                 lake = route_points(graph, 'lake_road', team)
@@ -375,7 +405,7 @@ class TacticalRouteReviewTest(unittest.TestCase):
                     150.0)
 
     def test_round_two_siegfried_fortification_route_stays_in_city(self):
-        graph = load_graph('14_siegfried_line')
+        graph = load_review_graph('14_siegfried_line')
         for team in ('1', '2'):
             with self.subTest(team=team):
                 route = route_points(graph, 'fortification_line', team)
@@ -388,7 +418,7 @@ class TacticalRouteReviewTest(unittest.TestCase):
                     int(math.ceil(len(city) * 0.75)))
 
     def test_round_two_munchen_west_route_uses_left_underpass(self):
-        graph = load_graph('17_munchen')
+        graph = load_review_graph('17_munchen')
         for team in ('1', '2'):
             with self.subTest(team=team):
                 route = route_points(graph, 'west_streets', team)
@@ -401,7 +431,7 @@ class TacticalRouteReviewTest(unittest.TestCase):
                 self.assertLess(max(heading_changes(route)), 135.0)
 
     def test_round_two_monastery_city_lane_is_direct(self):
-        graph = load_graph('19_monastery')
+        graph = load_review_graph('19_monastery')
         for team in ('1', '2'):
             with self.subTest(team=team):
                 route = route_points(graph, 'monastery_lane', team)
@@ -414,7 +444,7 @@ class TacticalRouteReviewTest(unittest.TestCase):
                     1)
 
     def test_round_two_canada_central_road_has_no_westward_hook(self):
-        graph = load_graph('47_canada_a')
+        graph = load_review_graph('47_canada_a')
         for team in ('1', '2'):
             with self.subTest(team=team):
                 route = route_points(graph, 'central_road', team)
@@ -426,7 +456,7 @@ class TacticalRouteReviewTest(unittest.TestCase):
                 self.assertLess(max(heading_changes(route)), 80.0)
 
     def test_canada_west_hills_preserves_reviewed_corridor_and_hold(self):
-        graph = load_graph('47_canada_a')
+        graph = load_review_graph('47_canada_a')
         for team in ('1', '2'):
             with self.subTest(team=team):
                 route = route_points(graph, 'west_hills', team)
@@ -440,7 +470,7 @@ class TacticalRouteReviewTest(unittest.TestCase):
                 self.assertIn([-410.,262.,True],record['waypoints'])
 
     def test_round_two_great_wall_routes_keep_three_distinct_roles(self):
-        graph = load_graph('59_asia_great_wall')
+        graph = load_review_graph('59_asia_great_wall')
         for team in ('1', '2'):
             with self.subTest(team=team):
                 wall = route_points(graph, 'wall_pass', team)
@@ -475,7 +505,7 @@ class TacticalRouteReviewTest(unittest.TestCase):
                     300.0)
 
     def test_round_two_korea_hills_has_fewer_major_bends(self):
-        graph = load_graph('73_asia_korea')
+        graph = load_review_graph('73_asia_korea')
         for team in ('1', '2'):
             with self.subTest(team=team):
                 changes = heading_changes(
@@ -498,7 +528,7 @@ class TacticalRouteReviewTest(unittest.TestCase):
             ('114_czech', 'valley', (62.0, 160.0), 60.0),
         )
         for map_name, route_id, gate, maximum_turn in contracts:
-            graph = load_graph(map_name)
+            graph = load_review_graph(map_name)
             for team in ('1', '2'):
                 with self.subTest(map=map_name, route=route_id, team=team):
                     route = route_points(graph, route_id, team)
@@ -507,7 +537,7 @@ class TacticalRouteReviewTest(unittest.TestCase):
                     self.assertLess(max(heading_changes(route)), maximum_turn)
 
     def test_round_four_north_america_uses_the_reviewed_fords_and_underpass(self):
-        graph = load_graph('45_north_america')
+        graph = load_review_graph('45_north_america')
         for team in ('1', '2'):
             with self.subTest(team=team):
                 north = route_points(graph, 'north_road', team)
@@ -527,7 +557,7 @@ class TacticalRouteReviewTest(unittest.TestCase):
                 self.assertLess(max(heading_changes(river)), 90.0)
 
     def test_round_four_great_wall_uses_mountain_gap_and_wider_ridge_corner(self):
-        graph = load_graph('59_asia_great_wall')
+        graph = load_review_graph('59_asia_great_wall')
         for team in ('1', '2'):
             with self.subTest(team=team):
                 wall = route_points(graph, 'wall_pass', team)
@@ -543,6 +573,15 @@ class TacticalRouteReviewTest(unittest.TestCase):
                     8.0)
                 self.assertLess(max(heading_changes(wall)), 80.0)
                 self.assertLess(max(heading_changes(ridge)), 55.0)
+
+    def test_current_directed_defaults_render_with_their_actual_authored_geometry(self):
+        for name in ('14_siegfried_line', '59_asia_great_wall', '86_himmelsdorf_winter'):
+            with self.subTest(map=name):
+                graph=load_graph(name)
+                installed=json.dumps(graph['routes'],sort_keys=True)
+                image=renderer._render(graph,Image.new('RGB',(64,64),(0,0,0)),1200)
+                self.assertEqual((1200,1284),image.size)
+                self.assertEqual(installed,json.dumps(graph['routes'],sort_keys=True))
 
     def test_missing_explicit_contract_is_rejected(self):
         graph = sample_graph()

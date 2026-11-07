@@ -25,6 +25,8 @@ from gui.mods.offline_lan_0922 import mission_events
 from gui.mods.offline_lan_0922 import siege_mechanics
 from gui.mods.offline_lan_0922 import spotting
 from gui.mods.offline_lan_0922 import turret_obstacle_schema
+from gui.mods.offline_lan_0922.projectile_wire import (
+    round_scalar as _projectile_wire_round)
 
 
 PROTOCOL_VERSION = 5
@@ -740,24 +742,6 @@ def _projectile_float_range(value, minimum, maximum):
     return parsed
 
 
-def _projectile_wire_round(value):
-    """Round identically on the shipped Python 2.7 and Python 3 server."""
-    number = float(value)
-    numerator, denominator = number.as_integer_ratio()
-    negative = math.copysign(1.0, number) < 0.0
-    scaled = abs(numerator) * 1000000
-    quotient, remainder = divmod(scaled, denominator)
-    twice_remainder = remainder * 2
-    if (twice_remainder > denominator or
-            (twice_remainder == denominator and quotient % 2)):
-        quotient += 1
-    if quotient == 0:
-        return -0.0 if negative else 0.0
-    if negative:
-        quotient = -quotient
-    return float(quotient) / 1000000.0
-
-
 def _valid_visible_authority_id(value):
     """Accept infrastructure authorities, never a visible player id."""
     return _exact_int(value) == WORKER_AUTHORITY_ID
@@ -1414,6 +1398,14 @@ def _valid_battle_receipt(message):
     if any(_exact_int(rewards.get(name)) is None or
            _exact_int(rewards.get(name)) < 0 for name in reward_names):
         return False
+    if 'economy_version' in rewards:
+        if type(rewards['economy_version']) not in integer_types or rewards['economy_version'] not in (1, 2):
+            return False
+        for field, total in (('achievement_credits', 'credits'),
+                             ('achievement_xp', 'xp'), ('achievement_free_xp', 'free_xp')):
+            if (_exact_int(rewards.get(field, 0)) is None or
+                    not 0 <= rewards.get(field, 0) <= rewards[total]):
+                return False
     if (_exact_int(rewards.get('crystal', 0)) is None or
             rewards.get('crystal', 0) < 0):
         return False
@@ -1421,6 +1413,11 @@ def _valid_battle_receipt(message):
             not 0 <= message.get('battle_booster', 0) <= 2 ** 31 - 1):
         return False
     if rewards.get('repair_cost') != 0 or rewards.get('ammo_cost') != 0:
+        return False
+    try:
+        from . import crew_injuries
+        crew_injuries.canonical(message.get('crew_injuries'))
+    except (TypeError, ValueError):
         return False
     try:
         friendly_fire.facts(message.get('friendly_fire'))
@@ -2214,6 +2211,12 @@ class LANClient(object):
             'voluntary': bool(voluntary),
         })
 
+    def send_input_sequence(self, *args, **kwargs):
+        """Return this input's ordered identity, never a later callback's one."""
+        kwargs['_return_sequence'] = True
+        sequence = self.send_input(*args, **kwargs)
+        return None if sequence is False else sequence
+
     def send_input(self, forward, turn, aim_yaw=0.0, gun_pitch=0.0,
                    position=None, yaw=None, fire_seq=0,
                    speed=None,
@@ -2225,8 +2228,16 @@ class LANClient(object):
                    destructible_contacts=None,
                    siege_enabled=None,
                    pitch=None, roll=None,
-                   gun_checkpoint=None, up_cosine=None, wreck_pose=False):
+                   gun_checkpoint=None, up_cosine=None, wreck_pose=False,
+                   _return_sequence=False):
         if not self.ready or self.phase != 'battle':
+            return False
+        timeline_enabled = bool(
+            HUMAN_RAM_TIMELINE_CAPABILITY in self.capabilities and
+            HUMAN_RAM_TIMELINE_CAPABILITY in self.server_capabilities)
+        if _return_sequence and not timeline_enabled:
+            # A local counter without its canonical wire echo cannot prove
+            # that a particular native setting was acknowledged.
             return False
         if self._input_seq_round != self.round_id:
             self._input_seq_round = self.round_id
@@ -2263,9 +2274,6 @@ class LANClient(object):
                 min(MAX_PLAYER_GUN_PITCH, _finite_float(gun_pitch))),
             'fire_seq': parsed_fire_seq,
         }
-        timeline_enabled = bool(
-            HUMAN_RAM_TIMELINE_CAPABILITY in self.capabilities and
-            HUMAN_RAM_TIMELINE_CAPABILITY in self.server_capabilities)
         if timeline_enabled:
             message['input_seq'] = next_input_seq
         if position is not None and len(position) >= 3:
@@ -2366,7 +2374,7 @@ class LANClient(object):
                 pending_landing['input_seq'] = int(self._input_seq)
                 pending_landing.pop('wire', None)
             self._send_pending_landing_observation(rebind=True)
-        return True
+        return next_input_seq if _return_sequence else True
 
     def send_track_repair(self, tracks, base_revision, repair_seq):
         """Publish one versioned, track-only repair checkpoint.
@@ -2498,6 +2506,8 @@ class LANClient(object):
             }
             if pending.get('module_contacts'):
                 wire['module_contacts'] = list(pending['module_contacts'])
+            if pending.get('contact_normal') is not None:
+                wire['contact_normal'] = list(pending['contact_normal'])
             if pending.get('vehicle_contact'):
                 wire['vehicle_contact'] = list(pending['vehicle_contact'])
             pending['wire'] = wire
@@ -2508,7 +2518,8 @@ class LANClient(object):
             pending.pop('refresh_input_on_retry', None)
         return sent
 
-    def send_landing_observation(self, impact_speed, module_contacts=None, vehicle_contact=None):
+    def send_landing_observation(self, impact_speed, module_contacts=None, vehicle_contact=None,
+                                 contact_normal=None):
         """Publish one physical landing observation, never a damage verdict."""
         if (isinstance(impact_speed, bool) or
                 not isinstance(impact_speed, integer_types + (float,))):
@@ -2526,6 +2537,7 @@ class LANClient(object):
         from gui.mods.offline_lan_0922 import environment_modules
         try:
             module_contacts = environment_modules.normalize_contacts(module_contacts or [])
+            contact_normal = environment_modules.contact_normal(contact_normal)
         except (TypeError, ValueError):
             return False
         if vehicle_contact is not None:
@@ -2558,6 +2570,7 @@ class LANClient(object):
                 'impact_speed': round(impact_speed, 6),
                 'module_contacts': module_contacts,
                 'vehicle_contact': vehicle_contact,
+                'contact_normal': contact_normal,
             })
             if (not pending.get('sent', False) and
                     pending.get('retry_on_input', False)):
@@ -2572,6 +2585,7 @@ class LANClient(object):
             'impact_speed': round(impact_speed, 6),
                 'module_contacts': module_contacts,
             'vehicle_contact': vehicle_contact,
+            'contact_normal': contact_normal,
             'sent': False,
             'reported': False,
         }
@@ -2590,6 +2604,7 @@ class LANClient(object):
             'input_seq': int(queued['input_seq']),
             'impact_speed': float(queued['impact_speed']),
             'module_contacts': list(queued.get('module_contacts', ())),
+            'contact_normal': queued.get('contact_normal'),
             'vehicle_contact': queued.get('vehicle_contact'),
             'sent': False,
             'reported': True,
@@ -4925,6 +4940,25 @@ class LANClient(object):
                      authority_epoch < self.authority_epoch) or
                     (ledger_required and 'server_time_ms' in message and
                      roster_server_time is None)):
+                from gui.mods.offline_lan_0922.native_input_diagnostics import validation_event
+                validation_event('roster_rejected', round_id=round_id,
+                    previous_round=self.round_id, phase=phase,
+                    previous_phase=self.phase, map_present=bool(map_name),
+                    players_present=players is not None,
+                    outfits=player_outfits_valid,
+                    effective_params=player_effective_params_valid,
+                    siege=player_siege_contract,
+                    gun_checkpoint=player_gun_checkpoint_contract,
+                    equipment=player_equipment_contract,
+                    assignments=player_assignments_valid,
+                    team_sizes=team_sizes is not None,
+                    bot_tier_mode=bot_tier_mode, bot_skill_mode=bot_skill_mode,
+                    host_present=host_player_id in player_ids,
+                    authority=_valid_visible_authority_message(message),
+                    authority_epoch=authority_epoch,
+                    previous_authority_epoch=self.authority_epoch,
+                    server_time=roster_server_time,
+                    server_time_present='server_time_ms' in message)
                 self.last_error = 'invalid roster message'
                 self.stop()
                 return

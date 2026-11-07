@@ -1,256 +1,217 @@
-"""Offline economy tests: the published reward structure and its one anchor.
+"""Independent reward-law and event-attribution checks for economy v2.
 
-Wargaming never published ``X``, ``Y``, ``Z`` or a vehicle's profitability
-coefficient, so the magnitudes here stay this product's policy.  What these
-tests pin is the *structure* the published material does describe, plus the one
-relationship recoverable from the captured retail tables: how XP per point of
-damage falls with vehicle tier.
+Credits intentionally use the complete 2015 community model. These fixtures
+are arithmetic examples of that selected model, not claims of WG server parity.
 """
-
-import statistics as statistics_module
 import sys
 from pathlib import Path
 import unittest
-
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'server'))
-sys.path.insert(0, str(ROOT / 'src' / 'res' / 'scripts' / 'client'))
-
-import offline_rewards
-from offline_rewards import compute_offline_rewards
-from gui.mods.offline_lan_0922 import mastery_catalog
+sys.path[:0] = [str(ROOT/'server'), str(ROOT/'src/res/scripts/client')]
+from offline_rewards import compute_offline_rewards, tier_weight
+from gui.mods.offline_lan_0922 import credit_coefficients, battle_achievements
 
 
-def _credits(**kwargs):
-    statistics = {}
-    for name in ('damage_dealt', 'damage_assisted_track',
-                 'damage_assisted_radio', 'damage_assisted_stun', 'kills',
-                 'spotted', 'capture_points', 'dropped_capture_points'):
-        if name in kwargs:
-            statistics[name] = kwargs.pop(name)
-    return compute_offline_rewards(statistics, kwargs.pop('won', False),
-                                   **kwargs)
+class RewardModelTests(unittest.TestCase):
+    def test_special_base_experience_is_before_scoreboard_and_account_bonuses(self):
+        from gui.mods.offline_lan_0922 import xp_coefficients
+        from types import SimpleNamespace
+        for vehicle in ('china:Ch01_Type59_Gold', 'china:Ch02_Type62', 'china:Ch03_WZ_111_A'):
+            normal = compute_offline_rewards({'damage_dealt': 1000}, True)
+            special = compute_offline_rewards({'damage_dealt': 1000}, True,
+                vehicle_xp_factor=xp_coefficients.base_factor(vehicle))
+            self.assertEqual(normal['xp'] * 2, special['xp'])
+            self.assertEqual(normal['credits'], special['credits'])
+            self.assertEqual(special['xp'] * 5 // 100, special['free_xp'])
+        self.assertEqual(100, xp_coefficients.base_factor('china:Ch01_Type59'))
+        for vehicle in ('ussr:R33_Churchill_LL','china:Ch03_WZ-111'):
+            ordinary=compute_offline_rewards({'damage_dealt':1000}, True)
+            special=compute_offline_rewards({'damage_dealt':1000}, True,
+                vehicle_xp_factor=xp_coefficients.base_factor(vehicle))
+            self.assertEqual(ordinary['xp']*150//100,special['xp'])
+            self.assertEqual(ordinary['credits'],special['credits'])
+        for level in (9, 10):
+            self.assertEqual(5, xp_coefficients.settlement_factor(SimpleNamespace(
+                tags=['premium'], level=level, premiumVehicleXPFactor=0)))
+            self.assertEqual(0, xp_coefficients.settlement_factor(SimpleNamespace(
+                tags=['mediumTank'], level=level, premiumVehicleXPFactor=0)))
 
+    def test_complete_community_credit_model_not_official_splices(self):
+        facts = dict(credit_damage_units=1000*100+1000*75,
+                     credit_assist_damage=400, damage_units=150000,
+                     assist_units=40000)
+        # Tier VIII, own 1000 + other-spot 1000, assist 400, 2 spots incl SPG.
+        loss = compute_offline_rewards({'spotted':2}, False, vehicle_tier=8,
+            spotted_spgs=1, reward_facts=facts, captured=True)
+        win = compute_offline_rewards({'spotted':2}, True, vehicle_tier=8,
+            spotted_spgs=1, reward_facts=facts, captured=True)
+        self.assertEqual(25900, loss['credits']) # 5600+17500+2000+300+500
+        self.assertEqual(30700, win['credits']) # participation 10400
+        self.assertEqual(4800, win['credits']-loss['credits'])
+        # 1.85 would produce 4760, and 50% other spotting would lose 2500.
 
-class TierAnchorTests(unittest.TestCase):
-    def test_tier_factors_are_the_baked_retail_tables_measured(self):
-        """The constants must stay what the captured retail tables say."""
-        index = mastery_catalog.MARKS_PERCENTILES.index(95)
-        samples = {}
-        for intcd, profile in mastery_catalog.VEHICLE_PROFILE.items():
-            tier = profile[0]
-            thresholds = mastery_catalog.MASTERY_XP.get(intcd)
-            curve = mastery_catalog.MARKS_DAMAGE.get(intcd)
-            if not thresholds or not curve or tier < 5:
-                continue
-            samples.setdefault(tier, []).append(
-                thresholds[3] / float(curve[index]))
-        self.assertEqual(set(range(5, 11)), set(samples))
-        pivot = statistics_module.median(
-            samples[offline_rewards.XP_TIER_PIVOT])
-        for tier, values in samples.items():
-            expected = int(round(
-                statistics_module.median(values) / pivot * 1000))
-            self.assertEqual(
-                expected, offline_rewards.XP_TIER_PERMILLE[tier],
-                'tier %d factor drifted from the baked retail tables' % tier)
-        # Retail publishes no gun-mark data below Tier V, so the lowest tiers
-        # hold the lowest measured value rather than extrapolating past it.
-        for tier in (1, 2, 3, 4):
-            self.assertEqual(offline_rewards.XP_TIER_PERMILLE[5],
-                             offline_rewards.XP_TIER_PERMILLE[tier])
-        self.assertEqual(1000, offline_rewards.XP_TIER_PERMILLE[
-            offline_rewards.XP_TIER_PIVOT])
+    def test_type59_coefficient_and_resistance_once(self):
+        coefficient, source = credit_coefficients.COEFFICIENTS['china:Ch01_Type59']
+        self.assertEqual((15750,6), (coefficient,source))
+        row = {'damage_dealt':4394,'spotted':6, 'kills':4,
+               'damage_assisted_track':237}
+        normal = compute_offline_rewards(row,False,vehicle_tier=8,
+            spotted_spgs=1,vehicle_coefficient=coefficient)
+        brave = compute_offline_rewards(row,False,vehicle_tier=8,
+            spotted_spgs=1,vehicle_coefficient=coefficient,courageous=True)
+        self.assertEqual(80994, normal['credits'])
+        self.assertEqual(7560, brave['achievement_credits'])
+        self.assertEqual(normal['credits']+7560, brave['credits'])
+        self.assertEqual(normal['xp']*3//2, brave['xp'])
+        win = compute_offline_rewards(row,True,vehicle_tier=8,
+            spotted_spgs=1,vehicle_coefficient=coefficient,courageous=True)
+        self.assertEqual(0,win['achievement_credits'])
+        self.assertEqual(brave['credits'],win['credits'])
 
-    def test_the_same_battle_pays_less_xp_as_tier_rises(self):
-        battle = {'damage_dealt': 2000, 'kills': 3, 'spotted': 2}
-        rewards = [compute_offline_rewards(
-            battle, False, True, tier, killed_durability=4200)['xp']
-            for tier in range(5, 11)]
-        self.assertEqual(sorted(rewards, reverse=True), rewards)
-        self.assertGreater(rewards[0], rewards[-1])
-        # Spotting XP carries no tier relationship, so the ratio of the
-        # damage-driven part is what moves.
-        combat = (2000 // 5 +
-                  4200 // offline_rewards.KILL_XP_DURABILITY_DIVISOR)
-        for offset, tier in enumerate(range(5, 11)):
-            expected = (offline_rewards.OFFLINE_PARTICIPATION_XP +
-                        combat * offline_rewards.XP_TIER_PERMILLE[tier] //
-                        1000 + 2 * 20)
-            self.assertEqual(expected, rewards[offset])
+    def test_credits_do_not_import_official_target_tier_bonus(self):
+        def rewards(weight):
+            return compute_offline_rewards({},False,vehicle_tier=8,reward_facts={
+                'damage_units':1000*weight*10,'credit_damage_units':100000})
+        low,same,high=[rewards(w) for w in (8,10,12)]
+        self.assertEqual([15600]*3,[r['credits'] for r in (low,same,high)])
+        self.assertLess(low['xp'],same['xp']);self.assertLess(same['xp'],high['xp'])
 
-    def test_a_kill_is_paid_by_what_was_killed(self):
-        """Wargaming: a kill counts with the tier difference taken in."""
-        base = compute_offline_rewards({}, False, True, 8)
-        # The plain frag count carries no XP of its own any more.
-        self.assertEqual(base['xp'], compute_offline_rewards(
-            {'kills': 3}, False, True, 8)['xp'])
-        small = compute_offline_rewards(
-            {'kills': 1}, False, True, 8, killed_durability=420)['xp']
-        large = compute_offline_rewards(
-            {'kills': 1}, False, True, 8, killed_durability=2000)['xp']
-        self.assertGreater(large, small)
-        self.assertEqual(
-            base['xp'] + 2000 // offline_rewards.KILL_XP_DURABILITY_DIVISOR,
-            large)
-        # A Tier VIII kill of a median Tier VIII vehicle keeps the 100 XP the
-        # previous flat rule paid, which is how the divisor is pinned.
-        self.assertEqual(base['xp'] + 100, compute_offline_rewards(
-            {'kills': 1}, False, True, offline_rewards.XP_TIER_PIVOT,
-            killed_durability=1400)['xp'])
+    def test_capture_is_full_payment_per_current_capturer(self):
+        plain=compute_offline_rewards({'capture_points':90},False)
+        captured=compute_offline_rewards({'capture_points':90},False,captured=True)
+        self.assertEqual(500,captured['credits']-plain['credits'])
+        self.assertEqual(plain['xp'],captured['xp'])
 
+    def test_assists_are_paid_but_aggregate_fallback_does_not_sum_categories(self):
+        one=compute_offline_rewards({'damage_assisted_track':100},False)
+        both=compute_offline_rewards({'damage_assisted_track':100,
+                                     'damage_assisted_radio':100},False)
+        self.assertEqual(one['credits'],both['credits'])
+        self.assertEqual(one['xp'],both['xp'])
+        self.assertEqual(1200,one['credits'])
 
-class CreditStructureTests(unittest.TestCase):
-    def test_only_the_participation_payment_carries_the_victory_factor(self):
-        """Lesta support: only ``X * tier`` is multiplied by 1.85 on a win."""
-        loss = _credits(damage_dealt=1000, spotted=1, vehicle_tier=6)
-        win = _credits(damage_dealt=1000, spotted=1, vehicle_tier=6, won=True)
-        participation = (
-            offline_rewards.OFFLINE_PARTICIPATION_CREDITS_PER_TIER * 6)
-        actions = (1000 * offline_rewards.OFFLINE_DAMAGE_CREDITS_PER_POINT +
-                   offline_rewards.OFFLINE_SPOTTING_CREDITS)
-        self.assertEqual(participation + actions, loss['credits'])
-        self.assertEqual(
-            participation * offline_rewards.OFFLINE_WIN_CREDITS_FACTOR_100
-            // 100 + actions, win['credits'])
+    def test_survival_criticals_activity_and_defence_are_distinct(self):
+        detail={}
+        result=compute_offline_rewards({'critical_hits':3, 'capture_points':10,
+            'dropped_capture_points':70},False,reward_facts={
+            'critical_units':300,'active_events':999,'survived':True},breakdown=detail)
+        self.assertEqual(dict(participation=100,damage=0,assistance=0,kills=0,
+            criticals=15,spotting=0,capture=20,defence=140,survival=20,
+            active_combat=50),detail['xp_parts'])
+        self.assertEqual(345,result['xp'])
+        # Defence does not manufacture a credit reward absent from this model.
+        self.assertEqual(700,result['credits'])
 
-    def test_damage_credits_do_not_scale_with_tier(self):
-        """Lesta support: ``Y`` per durability point is tier independent."""
-        low = _credits(damage_dealt=500, vehicle_tier=2)
-        high = _credits(damage_dealt=500, vehicle_tier=9)
-        self.assertEqual(
-            low['credits'] -
-            offline_rewards.OFFLINE_PARTICIPATION_CREDITS_PER_TIER * 2,
-            high['credits'] -
-            offline_rewards.OFFLINE_PARTICIPATION_CREDITS_PER_TIER * 9)
+    def test_kill_xp_uses_actual_tier_not_victim_hitpoints(self):
+        self.assertEqual(8,tier_weight(8,6));self.assertEqual(12,tier_weight(8,10))
+        same=compute_offline_rewards({},False,reward_facts={'kill_units':100})
+        higher=compute_offline_rewards({},False,reward_facts={'kill_units':120})
+        self.assertEqual(20,higher['xp']-same['xp'])
+        self.assertEqual(same['credits'],higher['credits'])
 
-    def test_detecting_an_spg_pays_double(self):
-        """Lesta support: ``Z`` per detected tank, ``2 * Z`` for an SPG."""
-        tanks = _credits(spotted=2, vehicle_tier=5)
-        one_spg = _credits(spotted=2, spotted_spgs=1, vehicle_tier=5)
-        both_spg = _credits(spotted=2, spotted_spgs=2, vehicle_tier=5)
-        step = offline_rewards.OFFLINE_SPOTTING_CREDITS
-        self.assertEqual(tanks['credits'] + step, one_spg['credits'])
-        self.assertEqual(tanks['credits'] + 2 * step, both_spg['credits'])
-        # An SPG count above the detection count cannot inflate the payment.
-        self.assertEqual(both_spg['credits'],
-                         _credits(spotted=2, spotted_spgs=9,
-                                  vehicle_tier=5)['credits'])
+    def test_costs_stay_client_owned_and_free_xp_is_derived_after_bonus(self):
+        r=compute_offline_rewards({'damage_dealt':1419},False,courageous=True)
+        self.assertEqual(r['xp']*5//100,r['free_xp'])
+        self.assertEqual((0,0),(r['repair_cost'],r['ammo_cost']))
+        self.assertLessEqual(r['achievement_free_xp'],r['free_xp'])
 
-    def test_capture_credits_need_a_completed_capture_and_split_equally(self):
-        """Lesta support: paid only for a capture that completed, split."""
-        points_only = _credits(capture_points=60, vehicle_tier=4)
-        self.assertEqual(
-            offline_rewards.OFFLINE_PARTICIPATION_CREDITS_PER_TIER * 4,
-            points_only['credits'])
-        alone = _credits(capture_points=100, vehicle_tier=4,
-                         capture_participants=1)
-        shared = _credits(capture_points=50, vehicle_tier=4,
-                          capture_participants=4)
-        self.assertEqual(points_only['credits'] +
-                         offline_rewards.OFFLINE_CAPTURE_CREDITS,
-                         alone['credits'])
-        self.assertEqual(points_only['credits'] +
-                         offline_rewards.OFFLINE_CAPTURE_CREDITS // 4,
-                         shared['credits'])
+    def test_bad_inputs_are_contained(self):
+        r=compute_offline_rewards({'damage_dealt':-5,'spotted':None},False,
+            vehicle_tier=None,spotted_spgs=-1)
+        self.assertEqual((700,100),(r['credits'],r['xp']))
+        self.assertEqual(0,compute_offline_rewards({},False,participated=False)['credits'])
 
-    def test_assisted_damage_pays_xp_but_no_credits(self):
-        """The published credits list has no assisted-damage payment."""
-        plain = _credits(damage_dealt=800, vehicle_tier=7)
-        assisted = _credits(damage_dealt=800, damage_assisted_radio=1500,
-                            vehicle_tier=7)
-        self.assertEqual(plain['credits'], assisted['credits'])
-        self.assertGreater(assisted['xp'], plain['xp'])
-
-    def test_free_xp_is_five_percent_and_costs_stay_zero(self):
-        rewards = _credits(damage_dealt=1200, kills=2, won=True,
-                           vehicle_tier=8)
-        self.assertEqual(rewards['xp'] * 5 // 100, rewards['free_xp'])
-        self.assertEqual(0, rewards['repair_cost'])
-        self.assertEqual(0, rewards['ammo_cost'])
-
-    def test_bad_inputs_cannot_produce_a_negative_or_unbounded_payment(self):
-        rewards = compute_offline_rewards(
-            {'damage_dealt': -50, 'spotted': None, 'kills': 'three'},
-            False, True, vehicle_tier=None, spotted_spgs=-3,
-            capture_participants=-1)
-        self.assertEqual(
-            offline_rewards.OFFLINE_PARTICIPATION_CREDITS_PER_TIER,
-            rewards['credits'])
-        # Nothing countable survived, so only the participation XP remains.
-        self.assertEqual(offline_rewards.OFFLINE_PARTICIPATION_XP,
-                         rewards['xp'])
-        self.assertEqual(0, compute_offline_rewards(
-            {}, False, participated=False)['credits'])
+    def test_only_battle_hero_and_epic_medals_qualify(self):
+        medals=battle_achievements.COURAGEOUS_RESISTANCE_ACHIEVEMENTS
+        self.assertTrue({'mainGun','warrior','defender','medalPascucci','huntsman'}<=medals)
+        self.assertTrue({'ironMan','markOfMastery','marksOnGun','kamikaze'}.isdisjoint(medals))
 
 
 class ServerRewardInputTests(unittest.TestCase):
-    """The two reward inputs the server derives from its own ledgers."""
-
     def _state(self):
         from lan_battle_server import BattleState, CLIENT_BUILD_0922
-        state = BattleState(map_name='13_erlenberg')
-        state.client_build = CLIENT_BUILD_0922
-        state.vehicle_catalogs = {1: (
-            {'name': 'ussr:R04_T-34', 'level': 5, 'tags': ('mediumTank',)},
-            {'name': 'ussr:R28_SU_26', 'level': 3, 'tags': ('SPG',)},
-        )}
-        state.bot_manifest = [
-            {'id': 11, 'name': 'Bot 11', 'vehicle': 'ussr:R04_T-34',
-             'team': 2},
-            {'id': 12, 'name': 'Bot 12', 'vehicle': 'ussr:R28_SU_26',
-             'team': 2},
-            {'id': 13, 'name': 'Bot 13', 'vehicle': 'ussr:R04_T-34',
-             'team': 1},
-        ]
-        state.bot_states = dict(
-            (int(row['id']), dict(row, alive=True, health=100))
-            for row in state.bot_manifest)
+        state=BattleState(map_name='13_erlenberg',clock=lambda:10)
+        state.client_build=CLIENT_BUILD_0922
+        state.vehicle_catalogs={1:(
+            {'name':'ussr:R04_T-34','level':5,'tags':('mediumTank',)},
+            {'name':'ussr:R66_SU-26','level':3,'tags':('SPG',)})}
+        state.bot_manifest=[dict(id=11,vehicle='ussr:R04_T-34',team=2),
+            dict(id=12,vehicle='ussr:R66_SU-26',team=2),
+            dict(id=13,vehicle='ussr:R04_T-34',team=1),
+            dict(id=14,vehicle='ussr:R04_T-34',team=1)]
+        state.bot_states={r['id']:dict(r,alive=True,health=100,max_health=100,
+                                     x=r['id']*2,y=0,z=0) for r in state.bot_manifest}
         return state
 
-    def test_only_artillery_detections_count_as_spg_spots(self):
-        state = self._state()
-        for target in (('bot', 11), ('bot', 12)):
-            state._statistics_interaction(('bot', 13), target)['spotted'] = 1
-        self.assertEqual(1, state._spotted_spg_count('bot', 13))
-        # A recorded target that was never revealed does not count.
-        state._statistics_interaction(('bot', 13), ('bot', 12))['spotted'] = 0
-        self.assertEqual(0, state._spotted_spg_count('bot', 13))
-        self.assertEqual(0, state._spotted_spg_count('bot', 11))
+    def test_first_spot_spg_is_not_an_extra_ordinary_tank(self):
+        s=self._state()
+        for i in (11,12):s._statistics_interaction(('bot',13),('bot',i))['spotted']=1
+        self.assertEqual(1,s._spotted_spg_count('bot',13))
 
-    def test_killed_durability_sums_the_victims_own_health(self):
-        state = self._state()
-        # Bot 13 destroys one medium and one SPG on the other team.
-        state.bot_states[11]['max_health'] = 900
-        state.bot_states[12]['max_health'] = 240
-        for target in (('bot', 11), ('bot', 12)):
-            state._statistics_interaction(('bot', 13), target)[
-                'target_kills'] = 1
-        self.assertEqual(1140, state._killed_durability('bot', 13))
-        # A target that was damaged but never destroyed adds nothing.
-        state._statistics_interaction(('bot', 13), ('bot', 11))[
-            'target_kills'] = 0
-        self.assertEqual(240, state._killed_durability('bot', 13))
-        self.assertEqual(0, state._killed_durability('bot', 11))
+    def test_damage_freezes_other_spot_and_deduplicates_overlapping_assists(self):
+        s=self._state();actor,target,helper=('bot',13),('bot',11),('bot',14)
+        with mock.patch.object(s,'_radio_assisters',return_value=[helper]),mock.patch.object(
+                s,'_impairment_assisters',return_value=[('track',helper),('stun',helper)]):
+            s._record_damage(actor,target,40,{})
+        own=s._reward_facts(*actor);assist=s._reward_facts(*helper)
+        self.assertEqual((2000,3000),(own['damage_units'],own['credit_damage_units']))
+        self.assertEqual((4000,40),(assist['assist_units'],assist['credit_assist_damage']))
+        self.assertEqual((40,40,40),tuple(s._statistics_row(*helper)[
+            'damage_assisted_'+key] for key in ('radio','track','stun')))
+        # A later local reveal must not retroactively upgrade the earlier shot.
+        s.bot_spotted[13]={target}
+        self.assertEqual(3000,s._reward_facts(*actor)['credit_damage_units'])
 
-    def test_capture_split_needs_a_completed_capture_and_participation(self):
-        state = self._state()
-        state._statistics_row('bot', 11)['capture_points'] = 40
-        state._statistics_row('bot', 12)['capture_points'] = 60
-        state._statistics_row('bot', 13)['capture_points'] = 25
-        # No capture completed yet.
-        self.assertEqual(0, state._capture_participants('bot', 11, 2))
-        state.base_captured_team = 2
-        self.assertEqual(2, state._capture_participants('bot', 11, 2))
-        self.assertEqual(2, state._capture_participants('bot', 12, 2))
-        # The losing team's own capture progress earns nothing.
-        self.assertEqual(0, state._capture_participants('bot', 13, 1))
-        # A team mate that never touched the base earns nothing either.
-        state._statistics_row('bot', 11)['capture_points'] = 0
-        self.assertEqual(0, state._capture_participants('bot', 11, 2))
-        self.assertEqual(1, state._capture_participants('bot', 12, 2))
+    def test_blind_damage_and_fire_use_the_same_event_accounting(self):
+        s=self._state()
+        with mock.patch.object(s,'_radio_assisters',return_value=[]):
+            s._record_damage(('bot',13),('bot',12),50,{})
+        facts=s._reward_facts('bot',13)
+        self.assertEqual(4000,facts['damage_units']) # tier V vs III
+        self.assertEqual(5000,facts['credit_damage_units']) # no credit tier term
+
+    def test_dead_or_departed_capture_contributor_gets_no_completion_credit(self):
+        s=self._state();s.base_captured_team=1
+        s._statistics_row('bot',13)['capture_points']=90
+        self.assertFalse(s._completed_capture('bot',13,1))
+        s.capture_invaders[2]={('bot',14)}
+        self.assertFalse(s._completed_capture('bot',13,1))
+        self.assertTrue(s._completed_capture('bot',14,1))
+
+    def test_public_and_personal_rewards_share_one_calculator(self):
+        s=self._state()
+        s._statistics_interaction(('bot',13),('bot',11))['target_kills']=1
+        raw=s._actor_rewards('bot',13,2)
+        brave=s._actor_rewards('bot',13,2,['mainGun','warrior'])
+        self.assertEqual(raw['xp']*3//2,brave['xp'])
+        self.assertGreater(brave['credits'],raw['credits'])
+        self.assertEqual(100,s._reward_facts('bot',13)['kill_units'])
+
+    def test_tiers_remain_exact_after_catalogue_donor_disconnects(self):
+        s=self._state()
+        s.vehicle_catalogs.clear()
+        self.assertEqual(5,s._reward_tier(('bot',13)))
+        self.assertEqual(3,s._reward_tier(('bot',12)))
+        self.assertEqual(8,s._reward_weight(('bot',13),('bot',12)))
+
+    def test_different_assist_events_accumulate_without_category_overlap(self):
+        s=self._state();actor,target,helper=('bot',13),('bot',11),('bot',14)
+        with mock.patch.object(s,'_radio_assisters',return_value=[helper]),mock.patch.object(
+                s,'_impairment_assisters',return_value=[('track',helper)]):
+            s._record_damage(actor,target,40,{})
+        with mock.patch.object(s,'_radio_assisters',return_value=[]),mock.patch.object(
+                s,'_impairment_assisters',return_value=[('stun',helper)]):
+            s._record_damage(actor,target,60,{})
+        self.assertEqual(100,s._reward_facts(*helper)['credit_assist_damage'])
+
+    def test_estimated_coefficients_are_explicit_and_positive(self):
+        rows=credit_coefficients.COEFFICIENTS
+        self.assertGreater(len(rows),600)
+        self.assertTrue(all(factor>0 and source>=0 for factor,source in rows.values()))
+        self.assertGreater(sum(source>0 for factor,source in rows.values()),350)
+        self.assertGreater(sum(source==0 for factor,source in rows.values()),0)
 
 
-if __name__ == '__main__':
-    unittest.main()
+if __name__=='__main__':unittest.main()

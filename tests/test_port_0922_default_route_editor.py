@@ -172,6 +172,7 @@ class DefaultRouteTests(unittest.TestCase):
         profile=edited_profile(self.graph)
         edit=profile['maps']['31_airfield']['default_routes'][0]
         edit['points'][0].append(30)
-        self.assertIsNone(config.route_config(profile,'31_airfield',edit['id'],1,
-            self.graph['routes']['1'][0]['waypoints']))
+        baked = self.graph['routes']['1'][0]['waypoints']
+        fallback = config.route_config(profile, '31_airfield', edit['id'], 1, baked)
+        self.assertEqual(baked, fallback['points'])
         self.assertIsNotNone(config.route_config(profile,'31_airfield',edit['id'],1,edit['points']))

@@ -21,8 +21,10 @@ retain the available endpoint. Select the gun first, then prefer the native
 stock turret when compatible. Otherwise use a compatible turret. Premium
 vehicles retain their fixed module configuration at all four tiers.
 
-Device family priority is stabilizer, rammer, laying drive, ventilation,
-coated optics, toolbox. Skip a family rejected by the native vehicle filters;
+Device families follow `equipment_policy.PRIORITIES`: LT optics/rammer/
+stabilizer/ventilation/GLD; MT rammer/stabilizer/optics/ventilation/GLD;
+HT liner/rammer/stabilizer/ventilation/GLD; TD and SPG rammer/ventilation/
+GLD/camouflage net/binoculars. Skip a family rejected by native vehicle filters;
 use the correct legal regular variant and never repeat a family. Installation
 also checks native admission tuples and the resulting serialized descriptor.
 
@@ -43,7 +45,7 @@ ratios, physical shell identities/prices and shot-result switching are retained.
 | germany:G81_Pz_IV_AusfH | _75mm_KwK_40_L48 | _105mm_StuH42_L28Pz |
 | germany:G83_Pz_IV_AusfA | _50mm_KwK_38_L42 | _75mm_KwK_37_L24 |
 | germany:G97_Waffentrager_IV | _150mm_Rohr_L38 | _128mm_K44_2_L61 |
-| germany:G99_RhB_Waffentrager | _150mm_Rohr_L29_5 | _128mm_K44_L55 |
+| germany:G99_RhB_Waffentrager | _150mm_Rohr_L29_5 | _150mm_Rohr_L29_5 |
 | japan:J20_Type_2605 | _140mm_50_3rd_Year_Type | _150mm_45_41st_Year_Type |
 | japan:J23_Mi_To | _75mm_Gun_Type5 | _120mm_Short_Barrel_Gun |
 | japan:J24_Mi_To_130_tons | _105mm_Cannon_Type92 | _150mm_Howitzer_Type96 |
@@ -68,6 +70,54 @@ ratios, physical shell identities/prices and shot-result switching are retained.
 | ussr:R44_T80 | _45mm_VT-42 | _45mm_VT-43 |
 | ussr:R49_SU100Y | _130mm_B-13-S2 | _130mm_B-13-S2 |
 | ussr:R77_KV2 | _107mm_ZiS-6 | _152mm_M-10 |
+
+## Reviewed full-gun additions and elite ammunition
+
+The shared full-gun override table now has 36 vehicles. RHM B WT no longer
+overrides the native full-gun choice: stock retains the 128 mm L/55 while
+intermediate/full use the 150 mm L/29.5. WT auf Pz. IV retains its reviewed
+128 mm L/61 full gun. The following four
+additions apply to newly generated unlocked player vehicles and to veteran and
+elite Bot full-development plans. Existing player fittings and manual installs
+remain authoritative. Stock and intermediate Bot modules are unchanged.
+
+| Vehicle identity | Reviewed full gun | Compatible full turret |
+| --- | --- | --- |
+| china:Ch31_M3G_FT | _57mm_ZiS_2 | Turret_1_Ch31_M3G_FT |
+| germany:G08_Pz38t | _47mm_PaK_38t_L43 | Pz38t_Ausf_G_turm |
+| uk:GB15_Stuart_I | _2pdr_Gun_Mk_IX | Turret_2_GB15_Stuart_I |
+| japan:J09_Chi_He | _57mm_Gun_Shin | Turret_2_Chi_He |
+
+AT15 retains its reviewed 32-pounder. This is a gun preference, not a claim
+that it dominates the 20-pounder B in every statistic.
+
+Elite difficulty transfers default silver non-HE ammunition quotas to a real
+premium non-HE round supported by the mounted gun. HE-primary guns retain their
+existing penetration backups and switching order. Two explicit vehicle/gun
+exceptions, SU-100Y's B-13-S2 and ISU-130's S-26A, retain the higher-penetration
+silver AP behind their premium AP primary. Ikv 103 has no exception.
+All selected silver HE quotas transfer to native premium HE when available,
+including artillery, with duplicate quotas merged before magazine allocation.
+Without a corresponding premium round, the original shell remains. Existing
+HE-only restrictions, including Sexton I and leFH18B2, cannot admit AP/HEAT as
+a premium replacement for HE. The SU-5 122 mm model 1930 gun uses only the
+420-damage OF420SO at every difficulty; its 300-damage HE is excluded.
+The
+reviewed gold-shell identity catalogue, rather than shell position, penetration,
+or the generic standard/premium role label, identifies the actual premium round.
+This matters for SU-100Y, whose premium AP is already its logical primary.
+Manual ammunition ratios override this difficulty default, including all-zero
+ratios. Player ammunition remains native. Other Bot difficulties retain their
+existing allocation except for the shared SU-5 gun correction above.
+Whole magazines and native capacity still govern rounding. The resolved Bot
+fitting tier travels in the tactical profile through the worker/server boundary,
+so initial ammunition, shot policy, replicas and authority restoration agree.
+The diagnostic entry records `bot_ammunition_initialized` with native shell
+identities, resolved tier, counts, initial shell and manual-override status.
+
+Default seed revision 5 rebuilds the default save once. New unlocked saves
+naturally use the revised full gun table; unrelated existing custom saves are
+not silently migrated or stripped of player assets.
 
 ## Native outfit exceptions
 
@@ -196,3 +246,11 @@ selections that cannot fill the team within the quota refuse start, rather
 than admitting unchecked classes. Preflight also refuses missing classes and
 impossible shared tier windows before loading. Training without Bots ignores
 these preferences. Standard and training Bots share the same selection policy.
+
+### Player ammunition boundary
+
+The reviewed gun/module defaults also initialize unlocked player vehicles.
+Player ammunition does not use Bot shell-role whitelists, elite premium
+substitution or the SU-5 Bot-only HE restriction. Both vehicle creation and
+gun replacement obtain the native load from `vehicles.getDefaultAmmoForGun`.
+A previously saved manual player fitting/load remains authoritative.

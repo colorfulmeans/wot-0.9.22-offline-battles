@@ -5,9 +5,8 @@ from __future__ import print_function
 The source implementation keeps this state inside ``offline_battle.py``.
 These methods preserve its descriptor reads, bloom/convergence formulas,
 empty-at-countdown start and clip transitions. Shot dispersion uses the
-bounded two-sigma model described for 8.6 instead of the unbounded 0.8.2
-offline approximation. The later 9.6 central-zone adjustment remains
-unimplemented; the radial probability law is not verified #1513 behaviour.
+bounded two-sigma base plus the 9.6 central-zone correction. Exact within-zone
+sampling is explicitly reconstructed in shot_dispersion, not claimed native.
 """
 
 import math
@@ -15,6 +14,7 @@ import random
 
 from gui.mods.offline_lan_0922 import burst_mechanics
 from gui.mods.offline_lan_0922 import loadout
+from gui.mods.offline_lan_0922 import shot_dispersion
 
 
 def _field(value, name, default=None):
@@ -482,10 +482,23 @@ class GunState(object):
             self.load_started = False
         return True
 
-    def cancel_burst(self, reload_factor=1.0):
-        """End an unlaunched tail after a final physical fire gate closes."""
+    def abort_burst(self):
+        """Undo pre-launch arming without inventing a reload cycle."""
+        if self._burst_remaining != self._burst_total:
+            return False
+        changed = self._burst_remaining > 0
+        self._burst_remaining = 0
+        self._burst_total = 0
+        return changed
+
+    def terminate_burst(self, reason, reload_factor=1.0):
+        """Retire a physically impossible trigger, never a controller stop."""
+        if reason not in burst_mechanics.TERMINAL_REASONS:
+            raise ValueError('gun trigger termination requires a physical reason')
         if self._burst_remaining <= 0:
             return False
+        if self._burst_remaining == self._burst_total:
+            return self.abort_burst()
         self._burst_remaining = 0
         self._burst_total = 0
         if self.clip > 0:
@@ -555,10 +568,9 @@ class GunState(object):
         boundary. In the published 8.6 model the circle is the two-sigma
         limit and an outlying normal sample is redistributed from the centre
         to the edge instead of being left outside or piled on its edge. 9.6
-        reweighted the innermost zone from about 16% to 10%. That adjustment
-        is NOT implemented here: the available public diagrams and client
-        resources do not provide its full sampling law. Preserving the cone
-        boundary does not establish retail weak-spot hit probabilities.
+        reweighted the innermost zone from about 16% to 10%. The shared sampler
+        applies that correction with an explicitly reconstructed adjacent-zone
+        redistribution. It does not establish exact retail hit probabilities.
 
         The former port added three unbounded ``dispersion / 3`` samples to
         the world axes. About 1.1 percent of its lateral samples landed beyond
@@ -574,10 +586,7 @@ class GunState(object):
             return direction
         gauss = gauss or random.gauss
         uniform = uniform or random.uniform
-        sigma = dispersion / 2.0
-        radius = abs(gauss(0.0, sigma))
-        if radius > dispersion:
-            radius = dispersion * uniform(0.0, 1.0)
+        radius = shot_dispersion.radius(dispersion, gauss, uniform)
         angle = uniform(0.0, 2.0 * math.pi)
         offset_x = radius * math.cos(angle)
         offset_y = radius * math.sin(angle)

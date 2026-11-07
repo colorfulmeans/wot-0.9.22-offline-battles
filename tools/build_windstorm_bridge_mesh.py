@@ -78,6 +78,8 @@ def build(client):
     for key, value in json.loads(raw).items():
         if key not in ('local_meshes', 'bake', 'links', 'navigation_previous_sha256s'):
             assert graph[key] == value, key
+    from bake_navigation_0922 import publish_default_routes
+    publish_default_routes(graph)
     path.write_bytes((json.dumps(graph, separators=(',', ':')) + '\n').encode())
     manifest_path = ROOT / 'navgraphs/manifest.json'
     manifest = json.loads(manifest_path.read_bytes())

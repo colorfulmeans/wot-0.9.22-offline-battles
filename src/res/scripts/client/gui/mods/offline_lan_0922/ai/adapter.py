@@ -355,6 +355,7 @@ class BotAdapter(object):
         progress = ((position[0]-attempt['origin'][0])*math.sin(attempt['heading']) +
                     (position[2]-attempt['origin'][2])*math.cos(attempt['heading']))
         evidence = dict(peer_id=key, phase=phase, sampled_at=state.get('now'),
+                        in_contact=wreck_contact,
                         origin=position, elapsed=attempt['elapsed'],
                         progress=progress, best_progress=attempt['best_progress'],
                         wreck_displacement=wreck_displacement,

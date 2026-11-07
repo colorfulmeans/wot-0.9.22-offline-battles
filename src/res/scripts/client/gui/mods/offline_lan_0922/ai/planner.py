@@ -642,7 +642,11 @@ def build_vehicle_profile(descriptor):
 
 	type_info = _attribute_or_key(descriptor, 'type', None)
 	vehicle_name = _attribute_or_key(type_info, 'name', class_tag)
+	from gui.mods.offline_lan_0922 import bot_fittings
+	fitting = bot_fittings.context(descriptor)
+	bot_tier = fitting['wire'].get('tier') if fitting is not None else None
 	return {
+		'bot_tier': bot_tier,
 		'class_tag': class_tag,
 		'vehicle_name': str(vehicle_name or class_tag),
 		'roles': roles,

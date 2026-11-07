@@ -168,6 +168,7 @@ def _bind_battle_progress(context):
             health=receipt.get('health'), vehicles_module=vehicles,
             shells_fired=receipt.get('shells_fired'),
             equipment_used=used,
+            crew_injuries=receipt.get('crew_injuries'),
             friendly_fire_facts=receipt.get('friendly_fire'),
             vehicle_type_name=receipt['vehicle'],
             battle_start=int(receipt['arena_unique_id']) & 0xffffffff,

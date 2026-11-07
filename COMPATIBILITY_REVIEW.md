@@ -1,4 +1,2003 @@
+# November 6 unified-trigger and complete foreground-copy rebuild
+
+## Current scope and superseded conclusions
+
+This rebuild starts at `ac953f201d4ae09033ad02bbc330286096228bb9`.
+The user's original dirty worktree is preserved separately. The current scope
+explicitly replaces the old reduced player automation and rewrites physical
+trigger execution for **both manual players and Bots**. Earlier statements
+limiting the work to player-only burst tails are superseded. Bot navigation and
+aiming policy sources remain the copying reference, not a place to simplify
+behaviour to make the player port pass.
+
+The previous sections below are historical reports of older code and packages.
+They do not define the current implementation contract. In particular, none of
+the following older claims is a requirement or a completion proof:
+
+- A diagnostic-only or deliberately minimal player controller is sufficient.
+- The former handwritten player modules fully copied Bot behaviour.
+- Every physical machinegun shell must re-enter tactical fire admission.
+- A blocked tail may wait five seconds and then be cancelled.
+- Stop, mission cancellation, target loss or a projectile rejection may cancel
+  the remaining shells of an already committed trigger.
+- Passing the old tests proves full migration or native Windows acceptance.
+
+## Trigger model and source boundary
+
+The implementation keeps the mounted #1513 descriptor's `gun.burst` (physical
+shells and interval within one trigger) separate from `gun.clip` (magazine
+capacity and the next-trigger reload). Ordinary single-shot and conventional
+autoloading guns use a one-shell trigger; machineguns may use multiple shells.
+The last partial trigger uses the available magazine and stock, not an invented
+full-group requirement. No current web vehicle statistics overwrite the mounted
+descriptor.
+
+Official and community sources were checked on 2026-11-06:
+
+- [Wargaming's Luchs tankopedia](https://worldoftanks.com/en/tankopedia/6161-G25_PzII_Luchs/)
+  distinguishes magazine capacity, shells in a container and their intervals.
+  It is current PC documentation, not a pinned 0.9.22 numerical fixture.
+- [Wargaming's July 23, 2024 console update](https://modernarmor.worldoftanks.com/en/cms/news/update-notes-july-23/)
+  explicitly distinguishes the older one-trigger/multiple-shot behaviour from
+  its new autocannon behaviour. It corroborates the distinction only; console
+  changes are not imported into this PC port.
+- The community's [PC Pz. I C record](https://wikiwiki.jp/wotanks/Pz.Kpfw.%20I%20Ausf.%20C)
+  separately lists burst size and magazine capacity and records later version
+  changes. Its newer balance values are not #1513 constants.
+- [GuidesBlitz's burst-fire description](https://guidesblitz.com/gun-types/)
+  describes one click producing an uninterrupted group. This is cross-product
+  corroboration, not exact-PC ABI evidence. The user's explicit PC gameplay
+  observation and required uninterrupted-trigger contract govern this rebuild.
+
+The old Wargaming wiki endpoints did not yield readable mechanics content in
+this environment. Current continuous-fire/overheating autocannons and their HE
+rules are deliberately not substituted for the 0.9.22 descriptor model. Exact
+client resource/ABI evidence and Windows acceptance remain distinct from public
+documentation.
+
+`TriggerClock` and the native weapon store separate scheduling from committing.
+Advancing time cannot consume a shell. A successful physical commit advances the
+next index exactly once; a failed uncommitted first edge can be aborted without
+a debit. Once committed, the group may terminate only for an explicit physical
+gun, actor, transport or battle lifecycle failure. Tactical changes cannot
+terminate it. Every emitted shell still uses current barrel/dispersion and has
+independent ammunition, launch identity, collision and damage bookkeeping.
+
+The foreground first-trigger gate is `TriggerAdmission`; manual firing does not
+run automatic penetration policy. Native input, callbacks and sender reentry
+are tested separately from high-level selection. A delayed rejection of one
+projectile retires that projectile, not its still-running physical trigger.
+
+## Complete-copy boundary and foreground adapter
+
+`player_control/copied/` is generated from complete source modules plus the
+required BattleRuntime geometry callback closure. The manifest records the
+source file, exact import/portability adaptations, and the explicit
+controlled-actor boundary. Source comparisons reverse that boundary adaptation
+and compare the original bodies; algorithms are not replaced by equivalents
+chosen by the agent. Neutral shared imports have a closed allowlist. A fresh
+process import test bans original Bot/AI/planner modules and the original
+network module's implicit behaviour imports.
+
+`FullPlayerRuntime` creates independent copied planner/loop/geometry owners.
+Other visible vehicles are observation context; only the local player is an
+actuator target. Native foreground pose, gun clock, dispersion, ammunition,
+equipment and projectile settlement are authoritative. The adapter projects
+observations and sends native input; it must not advance private shadow physics
+or publish another vehicle's Bot messages.
+
+The player's new attack policy is a separate explicit change **after** copying.
+It preserves current-ammunition ownership, immediately consumes an executable
+current candidate, separates armour proof from obstruction, and uses fresh
+all-relevant-enemy evidence for the eight-second search. Ordinary copied
+firing-position recovery keeps its own bounded failure/fallback path. HE
+penetration and real-contact fallback are separate candidates; a proved zero
+HP fallback contact is not unknown. Every evidence reuse must satisfy its pose,
+shell, identity and geometry dependencies.
+
+The two reversible copy seams select the locally controlled actor for execution
+and an identity-only public roster for the original SPG endgame count. They do
+not turn an unobserved peer into a spatial target or advance peer physics.
+Team tactics consume the existing server-admitted `bot_observation` receipts;
+an observation is not permission to simulate its sender. Traffic input freshness
+follows each peer's accepted input sequence rather than the render cadence or
+another peer's newer snapshot.
+
+Live snapshots also publish `defense` from the server's existing
+`_bot_defense_context()` producer. Contributor IDs/points and threatened circles
+come from the committed one-Hz capture state, not the foreground's newer
+instantaneous positions. Snapshot delta transport retains this complete
+read-only section. The foreground privately maps only its own human identity
+to its copied actor ID; it does not change the wire, award points, or control a
+peer. The original Bot defense algorithm is unchanged.
+
+Negative global search has its own bounded work frontier. Work is sliced and
+round-robin, and a supplemental closure pass checks a work deadline and native
+query/candidate budgets. A native call already in progress cannot be preempted
+by that Python deadline. An unfinished or invalidated pass is unknown, not an
+all-enemy penetration failure; it cannot start the eight-second clock. The
+long-range, low-velocity stress fixture requires many updates to close the
+complete negative domain. These bounds prevent unbounded work in one decision;
+they do not establish acceptable Windows frame time or search latency.
+
+## Legacy tests and replacement evidence
+
+The old reduced behaviour modules and their dependent tests are retired as one
+replacement, not retained as a hidden fallback. Public lifecycle and native
+consumer requirements are carried into the new suites. Private fields and
+thresholds belonging only to the retired implementation are not requirements
+on the copied Bot state machines.
+
+| Retired test responsibility | Replacement evidence |
+| --- | --- |
+| Reduced navigation, routes, cover, traffic, sortie and recovery | Exact source/import closure checks; unchanged original fixtures run against both namespaces; foreground native-input, peer-observation and bounded-recovery integration |
+| Reduced controller and migration glue | `test_player_controller_rebuild.py`, manual-command integration, control-completion and transport suites |
+| Per-shell tactical cancellation and hit-result-driven ammunition cycles | `test_trigger_transaction_contract.py`, physical human/Bot trigger suites, burst-liveness and rebuilt attack-policy suites |
+| Magazine selection, movement and early reload | `test_player_full_shell_settings.py` through real vehicle-setting and GunState consumers, not mocked switch/reload methods |
+| Stationary engagement, limited traverse, capture and mission priority | Full-control-arbitration, limited-traverse and native mission-ownership integration |
+| Direct/SPG aiming, current component geometry and first-trigger approval | Full-runtime and fire-admission integration, including moving/high-arc/cross-slope fixtures and ownership reentry |
+
+The retired failure-streak ammunition cycle, cancellable physical tails,
+player-specific low-health withdrawal, and human-only simplified flanker
+election are intentionally not restored. Original copied Bot laws and the
+explicitly requested new player attack policy replace them. Differential
+fixtures establish source/copy behaviour, while the foreground cases establish
+that their relevant outputs actually reach native consumers; neither test
+category substitutes for the other.
+
+## Validation scope
+
+Source equality, source import isolation, copied/original differential fixtures,
+foreground integration, trigger transactions, native weapon tests and packaging
+are separate checks. Their results must not be merged into a claim that the
+visible #1513 client has passed gameplay acceptance. The final PR/build handoff
+records the actual frozen revision and tests. Native frame cost, exact-client
+runtime behaviour and multiplayer observation/input independence still require
+an observed Windows run; no earlier report is evidence for this new build.
+
+# Historical November 6 limited-traverse, magazine and automatic-burst follow-up
+
+**Historical implementation and test record, superseded by the rebuild above.**
+The tail-cancellation design documented in this record was incorrect and is not
+retained. Its old test totals describe that earlier tree only.
+
+The report `wot-error-report-20261106-183205-e97f70580e0d` identifies both
+the installed client and bundled launcher payload as
+`colorfulmeans-42184370955-1`, built from `99e1b8d8`. This is the baseline
+for this follow-up. Native observations below come from that package, not
+from the corrected source or its controlled tests. The three rounds use
+the stationary equipment-test scene on Mittengard.
+
+## What this report proves
+
+| Player vehicle | Committed native shots | Relevant observation |
+| --- | ---: | --- |
+| `china:Ch21_T34` | 83 | The unchanged horizontal pose and hull yaw from 17:34:57.887 to 17:37:12.671 contain 68 actual shot commits. This supports stationary single-shot firing through reloads in that interval. |
+| `china:Ch09_M5` | 73 | The unchanged horizontal pose and hull yaw from 17:45:27.939 to 17:46:46.946 contain 33 commits. The vehicle eventually consumes all 73 rounds and enters empty-ammunition capture. |
+| `china:Ch39_WZ120_1G_FT` | 0 | Ammunition remains at 35 after the initial reload. Both automatic trigger requests are rejected with `auto_front_vehicle`; neither is a committed shot. The user's no-fire observation is confirmed. |
+
+The T-34 above is the Chinese vehicle actually played, rather than a USSR
+T-34 appearing elsewhere in the garage data. Its report also contains
+rejected world-obstructed requests; the successful parked interval does not
+establish universal aiming or movement correctness.
+
+For the WZ, 2,046 of 2,092 aiming decisions return no selected target.
+There are 3,587 `yaw_limit` and 304 `pitch_limit` candidate refusals. From
+18:19:54.120 through 18:21:33.341, 935 aiming rows retain exactly the same
+horizontal position and hull yaw for 99.222 seconds, despite fifteen
+visible contacts. The final control receipt is a settled automatic base
+capture with zero throttle/turn, brake enabled and no combat-facing owner.
+Earlier control rows contain nonzero turns; the evidence does not support
+an inability of that vehicle's tracks to turn.
+
+These rounds expose only single-round loaded states. They do not provide
+native magazine, machinegun or limited-turret acceptance evidence. The
+additional weapon categories below are audited by actual descriptor fields
+and production consumers with explicit native-boundary test seams. No
+unavailable exact-client vehicle catalog or mounted WZ traverse measurement
+is invented.
+
+## Player hull laying before firing admission
+
+The old direct comparison correctly found a mechanically unreachable
+horizontal angle, but converted its completed geometric result to
+`unavailable`. DirectEngagement then discarded that target. The later
+limited-traverse branch required an already returned target and combat
+hold, so it could not perform the turn needed to make the target reachable.
+A settled automatic capture made this circular prerequisite especially
+visible: it held the tracks while the aiming scan kept discarding enemies.
+
+The player now retains a completed, unobstructed, yaw-only candidate as
+`needs_hull`. This is evidence for body alignment, not permission to fire.
+It leaves `reachable`, `source_verified` and `clear` false, and does not
+invent a penetration result. Pitch-only refusals, blocked geometry and
+unfinished native probes cannot acquire this owner. Mounted
+`gun.turretYawLimits`, including asymmetric and zero-width arcs, determine
+the behavior; turret class names do not substitute for the installed arc.
+
+The independent foreground hull owner brakes translation, checks traffic
+and the existing full native rotation sweep, and retains the selected
+sample while measured body yaw approaches the installed arc. Settled
+automatic capture may turn in place under its existing capture-circle
+constraints. An explicit moving mission, withdrawal, an active physical
+trigger, an unsupported/overturned hull or a lost/replaced target cannot
+inherit that turn. Native queries recheck the controller and target
+identity before the final sender publishes movement. A gun replacement
+also retires an already-sent old turn when the same controller still owns
+that input; Stop or a successor command keeps its own input ownership.
+
+Once the hull enters the arc, native source inversion, the actual barrel,
+current collision geometry and armor admission must all succeed again.
+The previous point proof is never promoted into a new pose's shot proof.
+The existing 1e-5-radian native angular tolerance is applied to non-SPG
+horizontal limits to avoid rejecting roundoff such as 2.78e-17 at a fixed
+zero-width arc. This does not widen the arc by the former 0.02-radian
+movement completion threshold, and the SPG limit checks remain unchanged.
+
+The owner has a finite lease, a 2.4-second no-new-best-angle exit and a
+five-second pending-proof exit. Its lease accounts for the existing
+proportional turn command's final convergence using the mounted turn-rate
+limit; an angle/rate-only deadline incorrectly interrupted a slow fixed
+gun despite continuous measured improvement. A refused or expired pivot
+defers its point and returns to normal selection without labelling the
+point's armor a failure. The initial-blocked-scan route protection from
+`99e1b8d8` remains in force.
+
+## Loaded magazine, trigger and next-magazine ownership
+
+The player reads `GunState.clip_size` as physical rounds per magazine and
+`burst_count` as physical rounds per trigger. A normal autoloader and a
+machinegun therefore share magazine ownership, while each trigger still
+requires a fresh usable point. Physical subshots keep their original
+trigger and ammunition transaction.
+
+| Condition | Player decision |
+| --- | --- |
+| The loaded magazine has a point meeting the existing 65% penetration threshold | Use that magazine, including a loaded HE magazine. A ready current trigger receives comparison budget before speculative next-magazine work. |
+| A different ammunition type has a better eligible next-magazine priority | Update `NEXT_SHELLS` while the current magazine remains loaded. Plans can be changed or cancelled throughout the magazine; a deferred comparison never delays an already proved current trigger. |
+| A full current-ammunition scan conclusively has no eligible point | Attempt the player's checked local firing-position search. No direct `CURRENT_SHELLS` selection can unload the live magazine. |
+| The authorized search reaches its existing eight-second budget | Recheck current and alternative ammunition. If the current magazine becomes usable again, retain it. Otherwise request withdrawal and a new magazine. |
+| The final movement sender has accepted the withdrawal owner | Only then may the player perform `NEXT_SHELLS` followed by `RELOAD_PARTIAL_CLIP`. Rejected queueing, Stop, gun replacement, an active burst or a manual pending selection prevents this transaction. |
+| No ammunition meets the penetration threshold, but the existing HE nominal fallback is usable | An already-loaded HE magazine uses that fallback. Another loaded type first completes the same bounded search/withdrawal handoff before loading HE. The existing HE impact/damage calculations are unchanged. |
+
+The search clock consumes actual final-owner firing-position attempts,
+including checked blocked-path refusals. Requiring successful translation
+would deadlock a vehicle with no safe search move. Conversely, wall-clock
+time spent merely scanning, travelling an explicit route or running with
+automatic driving disabled does not authorize an early unload. After a
+completed current-armor failure, real search attempts may continue while a
+new native proof is pending; such a pending proof cannot issue a reload
+permit. A completed unknown result revokes the armor-failure qualification.
+Multi-slice scans and their final alternative recheck retain bounded work
+without starving either search timing or the next complete proof.
+
+The loaded type remains unchanged through every physical subshot. A queued
+plan is promoted only at the real magazine boundary, including a last
+trigger that consumes several remaining rounds. User-owned pending choices
+are preserved. An automatic plan left by a reentrant Stop must be cancelled
+or retained as an exact-gun cleanup obligation in the existing release
+retry mechanism; a refused cancellation cannot silently leave an unowned
+future ammunition change behind.
+
+## Bounded recovery from a blocked automatic burst tail
+
+A separate controlled reproduction found a player-only liveness gap not
+observed in the three native report rounds. After a successful first bullet,
+a frozen-scatter tail could hit a world object or friendly hull away from
+the clear central aiming line. The old full consumer retained that same
+burst for 601 decisions and 66.11 seconds, with two tails still pending,
+only one committed shot and no new trigger available. Removing the blocker
+allowed the two remaining bullets to finish immediately. A dead target and
+an ordinarily unlaid barrel already had terminal paths; neither explains
+this specific infinite `automatic_wait`.
+
+The foreground admission owner now bounds an already-confirmed blocked
+physical tail using the existing five-second laying tolerance. Temporary
+proof work cannot renew that deadline. A short-lived obstruction may clear
+and complete the burst normally. Persistent refusal terminates only the
+uncommitted tails through the existing native cancellation contract,
+retains already committed shots/debits, and defers that exact point before
+the next normal trigger search. Pure unknown work, SPG fire and another
+session/controller's burst do not acquire this new timeout. Shared native
+shooting, projectile physics and Bot burst behavior are unchanged.
+
+## Verification and delivery boundary
+
+The new regressions cover complete player consumers, not only selected
+helper returns. Limited-traverse tests advance measured body yaw through
+the final sender, hold fire while native source/barrel/armor evidence is
+missing, and then commit actual projectiles through the production firing
+chain. Magazine movement tests use the real navigation, final sender and
+GunState to establish search, withdrawal and partial-reload ordering,
+including blocked paths, explicit movement, disabled driving, unknown
+armor, manual ammunition and Stop inside the withdrawal callback. Burst
+tests exercise actual physical commits and cancellation rather than
+mocking a successful trigger.
+
+The previously captured opening-spin, blocked-scan and stationary-engagement
+regressions retain their movement/collision assertions. The old synthetic
+`direct=None` combat-facing test is explicitly identified as the unchanged
+SPG branch: production non-SPG startup always constructs DirectEngagement.
+Its original low-speed and collision-veto assertions remain in place.
+
+The frozen local run passes all 41 isolated player files and 991 tests.
+Including the existing gun, physical burst and SPG acceptance/reference
+checks, the same run passes 46 files and 1,051 tests, with no failures,
+errors or skips. These totals overlap and must not be added together.
+
+Runtime changes in this follow-up are confined to `player_control/`.
+Bot policies, shared vehicle/shot physics and `player_control/artillery.py`
+are identical to `99e1b8d8`. Descriptor-class tests are not a claim that every
+vehicle in the exact Windows resource catalog has been played. Frozen-source
+test totals, exact pushed-head CI and the verified launcher build identity
+are recorded in the PR handoff. A new native gameplay report is still needed
+to accept the corrected package's behavior in the user's client.
+
+# Historical November 6 opening-spin regression and local bypass rollback
+
+The follow-up report `wot-error-report-20261106-144204-f5b16d3a3c3a`
+ran `colorfulmeans-42173215936-1`, from `ae1a466b`, in the Chinese HD
+#1513 client. Both bundled and installed identities match. The user's
+opening-spin-then-stop observation is confirmed by the native session;
+the previous green Python and packaging results did not establish this
+movement behavior.
+
+## What the new session establishes
+
+The foreground controller stays active for the entire captured interval.
+All 765 aiming decisions have no usable returned target or firing proof;
+1,472 recorded comparisons return world-blocked or unavailable. Two
+unproved scan candidates alternate through 28 lock episodes (27 changes,
+about three seconds apart). There is no prior stationary firing position
+whose loss would justify an established-contact approach.
+
+Nevertheless, after only about 1.7 seconds of route movement, the new
+`advance_contact` branch replaces the route. The recorded opening travels
+about 31.006 m but ends only 2.986 m from the start, with about 723.076 degrees
+of accumulated absolute hull rotation. From 14:41:09.105 through
+14:42:04.254, 524 aiming samples retain exactly the same horizontal pose and
+yaw. Control decisions issue zero throttle and turn with the brake enabled.
+Their `holding` flag is false: this is not tactical stationary firing.
+
+Three independent contracts explain the failure:
+
+| Boundary | Captured evidence | Correction |
+| --- | --- | --- |
+| Initial scan versus established combat movement | `advance_contact` is selected for 77 of 79 control decisions despite no usable lane ever being established. Changing a scan candidate changes the path request. | A foreground-owned native target may retain contact-approach movement only after its own current usable firing proof. The separate four-second stationary lease can expire without erasing that established target, but a new, replaced, hidden/lost or out-of-range scan candidate cannot inherit movement ownership. When no checked firing position is available, an initial blocked scan keeps the existing route. |
+| Selected corner versus broad parking proximity | The final raw corner is (-26, 0.25, -102), beside the KV-2 at (-30, 0.25, -98). The two enclosing circles overlap, but the private exact hull/segment check, baked segment proof and full vehicle sweep allow the actual connector. | Roll back the `ae1a466b` extension that applied the endpoint's enclosing-circle bypass to intermediate corners. Preserve exact temporary hull obstacles in the player's pathfinder and the final physical movement checks. Completed/refused endpoint bypasses return to their path owner instead of manufacturing a permanent target at the current position. |
+| Retained detour versus current movement intent | At 14:40:43.900 the current target's bearing is +0.2582 rad, but driving still follows a previous -1.93082 rad detour. Later fans are selected around the old detour again. | Give ordinary request ownership its own identity, separate from fixed cover gear. Retained detours use the released Bot's bounded lifetime, angular validity and current clearance conditions. A new fan is centred on the current objective; completed travel and tactical holds retire the old heading. |
+
+The hard stop can be reproduced without fabricating a blocked native probe:
+starting from the captured 14:40:51 pose, the original modifier chooses the
+same bypass (-30.94531538097, -108.28839055584). After that leg completes,
+it repeatedly returns the current position for the otherwise clear corner,
+including after 12, 24, 54 and 120 seconds. This is a regression in the
+new modifier/hold behavior, not a reason to lengthen a retry timeout.
+
+## Further failures exposed by the complete movement consumer
+
+The opening regression additionally runs the real foreground controller,
+navigation, pathfinder, local modifiers, driver, traffic arbitration and final
+sender together. It uses the actual Mittengard graph, fourteen observed
+stationary allied hulls and the captured blocked target-switch sequence.
+Production copied-physics and full-hull collision helpers advance the pose;
+ground/BSP and aiming remain explicit test seams. This is a controlled
+closed-loop test, not a claim to reproduce BigWorld suspension or Windows
+frame timing.
+
+Checking only the original three defects was insufficient. The same unchanged
+scenario exposed additional state and command-boundary defects:
+
+- A retained alignment point could remain selected after its whole connector
+  became blocked by the observed T110E5, even though the planner's replacement
+  point less than two metres away was clear. The full old connector must still
+  be proved before it can retain heading ownership; target proximity alone
+  does not establish that proof.
+- With one fixed local target, stationary track pivots displaced the hull
+  centre by more than one metre while increasing its target distance from
+  4.126 to 10.617 metres. The driver's arbitrary-displacement reset credited
+  that motion, overwrote its best alignment with a worse angle, and then
+  credited the next swing back again. Its progress age never exceeded 1.32
+  seconds, so the existing three-second checked recovery never ran. Progress
+  needs a fixed-point distance/frontier and new best alignment; moving the
+  target or repeating an already earned turn is not travel.
+- A consumed fallback anchor at (-59.84346, -103.73001) survived after the
+  actual hull moved to (-62.13646, -104.55435). All eighteen candidates from
+  that old origin were rejected. The no-candidate branch neither retired the
+  consumed anchor nor recorded a bounded retry refusal, so every update
+  selected the same self-target. Using the actual hull with the same complete
+  selector finds (-65.09397, -103.56061), a 3.12-metre segment admitted by the
+  private hull check, baked dry proof and full physical sweep. A consumed
+  origin's conclusive failure cannot prove that the actual hull has no exit.
+- Path replanning and physical nonprogress had shared the same traffic-escape
+  admission flag. A valid replacement detour could therefore be interrupted
+  after only 1.10 seconds by an unnecessary short reverse. A real driver
+  recovery could also acquire a second traffic recovery, and its old gear
+  could resume after traffic had already completed and braked. Only the
+  driver's explicit current nonprogress event, without an owned recovery,
+  admits this extra escape; actual native failure stays a separate input.
+  A distance-completed short escape hands control back once, retiring old
+  driver gear/alignment state while retaining fixed-point best distances.
+- At a later local point, the hull remained 1.55655 metres away, only 5.65 cm
+  outside the unchanged 1.5-metre consumption circle. The combined turning
+  probe was blocked beyond that circle, so the final adapter cancelled
+  forward motion as well. Straight motion over the same full probe distance
+  was clear and entered the original circle. This requires a proved straight
+  continuation at the final command boundary, not a larger arrival radius
+  or a shorter collision probe.
+- The blocked-forward fan omitted the live goal direction itself. At
+  (-66.12424, -114.04324), yaw -0.72819 rad, the actual goal bearing
+  -0.19101 rad admitted both five/eight-metre full hull sweeps and the entire
+  intervening pivot. All four offset branches were blocked, so the old
+  selector incorrectly returned `blocked` without testing this clear centre.
+  The current goal must be tried before the existing offset fan; a zero
+  heading error cannot manufacture a negative turn.
+
+The native report independently confirms the track-pivot premise: between
+14:40:54.501 and 14:40:55.565 both control samples report zero speed while the
+centre moves 0.989208 m and yaw changes 47.899 degrees; the next interval adds
+0.986605 m and 47.765 degrees, again at zero speed. The exact repeated-credit
+chain above is observed in the controlled consumer, rather than asserted to
+have been directly logged by that native build.
+
+The fallback correction retires only a matching consumed anchor whose fan
+conclusively has no candidate, then retries the existing selector once from
+the actual hull. Active legs and their progress history retain ownership.
+If the actual-pose selector also fails conclusively, the existing bounded
+local-refusal retry advances; no new timeout or fabricated terrain edge is
+introduced. A changed native proof revision or deferred/unknown probe keeps
+the old anchor and does not consume a refusal. The private planning obstacle
+is an inflated observed OBB checked against a centreline; it is not a
+substitute for the full oriented player-hull sweep at the movement boundary.
+
+The independent driver now measures cumulative distance against fixed local
+points and keeps a fixed admitted alignment direction. Changing or revisiting
+a connector does not renew the progress clock; translation cannot overwrite
+the historical best angle with a worse one. Real arrival at the previous
+corner or departure from a vehicle-sized local area admits the next bend's
+alignment. Its existing one-metre, 0.20-radian and three-second thresholds and
+checked four-metre recovery corridor are unchanged. Positive cases include
+slow forward travel, continuous slow alignment, the next turn after a reached
+corner, and a slow turn toward an admitted detour. Four existing simplified
+motion fixtures now report speed consistent with their own preceding
+displacement; their scene, step size, steering integration and assertions
+are unchanged. The complete opening test uses its separate copied-physics
+and collision loop.
+
+Intermediate versions are retained as failing evidence. Merely waiting longer
+was not accepted as a fix: one intermediate version eventually reached the
+first route point after 102.41 seconds with 2,151.35 degrees of accumulated
+absolute yaw, while another stopped on its own position. These are repeated
+turns in both directions, not a measurement of that many same-direction
+circles. The route-point, sender and collision assertions remain unchanged.
+
+## Source and acceptance scope
+
+The current server Bot allocator admits a direct-fire assignment only with
+a local firing lane (`BotPlanner._assign_targets`), then retains that same
+visible established contact when the lane is temporarily lost. The previous
+Player change copied the latter behavior without its admission prerequisite.
+The correction owns its target locally; it neither calls the Bot allocator
+nor borrows its target assignment. The aiming-point and ammunition search
+algorithms are unchanged.
+
+The actual Bot occupied-point modifier is scoped to parked or initial
+artillery bodies during travel. The Player extension had instead applied
+its conservative endpoint circles to every observed stationary living body
+and every intermediate corner. The exact player-private planning layer
+continues to keep genuinely occupied corners, including the opening T110E4
+centre, out of direct, cached, asynchronous and fallback paths. Rolling back
+the circle-based modifier is not permission to pass through those hulls.
+
+Regressions must prove both rejection and forward progress. In particular,
+asserting that a fabricated occupied waypoint produces indefinite zero
+throttle is not an adequate navigation acceptance test. The new report's
+actual geometry, completed bypass lifecycle, initial unproved-target
+switches and retained-detour handoffs are checked before the corrected
+source is frozen. The frozen local player suite passes all 36 isolated
+files and 915 tests, with no failures, errors or skips. This includes the
+unchanged opening route/collision assertions and the stop-and-fire
+contracts. The final unchanged opening fixture consumes its first real
+route point after 64.35 seconds, with 46.68 metres net displacement and
+103.91 metres travelled. Its 1,072.76 degrees of accumulated absolute yaw
+include turns in both directions; the unwrapped range is 176.89 degrees.
+All 586 decisions retain the route instead of assigning an unproved
+contact. There are three early rotation clips and no translation clip;
+maximum overlap remains within the existing 0.01-metre physical slop.
+These figures establish bounded progress in this crowded fixture, not
+native driving efficiency or collision-free Windows gameplay.
+Exact pushed-head CI and package identity belong in the PR
+handoff. Controlled motion/geometry seams do not replace a fresh native
+Windows gameplay session.
+
+# Historical November 6 stop-and-fire correction: opening regressions found
+
+`wot-error-report-20261106-133716-d75e941bdded` identifies both installed and
+bundled payloads as `colorfulmeans-42091871223-1`, the package built from
+`95fe7da3`. The user's rejection of that package is supported by the new
+session. Its predecessor's repeated-cover test established a bounded reverse
+execution direction but retained the unwanted repeated movement. That test
+is a lower-level motion regression; it does not establish stop-and-fire
+acceptance. The per-target penetration/HE correction from `d69988df` remains
+unchanged.
+
+The session again uses the stationary-target scene on Mittengard. Timestamps
+below are the report's local timestamps. They identify separate defects:
+
+| Observed behavior | Report evidence and cause | Independent player correction |
+| --- | --- | --- |
+| A shootable enemy still causes forward/reverse travel | At 13:22:53.357, the selected enemy is 189.256 m away, clear and aligned, while throttle is -0.65. At 13:23:06.014 it is 194.574 m away with the same proof while throttle is +1. The medium's 135 m preferred distance never established an ordinary firing hold, and cover/flank could override a hold anyway. | A current usable aiming proof admits the player's explicit stop-and-fire policy independently of preferred approach range. Ordinary cover, flank, traffic recovery, automatic route reassignment and automatic end-of-route capture yield to that owner. Full-traverse turrets do not add an unnecessary hull pivot while already able to fire. |
+| A short aiming gap restarts driving | At 13:23:00.648, the same live selected enemy remains visible, but a `native_source_unverified` point result returns no target before `checking` becomes true. Most later gaps are bounded multi-frame scans. | The same native target object retains its previously established four-second stationary lease across both unknown first frames and pending scans. Unknown or cached solutions do not renew the lease. Confirmed lane loss, target loss/replacement, empty ammunition and expiry release it; a failed firing-position search approaches that same direct-fire contact instead of returning to an unrelated route. SPG deployment/sortie ownership remains separate. |
+| Repeated approach to stationary T110E4 | The opening local target repeatedly equals the living ally's centre near (-50, 0.30, -98). A completed head-on retreat hands the same target back to ordinary driving. This begins before the first cover movement at 13:22:52.322. | The selected A* corner receives the same occupied-point check as a strategic endpoint. Nearby observed stationary living hulls enter a revocable player-private planning layer. Current support, terrain, vehicle sweep and boundary checks must prove a bypass; failed or completed bypasses cannot restore the occupied centre. Departed, moving or no-longer-observed hulls release their temporary layer. |
+| A distant clear goal still causes a complete alignment stop | At 13:19:52.876, the target is 40.7 m away, yaw error is -0.458220459 rad, speed is 4.01241274 m/s, and the forward probe is clear with no recorded traffic rejection. Player's global 0.30 rad gate stops it; the released Bot drives the same clear scene. | Ordinary forward driving independently consumes the current Bot's near-corner, installed-turn-radius, slope and rear-heading pedal gates. A near alignment retains its admitted target until the 0.12 rad exit threshold; a distant moderate correction keeps forward progress. Installed `rotSpd` and actual hull length reach the player driver. Fixed-gear cover execution and final collision vetoes retain their contracts. |
+| Repeated stops just short of a path corner | 151 decisions occupy the 1.5--2 m band with `terminal=false`, `holding=false` and driver mode `hold`; 14 stable episodes total about 144.083 s. At 13:25:57.288 the remaining distance is 1.972971 m. | The ordinary driver uses the pathfinder's same 1.5 m corner-consumption radius. Explicit terminal arrival/braking contracts retain their own radius. No larger corner-skipping tolerance is introduced. |
+| Mid-route reversal under unchanged observations | All 14 recorded route changes are automatic local-pressure decisions; the session has no corresponding explicit mission. The player deducts its own 0.65 support from the currently occupied front, producing 0.60 versus 1.25 and reversing that comparison after arrival. | A transfer must strictly reduce the maximum deficit after accounting for both departure and arrival. Actor identity distinguishes native entity IDs from network player IDs and counts a friendly hull once. The 12 s observation interval and 30 s lease are unchanged; the correction changes the decision, not only its delay. |
+
+## Priority and migration contracts checked in this correction
+
+The explicit player stop-and-fire requirement is stronger than the current
+Bot's role-dependent preferred-range/cover policy. The live Bot chain is
+`server_bot_ai._order_for` through worker orders and `BotRuntime`, rather than
+only the basic `ai.planner.order_for` helper. Relevant behavior contracts are
+implemented in foreground-owned state:
+
+- Stationary target ownership survives pending lane refresh without granting
+  permission to fire from a stale proof. Final current-barrel and projectile
+  admission remain responsible for every shot.
+- Ordinary single-shot reloads remain stopped. Real empty-magazine/no-HE
+  retreat, the existing critical-health retreat, explicit movement/capture
+  commands and artillery deployment retain their applicable priorities.
+- A chosen direct-fire contact remains the combat objective after confirmed
+  lane loss. A failed local side-position search does not restore the
+  strategic route as an accidental fallback.
+- Automatic route-terminal capture waits for a real combat hold to release;
+  a bare no-target arrival still enters capture normally.
+- Occupied intermediate corners use observed actor geometry and independent
+  path/search state. This adds neither a Bot delegate nor a fake stationary
+  wall to the shared terrain model. Unchanged stationary observations retain
+  in-flight searches instead of restarting them each frame.
+- Front transfers apply the released Bot allocator's two-sided improvement
+  principle locally, without taking Bot slots or using hidden team orders.
+  Equal-pressure relocation cannot manufacture a new deficit on departure.
+  Changed stronger pressure can still justify a new assignment.
+
+The migration audit continues to distinguish behavioral parity from absence
+of Bot imports. The ordinary player driver still has its own smaller local
+steering/recovery implementation. Its distance/traverse pedal gates now
+consume the same observed geometry and installed parameters; the Bot driver's
+complete side-commit and recovery-pocket lifecycle are not certified as
+identical by this change. A navigation-acknowledged cross-route transfer
+lifecycle also remains a separate parity boundary: pressure reassessment
+does not claim that selecting a route proves arrival or reserves support
+there. These gaps are recorded rather than hidden behind passing isolation
+tests or an unsupported claim of complete migration.
+
+## Regression and package acceptance
+
+The new stationary-engagement suite executes the real foreground update,
+combat policy, navigation, driver and final sender boundaries. Its initial
+17 cases pass with the correction and produce 27 failed assertions, with no
+test errors, against the pinned `95fe7da3` runtime sources. It covers the
+reported 185--195 m geometry, committed shots, ordinary reloads, both forms
+of scan gap, stale returned solutions, lease expiry, target replacement,
+ordinary cover/flank suppression, explicit/emergency priorities, route
+terminal/flag-circle handoff and the SPG exception. Separate tests consume
+actual pathfinder corners and reproduce both directions of the unchanged
+front-pressure oscillation. Occupied-corner checks cover live actor layers,
+blocked bypasses and path/search lifecycle, rather than assuming that a
+missing native exception means movement succeeded.
+
+Previous reverse-gear/physical-steering corrections remain applicable to
+genuine withdrawal. Blindly reverting `95fe7da3` would leave the ordinary
+range policy, occupied-corner omission, arrival-radius mismatch and front
+self-feedback in place. The superseded acceptance claim and its ordinary
+automatic-pivot/route-fallback expectations have been corrected instead.
+Exact-head CI and extracted package identity are recorded with the PR
+handoff. Python tests and CI package checks establish implementation and
+packaging evidence; the resulting build still requires a new Chinese HD
+#1513 gameplay session to establish native movement behavior.
+
+# Historical November 6 cover-direction correction: incomplete behavioral acceptance
+
+`wot-error-report-20261106-024847-cfdc71d37406` identifies the installed
+and bundled build as `colorfulmeans-pr119-d69988df-local-qa`. This revision
+already contains the per-target penetration sweep described below; that
+aiming correction is retained unchanged. The session is round 1 on
+Mittengard (`100_thepit`), with player driving, firing and consumables enabled.
+The server selected the stationary-target test scene. Its 29 worker-owned
+Bots held their poses; this report cannot establish normal Bot navigation
+behavior.
+
+Between 02:42:17.423 and 02:44:54.860, 781 aiming decisions record about
+3,775 degrees of accumulated player hull yaw within an approximately
+10.7 by 5.8 metre area. The cover and peek endpoints remain fixed near
+`(118.469, 58.057)` and `(107.129, 55.199)` in X/Z. The target remains
+`2130706448`, with no strategic route replacement. Ten return-to-hold
+cycles repeat the same movement. Shooting still progresses during the
+window, so this is a repeated cover-driving circuit, not a stopped
+interpreter or a completely dead firing controller. An earlier, shorter
+cover cycle in the same session exhibits the same heading discontinuity.
+
+The return branch previously backed straight only when the cover bearing
+was within 0.35 radians of the vehicle's rear. At the captured first return
+pose, the rear error is -29.61 degrees. The branch therefore handed the
+goal to the ordinary forward-only route driver, which requested a positive
+150.39-degree hull turn without first testing a reverse corridor. Nine of
+the ten first return observations fall outside that narrow rear threshold.
+After driving nose-first back to cover, the next peek requires another half
+turn. Both legs make real distance progress, so the existing eight-second
+nonprogress deadline cannot diagnose the complete repeated circuit.
+
+The correction gives each cover leg an explicit direction: peek drives
+forward, return drives backward, and approach chooses its gear once from
+its initial geometry. All use the player's existing pathfinder, support
+checks and terminal driver. Reverse alignment uses the desired rear
+bearing; movement checks the actual `yaw + pi` corridor every update and
+reverses the steering-input sign required by `vehicle_physics.traverse_step`.
+Opposing residual velocity brakes before a gear change. Terminal stopping
+uses approach speed in the selected direction and the measured decision
+horizon. Short terminal probes do not demand cruise space beyond a valid
+cover endpoint, where the cover wall may legitimately block further travel.
+Ordinary routes retain their existing forward-only semantics.
+
+Cover phase/goal changes retire old driver detours and recovery attempts.
+An explicit cover owner also retires traffic translations, long-way pivot
+leases and wreck-push attempts, including during a cover hold. Physical
+vehicle braking, swept steering, world collision and support remain
+effective. A refused short alignment or rear corridor waits within the
+existing cover progress deadline, then releases cover instead of changing
+to an unrelated forward escape. Turn guards inspect physical yaw rather
+than the reverse steering-input sign. A braking guard clears steering when
+it clears throttle, preventing a retained reverse steering input from
+becoming an unchecked opposite-direction stationary pivot.
+
+Regressions exercise the captured return pose, both rear-error signs,
+phase/gear changes, repeated corridor validation, reverse terminal braking,
+stalled-cover expiry and the foreground sender/traffic boundary. A
+deliberately synthetic motion seam runs repeated actual withdrawal state
+transitions against the report's fixed endpoints; it distinguishes the
+baseline's repeated full turns from bounded hull alignment without claiming
+to reproduce Windows traction or pivot physics. The existing penetration,
+front-target handoff, ordinary-route and shot-admission checks remain part
+of the player suite. Exact-head CI/package evidence belongs in the PR
+handoff. A fresh Chinese HD #1513 session is still required to verify the
+corrected native movement, timing and obstacle behavior.
+
+# November 6 target changes during the HE fallback search
+
+In the second round of `wot-error-report-20261106-000829-b685f31afb01`
+(installed build `71f44fb0`), the controller adopted vehicle `2130706487`
+at 00:06:31 with APCR already loaded. Its first scan was the nominal HE
+sweep. It loaded HE and did 42 damage, then found APCR penetration on the
+same vehicle. The overall search deadline survived the target change as
+intended, but incorrectly authorized fallback without a penetration sweep
+of the new target.
+
+The player still shares one eight-second search budget across target
+changes. A finished full sweep must independently establish an armor
+failure for the adopted target and its eligible ammunition before the
+deadline can authorize nominal HE or a partial-magazine fallback. A
+successful proof or target change invalidates that failure evidence. An
+unsuccessful nominal sweep hands back to penetration search, and pending,
+blocked-only and unknown sweeps do not establish an armor failure.
+
+The earlier `auto_front_vehicle` rejection occurred at 00:06:27.366.
+The next decision did adopt `2130706509`; its sweep produced armor and
+unverified-source results rather than a viable aiming solution. Later
+periodic samples repeated the old admission receipt. The front-enemy
+handoff remains in place. The controller regression now combines a real
+front-contact receipt with an already-expired search and verifies that
+a viable loaded round on the front vehicle actually reaches the weapon
+aim adapter, then that selection resumes when that vehicle disappears.
+All 770 isolated player tests in 27 files passed locally, and the changed
+client module compiled under CPython 2.7.18. The exact-client replay of
+this interaction remains Windows playtest work.
+
+# November 6 foreground lifecycle and traffic liveness correction
+
+The installed-build metadata in `wot-error-report-20261106-000120-b685f31afb01`
+identifies PR #119 baseline `71f44fb0e8b8fd32dca88d32b7e34c0d8656e4dd`.
+The second-round Mittengard observations and the corresponding source disprove
+the previous blanket runtime-independence and finite-recovery claims. Older
+sections below retain their individual historical contracts, not a declaration
+that every foreground dependency or native gameplay case was complete.
+
+## Captured failure and corrected ownership
+
+The visible client continued producing frames and completed aiming scans while
+its player remained at one pose. `head_on_retreat` retained the controls after
+both its time and distance limits were exhausted: the receipt's deadline was
+in the past, its remaining distance was negative, and the same branch continued
+writing zero throttle/turn, braking and fire suppression. This was a control
+livelock, not evidence that the Python interpreter had stopped running. An old
+unit test explicitly expected the expired retreat to keep braking; that test
+contract was wrong.
+
+| Boundary | Correction and regression evidence |
+| --- | --- |
+| Expired head-on/crossing control | Deadline or distance exhaustion finishes the encounter and returns the unmodified controls to the current driver. A non-owning finished record prevents immediate same-pair renewal. Real geometry departure/reentry, public actor identity and a finite backoff govern a later attempt; tiny pose jitter alone cannot renew it. |
+| Short escape renewal | An expired short escape cannot immediately swap gear and renew its own authority in the same update. The normal driver/replanner receives a finite interval before another fully proved escape. Ending a lease does not bypass live-hull, static-world, support or turning checks. |
+| Foreground lifecycle | The visible client no longer constructs `BotRuntime` or the Bot `ArtilleryController`. Bot initialization, prewarm, update, authority reconciliation and authority pose publication belong to the room worker. Foreground snapshots materialize published replicas and retain contact history without a Bot controller. |
+| Replica physics | Player contacts derive remote physical parameters from the installed descriptor/native fitting and public snapshot/ACK history. They do not call `BotRuntime.replica_contact_params`, use its difficulty/slot decisions, or replace visible poses with Bot control state. Ground-pose and collision-pose math now live in actor-neutral vehicle physics; a player keeps its player identity. |
+| Route catalogue and parking | `player_control.route_catalog` projects immutable map/editor publications into private player rows. It neither calls `bot_tactics.effective_map/matches` nor fabricates Bot slot zero. Current Default geometry, class variants, authored waits, deleted routes and custom overrides remain effective. Bot formation slot filters do not exclude a human route. |
+| SPG roads and progress | A player can borrow ordinary class roads and follow a reversed authored defense connector to its junction. Ordinary-vehicle waits are removed from borrowed roads; an SPG's own authored waits retain their owner. A private sortie cursor attempts the next node after stalled net progress, then visited nodes in reverse, then home; entry and home failure are finite. Failed route geometry is not immediately resurrected. Exhausted choices enter the existing capture task with its own deadline, or explicitly fail if no objective exists. |
+| SPG pauses and receipts | Only observed productive aiming can temporarily pause a sortie attempt, with a finite allowance renewed by actual shots; blocked traffic is not progress. Authored parking and temporary base-defense ownership preserve the route cursor. Repeated strategy suggestions for the same projected road cannot reset recovery; explicit replacement/Stop clears the correct private state. `sortie_recovery` reports phase, reason, node and replacement outcome. |
+| Parking progress and authored waits | A parking approach renews its progress clock only for a better net distance, not arbitrary displacement or repeated space selection; a whole-approach deadline also bounds slow creep. Already-arrived indefinite holds remain intentional. A nearby-node burst must visit each authored wait owner, and a completed wait at one node cannot complete a different node at the same coordinates. Empty route catalogues and missing capture objectives terminate or hand off explicitly. |
+| Equipment and native factors | Player repair/crew priorities belong to `equipment_policy`, not Bot constants. `vehicle_fitting_context` owns the actual installed-fact registry/readers used by loadout, contact physics, critical effects and ammunition-rack HP. Bot compatibility exports point to that neutral implementation, not the other way round. Equipment decisions remain player-local; activation/damage laws stay shared. |
+| Firing dependency and blocked scans | `FireAdmission` reads neutral `projectile_wire.round_scalar`, not `lan_client` and its transitive Bot imports. Wire rounding and frozen physical-shot semantics are unchanged. A real `Aiming + DirectEngagement` regression completes repeated bounded scans and rotates targets during prolonged obstruction; it does not grant permission to shoot through the obstacle. |
+
+The error-tail reproduction retains the captured local pose, heading, deadline
+and negative distance. The peer's contemporaneous pose and the lease origin
+were not recorded, so those inputs are explicitly synthetic. The regression
+executes the real player update/driver handoff, but is not described as a full
+replay of Windows collision physics. Earlier segments of the log contain a
+different aiming comparison mode; installed metadata alone does not prove that
+every earlier round ran the same already-loaded modules.
+
+The newer ordered target/ammunition aiming model remains in place. Completed
+blocked scans are not evidence of an unbounded scan job, and removing static
+obstruction, friendly-fire or frozen-shot proof would not repair the movement
+owner. This correction changes neither the native ABI nor the server's accepted
+projectile/physics authority.
+
+## Deliberate sharing and remaining verification boundary
+
+The application still contains Bot code because a match still contains Bots.
+In particular, visible replicas must reconstruct the published Bot vehicle's
+installed equipment for correct rendering and collision facts. That data
+reconstruction is not a player decision controller. Immutable route text,
+descriptor data, collision/ballistic laws and native query services remain
+shared. Bot team allocations, mutable reservations, difficulty advantages,
+omniscient targeting and server order queues are not player policy. Obsolete
+route-network parking links are not reinstated merely for nominal parity.
+
+Tests now distinguish real worker authority from foreground replication rather
+than making a visible fixture generate Bot manifests. Foreground construction,
+snapshot and contact tests deliberately make Bot construction/authority access
+fail. Fresh-process import guards exercise actual route, loadout, projectile
+rounding and device-health consumers without Bot implementation imports. The
+existing worker physics, prewarm, authority handoff and critical HP assertions
+remain covered. Per-file isolation is required because native module fakes must
+not leak from one test file into another.
+
+The PR handoff records the exact tested tree, current isolated client/launcher
+results and exact-head CI/package status. Compilation and embedded-contract
+checks under CPython 2.7.18 do not establish native x86 CPython 2.7.7 gameplay.
+The changed foreground lifecycle still needs a fresh Chinese HD #1513 session
+for crowded passages, long-round handover, actual shell/impact presentation,
+SPG route recovery and two-machine LAN operation. Each machine must install
+the same new package and restart the client/room; an already-running Python
+process does not acquire replaced PYC code.
+
+# November 5 independent foreground migration (historical checkpoint)
+
+This implementation starts from PR #119 commit
+`310276ece390694ad57dc2369e2ba0b0186ab4b2`, including its newer ordered
+target/ammunition aiming logic. It closes the subsequent migration audit's
+runtime-coupling, traffic, firing and tactical gaps found at that checkpoint;
+the November 6 report above supersedes its completeness claims. It does not revert that
+aiming model, merge `main`, publish a release, change the native ABI or remove
+the room's required Bot/world worker. The affected completeness claims in older
+sections below are historical; the boundaries in this section supersede them.
+
+## Runtime ownership and capability matrix
+
+| Boundary | Independent implementation and regression contract |
+| --- | --- |
+| Player navigation algorithm | `PlayerPathfinder` and `PlayerTerrainGrid` contain their own mature search/recovery implementation, not a subclass, alias or delegate of `ai.navigation.TerrainNavigator`. Searches, failed edges, route anchors and native CPU jobs belong to that player and are cancelled on retask/close. Tests make the Bot constructors fail while the player completes a real search. |
+| Player local-height evidence | `PlayerLocalHeightLinks` replaces the imported Bot height class. `PlayerHeightSupport` retains local columns, actual-floor connectivity, generation fencing and the per-observation budget. Native unknown/budget exhaustion cannot authorize a bridge-level jump or turn into proved water/support. |
+| Neutral native oracle | A player oracle uses `watch_bot_owner=False`: replacing a Bot runtime cannot retire a player's query, and a property which throws on `_bots` access is covered. Avatar and space changes still invalidate it. Water/grade query constants live in the neutral oracle, not a Bot runtime import. Existing Bot callers keep their previous owner fence. |
+| Whole-route obstacles | Locally observed wrecks and landed turrets publish into the private grid. A geometry revision invalidates active cached paths; stable geometry does not churn the cache. No hidden enemy tactical position is introduced. |
+| Local passage and lane intent | Independent narrow-passage axis/rear-clearance guidance, finite occupied-destination detours and bounded local same-direction passing use actual observations and connected support proofs. They consume neither Bot queues nor team slot reservations. |
+| Traffic on every movement path | `travel_intent` reaches intersection/head-on coordination from ordinary routes, SPG travel, firing positions, flanks and cover/reload withdrawal, even when the first driver pass has already stopped for the peer. Network player IDs and native collision IDs remain distinct. |
+| Cross-client role identity | Collision lookup keeps the local engine entity ID; traffic tie breaks and local flanker election use the public `(kind, network_id)` actor key. A real `_contacts` to `update` regression gives both clients local ID 7 and remote ID 8 and still elects only one backing player. Bot/player namespaces retain the conservative Bot-first ordering without reading a Bot queue. |
+| Contact and stationary-friendly recovery | The actual copied planar contact reaches the player traffic owner. It chooses proved separation using the contact normal and unequal front/rear lengths; bounded retry/progress state prevents permanent reverse or endless renewed yields. Protected explicit parking/capture/waits and burst owners are not displaced by soft yielding. |
+| Wreck interaction | A bounded push can enter a proved steering phase. Full-body rotation queries are read-only (`record_local=False`, `commit_enabled=False`, static geometry included); other hulls and support still veto. Steering shares the same own-progress deadline and governor lease, not a new unlimited attempt. |
+| Real terminal braking | The driver consumes actual stopping distance and `max(0.1, dt, elapsed_decision_time)`. Only a true terminal destination brakes; intermediate A* corners do not. Turn-clearance and withdrawal dispatch preserve arrival-brake ownership. |
+| Cover and empty magazines | `PlayerCover` owns bounded multi-threat, native-muzzle and descriptor-body exposure checks, supported candidate/peek poses, bidirectional escape paths and route/congestion scoring. Healthy vehicles can approach verified cover, peek, fire and return; a fixed-height single ray is not treated as equivalent evidence. Empty-magazine withdrawal has a private actually traversed route fallback when no cover is available, and waits for native reload readiness. Low-health custom cover remains a separately labelled policy; it is not a substitute for magazine handling. Disabling firing or replacing the movement owner retires pending cover work. |
+| Combat intent | Range hysteresis and a short hold lease prevent oscillation. Observed friendly support controls distant support-hold and one locally selected mobile flanker; blocked/unsupported/expired flanks retire instead of reserving Bot slots. Stationary hull angling is stable and still subject to real collision and limited-traverse gates. |
+| Target priorities and ordered aiming | A private visible-contact selector considers close threats, base invaders, recent accepted hits, health and distance. Ordinary locks remain stable; urgent preemption cannot change an admitted burst's target/ammunition stage. Retaliation records an attacker identity, not an unspotted position. |
+| Every physical automatic round | `FireAdmission` runs at the native trigger/commit boundary for initial rounds and burst tails, not only at the high-level trigger. Current source ownership, actual laid muzzle, shell, target visibility/geometry, friendly lanes and HE splash gate the same launch that is published. The scatter/penetration draw is frozen for that physical round across pending work; obstruction does not permit rerolling. |
+| Real scattered endpoint and freshness | The scattered ray continues past the aiming plane until proved actual contact or the real range/time limit. Current component geometry, rather than an AABB overlap alone, establishes a vehicle terminal. HE uses the actual proved impact point. A destructible/space generation change or an expired completed proof forces reproof of the same draw. A failed/cancelled mission retires only uncommitted burst tails; temporary traffic/geometry waits preserve them. |
+| Long-arc progress | Static proof normally advances by 24 world chords. Two productive restarts caused by continuous target/muzzle tracking or scene revisions switch to a bounded complete attempt, throttled to at most one per 0.5 seconds, instead of starving at the first chord forever. World chords and exact component queries are separate measured costs; this is not a native-frame-time acceptance claim. |
+| Hydraulic and limited guns | A future hydraulically reachable solution may drive the native aim source, but `Weapon.ready` refuses fire while hydraulic actuation remains outstanding. Current angle/muzzle preflight and the physical-round gate are still required. |
+| Artillery parking progress | Candidate parking evidence retains a valid positive footprint prefix across a 64-column budget boundary. A budget-limited candidate resumes next observation before its cache expires, even with 64 queued alternatives; genuinely unknown geometry rotates and has a finite deadline. Pose/generation changes invalidate the prefix. A regression runs the retained Caucasus bake/lower-floor fixture. |
+| Artillery endgame observation | Public roster completeness comes from the current start/snapshot identity, not a Bot-created callback. A room with zero Bots is complete; an unstreamed live or unknown-class teammate cannot be mistaken for a dead non-SPG. Old-round snapshots do not establish current deaths. |
+| Local front reassessment | Visible enemy pressure and actual friendly losses/support replace the old three-minute damage-only retask. The player checks at 12 seconds, requires sustained evidence and keeps a 30-second private anti-oscillation lease. Explicit missions, active engagement and capture/base-defence priority retain ownership. |
+| Callback reentry | Actual decision-owner, generation, round, native entity, gun, feature and mission identities are rechecked after native query/setting/send seams. Stop inside navigation or a read-only wreck rotation query cannot let the old stack re-publish throttle or resurrect `last_order`. |
+| Consumable callback ownership | Stop during a kit activation, descriptor-extra lookup or mounted-equipment replacement cannot activate a second retired kit. Governor ownership is published before the native request so a same-stack Stop can release its on-intent, without resurrecting the old owner when the call returns. |
+| Siege while yielding and cancelling | Suppressed firing during contact separation/yield requests travel mode instead of maintaining siege because an earlier combat phase said `engage`. Automatic requests publish an exact observer token before notifying an old native observer; a same-stack Stop cannot reinstall braking, and cleanup cannot cancel a newer third-party request even if its boolean value matches. Failed cleanup retries only that token. Already submitted native transitions remain physical facts and are not rolled back. |
+
+Shared dependencies are limited to immutable route/position/vehicle catalogues,
+pure geometry/ballistic rules and native collision, input, physics and CPU-search
+services. A native CPU search worker is not a hidden game-client worker. Each
+LAN joiner computes its own decisions from its own visible-client observations;
+canonical server validation and world/Bot ownership are unchanged. Shared Bot
+team reservations, omniscient targeting and difficulty/player-preference
+advantages are deliberately not imported as player policy.
+
+Cover evaluates the focus and one relevant cross-direction visible threat,
+using up to four descriptor body samples per threat. Ordinary searches spend
+at most 40 probe operations per decision. After two productive budget-prefix
+invalidations, a single fresh candidate can use at most 84 operations, no more
+than once per 0.5 seconds, so a moving hull/target cannot permanently starve a
+candidate that requires its third peek. These are bounded probe operations,
+not a claim that every operation costs exactly one native call. The search
+episode has a three-second deadline; unknown geometry is never promoted to
+clear. Current native gun angles, owner/epoch, local pose, visible threat poses
+and the re-readable scene revision are checked before publishing a candidate.
+
+The firing receipt separates `world_chords`, `target_queries` and
+`proof_native_collision_calls_upper`. Its 334-chord complete-pass ceiling is
+**not** a ceiling on all native calls: a scattered path has at most 167 chords,
+with at most 30 observed enemy candidates and four component hit-test queries
+per candidate. Broad-phase filtering and nearest-contact pruning normally
+remove most of those queries, but the loose combined collision ceiling is
+20,374, plus the bounded actual-muzzle preflight. More than 30 observed enemies
+rejects admission explicitly instead of silently truncating the collision set.
+Extreme stacked-vehicle/long-arc native frame time remains an acceptance item.
+
+## Verification and acceptance boundary
+
+New tests cover independent search/close and two-owner state, actual baked
+support, dynamic obstacle invalidation, traffic intent and contact delivery,
+main-loop braking and stop reentry, visible targeting/support, artillery budget
+progress and per-physical-round firing. The integration regressions execute
+`PlayerControl.update()` or the actual native firing wrapper, rather than
+calling only the new helper in isolation. Engine-native calls use explicitly
+controlled test seams; their passing assertions do not establish physical
+Windows behaviour.
+
+The final-tree checks use the isolated file runner for all `tests/test_*.py`
+and `launcher/tests/test_*.py`, focused player regressions, real CPython 2.7.18
+source compilation and the embedded contract suite. The checked-in embedded
+suite imports the new package modules without a Bot runtime and executes actual
+independent searches, lower-floor links, local policy and frozen-round/flight
+contracts, not only syntax compilation. Exact-head CI must also
+build and inspect every shipped PYC; matching an artifact name or an old green
+run is insufficient. The commit/PR handoff records the observed results.
+
+The frozen pre-push focused check passed all 706 cases in 25 isolated files,
+without failures or skips. All 261 client modules compiled with actual CPython
+2.7.18, and all 13 embedded foreground contracts executed successfully. The
+Linux launcher check passed 49 isolated files: 1,317 cases discovered, 1,147
+executed successfully and 170 explicitly skipped for platform/resources. Full
+client, exact-head CI and package results are recorded in the PR handoff;
+these focused numbers are not substituted for those wider checks.
+
+Still required on Chinese HD Windows `0.9.22.0.1 #1513`: native frame cost for
+long arcs and simultaneous local searches, slope/bridge and crowded-passage
+driving, real contact/push/steering feel, hydraulic/siege actuation and firing,
+full input handover, and a two-machine LAN test proving that stopping one
+player's controller or replacing the Bot runtime cannot stop the other's local
+controller. CPython 2.7.18 compatibility and Windows Tk tests are not an
+embedded 32-bit CPython 2.7.7 gameplay run. No such gameplay run is claimed here.
+
+# November 4 explicit foreground command completion
+
+This continuation starts from the clean, published PR #119 commit
+`bdc9bd117cb88023d3f9b2c0e73368a1312ccb75`. The previous implementation was
+already committed; its explicit held-aim, equipment and siege commands were
+documented remaining work, not an unverified dirty tree. This section closes
+that command gap and supersedes the earlier open-work paragraph below. Player
+decisions and execution remain in the visible client. The room worker retains
+its existing Bot/world responsibilities; no new player worker or native ABI is
+introduced.
+
+## Implemented command and ownership boundaries
+
+| Boundary | Implementation and regression evidence |
+| --- | --- |
+| Held target/point aiming | `ManualAim` owns the reviewed `shotPointSourceFunctor` / `clientMode` seam. Visible targets are observed engine entity IDs with native started/alive and spotting gates. It does not reuse the automatic driver's mutable contact history or a Bot selector. |
+| Actual aim completion | The existing native angle/source inversion and mechanical limits validate reachable low/high arcs. Completion requires observed turret/gun angles and the current muzzle direction, not a successful setter. It neither asserts an unobstructed path/hit nor drives/fires. Missing native proof fails explicitly. |
+| Persistent and exclusive source ownership | Completed aim retains its source past the acquisition deadline. `release_aim` can be fenced to an exact holder ID. Stop, replacement, identity/real-entity change and target loss retire only the owned source/mode. Setter/getter reentry and third-party takeover cannot let old cleanup overwrite a new source. |
+| Current rather than historical firing proof | `fire` checks the held source against the current target, loaded shell and observed native angles. Its shot ledger records that held target, independently of a drive-only automatic target field. A completed aim receipt is not reused as current alignment. |
+| Native firing reentry | An actual `Avatar.updateVehicleAmmo` callback could cancel a command while the old firing stack still continued. The same trigger/attempt token is now checked after native callbacks and before projectile preparation/publication, including the actual frozen unscattered ray. Stop, expiry, entity/shell/source replacement and recursive triggers cannot admit an uncommitted round; already sent/committed rounds retain their factual ledger and ordinary manual fire is unchanged. |
+| Automatic start and partial restoration | A start lease is installed before native source/mode setters can re-enter Stop. Its release barrier survives input/navigation cleanup until the interrupted setter unwinds, preventing an old bind from reviving cancelled controls or overwriting a new owner. Source and client-mode restoration retain separate completion state, so a failed second restoration remains retryable without clobbering a third-party source. |
+| Independent movement and explicit channels | Timed drive completion/timeout and Halt retire movement/automatic policies while preserving explicit held aim, gun-setting observers and independently admitted fire. Stop and lifecycle teardown still release all owned controls; committed shots/equipment effects remain physical facts. |
+| Canonical equipment confirmation | The existing activation encoder returns its actual `send_equipment_intent` sequence. Small kits use real descriptor extra indices; all-target kits, manual extinguishers and RPM limiters retain their native codes. Only the exact canonical accepted result completes. A newer superseding result is an explicit unobserved failure, not an inferred cooldown success. |
+| Exact siege input identity | The existing input encoder exposes the particular queued input sequence. Post-send landing/contact callbacks may enqueue a later input, but cannot change this request's correlation ID. Ordinary callers retain the previous bool return contract. No wire field is added. |
+| Siege transition completion | The existing brake, native setter, ordered server request and canonical stable echo are retained. Completion also requires native entity/presented mode and completion of local descriptor/gun/physics application. A local applying token and delayed presentation stamp prevent synchronous native callbacks or failed adaptation from reporting early success. |
+| Owned cancellation and retry | Only the exact siege observer token can cancel its unsent brake. A submitted transition is never rolled back by cancelling observation. Failed source/brake cleanup remains in the existing retry loop and blocks conflicting work; repeated non-live stops cannot starve its retry deadline. |
+| Cross-channel conflict rejection | Automatic firing cannot steal a held source; native siege cannot compete with held aim, automatic driving/firing or a gun operation. Pending siege excludes new drive/aim/gun/fire consumers. Explicit equipment and automatic consumables cannot overlap ownership. Invalid requests leave existing channels intact. |
+| Native-query admission and gun identity | Admission rechecks the typed launch/round/player identity after preflight and receipt publication. Native setting preparation retains the admitted identity, actual entity and stop generation, then rechecks the clock before submission. Same-ID vehicle replacement cannot turn an old selection/reload into a successful command on the new vehicle. |
+| Launcher and schema parity | The same five actions, strict numeric/bool/target vocabulary, timeout defaults and ownership IDs are validated at both ends. The bilingual scrolling panel exposes current held/aligned status, visible target IDs, actual equipment stock and pending native sequence separately from historical command results. The result-line limit remains 16384 bytes. |
+
+The foreground tests exercise the real command gateway and controller routing,
+native source observations, same-ID entity replacement, callback reentry,
+movement/aim coexistence, exact deadlines, late results and cleanup retries.
+Equipment tests run the native wrapper, actual LAN encoder, server application,
+public canonical row and snapshot restoration. Siege tests run the actual brake
+and setting helpers, LAN encoder, server transition and `_apply_siege_state`,
+with explicit fake native body/descriptor presentation boundaries. Those fakes
+prove callback contracts and ordering, not Windows gameplay.
+
+The final-tree handoff and PR record the isolated client/launcher regression
+results, real CPython 2.7.18 compilation/contracts, exact-head CI and package
+inspection. New actual-Tk tests must execute in Windows CI; the absence of a
+Linux display is recorded as a skip, not GUI acceptance. No exact Windows
+Chinese HD #1513 game session is claimed for these changes. Native frame cost,
+held aiming feel, physical braking and the complete live-client handover still
+need observed client acceptance. The protocol and observed-state behavior do
+not substitute for that evidence.
+
+# November 4 adversarial foreground-completion follow-up
+
+The second audit of PR #119 at `0f92a1317843ced2bab2fb6bbb9812e45d922210`
+reproduced defects that the previous 205-case player suite did not cover. This
+section supersedes claims of completeness for the affected boundaries below;
+the earlier tests and native observations retain only their original scope.
+The interrupted implementation was resumed from its dirty tree, completed and
+retested as one final tree. No player decision or command is delegated to the
+room worker, and no Bot actor or mutable policy instance is reused.
+
+## Corrected boundaries and evidence
+
+| Boundary | Correction and regression evidence |
+| --- | --- |
+| Real baked navigation on a lower floor | A private local-height owner uses the visible hull's realised pose and native columns, not the baked upper deck, for local support/connectivity. Tests retain the actual Caucasus bake and captured lower-floor coordinates. Missing/budget-limited evidence cannot fabricate support or authorize an upper-floor jump. Native query work is bounded per observation. |
+| Implicit capture versus defence | Explicit tasks, implicit approach, actual capture and failed tasks have separate ownership. An armed implicit approach can yield to a base alarm; a failed implicit mission retires its veto and replans with bounded backoff. No-ammunition intent remains capture, while explicit return/defend/hold is preserved. |
+| Authored TD parking | Private parking execution consumes actual authored positions/durations, checks occupancy and support, approaches and stops before waiting, and skips firing waits when empty. No Bot reservation or Bot timing state is shared. |
+| Rejected committed ammunition | `Ammunition.reject` closes the exact active or retired row as a neutral result so FIFO settlement continues. Local debit, reload and actual burst count remain committed. All-rejected groups neither add misses nor erase an existing failure streak. Mixed groups evaluate real projectile feedback only. |
+| High-arc scheduling starvation | Three-second freshness applies to completed advisory scans, not unfinished valid work. Pending jobs keep their cursor while shell, muzzle, body and observed target trajectory remain valid. The current whole-barrel-path final check and all budgets remain in force. Recorded FV3805 parameters with 12 flat/8 lower targets now finish instead of repeatedly resetting at three seconds. |
+| Governor identity after snapshots | Ownership follows the mounted equipment identity, not an `EquipmentState` object replaced by canonical snapshot restoration. Flat/downhill/airborne/damaged-engine transitions and cancelling an unacknowledged on-intent issue off. Manually enabled equipment is not adopted. Failed release submission retains its retry obligation. |
+| Small medical kit and repair choice | A small kit clears pure stun using a real descriptor crew activation target. Missing crew extras are contained, not invented. Repair selection respects severity as well as component priority, so a destroyed engine precedes a merely critical gun. Tests execute actual client encoding, server application and canonical snapshot restoration. |
+| Movement replacement | `replace: false` covers normal automatic driving and retained completed parking anchors, not only a currently pending command ID. Fire-only ownership does not falsely occupy driving. Failed cleanup cannot install a replacement timed drive. |
+| Halt cleanup and full rest | Retired callbacks retry while a new brake owner is active without cancelling that owner. A failed input submission also remains pending. Halt completion waits for supported linear/angular/vertical/lateral rest, including suspension pitch/roll velocities and full pose stability, plus half a second of settling, with no cleanup obligations remaining. Unknown motion, falling, turning or rocking cannot claim success. |
+| Nonlive command drainage | Death/result stops gameplay but the running visible controller still consumes stop/status requests and rejects gameplay requests. The launcher no longer leaves an allowed stop permanently unread. Closed/teardown controllers do not resurrect execution. |
+| Independent shot observations | A controller-owned bounded ledger survives stop and does not depend on an active ammunition policy. Native trigger, terminal and canonical combat consumers publish linked observations, deduplicate effect IDs, retain late multi-target effects and fence old rejection feedback from a newer takeover/trigger. Foreign/manual projectile events do not enter this ledger. |
+| Launcher outcome readback | Local command completion is separate from per-projectile flight/rejection/combat observations. Identity fencing, burst linking, duplicate/reordered events and bounded snapshot repair preserve cumulative damage without double counting. No combat observation is not labelled a proved miss. |
+| Request admission expiry | All non-stop journal requests need a Unix wall-clock `expires_at`; expiry is checked before execution and independently of the admitted operation's timeout. Identical retries remain idempotent. Stop has no admission expiry. Script/UI response timeout is unconfirmed, never a false terminal result. |
+
+The launcher also exposes the previously protocol-only Attack/Hold destination
+and radius, with a current-pose copy action. The normal no-point actions retain
+their documented behavior. The command channel is still a local test entrance,
+not an alternate simulator or a hidden-worker controller.
+
+## Continued test-command work
+
+The verified follow-on subset adds `wait_state`, `assert_state`, `select_shell`
+and `reload` to the same gateway. Fixed predicates read current native-owner
+observations rather than the previous UI heartbeat. Waiters have bounded count,
+identity/deadline fencing and no movement ownership; stopping the controller can
+satisfy an active=false waiter without cancelling it. Captured mission outcomes
+are observed before navigation teardown. A named mission's identity-matched
+terminal command receipt remains status evidence after stop, timeout or
+replacement clears navigation; a rejected request is not an admitted mission.
+An unavailable final phase is reported explicitly, never inferred from status.
+Shot predicates use the actual committed
+IDs and keep missing combat evidence distinct from a miss or zero damage.
+Python 2.7 Unicode projectile lookups preserve text identities; an unknown
+non-ASCII query cannot raise an implicit ASCII-encoding error and stop a drive.
+
+Shell selection resolves the mounted compact descriptor and delegates to
+`CURRENT_SHELLS`; partial-magazine reload delegates to `RELOAD_PARTIAL_CLIP`.
+Neither command writes gun counters or simulates reload. Completion waits for
+the real matching shell/clip readiness, with automatic-fire and pending-trigger
+competition excluded. Cancelling observation does not rewind a native setting.
+The synchronous native return path rechecks the actual execution clock and
+identity before reporting completion; a setting that took effect after the
+deadline is not rolled back or labelled a timely success.
+The status stock list exposes the actual descriptors needed by a script.
+
+At this earlier checkpoint, explicit held aiming, equipment activation and
+siege commands remained separate open work; the continuation above now implements
+and tests them. A held aim source must survive command completion until release;
+equipment requires exact intent-sequence correlation, not a guessed revision or
+cooldown; siege requires the matching stable canonical echo, not a successful
+braking request. Their existing automatic player paths are not removed or moved
+to a worker. This historical paragraph is not the current implementation status.
+
+## Verification boundary
+
+The added completion regressions include real baked route integration, actual
+native-wrapper shot rejection and terminal consumers, launcher/client journal
+round trips, canonical equipment effects/snapshot reconstruction, and adversarial
+ownership and observation ordering. The independent full-suite runner keeps
+each test module in its own process so one module's engine fake cannot become
+another module's unintentional dependency. The packaging gate also executes the
+Unicode observation and full-body halt contract tests in real CPython 2.7.18,
+not only the Python 3 runner or a syntax compiler. The final commit/PR handoff records
+the final-tree test and exact-head CI results; intermediate green results do not
+certify the later tree.
+
+No new exact Windows #1513 gameplay run is claimed for this follow-up. Native
+lower-road driving, long/high-arc frame cost, TD parking, pure-stun kit HUD,
+equipment switch timing and complete physical input handover still need their
+own observed client run. Linux CPython 2.7.18 compilation verifies source/PYC
+compatibility, not embedded Windows x86 CPython 2.7.7 native behavior. Earlier
+Windows evidence below is not transferred to this changed runtime.
+
+# November 4 foreground player-control completion
+
+This follow-up is based on PR #119 at `21301607cf61fc77a57ea8b7da5f9128f73f0eaa`.
+All player policy and command execution remain in the visible client. The
+required room worker retains Bot/world authority. No player actor is registered
+in a Bot runtime, no Bot mutable policy is called, and no control command is
+forwarded to a worker. Static route/position catalogues, pure geometry and native
+mechanical services remain shared data/services.
+
+## Confirmed regression corrections
+
+| Boundary | Correction and regression evidence |
+| --- | --- |
+| Actual ammunition exhaustion | Classify known total-empty, current-stock-empty, clip reload, busy, ready and unknown separately. Exhaustion releases aiming/combat/cover/deployment holds and enters capture unless an explicit return/defend/hold command owns movement. Unknown inventory cannot assert exhaustion. |
+| APCR magazine tail | A failure-triggered desired HE phase remains latched across the final APCR receipt; automatic main-shell return cannot overwrite it. |
+| Mounted shell order | Resolve reviewed shell roles from the actual `GunState.shots` names after garage `shell_order`; policy indices always address the mounted slots. |
+| Reload cover | Approach has a bounded movement deadline; reached cover remains held until native clip/reload readiness, including the final two seconds. Critical-health cover has a separate bounded hold/retry policy. |
+| Banked direction probes | Pass occupied hull yaw/pitch/roll to the native corridor probe, retaining hull orientation for reverse travel. Analytic banked-ground fixtures retain real wall/missing-ground vetoes. |
+| Governor intent | Require sustained contacted uphill grade or an own-progress wreck push; unknown support, airborne/downhill travel and engine damage cannot keep it enabled. Release only a governor requested by this controller. |
+| Stop ownership | Release only claimed movement, aim source, equipment intent and controller-issued future bursts. A pre-existing manual burst is not adopted or cancelled. Accepted rounds retain original settlement ownership and policy receipt ledgers. |
+| Invalid timed drive | Validate finite values/ranges before any stop, replacement or input mutation. |
+| Oversized command record | Reject and drain overlong records under a per-poll byte budget; incomplete valid tails wait for a newline. A following stop remains consumable. |
+
+## Command and lifecycle contract
+
+The launcher and scripts share one identity-bound JSONL entrance. Each launch
+has request/result paths and a session UUID. Requests carry ID, session, round,
+player, action, arguments, timeout and replacement policy. Client validation
+precedes ownership changes. Identical retries replay receipts; conflicting ID
+reuse is rejected. Accepted tasks complete on observed execution, fail with a
+reason/timeout, or cancel on replacement, release, death or battle exit. Result
+transport errors cannot be presented as successful execution.
+
+The panel exposes start/release/halt, attack/return/defend/hold/capture, bounded
+movement, one trigger and status. It reads actual live status rather than
+treating file writes as completion. Halt retains a brake until release, and
+reports completion after observed stopping. Timed drive reports completion
+after its input duration; it does not assert a particular travelled distance.
+A fire command reports an actual local gun/projectile commit, with projectile
+identity. Later terminal/rejected-launch events are separate from that commit;
+completion does not claim a hit or damage.
+
+Explicit missions suppress automatic front switching and base retasking.
+Supported, stopped arrival is required for return/hold completion; completed
+parking retains its anchor and a shove triggers re-entry. Capture uses active
+match flag circles and continues until the real capture outcome. A route end
+is only a handoff into capture. No-ammo attack changes phase without replacing
+the accepted command ID. Return, defend and hold preserve the user's explicit
+intent. Invalid new missions must preserve the previous movement owner.
+
+## Capability migration
+
+The independent ammunition ledger now tracks target/position epochs, phase,
+magazine and physical firing groups. Old target/position/phase results drain
+their own rows without changing the current decision. Cancelled burst tails
+close at their actual committed count. Both HE stocks retain one logical phase.
+
+Independent artillery navigation copies authored parking candidates and uses
+observed occupancy, supported/stopped deployment, measured nonprogress,
+persistent firing failure and cooldowns to relocate. Public friendly life/class
+observations govern the late-battle sortie; missing presentation cannot prove
+that all non-artillery allies are dead. Automatic defence saves and restores the
+player's deployment phase. Flag-circle retention and explicit mission priority
+also apply to artillery.
+
+Targeting uses observed visible positions for motion estimation, sampled
+vehicle parts, mechanical reachability and armor evaluation. Candidate/arc
+planning shares a controller-tick budget of two candidates, twelve world
+segments and twelve native angle calls. A proposed artillery arc must also be
+representable by the exact native shot-point/angle contract; an unverified
+high arc is not executable merely because a ballistic solution exists.
+Actual laid-barrel clearance remains the final fire gate: one current full-path
+proof, at most twice per second, has a hard maximum of 167 world segments.
+It first rejects current friendly/wreck and settled-turret bounds along the
+entire path using pure geometry, checks the current static-world chords, then
+rechecks the dynamic bounds before admission. This runs after movement/mode
+decisions and immediately before the native trigger.
+Attached turret/gun extents are included; missing attached geometry cannot
+certify clearance. These conservative descriptor boxes do not claim exact
+native BSP hit equality. Final admission does not reuse already-scanned chords
+from earlier frames. Millimetre-scale muzzle movement therefore cannot keep
+resetting a multi-frame confirmation, and a friend entering an earlier chord
+is not missed. The bounded final proof's actual frame cost remains unmeasured
+on Windows #1513. Native gun
+rotation, dispersion, trigger handshake and projectile ownership remain in the
+existing player mechanical path.
+
+Range intent follows the current class catalogue. Ready-without-shot holds
+have bounded recovery; ordinary reload and continuing aim progress are not
+classified as a stalled gun. Mounted repair/medical/fire equipment retains the
+existing native activation encoding. Player governor decisions use contacted
+terrain grade and measured push progress; airborne, stopped/downhill and damaged
+engine states release only a governor activated by this controller.
+
+## Validation boundary
+
+The new suites exercise journal recovery, full launcher/client round trips,
+all eight release masks, actual mounted-role mapping, ammo/group/epoch feedback,
+banked probes, mission/capture transitions, artillery recovery and aiming
+budgets. Adversarial checks cover rejected-ID retries, ID conflicts, stale
+identity receipts, cleanup exceptions, request-cap release, burst timeout,
+invalid mission replacement and preservation of arrival/failure braking.
+Native mechanics regressions remain part of the focused and full test
+gates. Exact final test and CI results are recorded with the implementation
+commit/PR handoff; an intermediate passing tree is not acceptance evidence.
+
+No new Windows #1513 gameplay run has been performed for this follow-up.
+Earlier native observations below belong to their named builds. New native
+acceptance must separately exercise long magazine reload cover, zero-ammo
+movement/capture, moving/partially exposed targets, artillery arc/deployment,
+mission completion/replacement and mixed manual/automatic channel handover.
+
+# November 3 coherent-rule and player-control follow-up
+
+## Independent native follow-up: static-building pivot stall
+
+Runtime `24516ea8`, package `colorfulmeans-41610793002-1`, was exercised
+independently on the exact Chinese HD client. Its stationary fixture held both
+leFH18B2 hulls at their initial XZ positions over 231 server samples spanning
+690 seconds. The earlier artillery capture defect did not recur. The mouse
+panel's right-turn command completed after 1.009 seconds; panel fire launched
+a native projectile and reduced carried AP from 24 to 23. Full takeover then
+committed 14 shots, including 277 penetrating damage and 24 HE splash damage.
+The observed AP/APCR/HE sequence respected penetration receipts and the two-HE
+return. Stop at 18:08:01 cancelled takeover; a manual mouse shot at 18:09:00
+launched normally. These are independent passes, not the assisted first run.
+
+The drive-only launch published exactly `features=[drive]`, moved from
+(-26, .2867, 118) through its route, left aim ownership unset and generated no
+automatic-fire events. A manual mouse shot during that takeover succeeded.
+The fire-only launch published exactly `features=[fire]` and left the hull
+stationary; manual left-click did not launch a shot while fire was owned.
+Its spawn firing lane remained obstructed, so that launch alone is not positive
+automatic-fire acceptance. Actual automatic shots were proved by full takeover.
+These runs did not exercise all eight feature combinations, a physical grave-key
+toggle, automatic kit activation, or dual-HE depletion; those remain separate
+native boundaries rather than inferred passes.
+
+The subsequent ordinary mixed-roster battle committed six automatic shots,
+five penetrations, 1,263 damage and two kills, and released takeover on battle
+end at 18:54:18. It also exposed another player-only nonprogress case: T-44-100M
+remained at (-11.36555, .26, 27.96018), yaw -1.77334154, while requesting a
+left pivot. The rear planning ray hit the building at (-8.3719, .96, 26.9881).
+Vehicle turn sweeps were clear, so the vehicle-only latch did not own this
+static-world failure. The Driver's measured-nonprogress branch tried only the
+rear corridor and could repeat the same blocked pivot indefinitely.
+
+The follow-up adds a straight, one-second, at-most-three-metre forward clearance
+attempt only after measured nonprogress, rejected rear clearance and a proved
+four-metre forward corridor. Every update rechecks static and dynamic clearance;
+holds, new obstructions and the distance/deadline bounds cancel admission. Its
+direction and check results are logged. Bot drivers and authored route points
+are unchanged. The 48-case player-control suite and CPython 2.7 compilation pass.
+A rebuilt artifact and native recheck of this additional correction are pending.
+
+## Native acceptance follow-up: stationary fixture defect
+
+The user-assisted first session on runtime `2b2342bf` is observation only,
+not independent acceptance. A restarted session independently exercised the
+mouse panel. Forward and reverse commands reached the foreground consumer,
+produced signed native drive inputs, and ended after approximately one second.
+The left-turn command also completed. The later right-turn/fire commands were
+written by the panel after the battle had ended and therefore cannot count as
+successful execution.
+
+Native evidence exposed a fixture defect: the server issued stationary/no-fire
+orders, but worker-owned artillery travel replaced the leFH18B2 orders. Bots 15
+and 30 entered opposing bases, ending the static-target fixture at 17:15:28 on
+November 3 with `reason=base captured`. The diagnostic fixture now retains its
+orders before worker artillery task selection. Normal battles and the governor
+driving fixture retain their existing artillery travel. Three focused test files
+passed (37 cases, zero skips). A rebuilt package and fresh native acceptance
+are still required; this correction alone is not an acceptance pass.
+
+This section supersedes the earlier documentation-only implementation status,
+not its source-selection policy. Runtime acceptance on the new artifact is
+recorded separately below; earlier native passes do not transfer automatically.
+
+## Changes and evidence boundaries
+
+- Player-only turn clearance rechecks the alternative pivot and both straight
+  escape directions. The captured Type 62 pose (-18.4613, .2698, 112.8345), yaw
+  -2.7509, heading .5712 no longer has an unconditional brake-only latch when
+  the forward corridor is occupied but a rear exit is proved. Each update still
+  requires dynamic and static clearance; asymmetric hulls retain their physical
+  orientation while reversing. An actually trapped hull must wait rather than
+  move through another vehicle. Normal holds, waypoint radii, authored routes
+  and Bot driver/navigation owners are unchanged.
+- Both independent player and Bot ammunition policies treat premium/silver HE
+  as one phase, prefer the premium stock, then use carried silver HE only after
+  exhaustion. The alternate-HE two-shot count survives substitution. HE-primary
+  non-HE probes still return after one round; magazines retain their policy.
+  Default allocations, special HE-only guns and player-mounted quotas are not
+  rewritten. Runtime candidates read actual remaining stocks.
+- Historical CN double-base-XP vehicles retain 2.0. Churchill III and ordinary
+  WZ111 gain explicit 1.5 community-based reconstruction, not native extracted
+  constants. Sources: the PC player report at
+  https://steamcommunity.com/app/1407200/discussions/0/4130430927307016968/ ,
+  the historical Chinese PC rating discussion at
+  https://xvm.garphy.com/?page_id=4552 and the 2016 crew-training account at
+  https://games.sina.cn/yxbk/wy/2016-05-18/detail-ifxsktkp8939460.d.html .
+  Reports disagree on exact Churchill magnitude; 1.5 is the selected labelled
+  reconstruction. The shared native premium crew factor of 1.5 is NOT evidence
+  for this base-XP number. Premium settlement XP remains separate.
+- All four mastery classes scale by local special base XP / reference special
+  base XP. The existing Churchill III EU row already incorporates its bonus and
+  remains unchanged. The CN-specific factors scale their EU reference rows;
+  unknown/fallback rows are not assumed to incorporate a special bonus.
+  The captured 2026 EU population remains a documented substitute for unavailable
+  9.22 server distributions. Gun-mark damage curves are unchanged.
+- Dispersion base: official 9.6 centre-zone reduction, about 16% to 10%, with the
+  removed mass moved next to the centre. Sources:
+  https://worldoftanks.com/en/news/general-news/9-6-accuracy-changes/ and
+  https://lesta.ru/support/ru/products/mt/article/35718/ . The missing within-zone
+  law is explicitly reconstructed: retain the bounded 8.6 radial base elsewhere,
+  move rejected inner-10%-radius samples uniformly into the 10%-20% band.
+  Human and seeded Bot native-angle adapters use the same pure sampler; the
+  native cone and muzzle ray are retained. This is not a recovered server CDF.
+- Fire retains the Jak_Atackka 2020 community linear-decay base at
+  https://www.reddit.com/r/WorldofTanks/comments/hw7wph/ . One +/-20% initial-rate
+  draw is frozen per ignition, with no RNG on the base decay, so duration scales
+  linearly and integrated damage quadratically with that draw. Player authority
+  and worker-owned Bots retain their ignition draw across detached per-tick
+  adapters. Per-vehicle initial/decay rates remain missing; the declared
+  HP-based calibration is not relabelled as native data. Diagnostics identify
+  the actual initial draw, skill factor and remaining parameter gap.
+- The ten-battle native award now reuses the ordinary milestone description2
+  localization and stock text formatter. Exact #1513 bytecode establishes
+  PvEBattleAward.getDescription, battlesCount and wg_getIntegralFormat. Native
+  triggers/buttons and 50/100/250/later awards are unchanged; there is no new
+  income restriction or mod-created popup.
+- Credits keep the selected complete 2015 community base. Participation income
+  is already inside gross Credits and is not added again. Receipt-boundary
+  diagnostics now expose ending critical state, friendly-fire facts, special
+  base XP and premature-leave status. Module repair history/prices, multi-pusher
+  attribution and repeat-desertion history are still explicit implementation
+  gaps, not fixes or reasons to claim original parity. No speculative fee is
+  deducted and no missing historical event is fabricated. Bond rewards remain
+  unchanged under the user's explicit scope exclusion.
+
+## Updated validation baseline
+
+Reproduce the captured blocked-pivot case including rear-only clearance,
+changing neighbours, reverse-hull geometry, fully blocked holds and normal
+combat holds. Exercise AP/premium/HE, HE-primary AP probe, dual HE exhaustion
+across a two-shot phase, protected manual round, delayed terminal effects,
+magazine boundaries and unchanged default ammunition allocation. Check all
+four mastery boundaries, Churchill reference non-duplication, base/final XP and
+task counter separation. Check the 9.6 centre mass with 100,000 seeded samples,
+cone bounds and human/Bot consumer parity; fire low/high RNG bounds, one draw
+per ignition, slow-frame integration and canonical publication/echo continuity.
+The UI contract uses the stock ordinary milestone translation only and restores
+the old callable on adapter removal.
+
+Local initial gate: 26 selected test files / 725 test cases passed with no
+skips before the extra reverse-hull and Bot ignition-lifecycle cases; those
+added focused cases also passed. All 238 client sources compile with CPython
+2.7.18. Exact installed Chinese x86 #1513 inspection passed. A broad Windows
+host run exposed missing-host-native failures as well as old deterministic
+fire fixtures; the latter now freeze ignition RNG and have explicit random
+ignition coverage. A clean pre-change worktree comparison and final cloud CI
+must distinguish existing host failures from regressions. This paragraph does
+not claim full-suite or native-client acceptance.
+
+Broad Windows comparison: clean 59eb9163 ran 457 files, 402 passed / 55 failed;
+the first complete candidate ran 458 files, 403 passed / 55 failed. Comparing
+the complete failing assertion identities (not just counts) found no additions
+or removals. These host-native failures remain visible, not waived as passes.
+All five special-XP compact descriptors were joined against the installed
+#1513 packed vehicle roster successfully. A cloud native geometry check then
+caught a retained Bot Python scatter owner still using the old sampler. That
+runtime path now uses the same 9.6 sampler as the native adapter; its centre
+acceptance draw is also included in the strict RNG-consumption fixture.
+
+Computer Use stopped the current turn when it could not confidently identify
+the Edge URL. No further UI input is issued in this turn, and native new-package
+acceptance is not claimed. Cloud builds and non-UI package verification continue.
+
+## Final cloud and downloaded-package verification
+
+Runtime/test commit: 2b2342bf31e51a71ae78701e8d356cb8bea09441, on
+fix/elite-premium-ammo-reviewed-guns (not origin/main). Exact-commit CI
+https://github.com/colorfulmeans/wot-0.9.22-offline-battles/actions/runs/41598032854
+passed all eight jobs. The separate Windows build
+https://github.com/colorfulmeans/wot-0.9.22-offline-battles/actions/runs/41598198207
+also passed all three jobs. Earlier 82614fd2/a046a6fc failures are retained as
+failed intermediate evidence, not acceptance baselines.
+
+Downloaded CI unit-test artifacts record 458 client files / 9,494 cases with
+zero failed files and nine explicit skips; Linux launcher results record 48
+files / 1,236 cases, zero failed files and 168 skips for unavailable desktop,
+GPU or exact-client resources. The independent Windows editor job records 48
+files / 1,242 cases, zero failed files and nine skips (GPU/exact resources);
+its service-contract gate records five files / 35 cases, zero failed files and
+two exact-client skips. Skips do not constitute native-game passes. Additional
+local CPython 2.7 sampling over 100,000 shots yielded central fraction .09941,
+all within the aiming cone. Executing the installed stock BattleAward formatter
+with the real Chinese menu.mo produces the ordinary congratulations at ten
+battles and no PvE warning.
+
+Delivered artifact: C:/Users/USER/Downloads/PR119-2b2342bf-Windows-x64.zip,
+extracted at D:/Games/wot-mod/9.22/PR119-2b2342bf-QA. Identity is
+colorfulmeans-41598032854-1, semantic version 1.1.1. Independent ZIP inspection
+verifies exactly the normal EXE and START_DIAGNOSTIC_TEST.bat entry points;
+the launcher PE is x64. All 238 embedded Python 2.7 bytecode modules match this
+checkout, 44 frozen launcher modules match, and 245 bundled server sources
+match. Native source stamps and worker starter match; the bundled recorder
+runtime executes, and the downloaded executable's isolated editor smoke passes.
+The actual bundled launcher --serve 0.9.22 answers the reviewed loopback
+protocol in .78 seconds using an isolated temporary profile, with no game
+process or firewall change. These checks do not prove native battle behavior.
+
+No new client battle, takeover/mouse matrix, on-screen ten-battle popup or
+gameplay error report is claimed for this artifact: Computer Use remains
+stopped for this turn. These are required follow-up acceptance items. The
+remaining per-vehicle fire constants and documented economy-history gaps are
+not marked fixed. This final verification update changes documentation only;
+the delivered runtime remains the exact verified 2b2342bf build. No merge, tag
+or public release was performed.
+
+# November 3 source-policy alignment (documentation only)
+
+The gameplay reconstruction policy in CLAUDE.md governs every section below.
+Choose the base in official/community/custom priority order; resolve conflicts
+within that base and fill genuine gaps only with reasonable, compatible
+supplements. Missing official data requires evaluation of community evidence
+and, when necessary, labelled custom reconstruction before leaving a known
+broken behavior unchanged. An old "unresolved", "not reconstructed" or "no
+guessed values" entry records an implementation/evidence boundary, not a source
+restriction or permission to defer the work indefinitely. Conflicting estimates
+require an explicit choice and validation, not automatic retention of a default.
+
+Historical test results below remain limited to the version and behavior they
+exercised. In particular, the old Firefighting boundary entry is superseded for
+current implementation status by the community-decay and coherent-model reviews.
+Unimplemented special XP and later dispersion weighting remain actual gaps;
+this policy edit does not implement or validate them. Preserve user scope
+exclusions: bond rewards remain unchanged. No gameplay values, algorithms or
+packaged artifacts change in this documentation-only alignment.
+
+# November 3 final player-only traffic candidate and remaining boundaries
+
+Runtime 9dcac1f6, Windows build colorfulmeans-41552662203-1, passes 41 focused
+player regressions and all 237 Python 2.7 source compiles. Independent final
+ZIP inspection verifies 44 frozen launcher modules, 244 bundled server sources,
+237 client bytecode modules, native source stamps, recorder execution and a
+real packaged editor smoke. The bundled loopback protocol answers in 0.51 s.
+Exact-runtime CI 41552670522 passes all eight jobs; Windows build 41552662203
+also passes. No tag, release or merge is made for this candidate.
+
+Native preflight report wot-error-report-20261103-083918-143b6e3e18ad.zip uses
+that cloud-built client payload staged through the normal launcher. The final
+downloaded package's client members are individually byte-equal to that staged
+payload. No direct mod copy into the game directory was used. All four report
+logs have zero exception tracebacks. The native player acknowledges the bounded
+test interface and drives pit from route index 2 to 8. It creates forward turn
+space, maintains the admitted pivot, and translates out of the previous friend
+stalls. Real wreck 2130706469 at (-5.3551,0.26,41.0932), alive=false, appears as
+a swept-query blocker; later player poses move away from it. This proves real
+friend/wreck recognition and the exercised avoidance/recovery sequence, not
+arbitrary dense-queue escape.
+
+One later stop near (-4.2865,0.312,49.4258) has a native planning_collision
+receipt against static map geometry (material 111/item 204/chunk 32383). The
+player issues a pivot but measured yaw does not advance. The report retains
+pose, target, probe rays and native surface fields; this static-geometry stop
+is unresolved and must not be represented as a complete-route pass. Audio,
+all eight native feature combinations and a real observed-front redirect also
+remain unproved. Earlier real base-alarm movement and three-stock shell-cycle
+evidence below remain applicable; their source modules are unchanged.
+
+# November 3 native traffic witnesses and supported base approaches
+
+Report wot-error-report-20261103-070650-cae5c9da5bbd.zip captures bb4e1987
+through normal launcher installation (build colorfulmeans-41536295055-1).
+All three runtime logs are free of exception tracebacks/controller failures.
+At 06:52:59 native player decisions identify living team-2 blockers 2130706460
+and 2130706458, detour, advance to route index 4, then brake against 2130706460
+and 2130706464 when every tested exit is blocked. Logs count 29 presented peers
+including one wreck. This proves friend recognition and non-ramming; it does
+not prove arbitrary dense-queue escape or native traversal around a wreck.
+Unengaged native aim-source points follow the actual hull yaw, rather than the
+camera cursor. At 06:59:55 the panel Fire click acknowledges its native commit
+and the muzzle event; no active automatic ammo policy is needed.
+
+At 07:00:40 one invader/29 own-base points activates human-only defence, but
+the only centre target fails with no_connected_entry. Current Mittelang graph
+team-2 centre (-34.6800,100.7085) has routing height None; all eight 20 m ring
+approaches have supported heights. f2522a7b offers the centre, those approaches,
+and existing authored points within 40 m as independent goals. Every choice
+still passes the same height/connected-path check; it does not steer directly
+through an invalid cell or snap to a bridge. The 36-case player regression
+includes an unsupported centre with a connected approach. Native defence
+movement was exercised in report
+wot-error-report-20261103-073717-433a593abea1.zip, build
+colorfulmeans-41542626022-1 (f2522a7b). At 07:31:10 a real 22-point/one-invader
+alarm joins approach 2; the player moves about 4.96 m toward it. After the alarm
+clears, the independent controller rejoins pit. This does not attribute the
+alarm clearance to the player: another defender may have cleared it. All four
+report logs have zero exception tracebacks or player-controller failures.
+
+That same round exposes a separate traffic defect: a fan direction proved over
+5 m is rejected by the next update's ordinary 8 m cruise probe. The player
+alternates headings near (-9.21,111.66) without useful translation. ff14165d
+keeps detour travel at reduced throttle within a 3-4 m current-heading probe;
+ordinary cruise retains its longer horizon. The 37-case regression reproduces
+the inconsistent horizon and requires translation rather than accepting
+repeated steering. Its CI 41546582095 passed all eight jobs; build 41546574240
+and independent 44-launcher/244-server/237-client inspection passed.
+
+Native ff14165d report wot-error-report-20261103-080115-a3729744dc21.zip
+records translation out of the former stop, but exposes another independent
+failure: at 07:58:47-48, a blocked short-way pivot is replaced by an opposite
+pivot for one update, then the shortest-angle command undoes that pivot next
+update. The player stalls near (-17.07,106.28). No exception tracebacks occur
+in any of the four logs. 5d35e039 keeps the admitted long-way pivot until it
+aligns, a materially changed goal cancels it, or measured nonprogress requests
+the existing proved rear recovery. It cannot override hold or reverse orders.
+The 39-case suite includes the captured alternating-direction failure and the
+rear-recovery escape. Native retest remains required; ff14165d is not an
+accepted final traffic build.
+
+5d35e039 native report wot-error-report-20261103-082604-16bbc6862955.zip
+(build colorfulmeans-41549698356-1) has no exception tracebacks in the four
+logs. Its CI 41549703875 and build passed, as did independent source inspection.
+The player fires a damaging native shot, responds to a real base alarm and
+rejoins pit. The opposite-pivot oscillation is gone, but the admitted pivot
+later hits another hull near (-18.54,121.94); its proved rear corridor is also
+blocked by friend 2130706442. It remains stationary instead of creating forward
+turn space. 88c5fa56/9dcac1f6 allow at most 3 m of cautious forward turn-space
+creation, only while each update proves both static and dynamic clearance.
+This also applies when both initial pivot directions are blocked. The 41-case
+suite covers immediate loss of the proved corridor and release after 3 m;
+neither a successful build nor a stopped collision is complete escape evidence.
+
+# November 3 three-stock player shell and mouse-panel native review
+
+The ef602fd1 Windows package, build colorfulmeans-41530160684-1, was inspected
+against all 44 frozen launcher modules, 244 server sources and 237 Python 2.7
+client modules. CI runs 41530169613 and 41531134173 passed. Report
+wot-error-report-20261103-062051-a771aa11e04f.zip was generated through the
+launcher after three native rounds. Server, visible-client and hidden-worker
+logs contain no exception traceback or player-controller failure.
+
+The positive-stock Chieftain test carried 29 standard APCR, 29 premium APCR and
+six HESH, set only in the disposable QA garage. Round 2 shows one 260 HP primary
+penetration resetting the failure counter, then two primary failures -> premium,
+two premium failures -> HESH, two HESH rounds (139 and 22 HP) -> primary.
+All twelve automatic launches were accepted through Avatar.shoot with native
+waiting true and synchronous commit acknowledged. Native movement advanced the
+pit route from index 2 through 7. These observations do not prove audio, every
+vehicle's burst policy, all feature masks, or traffic/base/front behaviour.
+
+Actual clicks on all four timed direction buttons generated one-second commands
+and release records. The mouse Fire click produced a native muzzle event, but
+its accepted flag was false: inactive panel fire did not increment the active
+weapon's commit counter. The following candidate counts all human shot commits
+without activating automatic aiming or ammo policy; a regression covers the
+synchronous inactive-panel case. Direction command receipt alone is not marked
+as a complete pose acceptance.
+
+Traffic diagnostic receipts now retain bounded blocked-query witnesses even
+when a later detour is clear, including actor identity, team, live/wreck state
+and position. Decision logs also count presented peers/wrecks and identify the
+forward gun point. This closes an evidence gap, not a claim that a unit test
+proves native avoidance. The current automated player suite has 35 cases; all
+237 client source modules compile in the target Python 2.7 interpreter.
+
+Build 41536295055 uploaded bb4e1987 but its standalone server probe timed out:
+the probe invoked default LAN mode, which requested firewall authorization on
+a fresh runner. The same timeout reproduced locally. Selecting the existing
+WOT_0922_LOOPBACK_ONLY=1 mode answered the packaged protocol in 0.50 seconds.
+The workflow now explicitly tests loopback transport; it does not change any
+firewall/security settings or the public LAN mode. Independent inspection of
+that artifact passed all 44 launcher/244 server/237 client source checks.
+
+# November 3 player traffic, forward barrel and private strategic orders
+
+The 289a2651 package (build colorfulmeans-41523140230-1) passed all eight CI
+jobs and independent frozen-source/235-client-module inspection. Native report
+wot-error-report-20261103-052258-0e365b705886.zip records real automatic enemy
+damage and correctly received post-terminal penetration results, main/reserve
+rejoins and travel beyond the previously oscillating pit corner. User confirmed
+travel improvement and manual HE return. It did NOT pass vehicle/wreck avoidance;
+that gap is fixed in the following player-only candidate and requires retest.
+
+Player Traffic uses real chassis footprints, vertical separation and swept
+translation/rotation queries, including wrecks and overlap escape. It makes no
+Bot allocation or motion changes. The unengaged gun now aims forward with hull
+heading. Strategy owns only the human: canonical home-base capture points or
+invaders preempt route travel; a five-second clear interval rejoins connected
+routes. Observed-front support uses visible enemy counts minus .25 per living
+ally within 100 m of route segments, an eight-second stable proposal and a
+20-second switch cooldown. These are labelled custom player test-controller
+rules, not claimed retail AI. No unspotted enemy positions score a front.
+
+The next candidate also fixes synchronous accepted-fire diagnostics, curve-aware
+barrel alignment, SPG splash feedback, an empty selected shell on entry, and
+accepted-burst handover without changing the common burst implementation. Tests
+cover the new player geometry/strategy branches separately from native claims.
+The test loadout must include all three actual shell stocks; the normal player
+fitting and Bot ammo configuration are not rewritten.
+
+# November 3 foreground-only player-control replacement candidate
+
+Rollback commit ffa14996 removes the failed b2cf35b7 module and restores the
+pre-introduction BattleRuntime from 0e4146f7. Replacement owns decisions solely in
+player_control/{__init__,navigation,driving,ammunition,weapon}. No Bot scheduler,
+agent, driving law, firing policy or shell policy is called by that package.
+Unrelated earnings, queue and governor-wear fixes are retained. Bot gameplay
+sources are unchanged by this replacement.
+
+Exact #1513 VehicleGunRotator.__set_shotPointSourceFunctor accepts a callable;
+None restores its default. __onTick reads that callable in clientMode and runs
+the native speed-limited rotation path. The old Avatar.autoAim lock disabled
+clientMode while its offline cell did not provide equivalent barrel tracking.
+The replacement instead owns the source, uses clientMode true, and restores the
+saved source/mode on disable. Avatar.shoot calls base.vehicle_shoot before
+__startWaitingForShot; the dedicated synchronous trigger authorizes that mailbox
+without bypassing the native wait/muzzle/audio handshake.
+
+Report wot-error-report-20261103-043206-d8306b7102a5.zip confirms oscillating
+reverse_turn/avoid near fixed route tips. Server source publishes projectile
+impact before combat effects. The previous controller removed the pending shot
+on impact, so following positive damage could not update its ammo policy. New
+pending results wait for combat receipts; unknown is never counted as failure.
+
+Local component regressions and package/native acceptance are separate. This
+candidate is not accepted until actual motion, aiming, fire, handover and panel
+channels are exercised in Windows. Earlier candidate sections below are history.
+
 # Compatibility review: World of Tanks 0.9.22.0.1 #1513
+
+## Integrated test controls and reward coefficient follow-up (November 3)
+
+Historical first implementation notes below describe the withdrawn Bot-adapter
+candidate. The foreground-only replacement and acceptance boundary above and
+in the current testing baseline supersede those control details.
+
+The launcher now has one bilingual Testing tab, using the shared button polish,
+inside-border titles, margins and explanatory labels. Its scrolling content
+keeps the ordinary window size. Logs, single-player scene selection and player
+control settings are separate. Old scene buttons on Repair have been removed;
+normal/log outer entry points are unchanged. Settings are remembered, but every
+launch replaces scene flags and uses a fresh command journal. Network/replay
+launches cannot inherit the single-player fixtures.
+
+The optional visible-player controller is an input producer only: it uses the
+current authored routes, Bot adapter/local driver, and current terrain navigator;
+it never registers another native simulation or changes the player's fitting.
+Only presented visible enemy entities enter its targeting list. The actual
+native gun ray must align before automatic fire. This is a diagnostic controller,
+not a claim of identical strategic behaviour to the worker's full room planner.
+Native player physics, reload, damage, ammo and equipment activation stay owned
+by the existing paths. Timed script driving replaces the automatic writer and
+is bounded to ten seconds. Stop clears movement and pending bursts. Death,
+results, cleanup and a new round fence input/commands; cleanup restores only
+the handler wrapper this instance still owns.
+
+Exact #1513 `AvatarInputHandler.handleKeyEvent(self,event)` was inspected in
+scripts.pkg: it calls `game.convertKeyEvent` for `(isDown,key,mods,isRepeat)`.
+The wrapper is attached to the current handler instance, including SPG control,
+not just arcade/sniper. `Keys.KEY_GRAVE` exists in scripts/client/Keys.pyc.
+Chat focus and disabled input suppress toggling. Local state messages use
+`g_settings.htmlTemplates.format('battleErrorMessage',ctx={'error':text})`
+then `MessengerEntry.g_instance.gui.addClientMessage(...,isCurrentPlayer=False)`;
+this does not send a player's chat packet or consume network chat cooldown.
+
+The ammunition-warning deadlock was a pending request retained after native
+validation cancellation. Exact PreQueueEntity.queue(ctx,callback) completion
+now clears only the matching request. The temporary dispatch wrapper is restored
+immediately; delayed old callbacks cannot complete a replacement request.
+Native cancellation retest also exposed the waiting-room tick reopening the
+warning immediately. A cancelled validation now exits the LAN room intent via
+the existing queue-exit callback, as well as releasing the pending request.
+The callback regression passes; rebuilt native cancellation acceptance remains
+required.
+
+Credit baking now derives native premium membership from each nation's gold
+price, as #1513 VehicleType does. Raw roster tags lacked `premium`, which had
+pooled the premium cohort with ordinary tanks. All 375 measured workbook rows
+are unchanged; 226 of 305 explicitly estimated rows change. Type 59 retains
+1.5750; Gold Type 59's estimate changes from 0.8133 to 1.5000. These estimates
+remain estimates, not retrieved per-vehicle official coefficients.
+
+Historical Chinese base-XP x2 is applied once on the authority for Gold Type 59,
+Type 62 and WZ111T before scoreboard, mission and account settlement consumers.
+Ordinary premium settlement XP is separate; the owner's IX/X policy is +5%.
+Churchill III and ordinary WZ111 special base coefficients were not implemented
+in this candidate; the active fallback remains 1.0 and REWARD BREAKDOWN identifies
+it as unresolved, not a verified original value. Conflicting PC community claims
+must be evaluated under CLAUDE.md and supplemented by reasonable compatible
+reconstruction if needed; official confirmation is not a prerequisite for that
+work. Console/Blitz values require an explicit PC compatibility justification,
+not automatic transplantation. Native fire initial-burn/base-decay gaps and unsampled ignition
+RNG remain declared in FIRE_MODEL; this round does not claim a recovered fire law.
+The shared governor clock now applies whole-second low-speed wear to both human
+and Bot owners; disabling or reaching half forward speed clears the partial tick.
+
+Verification baseline: current scene and loadout selectors, current authored
+routes and current source-derived native contracts. Added independent cancellation,
+command ownership/key-repeat/chat-focus/round fences, reward coefficient ordering,
+governor split-tick tests, and real Tk bilingual scrolling/layout measurements.
+Focused tests and Python 2.7 client compilation pass locally. The broad Windows
+engine-free test run is not a valid complete green result: its native simulation
+fixtures require the matching native extension, and the available Python 3.14
+also lacks `imp`. Cloud Linux/native builds and packaged-client acceptance are
+tracked separately below; neither is implied by those local checks.
+
+Iteration 07a5ddeb: Windows build 41481999738 passed all three jobs; independent
+local verification matched 44 frozen launcher modules, 238 bundled server sources,
+231 Python 2.7 client code objects, native extension and starter, replay execution
+and packaged editor smoke. Full Tests 41481955633 passed 456/457 client files and
+48/48 launcher files; the failing old premium fixture omitted native premium tags
+and used an arbitrary Type 59 factor. It now carries Type 59's tier VIII / +10%
+native settlement fields and passes locally. This failure was not bypassed.
+Native timed driving moved the AMX 13 F3 from z=-110 to about -93.45 over three
+seconds and released inputs on its deadline. Full takeover exposed a separate
+consumer error: healthy native Vehicle has no is_on_fire shadow attribute.
+Automatic consumable selection now reads the existing canonical critical payload
+and retains the native automatic-extinguisher owner. A regression uses a native-like
+vehicle without shadow fields. This earlier package is not final acceptance;
+the corrected controller still requires a rebuilt package and native retest.
+
+Native iteration e3f25e13 kept full takeover alive, moved the Sherman III, and
+accepted script fire with ammunition falling from 57 to 56. It also exposed
+unacceptable repeated withdrawal/pivoting: the isolated director omitted allied
+planning records from its force balance. Observed living allies now populate
+that pure roster without creating physics owners or revealing hidden enemies.
+The owner's grave-key test reached the hook but failed on an absent isEnabled
+method; the exact native class instead exposes isStarted/isDetached properties.
+Countdown presses no longer latch the key, including a missing countdown key-up.
+These fixes have regressions; native key/countdown and movement re-acceptance is
+still required. Earlier movement alone is not a passing automatic-driving test.
+The takeover direction seam also returned a structured engine probe receipt to
+a Boolean driver callback. Nonempty blocked receipts were therefore truthy.
+It now uses BotRuntime's existing receipt predicate, preserving collision, water
+and grade rejection. Regression cases exercise that predicate rather than
+duplicating its implementation. Decision logs include strategic/local targets.
+
+Candidate 24f94133: Tests 41495360675 passed all eight jobs; Windows build
+41495349470 passed all three jobs (windows-580, colorfulmeans-41495349470-1).
+Independent verification again matched 44 launcher modules, 238 server sources,
+231 Python 2.7 client modules, native extension/starter and editor/replay smoke.
+The owner confirmed the grave-key native opening hint in the rebuilt client.
+Round 2's sampled automatic advance moved from (-26,118) to (-44.39,33.87),
+86.12 m displacement, with up to 6.35 m/s in those samples. Round 1 recorded an
+accepted automatic shot. These observations replace the failed early takeover
+claim; whole-map driving and every consumable trigger are not inferred from them.
+The exact countdown-press/live-press sequence has an automated lifecycle test;
+its complete native timing sequence is not yet independently confirmed.
+Native queue acceptance on 917ef28d completed empty-ammo Cancel -> garage ->
+Join -> warning again -> confirm -> populated waiting room, without restart.
+The earlier 917ef28d report (015643-4d237a87981c) passed ZIP integrity; its only
+Python exception class/message was the now-corrected isEnabled AttributeError
+in the visible client. Worker/server logs had no Python exception lines.
+
+The owner then correctly rejected complete aim acceptance: the turret still
+followed the mouse, and accepted automatic shots followed manual crosshair aim.
+The controller passed an integer to Avatar.autoAim; the exact Avatar wrapper
+requires a Vehicle object (only the cell mailbox takes an integer). Lock now
+receives the entity, unlock receives None, and a lost native lock is reacquired.
+Native retest is required; automatic_fire logs alone are not proof of aiming.
+All eight feature combinations have channel-ownership regressions. New help text
+states hull versus turret ownership and next-launch settings. Native per-feature
+and every mouse-panel action acceptance is tracked independently, not inferred.
+
+
+## Coherent earnings model and gameplay-source re-audit (November 2, evening)
+
+This section supersedes earlier claims that the old offline rewards followed the
+published payment structure. The owner explicitly selected the complete 2015
+community credit model after reviewing its disagreements with WG's article.
+Do not splice WG's 0.5 other-spot factor, 1.85 participation multiplier or
+credit tier bonus into this selected model. XP is a separate calculation with
+an official categorical base and explicitly reconstructed missing coefficients.
+The revised source-selection rule in CLAUDE.md applies to both.
+
+Credit base: HellQwer, September 24, 2015, mostly 0.9.9 replay measurements:
+https://forum.tanki.su/topic/1660148-%D0%BE-%D0%BA%D1%80%D0%B5%D0%B4%D0%B8%D1%82%D0%B0%D1%85/
+Original experiment: https://world-of-tanks.livejournal.com/3801962.html
+Workbook: https://forum-mt-prod.lesta.ru/monthly_09_2015/post-12045944-0-61402200-1443131647.xlsx
+
+Before the vehicle coefficient, credits are 700*tier participation on a loss/draw,
+1300*tier on a win, 10 per own/blind damage HP, 7.5 per other-spot damage HP,
+5 per assisted HP, 100 per first spot (200 for artillery) and 500 for each actor
+still in a successfully captured circle. Resistance adds 600*tier participation
+on a loss/draw, once regardless of medal count. Capture is not divided among
+historical contributors. There is no target-tier credit term in this model.
+The three assist categories remain separate public statistics, but the largest
+share credited to one holder per admitted damage event is paid only once.
+Stun assistance did not exist in the 2015 workbook: its missing credit treatment
+is the explicitly compatible extension of that model's assistance payment,
+not a claim that the 2015 author measured stun.
+
+The reproducible coefficient baker joins the original workbook to exact #1513
+vehicle identities using English/Russian names, compact IDs, tiers and classes.
+No fuzzy matching or modern prices/profitability are imported. Of 680 packed
+vehicle definitions, 375 have matching historical measurements; 305 have labelled
+same-premium-status/tier/class cohort estimates (nearest tier only when that
+cohort is empty). These are not 680 measured coefficients. Type 59 is workbook
+row 6: 1.575. Data from vehicles with changed tiers/classes is not reused as a
+measurement. Runtime logs name the measurement row or the estimate. Later
+vehicles, special regional variants and estimates need further retail evidence.
+
+XP base: WG support 18960 and the 0.8.8 manual:
+https://www.wargaming.net/support/en/products/wot/article/18960/?lang=en&redirect_lang=en
+https://worldoftanks.com/dcont/fb/wot_guide/world_of_tanks_game_manual_en_com_web_8_8.pdf
+
+Removed the modern Ace/mark-percentile ratio as an alleged XP coefficient and
+the victim-max-HP kill proxy. The server now freezes damage visibility, actual
+target tiers, admitted critical transitions, per-target kills, distinct assist
+shares and close positive-damage events. Capture/defence, first spots, survival
+and active combat have separate entries. Exact XP magnitudes and tier scaling
+are not published: the constants in offline_rewards.py are an explicit offline
+reconstruction of those missing quantities, not a recovered WG XP formula.
+Victories add 50%; losing/drawing Battle Hero/Epic recipients receive the same
+bonus once. Ordinary badges/mastery/marks do not qualify. Training remains zero.
+Bond formula/schedule and mission thresholds have not been retuned.
+
+Economy v2 credits already include vehicle profitability on the authority.
+The client must not multiply them by its historical generic premium-vehicle
+1.5 again. Legacy pending receipts retain that older settlement path. Account
+premium, first-win XP, reserves, save multiplier, service costs and the durable
+receipt marker still share the existing single transaction. Native #1513
+VEH_FULL_RESULTS has achievementCredits/achievementXP/achievementFreeXP; its
+reusable income chains insert these display-only resistance records and subtract
+them from the base row themselves. They must not be added to ValueReplay totals
+again. Exact bytecode readers and consumers were inspected locally before use.
+Server REWARD BREAKDOWN and client ECONOMY SETTLED record the raw model parts,
+coefficient provenance, account steps, services and wallet boundaries. The
+launcher diagnostic Repair tab adds a stationary-target earnings-test button;
+normal launching retains the two supported outer entry points.
+
+### Re-audit of earlier combat changes under the clarified model rule
+
+| Area | Actual base and gap handling | Audit conclusion / remaining boundary |
+| --- | --- | --- |
+| Ram HP damage | User-selected custom calibration based on the historical Battle Mechanics HE-like model and supplied collision note: quarter energy with full armour absorption; native mounted mass/armour/liner inputs | Custom, not unmodified WG/wiki law. The old ram_damage docstring incorrectly called it the documented 9.22 formula; corrected without changing the authorized tuning. No friendly ram HP remains an explicit product rule. |
+| Hull fire | Community linear-decay study (Jak_Atackka, 2020); native crew decay factor; missing initial rate and baseline decay use declared 5% HP/s and 10 s calibration | Partial reconstruction. The study's initial +/-20% RNG and per-vehicle burn values are not implemented by the current deterministic fire model. Do not call this complete retail/community parity. 2020-to-9.22 evidence and canonical ignition ownership still need verification before changing live fire randomness. |
+| Internal fire and module recovery | Custom 10 module HP/s, 50% orange threshold, 12/21.6 s reference repair work and the owner's physical-crew-count rule; native HP pools and skill/equipment factors fill compatible data | Explicit custom base; not an official or community per-vehicle repair table. These reconstruction constants cannot be passed off as native effects or measurements. |
+| Crew skills | Exact #1513 VehicleDescrCrew/configuration and physical seat/casualty eligibility, plus offline consumers for omitted cell-side effects | No second conflicting skill-percentage table found in the audited active native factor path. Repair work and fire duration belong to the custom/partial bases above, even though their skill multipliers are native. Conditional effects still require the existing live consumer tests. |
+| Devices | Native descriptor installation/updateVehicleAttrFactors/miscAttrs, including compatible liners, toolbox, rack/tank HP, reload/aim/bloom, optics/net/binocular state | No new conflicting device percentages introduced by this round. The owner's installation priorities are configuration policy, not a change to device-effect formulas. An item appearing in inventory is not acceptance of its battle consumer. |
+| Directives | Native BattleBooster eligibility/processors; six device and nine crew directives, active physical carriers and separate device-vs-crew factors | No alternate directive magnitudes substituted in the reviewed native path. Their repair/fire consumers inherit the explicitly declared bases above, not a separate directive formula. |
+| Consumables | Native item fields, reuse/cooldown, fire chance, food/fuel/power and kit effects; bot selection/reaction/governor use are explicit custom control policy | Do not describe Bot trigger delays, uphill/wreck decisions or the authorized half-speed governor engine-wear condition as recovered WG rules. No conflicting native item coefficient was replaced in the audited projection/state consumers. |
+
+The audit is not a blanket claim that all 25 skills, 49 devices, 15 directives
+and 21 consumables have been independently demonstrated in this new package.
+Existing exact-contract, matrix and engine-free consumer checks are rerun; the
+new Windows acceptance below must identify what it actually exercises. The fire
+RNG/per-vehicle-calibration gap remains recorded rather than silently declared
+fixed as part of earnings work.
+
+Final runtime is `90acd88c8db879d3d08b05216dd68ed73c8bc8a3`.
+The focused reward/protocol/crew/equipment/fire/ram run passed 18 files / 469
+tests with no skips; the launcher run passed 47 files / 1,239 tests with 19
+recorded platform/resource skips. All eight matching-native CI jobs passed in
+[Tests 41429763001](https://github.com/colorfulmeans/wot-0.9.22-offline-battles/actions/runs/41429763001),
+including the new coherent-earnings regression step. All three
+[Windows build 41429757820](https://github.com/colorfulmeans/wot-0.9.22-offline-battles/actions/runs/41429757820)
+jobs passed. The earlier broad local native-build failures are not claimed as
+passes or resolved by deleting assertions; the matching cloud build supplies
+that native evidence.
+
+Artifact 13133604185 (`windows-574`, identity `colorfulmeans-41429757820-1`)
+passed archive integrity, x64 launcher/x86 native-extension checks, all 236
+bundled-source comparisons, all 229 Python 2.7 code-object comparisons and the
+43-module frozen-launcher/package verification, including replay execution and
+the packaged Tk editor smoke. Native acceptance used this exact artifact,
+isolated QA app-data and the supported #1513 client; the owner authorized the
+license notice and drove the normal-battle sample.
+
+Three stationary-scene rounds and one normal Mittengard battle settled through
+real result receipts. Type 59's measured 1.575 multiplier was applied once;
+the normal battle's 3,480 damage and two initial spots produced
+`(10,400 + 34,800 + 200) * 1.575 = 71,505` gross credits. Repair was 7,410,
+net battle credits 64,095, and the actual wallet increased by exactly that
+amount before the separate 60,000-credit mission reward. Base XP was 1,711;
+the native 10% premium-vehicle XP bonus gave 1,882 vehicle XP and 94 free XP.
+The earlier first-win/control pair paid 396 vs 198 XP from the same 180 base;
+the successful 50-damage/35-defence sample separately paid 17,167 credits,
+412 base XP and 453 vehicle XP. Native detail columns and system messages
+were checked against receipt-linked ECONOMY SETTLED/REWARD BREAKDOWN logs.
+
+Repeated consumables were checked against the historical official 9.18 rule:
+https://worldoftanks.com/en/content/docs/release_notes/918-updatenotes/ .
+The owner's large repair kit activations were 90.246 seconds apart. Only one
+kit was resupplied for 50 gold, not two. Before the battle the account's 581
+large kits were all mounted on 581 vehicles, leaving zero spare stock; after
+one consumption and one purchase the total was again 581. The 13 AP and 7 HE
+shots used stock (respective stock deltas -13 and -7), so no ammunition currency
+charge was expected. Twelve bonds for the installed directive were separate.
+Nineteen Bots emitted 28 consumable effects; one veteran reused its small kit
+after 242.346 seconds. Regular one-use and veteran/elite reusable policies
+were visible, including repair, crew restoration/stun clearing and manual
+extinguishing. Bots have no player wallet: their item-state/cooldown evidence
+must not be described as an independent retail-account billing test.
+
+Reports `wot-error-report-20261102-193001-0edc66371b81.zip` and
+`wot-error-report-20261102-201729-258b0e65c8fe.zip` passed archive integrity.
+The final normal-session visible-client, worker and server logs had no ERROR
+entries or Python tracebacks; both native exception trails contained only
+their session headers. The static dependency scan found no missing physical
+imports; API-set resolution is outside that scan. These live samples do not
+exercise paid ammunition after stock exhaustion, account-premium activation,
+reserve activation, an ordinary-vehicle coefficient, or losing/drawing heroic
+resistance. Those cases retain automated coverage and remain distinct from
+the specific native observations. The full acceptance recipe is in
+`docs/testing/default-loadouts-stock-room-20261022.md`.
+
+
+## Repair workforce and directive acceptance follow-up (November 2, afternoon)
+
+This section supersedes the uniform repair-time boundary below. Exact #1513
+`VehicleDescrCrew._computeSummSkillLevel` excludes unconscious carriers; the
+common Repair skill is averaged over physical crew seats, not qualifications.
+The community description gives the concrete 80%/four-seat = 20% example:
+https://worldoftanks.fandom.com/wiki/Crew . No exact per-module regeneration
+rates were found in the pinned packed vehicle/common definitions. Under the
+user-authorized offline calibration, 12 s tracks / 21.6 s other modules are
+now four-conscious-person reference work: time scales by 4 / conscious members,
+then by the separately donated native Repair/equipment factor. Combined roles
+do not create extra workers. Zero conscious members perform no repair work.
+This is a declared reconstruction, not a recovered retail vehicle table.
+
+The player now carries native `repairSpeed` in each casualty/fire-dependent
+crew row. Both authority-side non-track repair and visible owner-CAS track
+repair consume that current row, rather than the healthy garage factor.
+The player's native descriptor `miscAttrs.repairSpeedFactor` also survives the
+authority handoff, keeping normal/improved toolbox effects independent of the
+crew/directive dictionary rather than losing them for non-track repair. Bot
+discrete-skill readers also include directive-granted perks for eligible physical
+carriers, matching the player's projection; unconscious carriers cannot use them.
+
+Terminal crew injury facts survive server exit/disconnect, persistence, client
+validation and the atomic XP transaction. A still-injured member receives 90%
+of their normal crew award. A healed member has no penalty; there is no extra
+penalty based merely on vehicle HP. The enrolled passport prevents the penalty
+from being reassigned to a replacement in the same seat. Legacy receipts without
+injury facts remain neutral. Source: WG support article 15085,
+https://wargaming.net/support/en/products/wot/article/15085/?redirect_lang=en .
+WG's 1.20.1 common-test article explicitly describes removing the injured-member
+XP penalty in a later rework, supporting the historical distinction:
+https://worldoftanks.com/en/news/general-news/1-20-1-CT-1/ .
+
+Diagnostic Repair adds baseline and varied-fitting scenes, keeping identical
+modules, 100% main qualifications and untrained secondary skills. Fifteen legal
+vehicle/item cases include a liner, toolbox+directive, wet rack, CO2 fuel tank,
+net+binoculars, GLD+directive and all nine skill directives. Native admission is
+still mandatory; nothing is mass-installed into normal battles. `repair_consumer`
+and `fire_consumer` record actual consumer transitions. Fire's absolute hull/module
+rates and module hysteresis remain explicitly unverified calibrations; no new
+retail claim is made. The ordinary equipment, governor and bridge entries remain.
+
+Native acceptance found a diagnostic-only room contract defect: `elite` is a
+per-slot skill tier, neither a room vehicle-level mode nor a room difficulty
+preset. The equipment scenes now retain valid room modes `same` / `brutal` while
+every explicit Bot assignment still carries `skill=elite`. The regression uses
+the actual BattleState reset and shipping LANClient roster validator for all
+four equipment scenes; it does not relax roster admission. Rejected rosters
+now record each validation gate in diagnostic mode. A separate packaged Tk
+smoke owner was updated for live translation of the five diagnostic labels.
+
+
+## Equipment, consumables and community-law follow-up (November 2)
+
+This section supersedes the previous package's unfinished fire/consumable status
+below. Source priority is official/exact-client evidence, community research,
+then explicitly labelled offline reconstruction. No-effect diagnostics are not
+completion evidence.
+
+* Fire uses the linear decay observed in Jak_Atackka's July 23, 2020 controlled
+  study: https://www.reddit.com/r/WorldofTanks/comments/hw7wph/ . The native
+  healthBurnPerSecLossFraction factor now reaches both player and Bot damage.
+  Missing server parameters use explicit offline calibration: initial rate 5%
+  of maximum HP/second, ten-second untrained duration, factor 0.57 baseline.
+  Full factor 1.0 gives 5.7 seconds and 57% of untrained integrated damage.
+  These absolute rates are not claimed per-vehicle retail values. Progress is
+  carried in combat_fire_timer (now decay progress, range 0..10), through Bot
+  publication, acknowledgement, replay and handoff; injury changes future decay
+  without resetting an existing fire. Server and worker bounds were updated
+  together. Firefighting directives use the same native factor. First-fire
+  diagnostics name the applied community model and its remaining calibration.
+* Bot live food/fuel compact descriptors reach native crew/stat factors; cache
+  identity includes them; live power applies to a copy of installed physics. Player
+  fuel remains in native base factors and is no longer multiplied a second time
+  in the movement consumer. Only the switched governor adds power there.
+* Custom governor-equipped Bots enable it after two continuous simulation seconds
+  of uphill movement, or during admitted actual wreck contact. Two seconds without
+  0.1 m wreck translation switches it off until actual progress/departure; rotation
+  alone cannot renew it. Level/downhill/stopped/airborne states reset uphill waiting.
+  Both policies require a functional engine. The uphill branch stops at rest;
+  the contact branch can assist a stationary push until its stall timeout.
+  They stop with a yellow/destroyed engine, apply its native +10% power
+  once, and lose the native 1.5 engine-module HP/second below half their base
+  forward limit. The half-speed condition is the existing user-supplied offline
+  experiment, not a recovered server predicate. Default Bots retain the three
+  kits/extinguisher; no food or governor is automatically substituted for them.
+* Ram calibration follows the user's supplied 08 collision-tuning note, section
+  3: retain quarter-energy tuning but preserve full armour absorption, equivalent
+  to .25*(.5*alpha - 4.4*armour*liner). Geometry/contact-normal and mass inputs,
+  moving Controlled Impact, and no friendly ram damage remain owned by their
+  existing consumers. 4.4 is labelled community/offline calibration, not an
+  official native coefficient. No arbitrary damage cap or speed floor is added.
+* Player and Bot installers share the approved class priorities, but remain
+  separate installation owners. LT: optics/rammer/stabilizer/ventilation/GLD;
+  MT: rammer/stabilizer/optics/ventilation/GLD; HT: compatible liner/rammer/
+  stabilizer/ventilation/GLD (no optics); TD and SPG: rammer/ventilation/GLD/net/
+  binoculars. Native compatibility and chassis load remain mandatory. Bot tables
+  are rebaked separately; player factory defaults use native installation calls.
+* Default revision 6 and one-time unlocked-save equipment revision reset default
+  and existing explicitly unlocked saves without backups as authorized. New
+  unlocked saves carry the marker immediately. Zero-start saves are untouched.
+* The diagnostic launcher's Repair tab exposes legal equipment/crew target
+  scenes, a moving governor fixture (native item replaces one test kit only),
+  and the restored shot-triggered bridge drop scene. There are still only
+  two outer launch entries. Both fixtures require diagnostic mode; normal single
+  play clears fixture flags. Drop geometry waits for actual native upper/lower
+  surfaces; it changes voluntary orders, not gravity/contact/damage laws.
+
+Audit boundaries: existing class-calibrated automatic repair times (tracks 12 s,
+other modules 21.6 s), critical threshold 50%, and internal fire module loss
+10 HP/s remain labelled reconstructions. Do not present them as exact per-vehicle
+native data. The 25 skills, 49 devices, 15 directives and 21 ordinary consumables
+must be distinguished from 25/49/15/21 independently demonstrated native effects.
+Actual validation and the final artifact identity belong in the existing testing
+record. Runtime f73d9893 passed cloud checks and native governor/bridge scene
+acceptance on the exact #1513 client. This is not independent native proof of
+every catalogue effect; the record identifies observed effects and remaining
+calibration limits.
+
+## Equipment effects and living Bot crew audit (November 2)
+
+The exact #1513 optional-device catalogue contains 49 definitions, including
+20 vehicle-specific suspension variants and six improved devices. Its directive
+catalogue contains six equipment and nine crew directives. Installation and UI
+bonuses alone are not evidence that the battle effect reaches its consumer.
+
+All four liners write `miscAttrs.crewChanceToHitFactor`; that factor now scales
+the shared direct/explosion crew saving throw, after the existing large-medkit
+protection. Final native protection factors accompany player device pools to the
+server. The same projection retains `vehicleByChassisDamageFactor`. Landing
+receipts carry a finite unit contact normal, preserved by retry/queue/dedup;
+only a positive upward support normal plus an actual track material contact
+admits suspension hull reduction. Missing contacts, wall/roof impacts and damage
+to a vehicle below are not reduced. No ram calibration constant changes.
+
+The native Recon processor still owns the ordinary vision factor. A wrapped
+processor additionally donates the destroyed/working coefficient ratio from its
+actual skill config, training increase and activity flags. Only destroyed
+observation devices receive that ratio, in both player and fitted Bot paths.
+
+Generated Bot crew compact descriptors now supply physical-slot skill affiliation
+and native final-skill level. Conscious, eligible carriers feed Controlled Impact,
+Deadeye at immutable shot creation, radio relay, Designated Target and Last Effort.
+Intuition rolls once per changed shell decision on a non-magazine/non-burst gun;
+success changes the actual next round without spending ammunition or completing
+an active reload. The native weapon owner retains its clocks and inventory.
+
+Historical status of the earlier package (superseded by the later community
+fire-decay implementation and coherent-model review): Firefighting was
+**unresolved**, not fixed. #1513 donates
+`healthBurnPerSecLossFraction`, including the directive enhancement, but the
+per-vehicle initial burn/base decay are stripped by the client reader's
+server-only guard. The donation survives player crew-state projection and a
+bounded `fire_model_boundary` diagnostic explicitly reports `skill_applied=false`,
+the native factor, missing contract and retained legacy fixed-burn parameters.
+This records the previous package's unfinished implementation, not a restriction
+on sources. The user authorizes official/client evidence first, community
+measurements second, and explicitly labelled reconstruction third. Missing
+official server parameters must not prevent evaluating community fire-decay
+models or correcting the known fixed-burn defect. Diagnostics alone are not a
+Firefighting fix.
+
+Local validation: 18 isolated suites / 576 tests passed; all 224 client modules
+compiled with CPython 2.7.18; `inspect_client.py` confirmed the pinned x86 Chinese
+HD build. Environmental law tests explicitly omit native simulation on all hosts;
+they no longer mistake an unavailable x86 Python-2 extension in a Windows Python-3
+test process for a gameplay assertion. CI now has a dedicated equipment/crew/
+directive regression step. Cloud Tests 41326363485 passed all eight jobs at
+f5a5828; build 41326069674 passed all three jobs for runtime 0e60da5. The actual
+Windows ZIP, x64 launcher, x86 native payload, bundled source and all 224 client
+bytecode signatures passed independent inspection. Exact-package Mittengard acceptance then exercised one player and 29 elite Bots,
+including injured native crew-factor states and 31 Intuition decisions (10
+successes). The battle and career receipt completed. Report
+`wot-error-report-20261102-013519-cd8e6d47a1d6.zip` has no Python exception or native
+exception-trail entry. Three actual fire starts recorded the missing-contract
+boundary with native decay factors and `skill_applied=false`. This is not proof
+of every device effect or a Firefighting repair; full observations and limits are
+in the equipment follow-up section of the existing default-loadouts test record.
 
 ## Clean-launch selection, editor layout and soft-plant felling (October 31)
 
@@ -2170,7 +4169,10 @@ states the historical change from 16% to 10%. The official 3,000-shot diagrams
 do not publish a complete sampling law. The 9.6 reweighting is not implemented;
 the current scatter model must not be described as verified #1513 accuracy.
 Matching the client-owned cone angle and armour preview cannot establish
-matching weak-spot hit probabilities. No guessed ring weights have been added.
+matching weak-spot hit probabilities. This is an open implementation gap, not
+a requirement to wait for the proprietary law: evaluate compatible community
+sampling studies and, if necessary, labelled reconstruction under CLAUDE.md.
+Do not transplant conflicting weights or describe calibrated values as native.
 
 One accepted penetration factor remains frozen across range, obstacles,
 ordered vehicle layers and a ricochet continuation. AP/APCR continuations
@@ -5332,8 +7334,11 @@ currency correction, not a claim of rebaking the entire #1513 client. The
 baker now preserves `<crystal/>` when run again. The medal schedule comes from
 WG's [9.20.1 announcement](https://worldoftanks.eu/en/news/general-news/920-1-bonds-and-medals/)
 and its [reward table](https://eu-wotp.wgcdn.co/dcont/fb/image/medals_en.jpg).
-The all-Tier-X base-XP bond conversion is not reconstructed. No guessed
-XP-to-bonds formula or later weekly-cap system is introduced.
+The all-Tier-X base-XP bond conversion is not implemented. Bond rewards remain
+unchanged under the owner's explicit scope exclusion, not because community
+evidence or labelled reconstruction is prohibited. Reopening this feature would
+require following CLAUDE.md and respecting the selected historical rule base;
+a later weekly-cap system must not silently replace it.
 
 Grand Battles remain unavailable. The current 15-slot team layout, bot identity
 ranges, 30-row result validators and baked map data need a coordinated change.
@@ -12623,3 +14628,312 @@ production workflow's Python snippet against an actual temporary root: the two
 supported entries pass, and an added development batch file is rejected. The
 strict two-entry archive policy is unchanged. No runtime source or English
 release-note content changes in this repair. No v1.1.1 tag was rewritten.
+# Windows retest of the fixture room
+
+Runtime 1163bb3e passed all eight CI jobs and all three Windows build jobs.
+Artifact 13260826343 (colorfulmeans-41693069097-1) passed CRC, committed
+source comparison and the single-launch-entry check. On the installed
+Chinese #1513 client, the equipment fixture displayed Mittenhard, 15:15,
+same tier and elite difficulty. The capacity, map, tier, difficulty and
+class controls were disabled. Clicking the previously live Team 1
+capacity arrow did not open a menu. Start remained available and the
+same package entered a live battle. The player test command journal
+enabled foreground control, and native logs showed route movement,
+combat hull turning and a committed automatic shot. This test does not
+exercise the physical shortcut, indirect artillery, native siege,
+withdrawal or an active wreck-push handover.
+
+# Native diagnostic room lock correction
+
+Runtime 9bf5e5e0 passed all eight CI jobs and the single-entry package
+inspection. Its actual equipment fixture opened the Mittenhard room
+with grey map controls, but the Team 1 capacity menu could still open.
+The fixture now locks roster controls even before the protocol advertises
+a fixed lineup, and skips restoring saved difficulty and capacities
+during fixture startup. The stock-room regression supplies an unlocked
+lineup and otherwise available setters. Stock room, sparse lineup and
+LAN session tests pass locally. Replacement-package acceptance is pending.
+
+# Foreground cover withdrawal
+
+A low-health or empty-clip player may reverse into nearby proved rear
+cover. The path must pass world and vehicle clearance and the destination
+must block the incoming terrain ray. Arrival holds cover while the
+withdrawal condition is active, including briefly losing sight of the
+enemy. The attempt is bounded, and base defence preempts it.
+
+The focused player suite passed 62 tests, including rejected clearance,
+clip withdrawal, lost contact at cover, and return to normal travel after
+reloading. Native cover behaviour is still pending.
+
+# Foreground siege request checkpoint
+
+The foreground controller uses the player's native siege setting when
+automatic driving is active. It debounces entry to stationary combat
+and return to travel, respects pending native requests and transitions,
+and avoids changing the descriptor during a player burst. Manual
+handover clears a still-pending brake owned by the player controller.
+Bot siege logic is unchanged.
+
+The player-control and sparse-lineup suites passed locally, and the
+player controller compiled under Python 2.7. The siege test covers
+debounce and the pending-request gate. Live siege and the outstanding
+cover, withdrawal and artillery position recovery checks are pending.
+
+# Windows launcher checkpoint
+
+Windows artifact 13253300738 for b310f831 passed archive integrity,
+build identity, committed source comparison, and the single-entry
+check. The actual launcher showed the three evenly spaced feature
+columns and the separately aligned control checkbox. Unchecking it
+destroyed the open control window, disabled Open, and retained all
+three feature selections. Bot behavior regressions passed in CI.
+
+Full CI caught the fixed-lineup preference regression in the test
+session adapter. The fixture-map check now uses the session class's
+static helper, and both the sparse-lineup and stock waiting-room
+suites pass locally. The rebuilt artifact and live fixture-room and
+battle checks remain pending.
+
+# Player firing position and artillery path checkpoint
+
+The foreground controller can choose a short, same-height firing position
+when a nearby visible target is blocked. It checks the approach and the
+predicted lane, limits the attempt in time, and resumes route movement
+when the attempt ends or a current lane opens. Artillery candidate checks
+sample the shell parabola against terrain and intervening vehicles. The
+laid barrel's actual arc must also pass before the native trigger is
+called. The existing Bot decision and execution code is unchanged.
+
+The player suite passed 60 tests and all eight player modules compiled
+under Python 2.7. The new tests cover bounded position selection and
+artillery path geometry. Native indirect fire and relocation are pending.
+Artillery firing-position recovery, cover and withdrawal, and special
+vehicle modes still require parity work.
+
+# Independent player migration follow-up
+
+The player-only front selector checks every 180 seconds and uses friendly
+health lost near visible enemies over the preceding 45 seconds. Capture
+alarms still preempt the schedule. The player navigation prefers reachable
+authored artillery attack routes and applies SPG-specific default route
+edits. During a stationary engagement the player controller checks the
+installed gun's yaw limits before requesting a clearance-checked hull
+turn. A mounted large medical kit can clear an active stun without a
+knocked-out crew member.
+
+The launcher Testing tab uses three equal-width columns. Current Windows
+packages admit only the launcher executable at the archive root. Detailed
+logs and fixtures are enabled through the Testing tab. Historical release
+verification still recognizes its original diagnostic script.
+
+Local checks covered player control (58 tests), consumable audit, launcher
+testing panel, launch entries, and Python 2.7 compilation of the player
+modules. These checks do not establish native acceptance. Artillery
+deployment and firing-position recovery, indirect fire, direct-fire
+repositioning, cover and withdrawal, and special-mode parity are still
+open. This checkpoint is not a complete player migration.
+
+# November 3: independent player control repair candidate
+
+During a stationary combat hold, the independent player driver turns
+the hull toward its current target. It brakes before pivoting and holds
+position when the next turn fails vehicle or terrain clearance. This
+does not use the route recovery movement while fighting. The focused
+player control suite passed 57 tests, including a clear turn, blocked
+turn and braking at speed. Native verification of the new turn is pending.
+
+The launcher closes its mouse control window and queues Stop when the
+control entry is unchecked. A second Open action reuses the existing
+window. The automatic driving, aiming/fire and consumable choices keep
+their values and apply at the next launch. Single-player diagnostic
+fixtures show their fixed map in the stock waiting room and disable map
+and random-map selection. The fixed lineup continues to own the
+capacities, class filters, tier and difficulty. The bridge fixture also
+locks the player to Team 1. Fixture map/capacity values are not saved as
+ordinary room preferences.
+
+Local verification passed the launcher testing panel tests and the stock
+room, waiting room UI/skin, and LAN session suites. The previous
+caf4142c live round recorded repeated manual handovers with a fresh route
+entry from the actual vehicle position each time. That round did not
+record an active wreck push at the handover, so it verifies route
+re-entry but not the full wreck-push interruption.
+
+### Follow-up: confirmed muzzle-clearance / target-forward feedback
+
+Native runtime 74fec0a1 reproduced the user's late oscillation beside a left
+wreck. Report `wot-error-report-20261103-213750-54648d3803e4.zip` preserves the
+session. Between 21:27:03 and 21:27:20, a nearly stationary player around
+(-198.5, 0.89, -9.4), yaw -2.375, repeatedly switched between live enemy
+2130706445 and forward aim. Each loss reported `no_clear_firing_lane`, followed
+by `clear_lane_selected`; the whole round logged 147 aim transitions. This
+supersedes the earlier non-reproduction observation, not the verified kit fix.
+
+The firing lane originates at the current moving muzzle. Using its clearance
+to relinquish target ownership can move that muzzle clear again, reacquire the
+same target and repeat. A live visible previous target now remains the aiming
+target when no clear alternative exists. Blocked aim never authorizes a shot
+or stationary engagement hold, including base defence; navigation can continue.
+A clear alternative still wins, and disappearing/dead contacts still release
+native aim. Diagnostics expose `aim.fire_clear` alongside target and point.
+No Bot targeting, route allocation or native rotation owner changes.
+
+A regression executes the actual foreground update across 150 alternating
+clear/blocked muzzle observations at the captured pose: one target acquisition,
+no forward resets, firing only on clear ticks and no blocked combat holds.
+Another verifies a clear alternative wins and contact loss restores forward aim.
+Replacement package/native acceptance is pending; these checks alone do not
+prove the user-visible oscillation has stopped on #1513.
+
+### Follow-up: independent player wreck motor and progress ownership
+
+Runtime ec5c72e1 passed all three build jobs (41646898020), all eight Tests
+jobs (41646847003), archive/source and frozen-launcher inspection. In its second
+native Mittenhard round it admitted eleven automatic shots and recorded thirteen
+one-second aiming decisions with `fire_clear=false` while retaining the target.
+No lane-blocked target-to-forward transition occurred. First-round zero-shot
+travel is inconclusive for aiming acceptance, not a successful combat test.
+Report `wot-error-report-20261103-223823-dcad2347c37f.zip` preserves both rounds.
+
+The user then identified a separate hull oscillation at the T110E3 wreck.
+From 22:29:39 through 22:29:56 the player remained around (-183.5, .38, -34.3),
+repeatedly alternating turn-clearance signs and short reverse attempts beside
+wreck 2130706512. Enemy acquisition at 22:29:57 interrupted this, and the player
+finally translated away at 22:30:03. Death occurred at 22:30:54. This is a
+confirmed failed native movement gate even though the hull eventually escaped.
+
+Comparison found two missing player-side behaviors: dead hulls were always
+avoidance obstacles, with no continuous motor attempt; and any .2-radian yaw
+change renewed the driver's progress clock, even when merely undoing its last
+turn. The independent player package now admits straight wreck motor attempts
+only after alignment and current static-ground/world and living-hull checks.
+Native mass/contact physics still owns every resulting movement. Half a metre
+of own forward progress renews a fourteen-second motor budget; yaw, route-tip
+changes and wreck-only motion do not. A spent encounter returns to ordinary
+checked recovery, rather than a permanent stop; leaving the encounter or actual
+wreck displacement can permit another attempt. Rotation only renews the driver
+clock when it improves the best heading error, not for repeated left/right sway.
+
+These decisions and encounter history are player-owned. No BotAdapter,
+BotRuntime, Bot driver, target policy or route allocation is imported or changed.
+The Bot comparison is a behavior audit, not runtime delegation. Bot wall-blocked
+tracking already retains the selected target and gates fire separately; its
+motor-attempt policy also exists separately. The user's second observation of
+an enemy rocking then leaving still needs exact actor/time matching; it is not
+being labelled the same defect solely from the visual similarity.
+Replacement package/native acceptance of the new player motor path is pending.
+
+### Follow-up: automatic kit encoding rejected by the authority
+
+Independent c2ff1f11 native acceptance exposed a confirmed failure, reported in
+`wot-error-report-20261103-200218-1714d7315197.zip`: ten automatic large-repair
+requests used descriptor extra indexes 82/78 and received
+`invalid_activation_code`. Damage detection worked; the kit never activated.
+The foreground policy now uses the reviewed #1513 high word 1 for all-target
+repair/medical kits and manual extinguishers. Single-target kits retain the
+exact descriptor index. Automatic extinguishers remain under their existing
+canonical owner. The diagnostic's `requested` field means local submission,
+not server acceptance.
+
+The regression passes each real foreground decision through BattleRuntime's
+encoder, LANClient's wire producer and the actual server validator/effect owner;
+it verifies repaired devices/restored crew/extinguished fire and cooldown for
+large/small repair, large/small medical and manual extinguisher requests.
+Local results: 29 consumable-audit tests, 48 player-control tests and CPython
+2.7 compilation pass. Engine-free checks alone do not prove native inventory
+presentation; replacement-build acceptance is recorded below.
+
+The user's late turret oscillation observation remains under investigation.
+Target-to-forward transitions now log their exact reason and pose, including
+loss of live visible contact versus an obstructed firing lane. No speculative
+targeting hysteresis or Bot behavior change is included in this diagnosis.
+
+Replacement runtime f7999a2f, identity `colorfulmeans-41632514292-1`, passed all
+three Windows build jobs and all eight Tests jobs (41632522754). Downloaded
+archive 13229657292 has exactly the normal EXE and diagnostic BAT entries;
+245 server sources / 238 client modules match the checkout, and 44 frozen
+launcher modules, native stamps, recorder execution and packaged editor smoke
+pass independent inspection. Delivered ZIP: `PR119-f7999a2f-Windows-x64.zip`.
+
+Two independent native Mittenhard rounds used the actual mounted player fitting.
+T-44-100M committed seven automatic shots / 788 damage; 113 committed eighteen
+shots / 4,050 damage. Both handed back at death/end without another trigger loop.
+At 20:41:00.464 the 113's left track was destroyed. At .517 the controller sent
+65541 (extra 1); at .558 canonical repair restored it to 250 HP and cleared
+the destroyed state. A later gunner injury was restored by automatic large
+medkit 65539 at 20:41:50.696. The large repair was reused at 20:42:30.541,
+90.024 seconds after its first request, restoring track/rotator/ammo rack to
+250/170/270 HP. No requests bypassed its cooldown and no equipment rejection
+was logged in either round. The native HUD displayed their running cooldowns.
+
+Report `wot-error-report-20261103-204530-d96509929695.zip` contains both rounds.
+The turret kept one target continuously for about 106 seconds in the 113 round;
+the reported persistent late oscillation did not reproduce. The observed
+short target/forward changes had lane-loss or live-contact-loss reasons.
+This does not prove that every oscillation case is fixed: the added transition
+diagnostics remain, without a speculative targeting-policy change. Manual
+extinguisher and small-kit activation retain contract/integration coverage,
+not a new native activation claim. The earlier static-building pivot correction
+did not encounter its exact captured site in these rounds; full physical-key,
+eight-checkbox-combination and dual-HE-exhaustion native coverage is not claimed.
+
+The same report also exposed one visible-client stock model assertion at
+20:28:55.748; the hidden worker had no traceback and the native exception files
+contained session headers only. This is not a clean-report claim. Vehicle
+2130706445 (Lowe) requested destroyed and exploded models 9 ms apart; the
+destroyed completion arrived 16 ms later while current state was exploded.
+Exact installed #1513 `CompoundAppearance.pyc` confirms line 838 asserts state
+equality before accessing/replacing the compound model. The follow-up discards
+only a destroyed completion superseded by exploded on the same current dead
+entity/appearance during this battle. It neither catches arbitrary assertions
+nor changes resources/native gun synchronization. The exploded completion still
+uses stock setup. Both completion orders, rebound appearance/reused entity ID,
+living entity, nonbattle and unknown states have focused regressions. The
+existing assertion diagnostics remain for other failures. Replacement native
+acceptance after this additional correction is pending.
+
+The 75bff5c3 native test FAILED acceptance. Four admitted shots hit allied Bot
+12 while the lock target was enemy Bot 30; static-world LOS did not test the
+intervening friendly hull. The native target lock itself worked, but neither
+locking nor an admitted trigger proved useful automatic combat. A second round
+held an occluded target with `world_clear=false`. The user's manual-fire failure
+matches the reviewed #1513 sequence: `base.vehicle_shoot()` returns before
+`__startWaitingForShot()`, while takeover incorrectly acknowledged suppressed
+manual triggers. These are failures, not passing tests.
+
+The replacement owns player route selection, navigator/driver instances,
+engagement clock and ammunition policy separately. It does not register a Bot,
+call BotRuntime's adapter, consume lane capacity or change Bot assignments.
+Only immutable current map/route configuration and shared low-level geometry,
+native vehicle input, gun transaction and damage rules are reused. It ranks
+main and reserve route points in 3D and requires a connected path whose entry
+support agrees with the actual player's layer. Searches are bounded across
+frames; no disconnected bridge-layer snap may authorize travel.
+
+Suppressed native fire now returns False through the existing deferred native
+acknowledgement cancellation. The player-owned input wrapper consumes left and
+right mouse buttons only during automatic aiming/fire. Stopping releases lock,
+movement and stale native shot wait without cancelling an accepted transaction.
+Attack candidates require world LOS and a live-ally/wreck hull-clear lane; a
+blocked contact cannot create a stationary combat hold. Elite reaction and
+opening-aim timing use rating 1.0. Player inventory and fitting are retained;
+the currently selected round is protected through its first admitted shot,
+then the existing non-premium-forcing ShotPolicy consumes committed results.
+
+Handover also preserves an already admitted burst subshot until its commit,
+then cancels future burst rounds; clearing the burst before acknowledgement
+would break the normal gun transaction. Local evidence: 23 player input/navigation tests and all 232 client modules
+compile with Python 2.7. Native checkbox/button matrix, handover firing and
+actual enemy damage remain pending on the replacement package. No native pass
+from the failed previous candidate transfers to these changed control paths.
+
+
+## November 3 withdrawal of the first player-control implementation
+
+The b2cf35b7 candidate failed native acceptance: oscillating forward/reverse travel,
+manual aim interference, missing firing presentation, and terminal-before-combat
+ammunition feedback. The first implementation is removed before replacement.
+BattleRuntime is restored byte-for-byte to 0e4146f7 (before 18983a25 introduced
+player control). Unrelated queue, earnings and governor-wear fixes are retained.
+Bot policy, driving and navigation owners are not changed by this withdrawal.

@@ -1,10 +1,16 @@
 # -*- coding: utf-8 -*-
 """Run complete navigation proofs on the current engine-owning thread."""
+import math
 import operator
 import sys
 
 from .worker_diagnostics import current, observed
 from .collision_flags import VEHICLE_SKIP_FLAGS
+
+# Native query limits belong to the physical map contract, not a Bot actor or
+# its policy modules. Keep this oracle usable by an independent LAN player.
+NAVIGABLE_WATER_DEPTH = 1.20
+NAVIGATION_MAX_GRADE = math.tan(math.radians(25.0))
 
 try:
     _LONG_TYPE = long
@@ -29,22 +35,23 @@ def _report_failure(error):
 
 class Oracle(object):
     @classmethod
-    def create(cls, owner):
+    def create(cls, owner, watch_bot_owner=True):
         try:
-            result = cls(owner)
+            result = cls(owner, watch_bot_owner=watch_bot_owner)
             return result if result._capabilities is not None else None
         except Exception as error:
             _report_failure(error)
             return None
 
-    def __init__(self, owner, backend=None):
+    def __init__(self, owner, backend=None, watch_bot_owner=True):
         if backend is None:
             from . import native_math
             backend = native_math._load()
         self.backend = backend
         self.owner = owner
         self._avatar = owner._avatar
-        self._bots = getattr(owner, '_bots', None)
+        self.watch_bot_owner = bool(watch_bot_owner)
+        self._bots = getattr(owner, '_bots', None) if self.watch_bot_owner else None
         self.calls = 0
         self.failures = 0
         self.rays = 0
@@ -85,18 +92,16 @@ class Oracle(object):
         if self._capabilities is None:
             return None
         if (self.owner._avatar is not self._avatar or
-                getattr(self.owner, '_bots', None) is not self._bots or
+                self.watch_bot_owner and getattr(self.owner, '_bots', None) is not self._bots or
                 self.owner._avatar.spaceID != self._capabilities[5]):
             self.last_receipt['reason'] = 'owner_identity_changed'
             return (-1, 0, 0)
-        from .bot_runtime import BOT_WATER_AVOID_DEPTH
         snapshot = tuple(start) + tuple(end) + (
-            cell_size, max_grade_up, max_grade_down, BOT_WATER_AVOID_DEPTH)
+            cell_size, max_grade_up, max_grade_down, NAVIGABLE_WATER_DEPTH)
         if slope_limit is not None:
-            from .ai.driver import NAVIGATION_MAX_GRADE
             grade = min(float(slope_limit), NAVIGATION_MAX_GRADE)
             snapshot = tuple(start) + tuple(end) + (
-                cell_size, grade, grade, BOT_WATER_AVOID_DEPTH,
+                cell_size, grade, grade, NAVIGABLE_WATER_DEPTH,
                 min(1.0, cell_size * 0.42))
         diagnostic = current()
         holder = [None]

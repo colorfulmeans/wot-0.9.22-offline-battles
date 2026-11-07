@@ -1782,15 +1782,20 @@ def _upgrade_default_save(game_root):
         import save_slots
     directory = save_slots.slot_dir(save_slots.DEFAULT_SLOT_ID, game_root)
     metadata = save_slots._read_metadata(os.path.join(directory, save_slots.METADATA_NAME)) or {}
-    if metadata.get('default_revision') == save_slots.DEFAULT_REVISION:
-        return []
     if game_is_running():
-        raise LauncherError('Close World of Tanks before replacing the old default save.')
+        if metadata.get('default_revision') != save_slots.DEFAULT_REVISION:
+            raise LauncherError('Close World of Tanks before replacing the old default save.')
+        return []
     try:
-        save_slots.replace_default(game_root)
+        replaced = save_slots.replace_default(game_root)
+        count = save_slots.reset_unlocked_equipment_defaults(game_root)
     except (OSError, save_slots.SaveSlotError) as error:
         raise LauncherError('The default save could not be updated: %s' % error)
-    return ['Replaced the old default save with fresh fully unlocked defaults; no backup was retained.']
+    actions = (['Replaced the old default save with fresh fully unlocked defaults; no backup was retained.']
+               if replaced else [])
+    if count:
+        actions.append('Reset %d fully unlocked saves to current equipment defaults.' % count)
+    return actions
 
 
 def _save_reset_targets(game_root):

@@ -38,6 +38,7 @@ class ControlBankTests(unittest.TestCase):
                                runtime._publish_control_this_step))
             for clock in list(runtime._burst_states.values()):
                 for edge in clock.advance(step):
+                    self.assertTrue(clock.commit(edge))
                     self.edges.append((start + int(round(edge['due_offset'] * 1000000.0)),
                                        edge['burst_index']))
             if self.after_step:
@@ -49,9 +50,9 @@ class ControlBankTests(unittest.TestCase):
         self.runtime._update_once = simulate
 
     def arm(self, interval, count=4, due=None):
-        clock = self.module.burst_mechanics.BurstClock()
+        clock = self.module.burst_mechanics.TriggerClock()
         self.assertTrue(clock.start(1, count, interval, 0))
-        clock.advance(0.)
+        self.assertTrue(clock.commit(clock.advance(0.)[0]))
         if due is not None:
             clock.time_left = due
         self.runtime._burst_states[1] = clock

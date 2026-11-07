@@ -33,7 +33,7 @@ METADATA_NAME = "save.json"
 METADATA_SCHEMA = 1
 # PR115 review packages used revision 1 before their implementation was accepted.
 # A distinct seed revision must not trust that older completion marker.
-DEFAULT_REVISION = 3
+DEFAULT_REVISION = 6
 
 # How a slot was created.  ``unlocked`` is the historical offline garage: every
 # vehicle owned and every balance effectively unlimited.  ``new_account``
@@ -262,6 +262,29 @@ def replace_default(game_root=None, environment=None, root=None, force=False):
     return True
 
 
+def reset_unlocked_equipment_defaults(game_root=None, root=None):
+    """User-approved one-time clean reset; never touch zero-start accounts."""
+    count = 0
+    for record in list_slots(game_root, root=root):
+        if record['id'] == DEFAULT_SLOT_ID or record['mode'] != MODE_UNLOCKED:
+            continue
+        directory = slot_dir(record['id'], game_root, root=root)
+        metadata = _read_metadata(os.path.join(directory, METADATA_NAME)) or {}
+        if metadata.get('mode') != MODE_UNLOCKED or metadata.get('equipment_revision') == DEFAULT_REVISION:
+            continue
+        targets = [_contained(directory, os.path.join(directory, name), 'Unlocked reset')
+                   for name in _state_file_names(directory)]
+        for path in targets:
+            os.unlink(path)
+        _write_metadata(os.path.join(directory, METADATA_NAME), {
+            'schema': METADATA_SCHEMA, 'id': record['id'], 'name': record['name'],
+            'mode': MODE_UNLOCKED, 'appearanceStockSeed': 1,
+            'equipment_revision': DEFAULT_REVISION, 'skip_legacy_import': True,
+            EARNINGS_KEY: 100, 'created': int(time.time())})
+        count += 1
+    return count
+
+
 def list_slots(game_root=None, environment=None, root=None):
     """Return every save slot, default first and the rest by name."""
     root = saves_root(game_root, environment) if root is None else root
@@ -342,6 +365,7 @@ def create_slot(name, mode, game_root=None, environment=None, root=None,
             "id": slot_id,
             "name": name,
             "mode": mode,
+            "equipment_revision": DEFAULT_REVISION if mode == MODE_UNLOCKED else 0,
             "appearanceStockSeed": 1 if mode == MODE_UNLOCKED else 0,
             EARNINGS_KEY: normalized_earnings_percent(earnings_percent),
             "created": int(time.time() if now is None else now),

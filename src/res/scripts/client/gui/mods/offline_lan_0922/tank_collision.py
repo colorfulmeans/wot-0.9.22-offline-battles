@@ -57,7 +57,11 @@ SPATIAL_CELL_SIZE = 24.0
 WEIGHT_SCALE = 0.001
 RAM_KINETIC_FACTOR = 0.5
 RAM_HE_DAMAGE_FACTOR = 0.5
-RAM_ARMOR_ABSORPTION_FACTOR = 1.1
+# Community patch supplied by the user: user-supplied collision tuning note, section 3.
+# Preserve the existing quarter-energy calibration, but do not quarter the
+# armour absorption too: .25 * (HE - 4.4*A) == .25*HE - 1.1*A.
+# This is an explicitly labelled offline calibration, not a native WG constant.
+RAM_ARMOR_ABSORPTION_FACTOR = 4.4
 # Temporary product tuning while the exact #1513 ramming curve is audited.
 # Keep every physical input and modifier intact; scale only the final HP loss.
 RAM_DAMAGE_COEFFICIENT = 0.25
@@ -1571,12 +1575,13 @@ def ram_damage(relative_speed, mass_self, mass_other,
                spall_self=1.0, spall_other=1.0,
                bonus_self=0.0, bonus_other=0.0,
                moving_self=True, moving_other=True):
-    """Return the documented 9.22 ``(damage_to_other, damage_to_self)``.
+    """Return the custom-calibrated ``(damage_to_other, damage_to_self)``.
 
     Wargaming's 9.22-era Battle Mechanics first creates an HE-like explosion
     from the pair's kinetic potential, distributes it by inverse mass share,
-    then applies the contemporaneous non-penetrating HE law at zero impact
-    distance.  There is no empirical threshold, ratio clamp, or damage cap.
+    then this user-selected custom model applies quarter-energy/full-armour
+    calibration. It is not the unchanged retail/wiki formula. There is no
+    extra empirical threshold, ratio clamp, or damage cap.
     """
     relative_speed = abs(float(relative_speed))
     self_tonnes = max(0.0, float(mass_self)) * WEIGHT_SCALE

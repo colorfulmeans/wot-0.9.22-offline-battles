@@ -38,6 +38,21 @@ float curve(float yaw,const Curve &points) {
 }
 }
 
+bool valid_termination_reason(TerminationReason reason) {
+    switch(reason) {
+    case TerminationReason::ActorDestroyed:
+    case TerminationReason::BattleEnded:
+    case TerminationReason::RoundChanged:
+    case TerminationReason::GunUnavailable:
+    case TerminationReason::WeaponReplaced:
+    case TerminationReason::AmmunitionUnavailable:
+    case TerminationReason::LaunchUnavailable:
+    case TerminationReason::TransportUnavailable:
+    case TerminationReason::NativeFailure:return true;
+    default:return false;
+    }
+}
+
 void GunConfig::validate() const {
     for (double value:{fully_aimed_dispersion,after_shot,after_shot_in_burst,
          turret_dispersion_factor,aiming_time,movement_dispersion_factor,
@@ -150,7 +165,12 @@ bool GunState::consume(bool final_round) {
     elapsed=0.; intra=clip>0; reload_duration=intra?config.reload_intra:config.reload_full;
     return true;
 }
-bool GunState::cancel() {
+bool GunState::abort() {
+    if(burst_remaining<=0) return false;
+    burst_remaining=0;return true;
+}
+bool GunState::terminate(TerminationReason reason) {
+    demand(valid_termination_reason(reason));
     if (burst_remaining<=0) return false;
     burst_remaining=0; elapsed=0.; intra=clip>0;
     reload_duration=intra?config.reload_intra:config.reload_full; return true;
@@ -202,28 +222,48 @@ bool BurstState::start(std::int64_t first,int amount,double delay,int selected) 
     if (active || first<=0 || amount<1 || amount>64 || selected<0 || !std::isfinite(delay) ||
         delay<0. || delay>10. || (amount>1 && delay<=0.)) return false;
     active=true; group_seq=first; count=amount; next_index=0; shell=selected;
-    interval=amount>1?delay:0.; time_left=0.; return true;
+    interval=amount>1?delay:0.; time_left=0.;
+    terminal_reason=TerminationReason::None; return true;
 }
 std::vector<BurstEdge> BurstState::advance(double dt) {
     std::vector<BurstEdge> result;
     if (!active || !std::isfinite(dt)) return result;
-    dt=std::max(0.,dt); double offset=std::max(0.,time_left); time_left-=dt;
-    while (active && time_left<=1.e-9) {
-        BurstEdge edge; edge.shot_seq=group_seq+next_index; edge.group_seq=group_seq;
-        edge.index=next_index; edge.count=count; edge.shell=shell;
-        edge.final_round=next_index+1>=count; edge.due_offset=std::min(dt,offset); result.push_back(edge);
-        ++next_index;
-        if (next_index>=count) {active=false; time_left=0.;}
-        else {time_left+=interval; offset+=interval;}
+    dt=std::max(0.,dt); const double previous=time_left; time_left-=dt;
+    for(int index=next_index;index<count;++index) {
+        const double offset=double(index-next_index)*interval;
+        if(time_left+offset>1.e-9) break;
+        BurstEdge edge; edge.shot_seq=group_seq+index; edge.group_seq=group_seq;
+        edge.index=index; edge.count=count; edge.shell=shell;
+        edge.final_round=index+1==count;
+        edge.due_offset=std::min(dt,std::max(0.,previous+offset));
+        result.push_back(edge);
     }
     return result;
 }
-bool BurstState::cancel(int launched) {
-    const bool changed=active || count>0; if (launched<0) launched=next_index;
-    if (launched<0 || launched>next_index) return false;
-    active=false; next_index=launched;
-    if (launched==0) {group_seq=0; count=0; interval=0.; shell=0;}
+bool BurstState::accepts(const BurstEdge &edge) const {
+    return active && time_left<=1.e-9 && edge.shot_seq==group_seq+next_index &&
+        edge.group_seq==group_seq && edge.index==next_index && edge.count==count &&
+        edge.shell==shell && edge.final_round==(next_index+1==count);
+}
+bool BurstState::commit(const BurstEdge &edge) {
+    if(!accepts(edge)) return false;
+    ++next_index;
+    if(next_index==count) {active=false;time_left=0.;}
+    else time_left+=interval;
+    return true;
+}
+bool BurstState::abort() {
+    if(next_index!=0) return false;
+    const bool changed=active || count>0;
+    active=false;group_seq=0;count=0;interval=0.;shell=0;
     time_left=0.; return changed;
+}
+bool BurstState::terminate(TerminationReason reason) {
+    demand(valid_termination_reason(reason));
+    if(!active) return false;
+    if(next_index==0) abort();
+    else {active=false;time_left=0.;}
+    terminal_reason=reason;return true;
 }
 void BurstState::validate(std::int64_t fire_seq) const {
     demand(group_seq>=0 && count>=0 && count<=64 && next_index>=0 && next_index<=count && shell>=0);
@@ -364,6 +404,18 @@ bool Store::remove(ActorKey key) {
 }
 ActorState &Store::at(ActorKey key) {auto found=actors_.find(key);demand(found!=actors_.end());return found->second;}
 const ActorState &Store::at(ActorKey key) const {auto found=actors_.find(key);demand(found!=actors_.end());return found->second;}
+void Store::restore_trigger(ActorKey key,const BurstState &burst,std::int64_t seq) {
+    burst.validate(seq);auto &state=at(key);ActorState candidate=state;
+    const int remaining=burst.active?burst.count-burst.next_index:0;
+    if(burst.active) {
+        demand(burst.shell==candidate.ammo.loaded && remaining<=candidate.gun.clip &&
+            remaining<=candidate.ammo.remaining[candidate.ammo.loaded]);
+    }
+    // Inactive partial groups are terminated physical history, not work to
+    // resume. An old donor gun counter must never resurrect or jam its tail.
+    candidate.burst=burst;candidate.gun.burst_remaining=remaining;
+    state=std::move(candidate);
+}
 void Store::prepare(ActorKey key,double dt,double factor,int requested) {
     auto &state=at(key); if(state.burst.active) return;
     state.gun.rescale(factor);state.gun.tick(dt);
@@ -389,16 +441,26 @@ bool Store::begin(ActorKey key,int count,double interval,double factor) {
     auto &state=at(key);if(!state.ammo.can_fire()) return false;
     count=std::min(count,std::min(state.ammo.remaining[state.ammo.loaded],state.gun.clip));
     if(count<=0) return false;
-    if(!state.burst.start(state.fire_seq+1,count,interval,state.ammo.loaded) || !state.gun.begin(count,factor)) {
-        state.burst.cancel(0);return false;
-    }
-    return true;
+    ActorState candidate=state;
+    if(!candidate.burst.start(state.fire_seq+1,count,interval,state.ammo.loaded) ||
+        !candidate.gun.begin(count,factor)) return false;
+    state=std::move(candidate);return true;
 }
-bool Store::cancel(ActorKey key) {
+bool Store::abort(ActorKey key) {
+    auto &state=at(key);if(state.burst.next_index!=0) return false;
+    if(!state.burst.abort()) return false;
+    // No shell launched, so neither stock nor the completed reload is spent.
+    state.gun.abort();return true;
+}
+bool Store::terminate(ActorKey key,TerminationReason reason) {
+    demand(valid_termination_reason(reason));
     auto &state=at(key);if(!state.burst.active && state.gun.burst_remaining<=0) return false;
-    const auto used=state.burst.group_seq>0?std::max<std::int64_t>(0,state.fire_seq-state.burst.group_seq+1):0;
-    state.burst.cancel(int(std::min<std::int64_t>(used,state.burst.next_index)));
-    state.gun.cancel();return true;
+    ActorState candidate=state;
+    const bool uncommitted=candidate.burst.next_index==0;
+    candidate.burst.terminate(reason);
+    if(uncommitted) candidate.gun.abort();
+    else candidate.gun.terminate(reason);
+    state=std::move(candidate);return true;
 }
 bool Store::enqueue(const LaunchRecord &launch) {
     demand(launch.actor.id>0 && launch.edge.shot_seq>0 && launch.launch_time_us>=0);
@@ -412,10 +474,11 @@ bool Store::commit(ActorKey key,const LaunchRecord &launch,double factor) {
     if(key!=launch.actor || edge.shot_seq!=state.fire_seq+1 || edge.shot_seq!=edge.group_seq+edge.index ||
         edge.index<0 || edge.index>=edge.count || edge.shell!=state.ammo.loaded ||
         edge.group_seq!=state.burst.group_seq || edge.count!=state.burst.count ||
-        edge.shell!=state.burst.shell || edge.index>=state.burst.next_index ||
+        edge.shell!=state.burst.shell || !state.burst.accepts(edge) ||
         edge.final_round!=(edge.index+1>=edge.count) || !state.ammo.can_fire(edge.index>0)) return false;
     ActorState candidate=state;
-    if(!candidate.gun.consume(edge.final_round) || !candidate.ammo.consume(edge.index>0)) return false;
+    if(!candidate.burst.commit(edge) || !candidate.gun.consume(edge.final_round) ||
+        !candidate.ammo.consume(edge.index>0)) return false;
     if(edge.final_round && candidate.ammo.requires_full()) candidate.gun.require_full();
     candidate.fire_seq=edge.shot_seq;candidate.gun.bloom(factor,edge.final_round);
     LaunchRecord frozen=launch;frozen.has_shells_before=true;

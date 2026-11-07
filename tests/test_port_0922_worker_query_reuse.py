@@ -80,6 +80,7 @@ class WorkerQueryReuseTests(unittest.TestCase):
         from gui.mods.offline_lan_0922.native_control_core import NativeControl
         from gui.mods.offline_lan_0922.bot_runtime import BotRuntime
         runtime = object.__new__(BotRuntime)
+        runtime._equipment_states = {}
         patch = mock.patch.dict(BotRuntime._spotting_profile.__globals__, {
             '_bot_profile':mock.Mock(return_value={}),
             '_base_invisibility':mock.Mock(return_value=0.),
@@ -108,7 +109,7 @@ class WorkerQueryReuseTests(unittest.TestCase):
                 for unused in range(1000):
                     owner._actor_config(source, {})
                 self.assertEqual(1, owner._project_actor_config.call_count)
-                self.assertIn(('bot',7,((),False)), runtime._spotting_profiles)
+                self.assertIn(('bot',7,((),False,())), runtime._spotting_profiles)
                 self.assertNotIn(('bot',7), runtime._spotting_profiles)
 
     def test_fitted_projection_invalidates_on_real_mutable_inputs(self):
@@ -426,3 +427,13 @@ class WorkerQueryReuseTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+def setUpModule():
+    import test_port_0922_bot_runtime as bots
+    bots.setUpModule()
+
+
+def tearDownModule():
+    import test_port_0922_bot_runtime as bots
+    bots.tearDownModule()
