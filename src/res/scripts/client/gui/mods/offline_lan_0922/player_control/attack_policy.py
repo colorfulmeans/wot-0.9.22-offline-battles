@@ -291,11 +291,13 @@ class AttackPolicy(object):
             return row.get('contact') is True and row.get('expected_damage') is not None
         return row.get('armor') == 'passed'
 
-    def _evaluate(self, job, now, channel):
+    def _evaluate(self, job, now, channel, ranked_recheck=False):
         key, shell, target, sample, mode = job
         previous = self._current(job)
-        value = self.evaluator.evaluate(self.frame, shell, target, sample,
-                                        mode, now, channel)
+        evaluate = self.evaluator.evaluate
+        if ranked_recheck:
+            evaluate = getattr(self.evaluator, 'evaluate_ranked_recheck', evaluate)
+        value = evaluate(self.frame, shell, target, sample, mode, now, channel)
         if not isinstance(value, dict):
             value = dict(armor='unknown', line='unknown', mechanical='unknown',
                          reason='evaluation_unavailable')
@@ -502,10 +504,66 @@ class AttackPolicy(object):
                                          for index, rows in groups)
         self.decision['next_shell'] = self.next_shell
 
+    def _ranked_recheck_key(self, groups, exclude):
+        planned_key = (self.next_plan or {}).get('key')
+        for index, rows in groups:
+            if index == exclude:
+                continue
+            if any(self._executable(row) for row in rows):
+                return None
+            if not all(self._reviewed(row, 'penetration') for row in rows):
+                if (planned_key is not None and planned_key[0] == index and
+                        planned_key[-1] == 'penetration'):
+                    return planned_key
+                return self._penetration_hints.get(index)
+        return None
+
+    def next_review_details(self, plan, reason):
+        """Describe lost proof without doing more collision work."""
+        details = dict(coverage=self.background_coverage, blocked_rank=None)
+        frame = self.frame
+        if frame is None or self._frame_invalid:
+            details['proof_changes'] = ('observation',)
+            return details
+        details['ranked_stock'] = tuple((shell['index'], shell.get('is_he'), shell.get('piercing'))
+            for shell in sorted(frame['shells'], key=_shell_rank)
+            if frame['ammo'][shell['index']] > 0 and not shell.get('unavailable'))
+        if reason == 'higher_rank_pending':
+            exclude = self._next_excluded()
+            details['blocked_rank'] = next((index for index, reviewed, total
+                in self.background_coverage if index != exclude and reviewed < total), None)
+        if plan is None or plan.get('key') is None:
+            return details
+        job = next((job for job in self._jobs(plan['mode'], plan['shell_index'])
+                    if job[0] == plan['key']), None)
+        if job is None:
+            details['proof_changes'] = ('domain',)
+            return details
+        old = plan['pose_stamp']
+        new = self._stamp(frame, job[1], job[2])
+        changes = [part for part, before, after in zip(
+            ('identity', 'source', 'target', 'velocity', 'shell'), old, new)
+            if before != after]
+        if 'source' in changes and 'planning_pose' in frame:
+            details['source_parts'] = tuple(part for part, before, after in zip(
+                ('body_angles', 'shot_origin', 'descriptor', 'gun'), old[1], new[1])
+                if before != after)
+            details['origin_shift_m'] = math.sqrt(_distance_sq(old[1][1], new[1][1]))
+        if plan['line_stamp'] != self._line_stamp(frame, plan.get('line_region')):
+            changes.append('lane')
+        details['proof_changes'] = tuple(changes)
+        current = self._current(job, require_line=True)
+        if current is not None:
+            details['candidate'] = dict((name, current.get(name)) for name in
+                ('armor', 'line', 'mechanical', 'reason', 'observed_at'))
+        return details
+
     def refresh_next_at_trigger(self, now):
         """Give the final trigger a bounded, same-observation ranked pass."""
         self.background(now)
         plan, reason = self.next_at_edge()
+        self.next_edge_receipt = dict(at=now, checked=0, status=reason,
+            result=(plan or {}).get('key'))
         if (plan is not None or reason != 'higher_rank_pending' or
                 self.frame is None or self._frame_invalid or self._atomic_at == now or
                 now < self._next_edge_at + ATOMIC_CLOSE_INTERVAL):
@@ -927,17 +985,31 @@ class AttackPolicy(object):
         pending = sorted(((job[4] == 'he_fallback', _shell_rank(job[1]),
                            repr(job[0][1]), repr(job[3])), job) for job in jobs
                          if not self._reviewed(current[job[0]], job[4]))
+        exclude = self._next_excluded()
+        recheck = None
+        if self.background_budget > 1 and pending and self._penetration_hints:
+            # Spend at most one existing slot on a previously proved point
+            # of the first unresolved rank. A pose change retires its proof,
+            # not its place in that rank's queue. Leave a slot for the fair
+            # scan so a moving tank cannot starve the rest of the domain.
+            key = self._ranked_recheck_key(self._penetration_groups(penetration, current), exclude)
+            recheck = next((job for unused, job in pending if job[0] == key), None)
+            if recheck is not None:
+                current[recheck[0]] = self._evaluate(recheck, now, 'background', ranked_recheck=True)
         if self.background_cursor is not None:
             split = next((offset for offset, (key, unused) in enumerate(pending)
                           if key > self.background_cursor), len(pending))
             pending = pending[split:] + pending[:split]
-        for key, job in pending[:self.background_budget]:
+        for key, job in pending:
+            if self._used['background'] >= self.background_budget:
+                break
+            if job is recheck:
+                continue
             self.background_cursor = key
             current[job[0]] = self._evaluate(job, now, 'background')
         if not pending:
             self.background_cursor = None
-        self._refresh_ranked_next(self._penetration_groups(penetration, current),
-                                  self._next_excluded())
+        self._refresh_ranked_next(self._penetration_groups(penetration, current), exclude)
         self.decision['background_queries'] = self._used['background']
         return self.next_shell
 
@@ -1494,7 +1566,13 @@ class NativeAttackEvaluator(object):
                           he_contact=dict(blast))
         return result
 
-    def evaluate(self, frame, shell, target, sample, mode, now, channel):
+    def evaluate_ranked_recheck(self, frame, shell, target, sample, mode, now, channel):
+        # Preserve a share of the same chord budget for the fair scan, even
+        # when a long path cannot complete the retained point this frame.
+        return self.evaluate(frame, shell, target, sample, mode, now, channel,
+                             world_limit=WORLD_CHORDS_PER_FRONTIER // 2)
+
+    def evaluate(self, frame, shell, target, sample, mode, now, channel, world_limit=None):
         result = dict(armor='unknown', line='unknown', mechanical='unknown',
                       reason='native_geometry_unavailable', contact=None,
                       expected_damage=None)
@@ -1535,7 +1613,9 @@ class NativeAttackEvaluator(object):
                 self.jobs[key[:3]] = job
             elif job['scene'] != frame['scene']:
                 job.update(scene=frame['scene'], cursor=0, done=False, blocked=None, lane=None)
-            budget = self._budgets.get(channel, 0)
+            available = self._budgets.get(channel, 0)
+            allowance = min(available, world_limit) if world_limit is not None else available
+            budget = allowance
             while not job['done'] and job['cursor'] < len(path) - 1 and budget > 0:
                 if channel == 'atomic' and self.atomic_clock() >= self.atomic_deadline:
                     self.atomic_receipt['reason'] = 'atomic_frame_budget_exhausted'
@@ -1550,7 +1630,7 @@ class NativeAttackEvaluator(object):
                 if hit is not None:
                     job['blocked'] = _point(hit[0])
                     job['done'] = True
-            self._budgets[channel] = budget
+            self._budgets[channel] = available - (allowance - budget)
             if job['cursor'] >= len(path) - 1:
                 job['done'] = True
             if not job['done']:

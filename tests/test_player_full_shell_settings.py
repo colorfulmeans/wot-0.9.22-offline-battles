@@ -197,6 +197,50 @@ class FullShellSettingsTests(unittest.TestCase):
         self.assertEqual(2, gun.pending_index)
         self.assertEqual([(scene.settings.NEXT_SHELLS, 103)], scene.setting_calls)
 
+    def test_source_changes_recheck_a_ranked_queue_before_releasing_it(self):
+        from test_player_rebuilt_attack_policy import Observations
+
+        for he, preferred in ((True, 2), (False, 1)):
+            with self.subTest(he=he):
+                scene = self.scene(clip=3, burst=1, third=he)
+                runtime, gun = scene.runtime, scene.battle._gun_state
+                observations = Observations(clips=3, targets=4, points=8, he=he)
+                observations.frame['ammo'] = tuple(gun.ammo)
+                if not he:
+                    observations.frame['shells'][1]['piercing'] = 150.
+                observations.passed(0)
+                observations.passed(preferred, target=4, sample=7)
+                observations.prime()
+                runtime.attack_policy = observations.policy
+                observations.tick(runtime.now)
+                runtime._apply_next_shell()
+                self.assertEqual(preferred, gun.pending_index)
+                for revision in range(1, 7):
+                    observations.frame['pose'] = ('source', revision)
+                    runtime.now += .11
+                    self.assertEqual('aim', observations.tick(runtime.now)['action'])
+                    runtime._apply_next_shell()
+                    self.assertEqual(preferred, gun.pending_index)
+                    self.assertEqual(revision, runtime.attack_policy.next_plan['pose_stamp'][1][1])
+                    probes = [call for call in observations.calls
+                              if call[0] == runtime.now and call[1] == 'background']
+                    self.assertEqual(2, len(probes))
+                    self.assertEqual((preferred, ('bot', 4), 7, 'penetration'), probes[0][2:])
+                self.assertEqual([(scene.settings.NEXT_SHELLS, 101 + preferred)],
+                                 scene.setting_calls)
+
+                # True proof loss must still clear the native reservation.
+                observations.frame['pose'] = ('source', 7)
+                observations.value(preferred, target=4, sample=7, line='world_blocked')
+                runtime.now += .3
+                observations.tick(runtime.now)
+                runtime._apply_next_shell()
+                self.assertIsNone(gun.pending_index)
+                review = runtime._shell_receipt['next_review']
+                self.assertIn('source', review['proof_changes'])
+                self.assertEqual('world_blocked', review['candidate']['line'])
+                self.assertEqual(preferred, review['blocked_rank'])
+
     def test_next_clip_plan_can_change_and_cancel_without_unloading_current_clip(self):
         scene = self.scene(third=True)
         gun = scene.battle._gun_state

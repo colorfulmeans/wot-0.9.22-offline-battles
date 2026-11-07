@@ -1113,6 +1113,46 @@ class FullRuntimeMissionOwnershipTests(unittest.TestCase):
                 else:
                     request.assert_not_called()
 
+    def test_udes_siege_uses_the_attack_destination_with_a_short_local_leg(self):
+        for distance, initial, expected in ((35., 0, True), (35.01, 0, None),
+                                             (55., 0, None), (55., 2, False)):
+            with self.subTest(distance=distance, siege_state=initial):
+                scene = self.scene(siege=True, siege_vehicle='sweden:S21_UDES_03')
+                runtime = scene.runtime
+                scene.entity.siegeState = initial
+                scene.pose(scene.target, (0., 0., 90.))
+                scene.world = [((-100., -100., 12.), (100., 100., 24.))]
+                goal = (0., 0., distance)
+                corner = (0., 0., 5.)
+                runtime.set_mission('attack', dict(position=goal, timeout=180.))
+                navigator = runtime.engine.navigator
+                original_target = navigator.next_target
+
+                def next_target(bot, position, goal_point, key, *args, **kwargs):
+                    target = original_target(bot, position, goal_point, key, *args, **kwargs)
+                    if bot != runtime.actor_id or tuple(goal_point) != goal:
+                        return target
+                    navigator.bot_states[bot].update(navigation_status='safe', last_target=corner)
+                    return corner
+
+                request = mock.Mock(wraps=scene.battle._request_player_control_siege)
+                scene.battle._request_player_control_siege = request
+                with mock.patch.object(navigator, 'next_target', side_effect=next_target):
+                    for unused in range(18):
+                        row = scene.tick()
+                        self.assertIsNone(scene.control.last_control_failure, row)
+                controls = runtime._last_order['control_trace']
+                self.assertEqual(goal, controls['strategic_move_position'])
+                self.assertEqual(corner, controls['local_target'])
+                self.assertEqual(corner, runtime._last_order['move_position'])
+                self.assertEqual(0, scene.control.automatic_commits)
+                self.assertIsNone(runtime.attack_policy.search_started)
+                if expected is None:
+                    request.assert_not_called()
+                    self.assertTrue(any(row['sender'][0] > 0. for row in scene.trace))
+                else:
+                    request.assert_called_once_with(expected, mock.ANY)
+
     def test_failed_or_cancelled_mission_cannot_admit_a_new_native_siege_transition(self):
         for cancelled in (False, True):
             with self.subTest(cancelled=cancelled):

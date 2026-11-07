@@ -74,6 +74,23 @@ class FullControlArbitrationTests(unittest.TestCase):
         self.assertGreater(moving, 0, scene.trace[-4:])
         self.assertFalse(scene.launches())
 
+    def test_reopened_lane_retires_the_firing_position_navigation_receipt(self):
+        scene = self.scene(distance=60., clip=1, burst=1)
+        scene.world = [((-100., -100., 5.), (100., 100., 15.))]
+        self.advance_until(scene, lambda result: result['action'] == 'firing_position')
+        policy = scene.runtime.attack_policy
+        self.assertEqual('copied_ordinary_navigation', policy.navigation_receipt['owner'])
+        self.assertIsNone(policy.search_started)
+        scene.trigger.assert_not_called()
+
+        scene.world = []
+        scene.set_hull(.01)
+        row = self.advance_until(scene, lambda result: result['action'] == 'aim')
+        self.assertEqual((0., True), row['sender'][::2])
+        self.assertFalse(policy.navigation_receipt)
+        self.advance_until(scene, lambda result: scene.control.automatic_commits == 1)
+        self.assertEqual(1, len(scene.launches()))
+
     def test_explicit_attack_destination_retains_motion_ownership_over_ready_lane(self):
         scene = self.scene()
         goal = (0., 0., 24.)

@@ -642,6 +642,16 @@ class _PlayerBehaviorEngine(copied_runtime.BotRuntime):
         return copied_runtime.BotRuntime._update_bot_siege_intent(
             self, state, command, target if target is not None else contact, step)
 
+    @staticmethod
+    def _siege_desired(state, command, target):
+        # The adapter carries the effective travel destination alongside the
+        # local point it can drive to now. Pending paths and short corners
+        # can both be close to the hull while long travel still owns motion.
+        destination = (command.get('control_trace') or {}).get('strategic_move_position')
+        if destination is not None:
+            command = dict(command, move_position=destination)
+        return copied_runtime.BotRuntime._siege_desired(state, command, target)
+
     def _set_bot_siege_state(self, state, siege_state, duration=0., transition_total=None):
         desired = int(siege_state) in (siege_mechanics.ENABLED, siege_mechanics.SWITCHING_ON)
         if int(siege_state) == int(state.get('siege_state', 0)):
@@ -2159,6 +2169,8 @@ class FullPlayerRuntime(object):
             plan=(plan or {}).get('key'), proof_at=(plan or {}).get('observed_at'),
             shot_seq=self._last_committed_shot_seq, at=self.now)
         if self.controller is not None and (force or self.now - self._shell_log_at >= .25):
+            if event in ('queue_release', 'queue_unavailable') and self.attack_policy is not None:
+                self._shell_receipt['next_review'] = self.attack_policy.next_review_details(plan, reason)
             self._shell_log_at = self.now
             self.controller.record('shell_transition', **self._shell_receipt)
 
@@ -2426,11 +2438,19 @@ class FullPlayerRuntime(object):
             return
         self._attack_log_key, self._attack_log_at = key, now
         intention = state.get('_diagnostic_aim_intent') or {}
+        siege_route = None
+        if state.get('_siege_intent') is not None:
+            route = self._last_order.get('control_trace') or {}
+            siege_route = dict(position=tuple(state['position']),
+                destination=route.get('strategic_move_position'),
+                local_target=route.get('local_target'),
+                movement_intent=self._last_order.get('movement_intent'))
         self.controller.record('attack_transition', policy=policy, setting=self._shell_receipt,
             loaded=gun.shot_index, queued=gun.pending_index, clip=gun.clip, stock=list(gun.ammo),
             reload=gun.reload_time, aligned=bool(state.get('gun_aligned')),
             shot_seq=self._last_committed_shot_seq, source_verified=self.weapon.verified,
             siege_state=state.get('siege_state'), siege_intent=state.get('_siege_intent'),
+            siege_route=siege_route,
             source_point=self.weapon.source_point or self.weapon.motion_point,
             actual=(state['turret_yaw'], state['gun_pitch']),
             desired=(intention.get('turret_yaw'), intention.get('gun_pitch')),
@@ -2838,6 +2858,11 @@ class FullPlayerRuntime(object):
             if deadline is not None and now >= deadline:
                 self.attack_policy.navigation_result(dict(self._last_navigation,
                     action='search_penetration', status='expired', at=now))
+            elif (self.attack_policy.navigation_receipt or {}).get('action') in (
+                    'firing_position', 'search_penetration'):
+                self.attack_policy.navigation_result(None)
+            if self._last_navigation.get('action') in ('firing_position', 'search_penetration'):
+                self._last_navigation = {}
             self._move_episode = None
             if action == 'retreat' and decision['reason'] == 'no_he_or_verified_penetration':
                 return self._unusable_ammo_retreat(order, now)

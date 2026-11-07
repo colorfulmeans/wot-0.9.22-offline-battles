@@ -240,6 +240,9 @@ class RebuiltForegroundTests(unittest.TestCase):
 
     def test_final_trigger_revalidates_expired_point_in_its_ammunition_rank(self):
         scene = Observations(targets=2, points=5)
+        # Exercise the final-edge backstop when the frame has only a fair
+        # background slot and cannot reserve a ranked recheck.
+        scene.policy.background_budget = 1
         scene.passed(0)
         scene.passed(2, target=2, sample=4)
         scene.prime()
@@ -259,20 +262,24 @@ class RebuiltForegroundTests(unittest.TestCase):
                          [call[2:] for call in scene.calls if call[:2] == (.1, 'atomic')])
 
     def test_final_trigger_keeps_lower_plan_pending_when_higher_rank_unresolved(self):
-        scene = Observations(targets=2, points=5)
-        scene.passed(0)
-        scene.prime()
-        scene.tick(0.)
-        self.assertEqual(0, scene.policy.next_shell)
-        scene.frame['line_revision'] += 1
-        for sample in range(5):
-            scene.value(2, sample=sample, armor='pending', line='pending')
-        scene.tick(.1)
-        scene.policy.atomic_clock = lambda: 0.
-        self.assertEqual((None, 'higher_rank_pending'), scene.policy.refresh_next_at_trigger(.1))
-        probes = [call for call in scene.calls if call[:2] == (.1, 'atomic')]
-        self.assertTrue(probes)
-        self.assertEqual({2}, set(call[2] for call in probes))
+        for he, first_rank in ((True, 2), (False, 1)):
+            with self.subTest(he=he):
+                scene = Observations(targets=2, points=5, he=he)
+                if not he:
+                    scene.frame['shells'][first_rank]['piercing'] = 150.
+                scene.passed(0)
+                scene.prime()
+                scene.tick(0.)
+                self.assertEqual(0, scene.policy.next_shell)
+                scene.frame['line_revision'] += 1
+                for sample in range(5):
+                    scene.value(first_rank, sample=sample, armor='pending', line='pending')
+                scene.tick(.1)
+                scene.policy.atomic_clock = lambda: 0.
+                self.assertEqual((None, 'higher_rank_pending'), scene.policy.refresh_next_at_trigger(.1))
+                probes = [call for call in scene.calls if call[:2] == (.1, 'atomic')]
+                self.assertTrue(probes)
+                self.assertEqual({first_rank}, set(call[2] for call in probes))
 
     def test_background_visits_all_ammo_targets_points_and_he_independently(self):
         scene = Observations()
@@ -961,6 +968,22 @@ class NativeAtomicClosureTests(native_fire.AutomaticFireScene):
         self.assertTrue(policy.evaluator.begin_atomic(frame, jobs, self.now))
         self.assertEqual(required, policy.evaluator.atomic_receipt['world_budget'])
         self.assertLess(required, ATOMIC_MAX_JOBS * 167)
+
+    def test_ranked_recheck_leaves_world_chords_for_the_fair_candidate(self):
+        from gui.mods.offline_lan_0922.player_control.attack_policy import WORLD_CHORDS_PER_FRONTIER
+
+        shot = self.battle._gun_state.shots[0]
+        shot.speed, shot.gravity = 100., .1
+        self.step(.1)
+        policy = self.runtime.attack_policy
+        policy.frame = policy.evaluator.snapshot(self.now)
+        first, second = policy._jobs(shell_index=0)[:2]
+        before = len(self.world_queries)
+        row = policy._evaluate(first, self.now, 'background', ranked_recheck=True)
+        self.assertEqual('pending', row['line'], row['reason'])
+        self.assertEqual(WORLD_CHORDS_PER_FRONTIER // 2, len(self.world_queries) - before)
+        policy._evaluate(second, self.now, 'background')
+        self.assertEqual(WORLD_CHORDS_PER_FRONTIER, len(self.world_queries) - before)
 
     def test_fifteen_stable_enemies_three_shells_complete_in_bounded_frames(self):
         from gui.mods.offline_lan_0922.player_control.attack_policy import ATOMIC_WALL_SECONDS
