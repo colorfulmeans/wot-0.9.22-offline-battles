@@ -16,6 +16,7 @@ import time
 from .. import equipment_mechanics
 from .. import shot_geometry
 from .. import siege_mechanics
+from .attack_policy import AttackPolicy, _planning_pose, native_source_pose
 from .copied import bot_runtime as copied_runtime
 from .copied import spg_positions
 from .copied import bot_tactics
@@ -32,6 +33,7 @@ from .settling import HaltObservation
 # ticks at 30 Hz. Foreground tactical input and native safety proofs continue
 # every physical frame; only the complete roster assignment has this cadence.
 STRATEGY_SECONDS = 1.0
+MECHANICAL_STALL_SECONDS = 6.0
 PLAYER_PROFILE_SECONDS = 30.0
 PLAYER_PROFILE_STAGES = (
     'player_observe', 'player_attack', 'player_strategy', 'player_traffic',
@@ -337,17 +339,18 @@ class _EquipmentObservation(equipment_mechanics.EquipmentState):
 
 
 class _NativeAimInput(object):
-    """Only bind native input. The copied runtime supplies the desired aim."""
+    """Bind movement input and separately certify the native gun source."""
     def __init__(self, runtime):
         self.runtime = runtime
         self.saved = None
         self.bound_source = None
         self.point = self.source_point = self.target = self.solution = None
+        self.motion_point = None
         self.verified = False
         self._release = None
 
     def shot_point(self):
-        point = self.source_point or self.point
+        point = self.source_point or self.motion_point
         return self.runtime.owner._vector(point) if point is not None else None
 
     def owned(self):
@@ -369,7 +372,7 @@ class _NativeAimInput(object):
         origin, direction = battle._mutable_shot_ray()
         origin, direction = _point(origin), _point(direction)
         self.point = tuple(origin[index] + 100. * direction[index] for index in range(3))
-        self.source_point = self.point
+        self.motion_point = self.point
         bound = self.shot_point
         lease = dict(mode_touched=False, releasing=False)
         self.saved, self.bound_source, self._release = saved, bound, lease
@@ -419,6 +422,7 @@ class _NativeAimInput(object):
         if self._release is lease:
             self.saved = self.bound_source = self._release = None
             self.source_point = self.point = self.target = self.solution = None
+            self.motion_point = None
             self.verified = False
 
     def aim(self, state, target, command, intention):
@@ -427,9 +431,13 @@ class _NativeAimInput(object):
         if not runtime._live(token) or not self.owned():
             return False
         self.target = target
-        self.solution = (runtime.attack_policy.decision.get('candidate') or {}).get('solution')
-        point = command.get('aim_position')
+        self.solution = (command.get('_ballistic_solution') or
+            (runtime.attack_policy.decision.get('candidate') or {}).get('solution'))
+        solution = command.get('_ballistic_solution') or {}
+        point = solution.get('point', command.get('aim_position'))
         self.point = _point(point) if point is not None else None
+        # A previous target's accepted inverse is never input for this point.
+        self.source_point = self.motion_point = None
         self.verified = False
         resting = target is None and intention.get('owner') == 'hull_forward_rest'
         if (target is None and not resting) or (self.point is None and not resting):
@@ -450,6 +458,7 @@ class _NativeAimInput(object):
         tolerance = 1.e-7 if 'SPG' in type_tags else NATIVE_ANGLE_TOLERANCE
         stabilised = getattr(battle, '_local_stabilised_pose', battle._local_body_pose)
         body = battle._runtime.math.Matrix(stabilised())
+        basis = float(body.yaw), float(body.pitch), float(body.roll)
         rotator = battle._avatar.gunRotator
         current = (float(rotator.turretYaw), float(rotator.gunPitch))
         origin = _point(battle._mutable_shot_ray()[0])
@@ -464,21 +473,27 @@ class _NativeAimInput(object):
             # point solver, while keeping fire alignment false below.
             direction = (math.sin(local[0]) * math.cos(local[1]),
                          -math.sin(local[1]), math.cos(local[0]) * math.cos(local[1]))
-            world = shot_geometry.transform_vehicle_vector(
-                direction, state['yaw'], state.get('pitch', 0.), state.get('roll', 0.))
+            world = shot_geometry.transform_vehicle_vector(direction, *basis)
             source = tuple(origin[index] + world[index] * distance for index in range(3))
             self.point, self.solution = source, None
+        best_error = float('inf')
         for attempt in range(6):
             try:
                 actual_yaw, actual_pitch = getter(descriptor, body, current, battle._vector(source))
-            except (ValueError, ArithmeticError):
+                dy = _angle(desired[0] - float(actual_yaw))
+                dp = float(desired[1]) - float(actual_pitch)
+            except (AttributeError, TypeError, ValueError, RuntimeError, ArithmeticError):
                 return False
             if (not runtime._live(token) or self.bound_source is not bound or
                     not self.owned()):
                 return False
-            dy = _angle(desired[0] - float(actual_yaw))
-            dp = float(desired[1]) - float(actual_pitch)
-            if max(abs(dy), abs(dp)) <= tolerance:
+            if any(math.isnan(error) or math.isinf(error) for error in (dy, dp)):
+                return False
+            error = max(abs(dy), abs(dp))
+            if error < best_error:
+                self.motion_point = tuple(source)
+                best_error = error
+            if error <= tolerance:
                 self.source_point, self.verified = tuple(source), True
                 return True
             if attempt:
@@ -486,12 +501,9 @@ class _NativeAimInput(object):
                 local[1] += dp
             direction = (math.sin(local[0]) * math.cos(local[1]),
                          -math.sin(local[1]), math.cos(local[0]) * math.cos(local[1]))
-            world = shot_geometry.transform_vehicle_vector(
-                direction, state['yaw'], state.get('pitch', 0.), state.get('roll', 0.))
+            world = shot_geometry.transform_vehicle_vector(direction, *basis)
             source = tuple(origin[index] + world[index] * distance for index in range(3))
-        # Do not replace the last native-bound, proven input with an
-        # unverified world impact point. At float32 precision an inversion may
-        # hit its numerical floor before our bounded solve converges.
+        # The best fresh source may move the gun. It cannot approve a shot.
         return False
 
 
@@ -683,7 +695,8 @@ class _PlayerBehaviorEngine(copied_runtime.BotRuntime):
     def _cadenced_ballistic_solution(self, state, target, descriptor,
                                      shell_index, now, force=False):
         if (state.get('profile') or {}).get('class_tag') != 'SPG':
-            candidate = self.player_runtime.current_attack_candidate(state, target, for_aim=True)
+            runtime = self.player_runtime
+            candidate = runtime.current_attack_candidate(state, target, for_aim=True)
             if candidate is not None and int(candidate['shell_index']) == int(shell_index):
                 # The new direct owner sampled the real native turret and
                 # measured motion. Reconstructing that point from the Bot
@@ -711,6 +724,9 @@ class _PlayerBehaviorEngine(copied_runtime.BotRuntime):
                 self._ballistic_solution_cache[state['id']] = (
                     signature, now + copied_runtime.LOCAL_ACTION_SECONDS, solution)
                 return solution, True
+            if 'fire' in runtime.features:
+                self._ballistic_solution_cache.pop(state['id'], None)
+                return None, False
             return copied_runtime.BotRuntime._cadenced_ballistic_solution(
                 self, state, target, descriptor, shell_index, now, force)
         # The native rotator consumes an installed source asynchronously. A
@@ -760,6 +776,8 @@ class _PlayerBehaviorEngine(copied_runtime.BotRuntime):
             if not matches:
                 self._ballistic_solution_cache.pop(int(state['id']), None)
             return matches
+        if 'fire' in self.player_runtime.features:
+            return False
         return copied_runtime.BotRuntime._direct_aim_matches(self, state, target, solution)
 
     def _apply_blocked_direct_aim(self, source, command, target, now, probe_budget=None):
@@ -774,19 +792,17 @@ class _PlayerBehaviorEngine(copied_runtime.BotRuntime):
             # cannot donate the hull actuator back to an otherwise valid gun
             # target later in the copied loop.
             return dict(command, fire_allowed=False), None
-        candidate = policy.decision.get('candidate')
-        if candidate is not None and target is not None:
-            context = self.player_runtime.geometry._bot_aim_context(source, target)
-            if context is not None:
-                entry = context[2]
-                sample = (candidate.get('solution') or {}).get('sample_value')
-                if sample is not None:
-                    entry['selected'] = sample
-            if candidate.get('line') != 'clear':
-                # Keep the planner's enemy/route context, but no obstructed
-                # point may take the firing hull actuator away from navigation.
-                command = dict(command, fire_allowed=False)
-                target = None
+        if policy.decision['action'] == 'unchanged':
+            return command, target
+        candidate = self.player_runtime.current_attack_candidate(source, target, for_aim=True)
+        if candidate is None:
+            # Strategic contacts may steer navigation, but cannot publish a
+            # second direct aim point while the player policy awaits proof.
+            return dict(command, fire_allowed=False, aim_position=None), None
+        context = self.player_runtime.geometry._bot_aim_context(source, target)
+        sample = candidate['solution'].get('sample_value')
+        if context is not None and sample is not None:
+            context[2]['selected'] = sample
         return command, target
 
     def _shot_clear(self, source, target, now, force=False,
@@ -829,17 +845,19 @@ class _PlayerBehaviorEngine(copied_runtime.BotRuntime):
                 state[key] = value
         intention = shadow.get('_diagnostic_aim_intent') or {}
         runtime = self.player_runtime
-        if 'fire' in runtime.features and runtime.active:
+        tail_active = getattr(runtime.owner, '_local_player_burst', None) is not None
+        if 'fire' in runtime.features and runtime.active and not tail_active:
             runtime.weapon.aim(state, target, command, intention)
         rotator = runtime.owner._avatar.gunRotator
         state['turret_yaw'] = float(rotator.turretYaw)
         state['gun_pitch'] = float(rotator.gunPitch)
         state['aim_yaw'] = _angle(state['yaw'] + state['turret_yaw'])
         desired_yaw, desired_pitch = intention.get('turret_yaw'), intention.get('gun_pitch')
-        state['gun_aligned'] = bool(target is not None and runtime.weapon.verified and
+        state['gun_aligned'] = bool(not tail_active and target is not None and runtime.weapon.verified and
             desired_yaw is not None and desired_pitch is not None and
             abs(_angle(state['turret_yaw'] - desired_yaw)) <= NATIVE_ANGLE_TOLERANCE and
             abs(state['gun_pitch'] - desired_pitch) <= NATIVE_ANGLE_TOLERANCE)
+        runtime._observe_attack_lay(state, target, intention, self.player_runtime.now)
         return result
 
     def _direct_launch_preview(self, state, descriptor, shell_index, gun_state,
@@ -871,6 +889,20 @@ class _PlayerBehaviorEngine(copied_runtime.BotRuntime):
         candidate = runtime.attack_policy.decision.get('candidate')
         solution = (candidate or {}).get('solution') or runtime.weapon.solution
         artillery = (state.get('profile') or {}).get('class_tag') == 'SPG'
+        if not artillery:
+            policy = runtime.attack_policy
+            if policy.decision['action'] != 'aim' or candidate is None:
+                return False
+            token = runtime.generation
+            runtime._apply_next_shell(at_trigger=True)
+            if not runtime._live(token):
+                return False
+            # Rebind the exact observed barrel at this edge. The ideal path
+            # cache deliberately excludes lay, but admission still fences it.
+            pose = native_source_pose(runtime)
+            solution = candidate['solution']
+            if _planning_pose(pose) == _planning_pose(solution['source_pose']):
+                solution = dict(solution, source_pose=pose)
         if artillery and launch_receipt is not None:
             intent = self._artillery_intents.get(state['id']) or {}
             planned = intent.get('solution')
@@ -926,6 +958,13 @@ class FullPlayerRuntime(object):
         self._reload_retreat = None
         self._shell_intent = None
         self._owned_next_shell = None
+        self._manual_shell_epoch = 0
+        self._manual_shell = None
+        self._loading_switch = None
+        self._shell_receipt = None
+        self._attack_lay = None
+        self._attack_log_key = None
+        self._attack_log_at = float('-inf')
         self._equipment_snapshot = None
         self._traffic_observed = {}
         self._traffic_inputs = {}
@@ -970,7 +1009,7 @@ class FullPlayerRuntime(object):
                 source.get('id') != self.actor_id or not isinstance(target, dict) or
                 (source.get('profile') or {}).get('class_tag') == 'SPG' or
                 policy.decision.get('action') not in
-                    (('aim', 'firing_position') if for_aim else ('aim',))):
+                    (('aim', 'preaim', 'firing_position') if for_aim else ('aim',))):
             return None
         candidate, frame = policy.decision.get('candidate'), policy.frame
         if not candidate or not frame or frame['loaded'] != int(self.gun.shot_index):
@@ -980,17 +1019,48 @@ class FullPlayerRuntime(object):
                 (target.get('kind'), target.get('network_id'))):
             return None
         mode = candidate.get('mode', 'penetration')
-        job = next((job for job in policy._jobs(mode, int(self.gun.shot_index))
-                    if job[0] == candidate['key']), None)
-        row = policy._current(job, require_line=True) if job is not None else None
+        row = policy.current_row(candidate)
         if (row is None or row.get('pose_stamp') != candidate.get('pose_stamp') or
                 row.get('line_stamp') != candidate.get('line_stamp') or
                 (not for_aim and not policy._executable(row, mode)) or
-                (for_aim and (row.get('line') != 'clear' or
-                              not isinstance(row.get('solution'), dict))) or
-                not policy.evaluator.fence(frame)):
+                (for_aim and (not isinstance(row.get('solution'), dict) or
+                    row.get('mechanical') not in ('reachable', 'hull_laying') or
+                    row.get('line') != 'clear' and policy.decision['action'] != 'preaim'))):
+            return None
+        if policy.decision['action'] == 'firing_position' and (
+                row.get('mechanical') != 'hull_laying' or
+                not self._native_hull_laying or self._native_hull_laying['refused']):
             return None
         return row
+
+    def _observe_attack_lay(self, state, target, intention, now):
+        policy = self.attack_policy
+        if policy is None or policy.decision['reason'] == 'no_relevant_enemy':
+            self._attack_lay = None
+            return
+        if policy.decision['action'] != 'aim' or target is None:
+            return
+        if state['gun_aligned']:
+            self._attack_lay = None
+            return
+        candidate = policy.decision['candidate']
+        if candidate is None:
+            return
+        desired_yaw, desired_pitch = intention.get('turret_yaw'), intention.get('gun_pitch')
+        error = (max(abs(_angle(state['turret_yaw'] - desired_yaw)),
+                     abs(state['gun_pitch'] - desired_pitch))
+                 if desired_yaw is not None and desired_pitch is not None else float('inf'))
+        progress = self._attack_lay
+        position = state['position']
+        if progress is None or _distance(progress['position'], position) >= .25:
+            self._attack_lay = dict(best=error, progressed_at=now,
+                                    verified=self.weapon.verified, position=position)
+        elif (error < progress['best'] - NATIVE_ANGLE_TOLERANCE or
+                self.weapon.verified and not progress['verified']):
+            progress.update(best=error, progressed_at=now, verified=self.weapon.verified)
+        elif now - progress['progressed_at'] >= MECHANICAL_STALL_SECONDS:
+            policy.lay_stalled(candidate, now)
+            self._attack_lay = None
 
     def target_entity(self, row):
         return self.owner._server_entity(row.get('engine_id'))
@@ -1149,7 +1219,6 @@ class FullPlayerRuntime(object):
         self.planner.tactics = self.engine._bot_tactics
         self.planner.tactics_map = self.engine._navigation_map_name
         self.planner._travel_graph_cache[self.planner.tactics_map] = spg_positions._Graph(graph, graph['bounds'])
-        from .attack_policy import AttackPolicy
         self.attack_policy = AttackPolicy(self)
         self._observe(self.now)
         return True
@@ -1181,6 +1250,12 @@ class FullPlayerRuntime(object):
         self._neutral_drive()
         self.weapon.close()
         self._release_next_shell()
+        if self.attack_policy is not None:
+            self.attack_policy.reset()
+        self._loading_switch = self._shell_receipt = self._attack_lay = None
+        self._manual_shell = None
+        self._attack_log_key = None
+        self._attack_log_at = float('-inf')
         if not self.release_governor():
             raise RuntimeError('owned_governor_release_pending')
         if self._siege_pending is not None:
@@ -1363,6 +1438,8 @@ class FullPlayerRuntime(object):
         if self.state is None:
             return
         gun = self.gun
+        if gun.reload_time <= 0.:
+            self._loading_switch = None
         self.engine._ammo_states[self.actor_id].publish(self.state)
         self.engine._burst_states[self.actor_id].publish(self.state)
         self.state.update(clip=int(gun.clip), clip_size=int(gun.clip_size),
@@ -1714,6 +1791,8 @@ class FullPlayerRuntime(object):
         self._observe_mission(now)
         if 'fire' in self.features:
             order = self.attack_policy.apply_order(order, now)
+            if self.attack_policy.decision['action'] == 'aim':
+                self.engine._clear_friendly_reposition(self.actor_id)
             order = self._move_order(order, now)
             order = self._reload_order(order, now)
         order = self._mission_guard_order(order, now)
@@ -1879,6 +1958,23 @@ class FullPlayerRuntime(object):
         else:
             order.pop('capture_pivot_circle', None)
         self._last_order = order
+        if 'fire' in self.features and self.attack_policy is not None:
+            action = self.attack_policy.decision['action']
+            if action in ('search_penetration', 'firing_position'):
+                navigation = dict(self._last_navigation, action=action, at=now,
+                    position=tuple(self.state['position']), path_clear=bool(path_clear),
+                    throttle=order['throttle'], turn=order['turn'],
+                    recovery=order.get('recovery_mode'))
+                if 'drive' not in self.features or self._mission_brakes():
+                    navigation.update(status='refused', reason='drive_authority_unavailable')
+                elif not path_clear:
+                    navigation.update(status='blocked', reason='copied_motion_probe')
+                elif abs(order['throttle']) > .01 or abs(order['turn']) > .01:
+                    navigation.update(status='accepted')
+                episode = self._move_episode
+                if episode is not None:
+                    navigation['displacement'] = _distance(episode['source'], self.state['position'])
+                self.attack_policy.navigation_result(navigation)
 
     def _send_drive(self):
         if not self.active or 'drive' not in self.features:
@@ -2001,6 +2097,7 @@ class FullPlayerRuntime(object):
             if self._live(token) and 'fire' in self.features:
                 self.attack_policy.background(now)
                 self._apply_next_shell()
+                self._record_attack(now)
         self._profile_stage(stages, marker, 'player_post')
         self._profile_capture(stages, now)
         return self.status()
@@ -2023,6 +2120,19 @@ class FullPlayerRuntime(object):
             if value is None:
                 return False
         return self.owner.change_vehicle_setting(code, value)
+
+    def observe_manual_shell_setting(self, code, gun):
+        settings = getattr(self.owner._runtime.constants, 'VEHICLE_SETTING', None)
+        if code is None or code not in (getattr(settings, 'CURRENT_SHELLS', None),
+                                       getattr(settings, 'NEXT_SHELLS', None)):
+            return
+        # The native input path can choose the same index as an automatic
+        # lease. Comparing indices alone would mistake it for our setting.
+        self._manual_shell_epoch += 1
+        self._owned_next_shell = None
+        if self.active and self.gun is gun:
+            pending = self.owner._local_player_burst or self.owner._local_fire_intent
+            self._manual_shell = (gun, pending)
 
     def _release_next_shell(self):
         lease = self._owned_next_shell
@@ -2061,13 +2171,17 @@ class FullPlayerRuntime(object):
             raise RuntimeError('owned_next_shell_release_pending')
         self._owned_next_shell = None
 
-    def _apply_next_shell(self):
+    def _apply_next_shell(self, at_trigger=False):
         if not self._live() or self._mission_brakes() or 'fire' not in self.features:
             return
         if (getattr(self.owner, '_local_player_burst', None) is not None or
                 getattr(self.owner, '_local_fire_intent', None) is not None):
             return
         gun = self.gun
+        if self._manual_shell is not None and self._manual_shell[0] is gun:
+            return
+        if at_trigger and min(gun.clip, gun.ammo[int(gun.shot_index)]) > gun.burst_count:
+            return
         lease = self._owned_next_shell
         if lease is not None and (lease['gun'] is not gun or
                 lease['identity'] != self._identity or gun.pending_index != lease['index']):
@@ -2075,7 +2189,18 @@ class FullPlayerRuntime(object):
         if gun.pending_index is not None and lease is None:
             # A manually queued shell is a real input, not a policy suggestion.
             return
-        index = self.attack_policy.next_shell
+        policy = self.attack_policy
+        index = policy.next_shell
+        plan = policy.next_plan
+        if plan is not None:
+            frame = policy.frame
+            if (frame is None or policy._frame_invalid or frame['loaded'] != gun.shot_index or
+                    frame['ammo'] != tuple(gun.ammo)):
+                return
+            current = policy.current_row(plan)
+            if (not policy._executable(current, plan['mode']) or
+                    at_trigger and not policy.evaluator.fence(frame)):
+                index = None
         if index is None:
             if lease is not None:
                 self._release_next_shell()
@@ -2092,12 +2217,14 @@ class FullPlayerRuntime(object):
         if gun.pending_index == index:
             return
         token = self.generation
+        epoch = self._manual_shell_epoch
         lease = dict(index=index, gun=gun, identity=self._identity, generation=token)
         self._owned_next_shell = lease
         accepted = self._shell_setting('NEXT_SHELLS', index)
         if not self._live(token):
             # Native setters can call Stop before completing their own write.
-            if self._binding() == lease['identity'] and gun.pending_index == index:
+            if (self._manual_shell_epoch == epoch and
+                    self._binding() == lease['identity'] and gun.pending_index == index):
                 self._owned_next_shell = lease
                 self._release_next_shell()
             elif self._owned_next_shell is lease:
@@ -2106,6 +2233,9 @@ class FullPlayerRuntime(object):
         if not accepted or gun.pending_index != index:
             if self._owned_next_shell is lease:
                 self._owned_next_shell = None
+        self._shell_receipt = dict(setting='NEXT_SHELLS', requested=index,
+            accepted=bool(accepted and gun.pending_index == index), loaded=int(gun.shot_index),
+            pending=gun.pending_index, reload=float(gun.reload_time), at=self.now)
 
     def _reload_order(self, order, now):
         decision = self.attack_policy.decision
@@ -2165,9 +2295,18 @@ class FullPlayerRuntime(object):
         if (getattr(self.owner, '_local_player_burst', None) is not None or
                 getattr(self.owner, '_local_fire_intent', None) is not None):
             return
-        # An already admitted load has a physical deadline. A new comparison
-        # may queue NEXT, but must never restart the current full reload.
-        if float(self.gun.reload_time) > 0.:
+        gun = self.gun
+        reloading = float(gun.reload_time) > 0.
+        if reloading and self._manual_shell is not None and self._manual_shell[0] is gun:
+            return
+        # Stock CURRENT may restart an ordinary load (or transfer progress
+        # with Intuition). Only the policy's proved replacement for this
+        # single-shot load may exercise that input, once during the load.
+        if reloading and (action != 'switch_shell' or gun.clip_size > 1 or
+                gun.burst_count > 1 or self._loading_switch is gun or
+                decision.get('reason') not in ('current_shell_all_armour_failed',
+                                               'current_ammunition_exhausted') or
+                decision.get('candidate') is None and gun.ammo[gun.shot_index] > 0):
             return
         if decision.get('early_reload') and not (self._reload_retreat or {}).get('ready'):
             return
@@ -2176,10 +2315,30 @@ class FullPlayerRuntime(object):
         if self.gun.pending_index is not None and (lease is None or
                 lease['gun'] is not self.gun or lease['index'] != self.gun.pending_index):
             return
+        token = self.generation
         if index is not None and int(index) != int(self.gun.shot_index):
-            self._shell_setting('CURRENT_SHELLS', int(index))
-        elif action == 'reload_clip' and float(self.gun.reload_time) <= 0.:
-            self._shell_setting('RELOAD_PARTIAL_CLIP')
+            index = int(index)
+            if not 0 <= index < len(gun.ammo) or gun.ammo[index] <= 0:
+                return
+            frame = self.attack_policy.frame
+            if frame is not None and not self.attack_policy.evaluator.fence(frame):
+                return
+            setting = 'CURRENT_SHELLS'
+            accepted = self._shell_setting(setting, index)
+            applied = bool(accepted and gun.shot_index == index)
+        elif action == 'reload_clip' and not reloading:
+            setting = 'RELOAD_PARTIAL_CLIP'
+            accepted = self._shell_setting(setting)
+            applied = bool(accepted and gun.clip == 0 and gun.reload_time > 0.)
+        else:
+            return
+        if not self._live(token) or self.gun is not gun:
+            return
+        if applied and setting == 'CURRENT_SHELLS' and gun.reload_time > 0.:
+            self._loading_switch = gun
+        self._shell_receipt = dict(setting=setting, requested=index, accepted=applied,
+            loaded=int(gun.shot_index), pending=gun.pending_index,
+            reload=float(gun.reload_time), at=self.now)
 
     def authorize_trigger(self, context, entity, gun, shot_ray):
         if not self.active or 'fire' not in self.features or self._binding() != self._identity:
@@ -2195,6 +2354,28 @@ class FullPlayerRuntime(object):
         if not self.weapon.verified or not self.state.get('gun_aligned'):
             return 'native_gun_not_aligned'
         return None
+
+    def _record_attack(self, now):
+        if self.controller is None or now - self._attack_log_at < STRATEGY_SECONDS:
+            return
+        policy = self.attack_policy.status()
+        gun, state = self.gun, self.state
+        key = (policy['phase'], policy['reason'], policy['shell'], policy['target'],
+               policy['sample'], policy['next_shell'], policy['next_target'], policy['next_sample'],
+               state.get('gun_aligned'), self.weapon.verified, gun.shot_index, gun.pending_index,
+               self._last_committed_shot_seq, (self._shell_receipt or {}).get('at'))
+        if key == self._attack_log_key:
+            return
+        self._attack_log_key, self._attack_log_at = key, now
+        intention = state.get('_diagnostic_aim_intent') or {}
+        self.controller.record('attack_transition', policy=policy, setting=self._shell_receipt,
+            loaded=gun.shot_index, queued=gun.pending_index, clip=gun.clip, stock=list(gun.ammo),
+            reload=gun.reload_time, aligned=bool(state.get('gun_aligned')),
+            shot_seq=self._last_committed_shot_seq, source_verified=self.weapon.verified,
+            source_point=self.weapon.source_point or self.weapon.motion_point,
+            actual=(state['turret_yaw'], state['gun_pitch']),
+            desired=(intention.get('turret_yaw'), intention.get('gun_pitch')),
+            first_edge=self.controller.last_fire_failure)
 
     def drive_contact(self, position, heading, dt, static, contact=None):
         if self.engine is None or not self.active:
@@ -2212,6 +2393,8 @@ class FullPlayerRuntime(object):
         self.engine._motion_probe_cache.pop(self.actor_id, None)
         if not rotation_refused:
             self.engine._invalidate_realised_motion(self.actor_id, heading, 'foreground_contact')
+            if self._move_episode is not None and static:
+                self._move_episode['goal'] = None
         goal = self._last_order.get('move_position')
         if goal is not None and not rotation_refused:
             self.engine.navigator.report_hard_contact(self.actor_id, position, goal, heading, now)
@@ -2250,14 +2433,20 @@ class FullPlayerRuntime(object):
         return False
 
     def shot_committed(self, event, pending):
-        if self.attack_policy is not None:
-            self.attack_policy.shot_committed(event, pending)
         try:
             committed = int(event['shot_seq'])
         except (KeyError, TypeError, ValueError):
             committed = 0
         if committed > self._last_committed_shot_seq:
             self._last_committed_shot_seq = committed
+            if (self._manual_shell is not None and
+                    int(event.get('burst_index', 0)) + 1 >= int(event.get('burst_count', 1))):
+                pending_manual = self._manual_shell[1]
+                if (pending_manual is None or
+                        pending_manual is not pending and pending_manual is not pending.get('player_burst')):
+                    self._manual_shell = None
+            if self.active and self.attack_policy is not None:
+                self.attack_policy.shot_committed(event, pending)
         self._sync_weapon_observation()
         identity = event.get('projectile_id')
         if identity is not None:
@@ -2548,7 +2737,11 @@ class FullPlayerRuntime(object):
             self._move_episode = None
             return self._ordinary_firing_order(order, now)
         if action != 'search_penetration':
+            if self._move_episode is not None and now >= self._move_episode['deadline']:
+                self.attack_policy.navigation_result(dict(self._last_navigation,
+                    action='search_penetration', status='expired', at=now))
             self._move_episode = None
+            self._native_hull_laying = None
             return order
         request = decision.get('move_request') or {}
         target = request.get('target') or (decision.get('candidate') or {}).get('target')
@@ -2556,7 +2749,7 @@ class FullPlayerRuntime(object):
             target = next(iter(self._targets), None)
         if target is None:
             return order
-        identity = (action, target['kind'], target['network_id'], request.get('episode_id'))
+        identity = request.get('episode_id')
         source = self.state['position']
         episode = self._move_episode
         if episode is None or episode['identity'] != identity:
@@ -2601,7 +2794,7 @@ class FullPlayerRuntime(object):
         if goal is None:
             self._last_navigation = dict(status='searching', action=action,
                                         candidates=episode['cursor'], deadline=episode['deadline'])
-            return order
+            return self._resume_firing_approach(order, target)
         result = dict(order, move_position=goal, throttle_override=None,
                       fire_allowed=False, combat_mode='player_' + action)
         self._last_navigation = dict(status='moving', action=action, goal=goal,
@@ -2620,7 +2813,12 @@ class FullPlayerRuntime(object):
         request = decision.get('move_request') or {}
         target = request.get('target') or candidate.get('target')
         if not isinstance(target, dict):
-            return order
+            target = next((row for row in self._targets if
+                           row['network_id'] == order.get('target_id') and
+                           row['kind'] == order.get('target_kind')), None)
+            target = target or next(iter(self._targets), None)
+            if target is None:
+                return order
         solution = candidate.get('solution') or request.get('solution') or {}
         mechanical = candidate.get('mechanical')
         protected = bool(order.get('parking_phase') or order.get('empty_ammo') or
@@ -2632,38 +2830,37 @@ class FullPlayerRuntime(object):
             # The original owner must observe and expire its existing lease.
             # Re-marking at the exact deadline would otherwise renew it before
             # _friendly_reposition_order can publish its bounded fallback.
-            if active is None and not protected:
+            if active is None and not protected and 'drive' in self.features:
                 command = dict(order, target_id=target['id'])
                 launch = dict(fire_seq=int(self.state.get('fire_seq', 0)) + 1,
                               shot_yaw=solution.get('yaw', self.state['aim_yaw']))
-                self.engine._mark_friendly_reposition(
+                active = self.engine._mark_friendly_reposition(
                     self.state, command, target, launch, blocker, now)
             self._last_navigation = dict(status='waiting', action='firing_position',
                 reason='friendly_lane', owner='copied_friendly_reposition')
-            return order
-        if mechanical == 'hull_laying' and candidate.get('line') == 'clear' and not protected:
+            if active or protected:
+                return order
+            return self._resume_firing_approach(order, target)
+        if (mechanical == 'hull_laying' and candidate.get('line') == 'clear' and
+                candidate['shell_index'] == self.gun.shot_index and not protected):
             identity = self.engine._artillery_target_identity(target)
             observation = self._native_hull_laying
             yaw = float(self.state['yaw'])
             if observation is None or observation['target'] != identity:
                 observation = self._native_hull_laying = dict(target=identity,
-                    yaw=yaw, progress_at=now, refused=False)
-            elif abs(_angle(yaw - observation['yaw'])) > 1.e-7:
-                observation.update(yaw=yaw, progress_at=now)
-            actual_turn_requested = ('drive' in self.features and
-                self.state.get('hull_aiming') and abs(self._last_order.get('turn', 0.)) > 1.e-7)
-            if (actual_turn_requested and now - observation['progress_at'] >= 6. and
-                    not observation['refused']):
-                # Repeated native pivot input with no measured yaw progress
-                # is a real refused laying attempt. Feed that observation to
-                # the copied mechanical recovery owner (two-second facing,
-                # checked relocation and its existing six-second stall exit),
-                # rather than inventing movement or extending a turn forever.
-                self.state['_gun_angle_pivot_refusal'] = identity
-                observation['refused'] = True
-                self.engine._decision_cache.pop(self.actor_id, None)
-            elif not actual_turn_requested and not observation['refused']:
-                observation['progress_at'] = now
+                    progress_at=now, refused=False)
+            bearing = solution.get('yaw', yaw)
+            error = abs(_angle(bearing - yaw))
+            if error < observation.get('best_error', float('inf')) - NATIVE_ANGLE_TOLERANCE:
+                observation.update(best_error=error, progress_at=now)
+            observation['refused'] = bool(observation['refused'] or
+                'drive' not in self.features or
+                now < self.state.get('_native_rotation_refused_until', 0.) or
+                now - observation['progress_at'] >= MECHANICAL_STALL_SECONDS)
+            if observation['refused']:
+                self._last_navigation = dict(status='refused', action='firing_position',
+                    reason='native_pivot_stalled', owner='copied_ordinary_navigation')
+                return self._resume_firing_approach(order, target)
             # The copied combat_hull_aim only pivots a stationary engagement;
             # a synthetic lateral goal incorrectly bypasses this whole branch.
             result = dict(order, move_position=tuple(self.state['position']),
@@ -2673,12 +2870,23 @@ class FullPlayerRuntime(object):
                 reason=solution.get('mechanical_reason'), owner='copied_combat_hull_aim')
             return result
         self._native_hull_laying = None
-        # The complete copied gun solver records true pitch/pivot refusals.
-        # _gun_angle_order owns their bounded relocation, and the complete
-        # planner owns blocked-world approach/cover/firing-hold fallback.
         self._last_navigation = dict(status='waiting', action='firing_position',
             reason=decision.get('reason'), owner='copied_ordinary_navigation')
-        return order
+        return order if protected else self._resume_firing_approach(order, target)
+
+    def _resume_firing_approach(self, order, target):
+        # Keep existing route, cover, traffic and recovery control when it
+        # already has a destination. Release only an attack-owned stop.
+        position = self.state['position']
+        goal = order.get('move_position') or position
+        if ('drive' not in self.features or self._mission_brakes() or
+                order.get('parking_phase') or order.get('empty_ammo') or
+                order.get('combat_mode') in ('base_defense', 'low_health_retreat',
+                    'magazine_reload_retreat', 'withdraw') or
+                order.get('throttle_override') != 0. and _distance(_point(goal), position) > 1.):
+            return order
+        return self.engine._gun_angle_combat_order(self.state,
+            dict(order, aim_position=target['position'], face_position=target['position']))
 
     def status(self):
         state = self.state or {}
@@ -2686,8 +2894,11 @@ class FullPlayerRuntime(object):
         target = self.weapon.target
         aim = dict(target=target.get('engine_id') if isinstance(target, dict) else None,
                    point=self.weapon.point, source_verified=self.weapon.verified,
+                   shot_point_source=('verified' if self.weapon.verified else
+                       'motion_only' if self.weapon.motion_point is not None else 'none'),
                    aligned=bool(state.get('gun_aligned')), failure=self._last_fire_failure,
                    action=policy.get('action'), reason=policy.get('reason'))
         return dict(active=self.active, order=_plain_order(self._last_order), aim=aim,
+                    attack=policy, shell_setting=self._shell_receipt,
                     target=aim['target'], navigation=dict(self._last_navigation),
                     mission=self.mission_status())

@@ -80,7 +80,7 @@ def _matrix_signature(matrix):
 
 
 def native_source_pose(runtime, origin=None):
-    """One signature for planner and final admission, including native lay."""
+    """Exact physical barrel observation for first-trigger admission."""
     owner = runtime.owner
     entity = owner._server_entity(owner._server.vehicle_id)
     descriptor = entity.typeDescriptor
@@ -95,6 +95,13 @@ def native_source_pose(runtime, origin=None):
     lay = (float(rotator.turretYaw), float(rotator.gunPitch))
     return (_point(owner.local_pose()[0]), body, _point(origin), lay,
             id(descriptor), id(descriptor.gun), _point(matrix.translation))
+
+
+def _planning_pose(pose):
+    # Laying the gun does not change an ideal trajectory unless the actual
+    # pivot moves. Body rotation, pivot and descriptor fence its proof. The
+    # raw physics position is independent of the native shot transform.
+    return pose[1:3] + pose[4:6]
 
 
 def _shell_signature(index, shot):
@@ -183,6 +190,7 @@ class AttackPolicy(object):
         self.frame = None
         self.rows = {}
         self._admission_blocks = {}
+        self._lay_recovery = None
         self.selected = None
         self.trigger = None
         self.foreground_cursor = 0
@@ -191,6 +199,7 @@ class AttackPolicy(object):
         self.search_authority = None
         self.fallback = False
         self.next_shell = None
+        self.next_plan = None
         self.navigation_receipt = None
         self._identity = None
         self._magazine = None
@@ -199,6 +208,7 @@ class AttackPolicy(object):
         self._atomic_at = float('-inf')
         self._atomic_receipt = dict(status='not_started')
         self._move_episode = 0
+        self._evidence_wait_since = None
         self._frame_invalid = False
         self._used = dict(foreground=0, background=0, atomic=0)
         self.decision = dict(action='wait', reason='not_observed', candidate=None)
@@ -209,10 +219,15 @@ class AttackPolicy(object):
 
     @staticmethod
     def _stamp(frame, shell, target):
-        return (frame['identity'], frame['pose'], target.get('pose'), target.get('velocity'),
+        return (frame['identity'], frame.get('planning_pose', frame['pose']),
+                target.get('pose'), target.get('velocity'),
                 shell.get('signature', (int(shell['index']),
                                        bool(shell.get('is_he')),
-                                       float(shell['piercing']))), frame.get('scene'))
+                                       float(shell['piercing']))))
+
+    @staticmethod
+    def _line_stamp(frame):
+        return frame.get('scene'), frame.get('line_revision')
 
     def _jobs(self, mode='penetration', shell_index=None):
         frame = self.frame
@@ -238,7 +253,7 @@ class AttackPolicy(object):
         row = self.rows.get(key)
         if row is None or row.get('pose_stamp') != self._stamp(self.frame, shell, target):
             return None
-        if require_line and row.get('line_stamp') != self.frame.get('line_revision'):
+        if require_line and row.get('line_stamp') != self._line_stamp(self.frame):
             return None
         return row
 
@@ -265,7 +280,7 @@ class AttackPolicy(object):
                    target=target.get('value', target), target_key=_target_key(target),
                    sample=sample, mode=mode, observed_at=now,
                    pose_stamp=self._stamp(self.frame, shell, target),
-                   line_stamp=self.frame.get('line_revision'))
+                   line_stamp=self._line_stamp(self.frame))
         row.setdefault('armor', 'unknown')
         row.setdefault('line', 'unknown')
         row.setdefault('mechanical', 'unknown')
@@ -282,6 +297,9 @@ class AttackPolicy(object):
         if (row['armor'] in ('pending', 'unknown') and previous is not None and
                 previous.get('armor') in ('passed', 'failed')):
             row['armor'] = previous['armor']
+            for field in ('penetration_threshold', 'penetration_factor'):
+                if field in previous:
+                    row[field] = previous[field]
         if row['expected_damage'] is not None:
             damage = float(row['expected_damage'])
             if math.isnan(damage) or math.isinf(damage) or damage < 0. or row['contact'] is not True:
@@ -296,31 +314,37 @@ class AttackPolicy(object):
         jobs = self._jobs(shell_index=self.frame['loaded'])
         if not jobs:
             return None
-        selected_job = next((job for job in jobs if job[0] == self.selected), None)
+        plan_key = self.selected or (self.next_plan or {}).get('key')
+        selected_job = next((job for job in jobs if job[0] == plan_key), None)
         if selected_job is not None:
             row = self._current(selected_job, require_line=True)
             if self._executable(row):
                 return row
         # Refresh a retained point first, but never let one pending point
         # prevent all other points or enemies from receiving a budget slice.
-        ordered = []
-        if selected_job is not None:
-            ordered.append(selected_job)
-        for offset in range(len(jobs)):
-            job = jobs[(self.foreground_cursor + offset) % len(jobs)]
-            if job not in ordered:
-                ordered.append(job)
         remaining = max(0, self.foreground_budget - self._used['foreground'])
-        for job in ordered[:remaining]:
-            self.foreground_cursor = (jobs.index(job) + 1) % len(jobs)
+        ordered = [(None, selected_job)] if selected_job is not None and remaining else []
+        for offset in range(len(jobs)):
+            if len(ordered) >= remaining:
+                break
+            position = (self.foreground_cursor + offset) % len(jobs)
+            job = jobs[position]
+            if job is not selected_job:
+                ordered.append((position, job))
+        for position, job in ordered:
+            if position is not None:
+                self.foreground_cursor = (position + 1) % len(jobs)
             row = self._current(job, require_line=True)
             if row is None or row.get('armor') in ('pending', 'unknown') or row.get('line') != 'clear':
                 row = self._evaluate(job, now, 'foreground')
             if self._executable(row):
                 return row
         # A prior frame/background proof can be the earliest useful point.
-        return next((self._current(job, True) for job in jobs
-                     if self._executable(self._current(job, True))), None)
+        for job in jobs:
+            row = self._current(job, require_line=True)
+            if self._executable(row):
+                return row
+        return None
 
     def _rows_for(self, mode, shell_index=None, executable=False):
         result = []
@@ -360,6 +384,32 @@ class AttackPolicy(object):
                    _shell_rank(row['shell']), repr(row['target_key']),
                    repr(row['sample'])))
 
+    def _plan_next(self, row):
+        self.next_plan = row
+        self.next_shell = row['shell_index'] if row is not None else None
+
+    def current_row(self, candidate, require_line=True):
+        if candidate is None or self.frame is None or self._frame_invalid:
+            return None
+        job = next((job for job in self._jobs(candidate['mode'], candidate['shell_index'])
+                    if job[0] == candidate['key']), None)
+        return self._current(job, require_line) if job is not None else None
+
+    def _recover_incomplete(self, now, reason, rows=()):
+        if self._evidence_wait_since is None:
+            self._evidence_wait_since = now
+        candidate = next((row for row in rows if row['key'] == self.selected and
+                          isinstance(row.get('solution'), dict)), None)
+        if now - self._evidence_wait_since >= ATOMIC_CLOSE_INTERVAL:
+            candidate = candidate or next((row for row in rows
+                if isinstance(row.get('solution'), dict)), None)
+            return self._choose('firing_position', reason, candidate)
+        if (candidate is not None and candidate.get('mechanical') == 'reachable' and
+                candidate.get('line') in ('clear', 'pending') and
+                self.decision['action'] in ('aim', 'preaim')):
+            return self._choose('preaim', reason, candidate)
+        return self._choose('wait', reason)
+
     def _end_search(self, penetration_found=False):
         self.search_started = None
         self.search_authority = None
@@ -369,6 +419,8 @@ class AttackPolicy(object):
     def _choose(self, action, reason, candidate=None, **fields):
         row = dict(action=action, reason=reason, candidate=candidate,
                    next_shell=self.next_shell,
+                   phase=('preaiming' if action == 'preaim' or action == 'aim' and
+                          (self.frame or {}).get('reloading') else action),
                    search_started=self.search_started,
                    search_deadline=(self.search_started + SEARCH_SECONDS
                                     if self.search_started is not None else None),
@@ -388,13 +440,15 @@ class AttackPolicy(object):
                 episode_id=(self._identity, action,
                             self.search_started if action == 'search_penetration' else self._move_episode))
         self.decision = row
-        if action in ('aim', 'firing_position') and candidate is not None:
+        if action in ('aim', 'preaim', 'firing_position', 'switch_shell', 'reload_clip') and candidate is not None:
             # Intent stability and evidence validity are separate lifetimes.
             # A zero-width gun must be able to finish laying toward one point
             # even though every hull step invalidates that point's old proof.
             self.selected = candidate['key']
         elif action not in ('trigger_active', 'wait'):
             self.selected = None
+        if action == 'aim' or reason == 'no_relevant_enemy':
+            self._evidence_wait_since = None
         return row
 
     def _atomic_close(self, now):
@@ -471,9 +525,10 @@ class AttackPolicy(object):
             frame = self.evaluator.snapshot(now) if frame is None else frame
         except (AttributeError, TypeError, ValueError, RuntimeError, KeyError, IndexError):
             self.frame = None
-            return self._choose('wait', 'observation_unavailable')
+            return self._recover_incomplete(now, 'observation_unavailable')
         if not isinstance(frame, dict):
-            return self._choose('wait', 'observation_unavailable')
+            self.frame = None
+            return self._recover_incomplete(now, 'observation_unavailable')
         identity = frame['identity']
         if self._identity is not None and identity != self._identity:
             self.reset()
@@ -495,8 +550,11 @@ class AttackPolicy(object):
         for key in list(self._admission_blocks):
             blocked = self._admission_blocks[key]
             if (key not in valid_keys or blocked['pose_stamp'] != stamps[key] or
-                    blocked['line_stamp'] != frame.get('line_revision')):
+                    blocked['line_stamp'] != self._line_stamp(frame) or
+                    now >= blocked.get('retry_at', float('inf'))):
                 self._admission_blocks.pop(key, None)
+                if key in self.rows:
+                    self.rows[key]['line'] = 'pending'
         if self.selected is not None and self.selected not in valid_keys:
             self.selected = None
         loaded = int(frame['loaded'])
@@ -506,7 +564,10 @@ class AttackPolicy(object):
             # A genuinely different shell/clip gets new penetration evidence;
             # the continuing HE fallback phase is not another eight seconds.
             self._end_search()
-            self.selected = None
+            # A completed load retains the point already being laid. A
+            # different loaded shell requires its own point and proof.
+            if self.selected is not None and self.selected[0] != loaded:
+                self.selected = None
         self._magazine = magazine
         if frame.get('artillery'):
             return self._choose('unchanged', 'copied_artillery_owner')
@@ -516,7 +577,8 @@ class AttackPolicy(object):
         if not any(amount > 0 for amount in frame.get('ammo', ())):
             return self._choose('retreat', 'ammunition_exhausted')
         if not frame.get('targets'):
-            empty_clip = int(frame.get('clip_size', 1)) > 1 and frame['clip'] <= 0
+            empty_clip = (int(frame.get('clip_size', 1)) > 1 and frame['clip'] <= 0 and
+                          not frame.get('reloading'))
             if frame['ammo'][loaded] <= 0 or empty_clip:
                 planned = self.next_shell
                 if planned is None or planned >= len(frame['ammo']) or frame['ammo'][planned] <= 0:
@@ -527,15 +589,22 @@ class AttackPolicy(object):
                     'empty_clip' if empty_clip else 'current_ammunition_exhausted',
                     shell_index=planned, early_reload=False)
             return self._choose('wait', 'no_relevant_enemy')
+        if self._lay_recovery is not None:
+            refused, retry_at = self._lay_recovery
+            if now < retry_at:
+                candidate = self.current_row(refused)
+                if candidate is not None:
+                    candidate = dict(candidate, mechanical='mechanical_limited',
+                                     reason='native_lay_stalled')
+                return self._choose('firing_position', 'native_lay_stalled', candidate)
+            self._lay_recovery = None
         current = self._frontier(now)
         if current is None and not any(row.get('armor') == 'passed'
                 for row in self._rows_for('penetration', loaded)):
             current = self._atomic_close(now)
         if self._frame_invalid:
-            return self._choose('wait', 'observation_changed_during_atomic_close')
+            return self._recover_incomplete(now, 'observation_changed_during_atomic_close')
         next_pen = self._best_penetration()
-        if next_pen is not None:
-            self.next_shell = next_pen['shell_index']
         is_magazine = int(frame.get('clip_size', 1)) > 1
         if frame['ammo'][loaded] <= 0:
             # Exhaustion is not a fabricated penetration failure. There is no
@@ -549,7 +618,7 @@ class AttackPolicy(object):
             return self._choose('reload_clip' if is_magazine else 'switch_shell',
                 'current_ammunition_exhausted', planned, shell_index=index,
                 early_reload=False)
-        if is_magazine and frame['clip'] <= 0:
+        if is_magazine and frame['clip'] <= 0 and not frame.get('reloading'):
             planned = next_pen or (self._best_he() if self.fallback else None)
             index = planned['shell_index'] if planned is not None else loaded
             if frame['ammo'][index] <= 0:
@@ -584,15 +653,16 @@ class AttackPolicy(object):
                                     'new_penetration_opportunity', alternative,
                                     shell_index=alternative['shell_index'],
                                     early_reload=is_magazine)
-            return self._fallback_decision(loaded, is_magazine)
+            return self._fallback_decision(loaded, is_magazine, now)
         stocked = tuple(shell['index'] for shell in frame['shells']
                         if frame['ammo'][shell['index']] > 0)
-        eligible = current_failed if is_magazine else self._all_failed(stocked)
+        eligible = (current_failed and frame['clip'] > 0
+                    if is_magazine else self._all_failed(stocked))
         if self.search_started is None and eligible:
             fence = getattr(self.evaluator, 'fence', None)
             if callable(fence) and not fence(frame):
                 self.rows.clear()
-                return self._choose('wait', 'observation_changed_before_search')
+                return self._recover_incomplete(now, 'observation_changed_before_search')
             self.search_started = now
             self.search_authority = dict(pose=frame['pose'],
                 targets=tuple(_target_key(target) for target in frame['targets']),
@@ -606,11 +676,11 @@ class AttackPolicy(object):
                                         shell_index=alternative['shell_index'],
                                         early_reload=is_magazine)
                 self.fallback = True
-                return self._fallback_decision(loaded, is_magazine)
+                return self._fallback_decision(loaded, is_magazine, now)
             rows = self._rows_for('penetration', loaded)
             return self._choose('search_penetration', 'confirmed_global_armour_failure',
                                 rows[0] if rows else None)
-        rows = self._rows_for('penetration', loaded)
+        rows = self._rows_for('penetration', None if current_failed and not is_magazine else loaded)
         obstructed = [row for row in rows if row.get('line') in (
             'friendly_blocked', 'world_blocked') or row.get('mechanical') in (
             'hull_laying', 'mechanical_limited')]
@@ -625,12 +695,12 @@ class AttackPolicy(object):
             candidates = [row for row in rows if isinstance(row.get('solution'), dict)]
             return self._choose('firing_position', 'global_snapshot_budget_pending',
                                 candidates[0] if candidates else None)
-        return self._choose('wait', 'penetration_evidence_incomplete')
+        return self._recover_incomplete(now, 'penetration_evidence_incomplete', rows)
 
-    def _fallback_decision(self, loaded, is_magazine):
+    def _fallback_decision(self, loaded, is_magazine, now):
         best = self._best_he()
         if best is not None:
-            self.next_shell = best['shell_index']
+            self._plan_next(best)
         current = self._best_he(loaded)
         if is_magazine and current is not None:
             return self._choose('aim', 'current_he_clip_fallback', current)
@@ -650,12 +720,13 @@ class AttackPolicy(object):
                          row.get('mechanical') != 'reachable')), None)
         if blocked is not None:
             return self._choose('firing_position', 'he_fallback_obstructed', blocked)
-        return self._choose('wait', 'he_contact_evidence_incomplete')
+        return self._recover_incomplete(now, 'he_contact_evidence_incomplete', rows)
 
     def background(self, now):
         """One independent, fair all-shell/all-target frontier after control."""
         now = float(now)
-        if self.frame is None or self.frame.get('artillery') or self._background_at == now:
+        if (self.frame is None or self.frame.get('artillery') or self._frame_invalid or
+                self._background_at == now):
             return self.next_shell
         self._background_at = now
         self._used['background'] = 0
@@ -676,20 +747,30 @@ class AttackPolicy(object):
         # Once the domain is complete keep its ordinary cyclic refresh. A pose
         # or line revision change makes affected jobs incomplete immediately.
         ordered = []
+        plan_key = (self.next_plan or {}).get('key')
+        if self.background_budget > 1 and plan_key in incomplete:
+            retained = next((job for job in jobs if job[0] == plan_key), None)
+            if retained is not None and self._executable(self._current(retained), retained[4]):
+                # Changing ally poses can make the selected next load stale
+                # every frame. Renew it in one slot; keep the other rotating.
+                ordered.append((None, retained))
         for offset in range(len(jobs)):
             position = (self.background_cursor + offset) % len(jobs)
             job = jobs[position]
+            if ordered and ordered[0][0] is None and job[0] == plan_key:
+                continue
             if not incomplete or job[0] in incomplete:
                 ordered.append((position, job))
                 if len(ordered) >= self.background_budget:
                     break
         for position, job in ordered:
-            self.background_cursor = (position + 1) % len(jobs)
+            if position is not None:
+                self.background_cursor = (position + 1) % len(jobs)
             self._evaluate(job, now, 'background')
         best = self._best_penetration()
         if best is None and self.fallback:
             best = self._best_he()
-        self.next_shell = best['shell_index'] if best is not None else None
+        self._plan_next(best)
         self.decision['next_shell'] = self.next_shell
         self.decision['background_queries'] = self._used['background']
         return self.next_shell
@@ -697,6 +778,11 @@ class AttackPolicy(object):
     def navigation_result(self, receipt):
         """Observe normal recovery without granting a new search deadline."""
         self.navigation_receipt = dict(receipt or {})
+        if self.search_authority is not None and self.navigation_receipt.get('action') == 'search_penetration':
+            self.search_authority['navigation_status'] = self.navigation_receipt.get('status')
+
+    def lay_stalled(self, candidate, now):
+        self._lay_recovery = candidate, now + ATOMIC_CLOSE_INTERVAL
 
     def admission_failed(self, candidate, reason, blocker=None):
         """A first-edge refusal invalidates only its point, never its tank.
@@ -720,6 +806,12 @@ class AttackPolicy(object):
             self._admission_blocks[row['key']] = dict(line=line, reason=reason,
                 blocker=dict(blocker or {}), pose_stamp=row['pose_stamp'],
                 line_stamp=row['line_stamp'])
+            if reason in ('auto_front_vehicle', 'auto_lane_geometry_unknown',
+                          'auto_world_geometry_unknown'):
+                # A live front vehicle or unavailable native contact can
+                # clear before either of the planning stamps changes.
+                self._admission_blocks[row['key']]['retry_at'] = (
+                    self.frame['observed_at'] + ATOMIC_CLOSE_INTERVAL)
             invalidate = getattr(self.evaluator, 'invalidate_line', None)
             if callable(invalidate):
                 invalidate(row['key'])
@@ -739,12 +831,15 @@ class AttackPolicy(object):
             self.selected = None
         if int(event.get('burst_index', 0)) + 1 >= int(event.get('burst_count', 1)):
             self.trigger = None
+            self._evidence_wait_since = None
 
     def apply_order(self, order, now=None):
         """Only replace attack intent; the copied navigation still owns motion."""
         decision = self.decision
-        if decision['action'] in ('unchanged', 'trigger_active'):
+        if decision['action'] == 'unchanged':
             return order
+        if decision['action'] == 'trigger_active':
+            return dict(order or {}, fire_allowed=False)
         result = dict(order or {})
         candidate = decision.get('candidate')
         if candidate is not None:
@@ -755,13 +850,12 @@ class AttackPolicy(object):
                           face_position=target.get('position'))
         result['shell_index'] = (decision.get('shell_index', self.frame['loaded'])
                                  if self.frame is not None else result.get('shell_index'))
-        result['_player_attack'] = decision
         if decision['action'] == 'aim':
             position = self.frame.get('position')
             if position is not None:
                 result.update(move_position=position, throttle_override=0.,
                               combat_mode='engage')
-            result['fire_allowed'] = True
+            result['fire_allowed'] = not self.frame.get('reloading')
         else:
             result['fire_allowed'] = False
         return result
@@ -784,7 +878,7 @@ class AttackPolicy(object):
         elif self._executable(candidate, candidate.get('mode', 'penetration')):
             # The copied gate may have examined another sample. Replace its
             # attack intent only; the native gun/lane first-edge gate remains.
-            result['fire_allowed'] = True
+            result['fire_allowed'] = not (self.frame or {}).get('reloading')
         return result, target
 
     def status(self):
@@ -793,7 +887,18 @@ class AttackPolicy(object):
             target=candidate.get('target_key') if candidate else None,
             sample=candidate.get('sample') if candidate else None,
             shell=candidate.get('shell_index') if candidate else None,
+            phase=self.decision.get('phase'),
+            point=(candidate.get('solution') or {}).get('point') if candidate else None,
+            mode=candidate.get('mode') if candidate else None,
+            armor=candidate.get('armor') if candidate else None,
+            penetration_threshold=candidate.get('penetration_threshold') if candidate else None,
+            line=candidate.get('line') if candidate else None,
+            mechanical=candidate.get('mechanical') if candidate else None,
+            proof_at=candidate.get('observed_at') if candidate else None,
             next_shell=self.next_shell, fallback=self.fallback,
+            next_target=(self.next_plan or {}).get('target_key'),
+            next_sample=(self.next_plan or {}).get('sample'),
+            next_point=((self.next_plan or {}).get('solution') or {}).get('point'),
             search_started=self.search_started,
             search_deadline=(self.search_started + SEARCH_SECONDS
                              if self.search_started is not None else None),
@@ -880,8 +985,10 @@ class NativeAttackEvaluator(object):
                  revision() if callable(revision) else None)
         # Every frame refreshes lane facts independently of retained armour.
         dynamic = self._dynamic_stamp()
+        planning_pose = _planning_pose(pose)
         frame = dict(identity=(owner._generation, id(gun), id(descriptor.gun)),
-            source=source, pose=pose, position=pose[0], body=body, origin=origin,
+            source=source, pose=pose, planning_pose=planning_pose,
+            position=pose[0], body=body, origin=origin,
             descriptor=descriptor, entity=entity, loaded=int(gun.shot_index),
             ammo=tuple(gun.ammo), clip=int(gun.clip), clip_size=int(gun.clip_size),
             reloading=float(gun.reload_time) > 0.,
@@ -897,18 +1004,19 @@ class NativeAttackEvaluator(object):
                     for shell in shells for target in targets
                     for sample in target['samples'] or (None,)
                     for mode in ('penetration', 'he_fallback'))
-        target_poses = dict((target['key'], target['pose']) for target in targets)
+        target_poses = dict((target['key'], (target['pose'], target['velocity']))
+                            for target in targets)
         signatures = dict((shell['index'], shell['signature']) for shell in shells)
         for key in list(self.jobs):
             geometry = self.jobs[key]['geometry']
-            if (key not in valid or geometry[0] != pose or
-                    geometry[1] != target_poses.get(key[1]) or
+            if (key not in valid or geometry[0] != planning_pose or
+                    (geometry[1], geometry[3]) != target_poses.get(key[1]) or
                     geometry[2] != signatures.get(key[0])):
                 self.jobs.pop(key, None)
         for key in list(self.predictions):
             stamp, unused = self.predictions[key]
-            if (key not in valid or stamp[0] != pose or
-                    stamp[1] != target_poses.get(key[1]) or
+            if (key not in valid or stamp[0] != planning_pose or
+                    (stamp[1], stamp[3]) != target_poses.get(key[1]) or
                     stamp[2] != signatures.get(key[0])):
                 self.predictions.pop(key, None)
         return frame
@@ -921,9 +1029,16 @@ class NativeAttackEvaluator(object):
                 continue
             other = owner._server_entity(record.get('engine_id'))
             try:
+                state = record.get('state') or {}
+                alive = bool(other.isAlive() and state.get('alive', True))
+                team = int(state.get('team', record.get('team', 0)))
+                # This frontier tests allies and wrecks. The selected enemy
+                # already has its own geometry stamp. Other live enemies are
+                # tested against the real scattered path at first admission.
+                if alive and team != int(owner.client.team):
+                    continue
                 dynamic.append((record.get('engine_id'),
-                    bool((record.get('state') or {}).get('alive', True)),
-                    bool(record.get('spot_visible')),
+                    alive, team,
                     native_target_pose(owner, other, record)[0]))
             except (AttributeError, TypeError, ValueError, RuntimeError, KeyError, IndexError):
                 dynamic.append((record.get('engine_id'), None))
@@ -957,8 +1072,8 @@ class NativeAttackEvaluator(object):
                 self.atomic_receipt['reason'] = 'atomic_frame_budget_exhausted'
                 break
             cached = self.predictions.get(key)
-            stamp = (frame['pose'], target['pose'], shell['signature'],
-                     target.get('velocity'), frame['scene'], frame['identity'])
+            stamp = (frame['planning_pose'], target['pose'], shell['signature'],
+                     target.get('velocity'), frame['identity'])
             prediction = cached[1] if cached is not None and cached[0] == stamp else None
             if prediction is None:
                 continue
@@ -979,7 +1094,7 @@ class NativeAttackEvaluator(object):
     def fence(self, frame):
         try:
             owner = self.owner
-            if (native_source_pose(self.runtime) != frame['pose'] or
+            if (_planning_pose(native_source_pose(self.runtime)) != frame['planning_pose'] or
                     self.runtime.gun.shot_index != frame['loaded'] or
                     tuple(self.runtime.gun.ammo) != frame['ammo']):
                 return False
@@ -1008,8 +1123,8 @@ class NativeAttackEvaluator(object):
         try:
             owner, entity, shot = self.owner, target['entity'], shell['shot']
             key = (shell['index'], target['key'], sample, mode)
-            stamp = (frame['pose'], target['pose'], shell['signature'],
-                     target['velocity'], frame['scene'], frame['identity'])
+            stamp = (frame['planning_pose'], target['pose'], shell['signature'],
+                     target['velocity'], frame['identity'])
             previous = self.predictions.get(key)
             if previous is not None and previous[0] == stamp:
                 return previous[1]
@@ -1145,17 +1260,20 @@ class NativeAttackEvaluator(object):
             if predicted.get('unreachable'):
                 result.update(mechanical='mechanical_limited', reason=predicted['reason'])
                 return result
-            path, reach, solution = predicted['path'], predicted['reach'], predicted['solution']
+            path, reach = predicted['path'], predicted['reach']
+            solution = dict(predicted['solution'], source_pose=frame['pose'])
             sample_point, direction, flight = predicted['sample_point'], predicted['direction'], predicted['flight']
             result['mechanical'] = reach['status']
             result['solution'] = solution
-            geometry = (frame['pose'], target['pose'], shell['signature'],
-                        target['velocity'], tuple(path), frame['scene'], frame['identity'])
+            geometry = (frame['planning_pose'], target['pose'], shell['signature'],
+                        target['velocity'], frame['identity'])
             job = self.jobs.get(key)
             if job is None or job['geometry'] != geometry:
-                job = dict(geometry=geometry, cursor=0, done=False,
+                job = dict(geometry=geometry, scene=frame['scene'], cursor=0, done=False,
                            blocked=None, armour=None)
                 self.jobs[key] = job
+            elif job['scene'] != frame['scene']:
+                job.update(scene=frame['scene'], cursor=0, done=False, blocked=None)
             budget = self._budgets.get(channel, 0)
             while not job['done'] and job['cursor'] < len(path) - 1 and budget > 0:
                 if channel == 'atomic' and self.atomic_clock() >= self.atomic_deadline:

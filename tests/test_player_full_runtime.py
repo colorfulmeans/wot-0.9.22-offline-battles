@@ -629,6 +629,29 @@ class NativeAimLoopBoundaryTests(unittest.TestCase):
         self.assertFalse(scene.runtime.state['gun_aligned'])
         self.assertFalse(scene.launches())
 
+    def test_failed_new_inverse_revokes_old_native_source_and_yields_after_stall(self):
+        scene = self.scene()
+        scene.lay()
+        old_source = scene.runtime.weapon.source_point
+        self.assertIsNotNone(old_source)
+        scene.pose(scene.target, (18., 0., 100.))
+        scene.battle._runtime.get_shot_angles = lambda *args: (.45, .27)
+        moved_source, recovered = False, False
+        for unused in range(100):
+            self.native_tick(scene)
+            weapon = scene.runtime.weapon
+            self.assertIsNone(weapon.source_point)
+            self.assertNotEqual(old_source, weapon.motion_point)
+            if weapon.target is not None and weapon.motion_point is not None:
+                moved_source = True
+            if scene.runtime.attack_policy.decision['action'] == 'firing_position':
+                recovered = True
+                break
+        self.assertTrue(moved_source)
+        self.assertTrue(recovered, scene.runtime.status())
+        self.assertIsNone(scene.runtime.attack_policy.search_started)
+        self.assertFalse(scene.launches())
+
     def test_rotated_native_turret_sample_stays_the_same_point_through_real_trigger(self):
         scene = self.scene()
         scene.target.appearance.turretMatrix.setRotateYPR((math.pi * .5, 0., 0.))

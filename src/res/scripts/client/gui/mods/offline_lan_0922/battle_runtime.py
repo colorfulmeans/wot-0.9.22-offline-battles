@@ -1997,7 +1997,15 @@ class _LANInputSender(object):
         return self.owner._defer_cancel_native_shot_wait()
 
     def change_vehicle_setting(self, vehicle_id, code, value):
-        return self.owner.change_vehicle_setting(code, value)
+        gun = getattr(self.owner, '_gun_state', None)
+        accepted = self.owner.change_vehicle_setting(code, value)
+        if accepted and gun is not None and gun is self.owner._gun_state:
+            control = getattr(self.owner, '_player_control', None)
+            runtime = getattr(control, 'runtime', None)
+            observe = getattr(runtime, 'observe_manual_shell_setting', None)
+            if callable(observe):
+                observe(code, gun)
+        return accepted
 
     def _track(self, point, relative=False):
         target = _xyz(point)

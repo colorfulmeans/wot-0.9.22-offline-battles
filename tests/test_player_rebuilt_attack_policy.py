@@ -297,7 +297,7 @@ class RebuiltForegroundTests(unittest.TestCase):
 class RebuiltEvidenceTests(unittest.TestCase):
     def test_positive_proof_expires_for_each_source_and_target_pose_change(self):
         for change in ('source_position', 'source_hull', 'source_turret',
-                       'target_hull', 'target_turret', 'ammo_geometry', 'scene'):
+                       'target_hull', 'target_turret', 'ammo_geometry'):
             with self.subTest(change=change):
                 scene = Observations(targets=1, points=1)
                 scene.passed()
@@ -307,13 +307,38 @@ class RebuiltEvidenceTests(unittest.TestCase):
                     scene.frame['pose'] = (change, 1)
                 elif change.startswith('target'):
                     scene.frame['targets'][0]['pose'] = (change, 1)
-                elif change == 'scene':
-                    scene.frame['scene'] += 1
                 else:
                     scene.frame['shells'][0]['signature'] = ('new_penetration_model', 2)
                 result = scene.tick(.1)
                 self.assertNotEqual('aim', result['action'])
                 self.assertFalse(any(row['armor'] == 'passed' for row in scene.policy.rows.values()))
+
+    def test_world_revision_revokes_line_without_discarding_the_plate_proof(self):
+        scene = Observations(targets=1, points=1)
+        scene.passed()
+        first = scene.tick(0.)['candidate']
+        scene.frame['scene'] += 1
+        scene.value(0, armor='unknown', line='pending')
+        result = scene.tick(.1)
+        candidate = result['candidate']
+        self.assertEqual('firing_position', result['action'])
+        self.assertEqual(first['pose_stamp'], candidate['pose_stamp'])
+        self.assertNotEqual(first['line_stamp'], candidate['line_stamp'])
+        self.assertEqual(('passed', 'pending'), (candidate['armor'], candidate['line']))
+        self.assertIsNone(scene.policy.search_started)
+
+    def test_missing_evidence_releases_wait_to_ordinary_firing_position(self):
+        scene = Observations(targets=1, points=1, he=False)
+        scene.allow_atomic = False
+        for index in (0, 1):
+            scene.value(index, armor='unknown', line='unknown')
+        self.assertEqual('wait', scene.tick(0.)['action'])
+        for now in (.5, 1., 1.5, 2., 3., 10., 76.):
+            scene.move_target(1, now)
+            result = scene.tick(now)
+            self.assertIsNone(scene.policy.search_started)
+        self.assertEqual('firing_position', result['action'])
+        self.assertEqual('penetration_evidence_incomplete', result['reason'])
 
     def test_pose_away_then_return_cannot_resurrect_old_proof(self):
         scene = Observations(targets=1, points=1)
@@ -388,6 +413,28 @@ class RebuiltEvidenceTests(unittest.TestCase):
 
 
 class RebuiltSearchAndClipTests(unittest.TestCase):
+    def test_committed_next_shell_preaims_its_proved_point_until_load_completion(self):
+        for clip_size in (1, 4):
+            with self.subTest(clip_size=clip_size):
+                scene = Observations(clips=clip_size, targets=2, points=2)
+                scene.passed(0, 1, 0)
+                scene.passed(2, 2, 1)
+                scene.prime()
+                first = scene.tick(0.)
+                self.assertEqual(0, first['candidate']['shell_index'])
+                plan = scene.policy.next_plan
+                self.assertEqual((2, ('bot', 2), 1, 'penetration'), plan['key'])
+                scene.policy.shot_committed(dict(burst_index=0, burst_count=1), {})
+                scene.frame.update(loaded=2, clip=0, reloading=True)
+                preaim = scene.tick(.1)
+                self.assertEqual('preaiming', preaim['phase'])
+                self.assertEqual(plan['key'], preaim['candidate']['key'])
+                self.assertFalse(scene.policy.apply_order({})['fire_allowed'])
+                scene.frame.update(clip=clip_size, reloading=False)
+                ready = scene.tick(.2)
+                self.assertEqual(plan['key'], ready['candidate']['key'])
+                self.assertTrue(scene.policy.apply_order({})['fire_allowed'])
+
     def test_single_all_ammo_domain_and_magazine_current_only(self):
         for clips in (1, 6):
             scene = Observations(clips=clips, targets=1, points=2)
@@ -759,6 +806,20 @@ class NativeAtomicClosureTests(native_fire.AutomaticFireScene):
         self.battle._avatar.gunRotator.turretYaw -= .03
         self.battle._avatar.gunRotator.gunPitch += .03
         self.assertNotEqual(original, native_source_pose(self.runtime))
+
+    def test_native_gun_lay_preserves_the_unchanged_ideal_point_proof(self):
+        policy = self.runtime.attack_policy
+        self.lay(sample_index=0)
+        first = self.candidate
+        self.assertEqual('passed', first['armor'])
+        physical_pose = policy.frame['pose']
+        self.battle._avatar.gunRotator.gunPitch += .03
+        self.step(.1)
+        selected = policy.update(self.now)['candidate']
+        self.assertNotEqual(physical_pose, policy.frame['pose'])
+        self.assertEqual(first['key'], selected['key'])
+        self.assertEqual(first['pose_stamp'], selected['pose_stamp'])
+        self.assertEqual(0, policy.status()['foreground_queries'])
 
     def test_unmodelled_stock_slot_remains_unknown_in_global_ammo_domain(self):
         policy = self.hardened_target()

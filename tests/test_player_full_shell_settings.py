@@ -72,6 +72,76 @@ class FullShellSettingsTests(unittest.TestCase):
             decision['shell_index'] = index
         scene.runtime.attack_policy.decision = decision
 
+    def tick_weapon(self, scene):
+        scene.battle._advance_local_gun_to(scene.entity, scene.now)
+        row = scene.tick()
+        self.assertIsNone(scene.control.last_control_failure, row)
+        return row
+
+    def test_exhausted_ap_steers_to_the_next_point_during_reload_and_fires_again(self):
+        for clip_size in (1, 2):
+            with self.subTest(clip_size=clip_size):
+                scene = self.scene(clip=clip_size, burst=1)
+                gun = scene.battle._gun_state
+                gun.ammo[0], gun.clip = 1, 1
+                gun.reload = 3.
+                scene.rotator_enabled = True
+                for unused in range(100):
+                    self.tick_weapon(scene)
+                    if scene.launches():
+                        break
+                self.assertEqual([0], [shot['shell_index'] for shot in scene.launches()])
+                self.assertEqual((1, 0), (gun.shot_index, gun.clip))
+                old_point = scene.runtime.weapon.point
+                scene.pose(scene.target, (9., 0., 40.))
+                preaim = None
+                for unused in range(160):
+                    self.tick_weapon(scene)
+                    policy = scene.runtime.attack_policy
+                    if gun.reload_time > 0. and len(scene.launches()) == 1:
+                        if policy.decision.get('phase') == 'preaiming' and scene.runtime.weapon.verified:
+                            if scene.runtime.weapon.point != old_point:
+                                preaim = policy.decision['candidate']['key']
+                                self.assertEqual(1, preaim[0])
+                        self.assertFalse(scene.control.last_order['fire_allowed'])
+                    if gun.reload_time == 0. and preaim is not None and len(scene.launches()) == 1:
+                        self.assertEqual(preaim, policy.decision['candidate']['key'])
+                    if len(scene.launches()) >= 3:
+                        break
+                self.assertIsNotNone(preaim, scene.trace[-3:])
+                self.assertEqual([0, 1, 1], [shot['shell_index'] for shot in scene.launches()])
+                self.assertEqual([0, 8], gun.ammo)
+                self.assertFalse(scene.runtime.attack_policy.search_started)
+
+    def test_proved_single_round_replacement_can_apply_during_loading(self):
+        scene = self.scene(clip=1, burst=1)
+        gun = scene.battle._gun_state
+        gun.reload = 4.
+        scene.rotator_enabled = True
+        for unused in range(100):
+            self.tick_weapon(scene)
+            if scene.launches():
+                break
+        self.assertEqual([0], [shot['shell_index'] for shot in scene.launches()])
+        self.assertGreater(gun.reload_time, 0.)
+        gun.shots[0].piercingPower = (1., 1.)
+        scene.battle.client.effective_params['gun']['shots'][0]['source_shot']['piercingPower'] = (1., 1.)
+        switched = None
+        for unused in range(120):
+            was_loading = gun.reload_time > 0.
+            self.tick_weapon(scene)
+            if gun.shot_index == 1 and switched is None:
+                switched = dict(scene.runtime._shell_receipt)
+                self.assertTrue(was_loading)
+                self.assertEqual(('CURRENT_SHELLS', True),
+                                 (switched['setting'], switched['accepted']))
+            if len(scene.launches()) == 2:
+                break
+        self.assertIsNotNone(switched, scene.trace[-3:])
+        self.assertEqual([0, 1], [shot['shell_index'] for shot in scene.launches()])
+        self.assertEqual([(scene.settings.CURRENT_SHELLS, 102)],
+            [call for call in scene.setting_calls if call[0] == scene.settings.CURRENT_SHELLS])
+
     def test_next_clip_plan_can_change_and_cancel_without_unloading_current_clip(self):
         scene = self.scene(third=True)
         gun = scene.battle._gun_state
@@ -105,6 +175,19 @@ class FullShellSettingsTests(unittest.TestCase):
         self.assertEqual((0, 6, 1, 0.),
                          (gun.shot_index, gun.clip, gun.pending_index, gun.reload_time))
         self.assertIsNone(scene.runtime._owned_next_shell)
+
+    def test_manual_selection_of_same_queued_shell_takes_over_the_lease(self):
+        scene = self.scene(third=True)
+        gun = scene.battle._gun_state
+        self.queue(scene, 1)
+        self.assertIsNotNone(scene.runtime._owned_next_shell)
+        self.assertTrue(scene.battle._sender.change_vehicle_setting(
+            scene.entity.id, scene.settings.NEXT_SHELLS, 102))
+        self.queue(scene, 2)
+        scene.control.stop('manual_selection_survives_stop')
+        self.assertIsNone(scene.runtime._owned_next_shell)
+        self.assertEqual(1, gun.pending_index)
+        self.assertEqual([(scene.settings.NEXT_SHELLS, 102)] * 2, scene.setting_calls)
 
     def test_published_pending_plan_is_not_a_reload_and_actual_reload_is_not_ready(self):
         scene = self.scene()
