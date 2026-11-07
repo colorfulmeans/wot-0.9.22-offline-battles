@@ -197,6 +197,50 @@ class RebuiltForegroundTests(unittest.TestCase):
                          (result['action'], result['candidate']['shell_index']))
         self.assertIsNone(scene.policy.search_started)
 
+    def test_repeated_native_refusals_across_points_release_stationary_aim(self):
+        for refusal in ('auto_front_vehicle', 'auto_lane_geometry_unknown'):
+            with self.subTest(refusal=refusal):
+                scene = Observations(targets=5, points=9)
+                for target in range(1, 6):
+                    for sample in range(9):
+                        scene.passed(target=target, sample=sample)
+                attempted = set()
+                for step in range(61):
+                    now = step / 5.
+                    scene.frame['pose'] = ('source', 1.e-8 * step)
+                    result = scene.tick(now)
+                    if result['action'] != 'aim':
+                        break
+                    point = result['candidate']
+                    attempted.add(point['key'])
+                    scene.policy.admission_failed(point, refusal)
+
+                self.assertGreater(len(attempted), 1)
+                self.assertEqual(('firing_position', 'native_lane_stalled'),
+                                 (result['action'], result['reason']))
+                self.assertLessEqual(now, ATOMIC_CLOSE_INTERVAL + .2)
+                self.assertIsNone(scene.policy.search_started)
+                order = scene.policy.apply_order(dict(
+                    move_position=(10., 0., 10.), throttle_override=1.))
+                self.assertEqual((10., 0., 10.), order['move_position'])
+                self.assertFalse(order['fire_allowed'])
+                self.assertEqual('firing_position', scene.tick(now + .1)['action'])
+                self.assertEqual('aim', scene.tick(now + ATOMIC_CLOSE_INTERVAL)['action'])
+
+    def test_committed_alternative_clears_native_refusal_wait(self):
+        scene = Observations(targets=1, points=3)
+        for sample in range(3):
+            scene.passed(sample=sample)
+        first = scene.tick(0.)['candidate']
+        scene.policy.admission_failed(first, 'auto_front_vehicle')
+        alternative = scene.tick(1.9)
+        self.assertEqual('aim', alternative['action'])
+        self.assertNotEqual(first['sample'], alternative['candidate']['sample'])
+        scene.policy.shot_committed({}, {})
+        point = scene.tick(2.2)['candidate']
+        scene.policy.admission_failed(point, 'auto_front_vehicle')
+        self.assertEqual('aim', scene.tick(2.3)['action'])
+
     def test_copied_other_sample_refusal_does_not_override_verified_sample(self):
         scene = Observations()
         scene.passed(0, sample=1)

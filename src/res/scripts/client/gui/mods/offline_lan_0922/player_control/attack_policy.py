@@ -197,6 +197,7 @@ class AttackPolicy(object):
         self.rows = {}
         self._admission_blocks = {}
         self._lay_recovery = None
+        self._native_lane_wait = None
         self.selected = None
         self.trigger = None
         self.foreground_cursor = 0
@@ -628,6 +629,7 @@ class AttackPolicy(object):
 
     def load_started(self, shell_index, plan=None):
         self.selected = None
+        self._native_lane_wait = None
         self.loading_plan = (plan if plan is not None and
                              plan['shell_index'] == shell_index else None)
 
@@ -694,6 +696,9 @@ class AttackPolicy(object):
             self.selected = None
         if action == 'aim' or reason == 'no_relevant_enemy':
             self._evidence_wait_since = None
+        if (reason == 'no_relevant_enemy' or action not in ('aim', 'preaim', 'wait')
+                and reason != 'native_lane_stalled'):
+            self._native_lane_wait = None
         return row
 
     def _atomic_close(self, now):
@@ -821,6 +826,7 @@ class AttackPolicy(object):
             # A genuinely different shell/clip gets new penetration evidence;
             # the continuing HE fallback phase is not another eight seconds.
             self._end_search()
+            self._native_lane_wait = None
             # A completed load retains the point already being laid. A
             # different loaded shell requires its own point and proof.
             if self.selected is not None and self.selected[0] != loaded:
@@ -854,6 +860,11 @@ class AttackPolicy(object):
                                      reason='native_lay_stalled')
                 return self._choose('firing_position', 'native_lay_stalled', candidate)
             self._lay_recovery = None
+        lane_wait = self._native_lane_wait
+        if lane_wait is not None and lane_wait['move_until'] is not None:
+            if now < lane_wait['move_until'] and not frame.get('reloading'):
+                return self._choose('firing_position', 'native_lane_stalled')
+            self._native_lane_wait = None
         current = self._frontier(now)
         if current is None and not any(row.get('armor') == 'passed'
                 for row in self._rows_for('penetration', loaded)):
@@ -1070,8 +1081,16 @@ class AttackPolicy(object):
             if reason in NATIVE_LINE_RETRY_REASONS:
                 # A live front vehicle or unavailable native contact can
                 # clear before either of the planning stamps changes.
-                self._admission_blocks[row['key']]['retry_at'] = (
-                    self.frame['observed_at'] + ATOMIC_CLOSE_INTERVAL)
+                now, position = self.frame['observed_at'], self.frame['position']
+                self._admission_blocks[row['key']]['retry_at'] = now + ATOMIC_CLOSE_INTERVAL
+                # A long sequence of individually rejected alternatives at
+                # the same firing position needs one ordinary movement turn.
+                wait = self._native_lane_wait
+                if wait is None or _distance_sq(wait['position'], position) >= .25 ** 2:
+                    wait = self._native_lane_wait = dict(
+                        position=position, first_at=now, move_until=None)
+                if now - wait['first_at'] >= ATOMIC_CLOSE_INTERVAL:
+                    wait['move_until'] = now + ATOMIC_CLOSE_INTERVAL
             invalidate = getattr(self.evaluator, 'invalidate_line', None)
             if callable(invalidate):
                 invalidate(row['key'])
@@ -1085,6 +1104,7 @@ class AttackPolicy(object):
         # Hit, miss, zero damage and penetration results are deliberately not
         # inputs. Only the physical group's first/final commit bounds its lock.
         if int(event.get('burst_index', 0)) == 0:
+            self._native_lane_wait = None
             self.trigger = (pending.get('player_control') or {}).get('candidate')
             if self.trigger is None:
                 self.trigger = self.decision.get('candidate')
