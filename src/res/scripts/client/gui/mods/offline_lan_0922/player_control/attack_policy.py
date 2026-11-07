@@ -31,6 +31,7 @@ ATOMIC_ARMOUR_BATCHES = 32
 ATOMIC_CANDIDATES = 48
 NEXT_EDGE_WALL_SECONDS = .004
 NEXT_EDGE_CANDIDATES = 8
+NATIVE_UNVERIFIED_LANE = ('auto_lane_geometry_unknown', 'auto_world_geometry_unknown')
 _WALL_CLOCK = getattr(time, 'perf_counter', time.time)
 # A retail battle has fewer than 30 opponents, three shell slots and nine
 # finite native aim samples. Custom data exceeding this explicitly reported
@@ -291,6 +292,21 @@ class AttackPolicy(object):
             return row.get('contact') is True and row.get('expected_damage') is not None
         return row.get('armor') == 'passed'
 
+    @staticmethod
+    def _matching_admission_block(blocked, stamp):
+        previous = blocked['pose_stamp']
+        # An unconfirmed native lane briefly steers the search away from its
+        # point. Source-only refreshes still retire every positive proof, but
+        # must not erase this bounded retry on the very next observation.
+        return (previous == stamp or (blocked['reason'] in NATIVE_UNVERIFIED_LANE and
+                previous[0] == stamp[0] and previous[2:] == stamp[2:]))
+
+    @staticmethod
+    def _needs_firing_position(row):
+        return (row.get('line') in ('friendly_blocked', 'world_blocked') or
+                row.get('mechanical') in ('hull_laying', 'mechanical_limited') or
+                row.get('reason') in NATIVE_UNVERIFIED_LANE)
+
     def _evaluate(self, job, now, channel, ranked_recheck=False):
         key, shell, target, sample, mode = job
         previous = self._current(job)
@@ -315,8 +331,9 @@ class AttackPolicy(object):
         if previous is not None and row['line_stamp'] != previous['line_stamp']:
             self.proof_revocations['lane_rechecks'] += 1
         blocked = self._admission_blocks.get(key)
-        if (blocked is not None and blocked['pose_stamp'] == row['pose_stamp'] and
-                blocked['line_stamp'] == row['line_stamp']):
+        if (blocked is not None and self._matching_admission_block(blocked, row['pose_stamp']) and
+                blocked['line_stamp'] == row['line_stamp'] and
+                (blocked['line'] != 'unknown' or row['line'] not in ('friendly_blocked', 'world_blocked'))):
             row.update(line=blocked['line'], reason=blocked['reason'],
                        blocker=blocked['blocker'])
         # A new friendly obstruction cannot erase a still-valid plate proof.
@@ -785,7 +802,7 @@ class AttackPolicy(object):
                 self.rows.pop(key, None)
         for key in list(self._admission_blocks):
             blocked = self._admission_blocks[key]
-            if (key not in valid_keys or blocked['pose_stamp'] != stamps[key] or
+            if (key not in valid_keys or not self._matching_admission_block(blocked, stamps[key]) or
                     blocked['line_stamp'] != self._line_stamp(frame, blocked.get('line_region')) or
                     now >= blocked.get('retry_at', float('inf'))):
                 self._admission_blocks.pop(key, None)
@@ -869,9 +886,7 @@ class AttackPolicy(object):
             self._end_search(penetration_found=True)
             return self._choose('aim', 'current_shell_verified', current)
         valid_pen = [row for row in self._rows_for('penetration', loaded, fresh_line=True)
-                     if row.get('armor') == 'passed' and
-                     (row.get('line') in ('friendly_blocked', 'world_blocked') or
-                      row.get('mechanical') in ('hull_laying', 'mechanical_limited'))]
+                     if row.get('armor') == 'passed' and self._needs_firing_position(row)]
         if valid_pen:
             self._end_search()
             candidate = min(valid_pen, key=lambda row: (
@@ -927,9 +942,7 @@ class AttackPolicy(object):
                                 rows[0] if rows else None)
         rows = self._rows_for('penetration', None if current_failed and not is_magazine else loaded,
                               fresh_line=True)
-        obstructed = [row for row in rows if row.get('line') in (
-            'friendly_blocked', 'world_blocked') or row.get('mechanical') in (
-            'hull_laying', 'mechanical_limited')]
+        obstructed = [row for row in rows if self._needs_firing_position(row)]
         if obstructed:
             return self._choose('firing_position', 'unverified_points_obstructed',
                 min(obstructed, key=lambda row: (0 if row['key'] == self.selected else 1,
@@ -1052,8 +1065,7 @@ class AttackPolicy(object):
             self._admission_blocks[row['key']] = dict(line=line, reason=reason,
                 blocker=dict(blocker or {}), pose_stamp=row['pose_stamp'],
                 line_stamp=row['line_stamp'], line_region=row.get('line_region'))
-            if reason in ('auto_front_vehicle', 'auto_lane_geometry_unknown',
-                          'auto_world_geometry_unknown'):
+            if reason == 'auto_front_vehicle' or reason in NATIVE_UNVERIFIED_LANE:
                 # A live front vehicle or unavailable native contact can
                 # clear before either of the planning stamps changes.
                 self._admission_blocks[row['key']]['retry_at'] = (

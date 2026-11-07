@@ -2435,13 +2435,14 @@ class FullPlayerRuntime(object):
         policy = self.attack_policy.status()
         navigation = policy['navigation'] or {}
         gun, state = self.gun, self.state
+        first_edge = self.controller.last_fire_failure
         key = (policy['phase'], policy['reason'], policy['shell'], policy['target'],
                policy['sample'], policy['next_shell'], policy['next_target'], policy['next_sample'],
                policy['next_status'], policy['background_coverage'],
                state.get('gun_aligned'), self.weapon.verified, gun.shot_index, gun.pending_index,
                self._last_committed_shot_seq, (self._shell_receipt or {}).get('at'),
                state.get('siege_state'), state.get('_siege_intent'),
-               policy['line'], policy['mechanical'],
+               policy['line'], policy['mechanical'], first_edge,
                navigation.get('owner'), navigation.get('reason'))
         if key == self._attack_log_key:
             return
@@ -2454,6 +2455,10 @@ class FullPlayerRuntime(object):
                 destination=route.get('strategic_move_position'),
                 local_target=route.get('local_target'),
                 movement_intent=self._last_order.get('movement_intent'))
+        admission = getattr(self.controller, 'trigger_admission', None)
+        receipt = getattr(admission, 'receipt', {})
+        edge_detail = dict(status=receipt.get('status'), blocker=receipt.get('blocker')) if (
+            first_edge and receipt.get('reason') == first_edge) else None
         self.controller.record('attack_transition', policy=policy, setting=self._shell_receipt,
             loaded=gun.shot_index, queued=gun.pending_index, clip=gun.clip, stock=list(gun.ammo),
             reload=gun.reload_time, aligned=bool(state.get('gun_aligned')),
@@ -2463,7 +2468,7 @@ class FullPlayerRuntime(object):
             source_point=self.weapon.source_point or self.weapon.motion_point,
             actual=(state['turret_yaw'], state['gun_pitch']),
             desired=(intention.get('turret_yaw'), intention.get('gun_pitch')),
-            first_edge=self.controller.last_fire_failure)
+            first_edge=first_edge, first_edge_detail=edge_detail)
 
     def drive_contact(self, position, heading, dt, static, contact=None):
         if self.engine is None or not self.active:

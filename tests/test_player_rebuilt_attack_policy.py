@@ -155,6 +155,36 @@ class RebuiltForegroundTests(unittest.TestCase):
                 self.assertNotIn('shell_index', result)
                 self.assertEqual(1, len(scene.invalidated))
 
+    def test_native_lane_refusal_survives_source_refresh_and_yields_to_other_points(self):
+        for alternate in (False, True):
+            with self.subTest(alternate=alternate):
+                scene = Observations(targets=1, points=2)
+                scene.passed()
+                scene.passed(1)
+                first = scene.tick(0.)['candidate']
+                scene.policy.load_started(0, first)
+                scene.policy.admission_failed(first, 'auto_lane_geometry_unknown')
+                if alternate:
+                    scene.passed(0, sample=1)
+                for step in range(1, 10):
+                    scene.frame['pose'] = ('source', 1.e-8 * step)
+                    result = scene.tick(.1 * step)
+                    if alternate:
+                        self.assertEqual(('aim', 1), (result['action'], result['candidate']['sample']))
+                    else:
+                        self.assertEqual(('firing_position', 'unknown', 'passed'),
+                            (result['action'], result['candidate']['line'], result['candidate']['armor']))
+                        self.assertFalse(scene.policy.apply_order({})['fire_allowed'])
+                    self.assertIsNone(scene.policy.search_started)
+                if not alternate:
+                    scene.frame['pose'] = ('source', 1.e-7)
+                    result = scene.tick(ATOMIC_CLOSE_INTERVAL)
+                    self.assertEqual(('aim', 0), (result['action'], result['candidate']['sample']))
+                    scene.policy.admission_failed(result['candidate'], 'auto_lane_geometry_unknown')
+                    scene.frame['line_revision'] += 1
+                    result = scene.tick(ATOMIC_CLOSE_INTERVAL + .1)
+                    self.assertEqual(('aim', 0), (result['action'], result['candidate']['sample']))
+
     def test_blocked_current_ap_keeps_usage_even_when_apcr_is_executable(self):
         scene = Observations(targets=1, points=1)
         scene.value(0, armor='passed', line='world_blocked')
