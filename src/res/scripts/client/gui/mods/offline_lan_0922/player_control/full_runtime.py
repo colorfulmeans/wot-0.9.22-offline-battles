@@ -2220,23 +2220,18 @@ class FullPlayerRuntime(object):
             return
         policy = self.attack_policy
         frame = policy.frame
-        reason = policy.next_status
+        stale_frame = (frame is None or policy._frame_invalid or
+                       frame['loaded'] != gun.shot_index or frame['ammo'] != tuple(gun.ammo))
         if at_trigger:
-            # Finish this observation's bounded frontier before freezing the
-            # last trigger of a load. Current-shot approval is independent.
-            policy.background(self.now)
-        index, plan = policy.next_shell, policy.next_plan
-        if plan is not None and (frame is None or policy._frame_invalid or
-                frame['loaded'] != gun.shot_index or frame['ammo'] != tuple(gun.ammo)):
-            if not at_trigger:
-                return
-            index, plan, reason = None, None, 'observation_changed'
-        elif at_trigger and (plan is not None or index is None):
-            plan, reason = policy.next_at_edge()
+            # Current-shot approval is independent of this bounded ranking.
+            plan, reason = ((None, 'observation_changed') if stale_frame else
+                            policy.refresh_next_at_trigger(self.now))
             index = plan['shell_index'] if plan is not None else None
-        elif plan is not None:
-            current = policy.current_row(plan)
-            if not policy._executable(current, plan['mode']):
+        else:
+            index, plan, reason = policy.next_shell, policy.next_plan, policy.next_status
+            if plan is not None and stale_frame:
+                return
+            if plan is not None and not policy._executable(policy.current_row(plan), plan['mode']):
                 index, plan, reason = None, None, 'candidate_expired'
         if index is None:
             if lease is not None:

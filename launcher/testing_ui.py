@@ -135,9 +135,9 @@ class TestingPanel:
                                     command=app._save_settings)
             widget.grid(row=0, column=column, sticky='ew')
             self.labels.append((widget, en, zh))
-        check(body, 'control', 'Enable the ` key and mouse control panel', '启用·键与鼠标控制面板')
-        help_text(body, 'Each battle starts under manual control. Press ` to take over or stop; native local messages show the state. Your own loadout remains in use. Chat, menus and dialogs do not toggle control.',
-                  '每局默认手动控制。按·键接管或停止，原生本地消息提示状态；保留玩家自己的配装。聊天、菜单及弹窗中不触发切换。')
+        check(body, 'control', 'Start automatic control at battle start', '开局自动接管')
+        help_text(body, 'Checked channels take over when the battle is ready. Press ` to toggle control. Chat, menus and dialogs do not toggle it.',
+                  '战斗就绪后自动接管已勾选的功能。按反引号键（`）切换接管状态。聊天、菜单及弹窗中不触发切换。')
         help_text(body, 'Driving owns the hull only; aiming/fire owns target lock and shots. Unchecked features stay manual. Changes apply on the next game launch.',
                   '自动驾驶只接管车体；自动瞄准与开火接管炮塔锁定及射击。未勾选的功能保留手动操作；更改在下次启动游戏时生效。')
         button = tk.Button(body, command=self.open_controls)

@@ -40,7 +40,7 @@ def handle_key(is_down, key, mods=0):
 
 
 class PlayerControl(object):
-    def __init__(self, owner, features, notify=native_message):
+    def __init__(self, owner, features, notify=native_message, auto_start=False):
         from .commands import CommandGateway, JournalReader
         from .manual_aim import ManualAim
         from .native_actions import NativeActions
@@ -52,6 +52,7 @@ class PlayerControl(object):
         self.features = set(features) & set(('drive', 'fire', 'consumables'))
         self.notify = notify
         self.active = self.key_down = self.closed = self.halted = False
+        self._auto_start_pending = bool(auto_start and self.features)
         self._starting = False
         self._release_depth = 0
         self.runtime = None
@@ -328,6 +329,7 @@ class PlayerControl(object):
         return bool(ready and entity is not None and entity.isAlive())
 
     def toggle(self, navigation=None):
+        self._auto_start_pending = False
         # Native setters may synchronously Stop and try starting again before
         # their delayed source/mode write has returned. That older stack still
         # owns its cleanup; a new owner cannot be admitted inside it.
@@ -434,6 +436,8 @@ class PlayerControl(object):
                                  context.get('submission_in_progress')))
 
     def stop(self, reason='manual', preserve_explicit=False):
+        if reason != 'battle_not_live':
+            self._auto_start_pending = False
         owner = self.owner
         now = owner._clock()
         changed = bool(self.active or self.override is not None or self.halted)
@@ -1125,6 +1129,16 @@ class PlayerControl(object):
             self.publish_status(now, reason='player_dead')
             return
         self.retry_releases(now)
+        if (self._auto_start_pending and not self.release_pending and
+                not self.halted and self.override is None and
+                getattr(self.owner, '_gun_state', None) is not None):
+            try:
+                ready = self.input_available()
+            except (AttributeError, ImportError):
+                ready = False
+            if ready:
+                self.record('launcher_auto_start')
+                self.toggle()
         from .capabilities import ammunition_state
         self.ammo_state = ammunition_state(self.owner._gun_state)
         sender = self.owner._sender
@@ -1197,7 +1211,7 @@ def attach(owner):
         return None
     if _current is not None:
         _current.close()
-    _current = PlayerControl(owner, raw.split(','))
+    _current = PlayerControl(owner, raw.split(','), auto_start=True)
     path = os.environ.get('WOT_OFFLINE_TEST_CONTROL_FILE')
     if path and os.path.isfile(path):
         _current.command_offset = os.path.getsize(path)

@@ -29,6 +29,8 @@ ATOMIC_WALL_SECONDS = .008
 ATOMIC_WORLD_QUERIES = 128
 ATOMIC_ARMOUR_BATCHES = 32
 ATOMIC_CANDIDATES = 48
+NEXT_EDGE_WALL_SECONDS = .004
+NEXT_EDGE_CANDIDATES = 8
 _WALL_CLOCK = getattr(time, 'perf_counter', time.time)
 # A retail battle has fewer than 30 opponents, three shell slots and nine
 # finite native aim samples. Custom data exceeding this explicitly reported
@@ -205,6 +207,10 @@ class AttackPolicy(object):
         self.next_status = 'not_observed'
         self.next_proofs = ()
         self.loading_plan = None
+        self._penetration_hints = {}
+        self._next_edge_at = float('-inf')
+        self.next_edge_receipt = {}
+        self.proof_revocations = dict(source=0, target=0, domain=0, shell=0, lane_rechecks=0)
         self.background_coverage = ()
         self.navigation_receipt = None
         self._identity = None
@@ -304,6 +310,8 @@ class AttackPolicy(object):
         row.setdefault('mechanical', 'unknown')
         row.setdefault('contact', None)
         row.setdefault('expected_damage', None)
+        if previous is not None and row['line_stamp'] != previous['line_stamp']:
+            self.proof_revocations['lane_rechecks'] += 1
         blocked = self._admission_blocks.get(key)
         if (blocked is not None and blocked['pose_stamp'] == row['pose_stamp'] and
                 blocked['line_stamp'] == row['line_stamp']):
@@ -325,6 +333,8 @@ class AttackPolicy(object):
             else:
                 row['expected_damage'] = damage
         self.rows[key] = row
+        if mode == 'penetration' and self._executable(row):
+            self._penetration_hints[row['shell_index']] = key
         self._used[channel] += 1
         return row
 
@@ -471,6 +481,73 @@ class AttackPolicy(object):
         valid = (fence(self.frame, proofs, len(proofs) > 1) if callable(fence)
                  else self.evaluator.fence(self.frame))
         return (current, 'verified') if valid else (None, 'observation_changed')
+
+    def _next_excluded(self):
+        frame = self.frame
+        loaded = frame['loaded']
+        in_load = frame['clip_size'] if frame.get('reloading') else frame['clip']
+        # The last mounted round or cassette is not stocked for the next
+        # full load, even though it is still stocked for this trigger.
+        return loaded if frame['ammo'][loaded] <= in_load else None
+
+    def _refresh_ranked_next(self, groups, exclude):
+        best, status, proofs = self._ranked_penetration(groups, exclude=exclude)
+        if best is None and self.fallback and self._best_penetration(exclude=exclude) is None:
+            best = self._best_he(exclude=exclude)
+            if best is not None:
+                status, proofs = 'verified_he_fallback', (best,)
+        self._plan_next(best, status, proofs)
+        self.background_coverage = tuple((index, sum(self._reviewed(row, 'penetration')
+                                                     for row in rows), len(rows))
+                                         for index, rows in groups)
+        self.decision['next_shell'] = self.next_shell
+
+    def refresh_next_at_trigger(self, now):
+        """Give the final trigger a bounded, same-observation ranked pass."""
+        self.background(now)
+        plan, reason = self.next_at_edge()
+        if (plan is not None or reason != 'higher_rank_pending' or
+                self.frame is None or self._frame_invalid or self._atomic_at == now or
+                now < self._next_edge_at + ATOMIC_CLOSE_INTERVAL):
+            return plan, reason
+        self._next_edge_at = now
+        started = self.atomic_clock()
+        self.evaluator.atomic_deadline = started + NEXT_EDGE_WALL_SECONDS
+        self.evaluator.atomic_clock = self.atomic_clock
+        exclude = self._next_excluded()
+        domain = self._jobs()
+        jobs = [job for job in domain if job[0][0] != exclude]
+        begin = getattr(self.evaluator, 'begin_atomic', None)
+        if not callable(begin) or not begin(self.frame, jobs, now):
+            return None, reason
+        self._used['atomic'] = 0
+        # Rank always comes before a retained point. The hint only chooses
+        # which point of that same shell gets tested first. It carries no
+        # physical proof, and all points still participate in the fair pass.
+        jobs.sort(key=lambda job: (_shell_rank(job[1]),
+            self._penetration_hints.get(job[0][0]) != job[0],
+            repr(job[0][1]), repr(job[3])))
+        count, unresolved, index = 0, False, None
+        for job in jobs:
+            shell_index = job[0][0]
+            if index != shell_index and unresolved:
+                break
+            index = shell_index
+            row = self._current(job, require_line=True)
+            if not self._reviewed(row, 'penetration'):
+                if count >= NEXT_EDGE_CANDIDATES or self.atomic_clock() >= self.evaluator.atomic_deadline:
+                    break
+                row = self._evaluate(job, now, 'atomic')
+                count += 1
+            if self._executable(row):
+                break
+            unresolved = unresolved or not self._reviewed(row, 'penetration')
+        self._refresh_ranked_next(self._penetration_groups(domain), exclude)
+        plan, reason = self.next_at_edge()
+        self.next_edge_receipt = dict(at=now, checked=count, status=reason,
+            result=(plan or {}).get('key'),
+            elapsed_ms=(self.atomic_clock() - started) * 1000.)
+        return plan, reason
 
     def load_started(self, shell_index, plan=None):
         self.selected = None
@@ -636,7 +713,17 @@ class AttackPolicy(object):
         valid_keys = set(job[0] for job in jobs)
         stamps = dict((job[0], self._stamp(frame, job[1], job[2])) for job in jobs)
         for key in list(self.rows):
-            if key not in valid_keys or self.rows[key].get('pose_stamp') != stamps[key]:
+            old, stamp = self.rows[key].get('pose_stamp'), stamps.get(key)
+            if old != stamp or key not in valid_keys:
+                if key not in valid_keys or old is None or old[0] != stamp[0]:
+                    reason = 'domain'
+                elif old[1] != stamp[1]:
+                    reason = 'source'
+                elif old[2:4] != stamp[2:4]:
+                    reason = 'target'
+                else:
+                    reason = 'shell'
+                self.proof_revocations[reason] += 1
                 self.rows.pop(key, None)
         for key in list(self._admission_blocks):
             blocked = self._admission_blocks[key]
@@ -849,23 +936,8 @@ class AttackPolicy(object):
             current[job[0]] = self._evaluate(job, now, 'background')
         if not pending:
             self.background_cursor = None
-        frame = self.frame
-        loaded = frame['loaded']
-        in_load = frame['clip_size'] if frame.get('reloading') else frame['clip']
-        # The last mounted round or cassette is not stocked for the next
-        # full load, even though it is still stocked for this trigger.
-        exclude = loaded if frame['ammo'][loaded] <= in_load else None
-        groups = self._penetration_groups(penetration, current)
-        best, status, proofs = self._ranked_penetration(groups, exclude=exclude)
-        if best is None and self.fallback and self._best_penetration(exclude=exclude) is None:
-            best = self._best_he(exclude=exclude)
-            if best is not None:
-                status, proofs = 'verified_he_fallback', (best,)
-        self._plan_next(best, status, proofs)
-        self.background_coverage = tuple((index, sum(self._reviewed(row, 'penetration')
-                                                     for row in rows), len(rows))
-                                         for index, rows in groups)
-        self.decision['next_shell'] = self.next_shell
+        self._refresh_ranked_next(self._penetration_groups(penetration, current),
+                                  self._next_excluded())
         self.decision['background_queries'] = self._used['background']
         return self.next_shell
 
@@ -1000,6 +1072,7 @@ class AttackPolicy(object):
             proof_at=candidate.get('observed_at') if candidate else None,
             next_shell=self.next_shell, fallback=self.fallback,
             next_status=self.next_status, background_coverage=self.background_coverage,
+            proof_revocations=dict(self.proof_revocations), next_edge=dict(self.next_edge_receipt),
             loading_plan=(self.loading_plan or {}).get('key'),
             next_target=(self.next_plan or {}).get('target_key'),
             next_sample=(self.next_plan or {}).get('sample'),

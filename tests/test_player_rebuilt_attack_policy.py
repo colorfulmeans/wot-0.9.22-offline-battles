@@ -238,6 +238,42 @@ class RebuiltForegroundTests(unittest.TestCase):
         self.assertEqual(0, scene.tick(0.)['candidate']['shell_index'])
         self.assertEqual(1, scene.policy.next_shell)
 
+    def test_final_trigger_revalidates_expired_point_in_its_ammunition_rank(self):
+        scene = Observations(targets=2, points=5)
+        scene.passed(0)
+        scene.passed(2, target=2, sample=4)
+        scene.prime()
+        scene.tick(0.)
+        old = scene.policy.next_plan
+        self.assertEqual((2, ('bot', 2), 4, 'penetration'), old['key'])
+        scene.frame['line_revision'] += 1
+        self.assertEqual(0, scene.tick(.1)['candidate']['shell_index'])
+        self.assertIsNone(scene.policy.next_plan)
+        self.assertIsNone(scene.policy.current_row(old))
+        scene.policy.atomic_clock = lambda: 0.
+        renewed, status = scene.policy.refresh_next_at_trigger(.1)
+        self.assertEqual('verified', status)
+        self.assertEqual(old['key'], renewed['key'])
+        self.assertNotEqual(old['line_stamp'], renewed['line_stamp'])
+        self.assertEqual([(2, ('bot', 2), 4, 'penetration')],
+                         [call[2:] for call in scene.calls if call[:2] == (.1, 'atomic')])
+
+    def test_final_trigger_keeps_lower_plan_pending_when_higher_rank_unresolved(self):
+        scene = Observations(targets=2, points=5)
+        scene.passed(0)
+        scene.prime()
+        scene.tick(0.)
+        self.assertEqual(0, scene.policy.next_shell)
+        scene.frame['line_revision'] += 1
+        for sample in range(5):
+            scene.value(2, sample=sample, armor='pending', line='pending')
+        scene.tick(.1)
+        scene.policy.atomic_clock = lambda: 0.
+        self.assertEqual((None, 'higher_rank_pending'), scene.policy.refresh_next_at_trigger(.1))
+        probes = [call for call in scene.calls if call[:2] == (.1, 'atomic')]
+        self.assertTrue(probes)
+        self.assertEqual({2}, set(call[2] for call in probes))
+
     def test_background_visits_all_ammo_targets_points_and_he_independently(self):
         scene = Observations()
         scene.passed()

@@ -86,7 +86,7 @@ Do not validate this build against screenshots expecting those old Repair button
 | Fixture transitions | Equipment/drop/governor/baseline/matrix/rewards select existing current fixtures; returning to Normal clears every prior scene flag. Network/replay never loads a single-player fixture. |
 | Ammo warning cancellation | Empty ammo -> Join -> Cancel -> supply ammo or retry: native validation opens again and successful confirmation reaches waiting room. No restart needed. |
 | Player control off | No input wrapper or automatic vehicle changes. |
-| Player control enabled | Each battle begins manually; grave key toggles once per physical press in arcade, sniper and strategic mode. Chat/input/menu focus does not toggle. Native local message only; no player chat packet. |
+| Player control enabled | Checked channels start once when the battle is live and the native input handler is ready. The grave key toggles once per physical press in arcade, sniper and strategic mode. Chat, input or menu focus suppresses the hotkey. A local notification reports the state. |
 | Countdown key | Press during countdown, release, then press after battle begins; the live toggle still works. A missed countdown release must not latch a later live press. |
 | Automatic planning | The player owns no Bot force-balance actor; hidden enemies do not become contacts. A nonempty blocked probe receipt is rejected for collision/water/grade. Movement alone or repeated pivoting is not acceptance. |
 | Mouse/script | Toggle/Stop/Fire and bounded timed driving use the same controller. Driving replaces the automatic writer. Stop clears movement and its aim source, while admitted shots/bursts settle; next round ignores old journal commands. |

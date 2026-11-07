@@ -128,7 +128,7 @@ class FullControllerBoundaryTests(unittest.TestCase):
 
     def test_wrapper_imports_no_legacy_automatic_policy(self):
         source = Path(__import__(PlayerControl.__module__, fromlist=['x']).__file__)
-        tree = ast.parse(source.read_text())
+        tree = ast.parse(source.read_text(encoding='utf-8'))
         forbidden = {'navigation', 'weapon', 'aiming', 'ammunition', 'strategy',
             'traffic', 'targeting', 'tactics', 'hull_alignment', 'direct_engagement',
             'fire_admission', 'wrecks', 'pathfinding', 'parking', 'cover'}
@@ -369,6 +369,33 @@ class FullControllerBoundaryTests(unittest.TestCase):
             self.assertFalse(self.control.active)
         self.control.close()
         self.assertEqual('manual', handler.handleKeyEvent(None))
+
+    def test_launcher_start_waits_for_live_input_then_hotkey_can_stop_and_restart(self):
+        import gui.mods.offline_lan_0922.player_control as module
+
+        control = self.control
+        control._auto_start_pending = True
+        control.input_available = lambda: False
+        self.owner._battle_live = False
+        control.update(.1, .1)
+        self.assertFalse(control.active)
+        self.owner._battle_live = True
+        control.update(.1, .2)
+        self.assertFalse(control.active)
+        control.input_available = lambda: True
+        control.update(.1, .3)
+        self.assertTrue(control.active)
+        self.assertEqual(1, sum(call[0] == 'start' for call in self.runtime.calls))
+        with mock.patch.dict(sys.modules, {'Keys': types.SimpleNamespace(KEY_GRAVE=41)}), \
+                mock.patch.object(module, '_current', control):
+            self.assertTrue(module.handle_key(True, 41))
+            self.assertFalse(control.active)
+            control.update(.1, .4)
+            self.assertFalse(control.active)
+            module.handle_key(False, 41)
+            self.assertTrue(module.handle_key(True, 41))
+            self.assertTrue(control.active)
+        self.assertEqual(2, sum(call[0] == 'start' for call in self.runtime.calls))
 
     def test_native_mailbox_keeps_all_eight_masks_and_exact_automatic_trigger_token(self):
         from test_port_0922_battle_runtime import _LANInputSender
