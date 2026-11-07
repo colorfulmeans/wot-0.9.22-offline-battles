@@ -623,6 +623,62 @@ class AutomaticFireAdmissionTests(AutomaticFireScene):
         self.assertEqual('auto_lane_geometry_unknown', self.control.last_fire_failure)
         self.assert_unspent()
 
+    def test_wreck_envelope_refines_a_gap_and_skips_a_missed_box(self):
+        wreck = self.vehicle(43, (0., -.45, 50.), 2)
+        record = self.battle._records['bot:43']
+        record['state'].update(alive=False, health=0)
+        record['native_remote'] = True
+        wreck.health = 0
+        descriptor = wreck.typeDescriptor
+        descriptor.hull.hitTester.bbox = (
+            f._Vector(-1.7, -.2, -3.5), f._Vector(1.7, .8, 3.5))
+        descriptor.turret.gunPosition = f._Vector(0., 2.2, 0.)
+        tester = descriptor.gun.hitTester
+        tester.localHitTest = mock.Mock(wraps=tester.localHitTest)
+
+        # The union of attached boxes covers the ray between the hull and
+        # barrel. The native components leave that space open.
+        self.assertTrue(self.friendly_verdict()['clear'])
+        self.assertTrue(tester.localHitTest.called)
+        for call in tester.localHitTest.call_args_list:
+            start, end = call.args
+            self.assertLess((end - start).length, 7.01)
+
+        # Still inside the cheap radius, but clear of the actual box.
+        self.pose(wreck, (4., -.45, 50.))
+        tester.localHitTest.reset_mock()
+        self.step()
+        self.assertTrue(self.friendly_verdict()['clear'])
+        tester.localHitTest.assert_not_called()
+
+        self.pose(wreck, (0., .8, 50.))
+        self.step()
+        self.assertFalse(self.friendly_verdict()['clear'])
+        self.assertFalse(self.fire())
+        self.assert_unspent()
+
+        self.pose(wreck, (0., -.45, 50.))
+        self.step()
+        self.lay()
+        self.assertEqual('clear', self.candidate['line'])
+        self.assertTrue(self.fire(), self.admission.receipt)
+        self.assertEqual(19, self.battle._gun_state.ammo[0])
+
+    def test_wreck_with_incomplete_bounds_keeps_its_native_contact(self):
+        wreck = self.vehicle(43, (0., -.45, 50.), 2)
+        self.battle._records['bot:43']['state'].update(alive=False, health=0)
+        wreck.health = 0
+        descriptor = wreck.typeDescriptor
+        descriptor.hull.hitTester.bbox = (
+            f._Vector(-1.7, -.2, -3.5), f._Vector(1.7, .8, 3.5))
+        tester = descriptor.gun.hitTester
+        tester.bbox = None
+        tester.localHitTest = mock.Mock(return_value=((1., f._Vector(0., 0., -1.), 1., 0),))
+        self.assertFalse(self.friendly_verdict()['clear'])
+        self.assertTrue(tester.localHitTest.called)
+        self.assertFalse(self.fire())
+        self.assert_unspent()
+
     def test_missing_attached_friend_gun_cannot_certify_a_clear_first_trigger(self):
         friend = self.friend_beside_barrel_path()
         friend.appearance.turretMatrix.setRotateY(math.pi/2.)

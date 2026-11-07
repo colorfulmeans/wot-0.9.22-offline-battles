@@ -16,7 +16,13 @@ import time
 from .. import equipment_mechanics
 from .. import shot_geometry
 from .. import siege_mechanics
-from .attack_policy import AttackPolicy, _planning_pose, native_source_pose
+from ..entities.remote_vehicle import (
+    collide_vehicle_at_matrix, vehicle_target_bounds_at_matrix)
+from ..projectile_runtime import (
+    PROJECTILE_BROADPHASE_RADIUS, point_in_expanded_segment_bounds,
+    point_segment_distance_sq)
+from .attack_policy import (
+    AttackPolicy, _planning_pose, native_geometry_complete, native_source_pose)
 from .copied import bot_runtime as copied_runtime
 from .copied import spg_positions
 from .copied import bot_tactics
@@ -64,6 +70,25 @@ def _angle(value):
 
 def _distance(first, second):
     return math.hypot(first[0] - second[0], first[2] - second[2])
+
+
+def _clip_wreck_chord(first, last, bounds):
+    """Restrict the precise wreck test to the coarse envelope's overlap."""
+    if bounds is None:
+        return first, last
+    entry = shot_geometry.segment_box_entry_distance(first, last, bounds)
+    if entry is None:
+        return None
+    tail = shot_geometry.segment_box_entry_distance(last, first, bounds)
+    if tail is None:
+        return first, last
+    delta = tuple(last[axis] - first[axis] for axis in range(3))
+    length = math.sqrt(sum(value * value for value in delta))
+    # Preserve grazing contacts on the boundaries of the envelope.
+    lo = max(0., entry - .001) / length
+    hi = min(length, length - tail + .001) / length
+    return (tuple(first[axis] + delta[axis] * lo for axis in range(3)),
+            tuple(first[axis] + delta[axis] * hi for axis in range(3)))
 
 
 def _field(value, name, default=None):
@@ -567,6 +592,42 @@ class _ForegroundGeometry(CopiedBattleGeometry):
 
     def _server_entity(self, entity_id):
         return self.player_runtime.owner._server_entity(entity_id)
+
+    def _wreck_blocks_bot_path(self, rows, points, lane_ends=()):
+        """An envelope hit only selects the chord for native component tests."""
+        radius = PROJECTILE_BROADPHASE_RADIUS
+        radius_sq = radius ** 2
+        chords = tuple(zip(points, points[1:]))
+        for record, vehicle, position in rows:
+            if any(record is excluded for excluded in lane_ends):
+                continue
+            nearby = [(first, last) for first, last in chords
+                      if point_in_expanded_segment_bounds(position, first, last, radius)
+                      and point_segment_distance_sq(position, first, last) <= radius_sq]
+            if not nearby:
+                continue
+            if not native_geometry_complete(vehicle):
+                raise ValueError('Missing attached wreck collision geometry')
+            if record.get('local') and self._local_matrix is not None:
+                body, chassis = self._local_body_pose(), self._local_matrix
+            else:
+                body, chassis = self._projectile_vehicle_matrices(record, vehicle)
+            math_module = self._runtime.math
+            bounds = vehicle_target_bounds_at_matrix(
+                vehicle, body, math_module, chassis_matrix=chassis,
+                require_complete=True)
+            for first, last in nearby:
+                segment = _clip_wreck_chord(first, last, bounds)
+                if segment is None:
+                    continue
+                if collide_vehicle_at_matrix(
+                        vehicle, body, self._vector(segment[0]), self._vector(segment[1]),
+                        math_module, chassis_matrix=chassis):
+                    self._wreck_lane_evidence(record, vehicle, points, True)
+                    return True
+            self._wreck_lane_evidence(record, vehicle, points, False)
+        # Landed turrets remain separate obstacles on the server clock.
+        return CopiedBattleGeometry._wreck_blocks_bot_path(self, (), points, lane_ends)
 
     def _bot_direct_launch_origin(self, source, descriptor, shell_index,
                                   fire_seq, yaw, pitch, flight_time=0.):
