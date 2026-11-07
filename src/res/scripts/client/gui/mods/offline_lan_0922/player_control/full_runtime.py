@@ -21,6 +21,7 @@ from .copied import bot_runtime as copied_runtime
 from .copied import spg_positions
 from .copied import bot_tactics
 from .copied import capture_orders
+from .copied.ai import driver as copied_driver
 from .copied.ai import traffic as copied_traffic
 from .copied.artillery_controller import ArtilleryController
 from .copied.battle_geometry import CopiedBattleGeometry
@@ -1039,7 +1040,7 @@ class FullPlayerRuntime(object):
             return None
         if policy.decision['action'] == 'firing_position' and (
                 row.get('mechanical') != 'hull_laying' or
-                not self._native_hull_laying or self._native_hull_laying['refused']):
+                self._last_navigation.get('owner') != 'copied_combat_hull_aim'):
             return None
         return row
 
@@ -2411,13 +2412,16 @@ class FullPlayerRuntime(object):
         if self.controller is None or now - self._attack_log_at < STRATEGY_SECONDS:
             return
         policy = self.attack_policy.status()
+        navigation = policy['navigation'] or {}
         gun, state = self.gun, self.state
         key = (policy['phase'], policy['reason'], policy['shell'], policy['target'],
                policy['sample'], policy['next_shell'], policy['next_target'], policy['next_sample'],
                policy['next_status'], policy['background_coverage'],
                state.get('gun_aligned'), self.weapon.verified, gun.shot_index, gun.pending_index,
                self._last_committed_shot_seq, (self._shell_receipt or {}).get('at'),
-               state.get('siege_state'), state.get('_siege_intent'))
+               state.get('siege_state'), state.get('_siege_intent'),
+               policy['line'], policy['mechanical'],
+               navigation.get('owner'), navigation.get('reason'))
         if key == self._attack_log_key:
             return
         self._attack_log_key, self._attack_log_at = key, now
@@ -2815,6 +2819,17 @@ class FullPlayerRuntime(object):
         """Preserve ordinary copied handoffs; bind only the new armour search."""
         decision = self.attack_policy.decision
         action = decision.get('action')
+        observation = self._native_hull_laying
+        if observation is not None:
+            handoff = observation.get('handoff')
+            if (action not in ('firing_position', 'wait', 'preaim') or
+                    observation['gun'] is not self.gun or
+                    observation['shell'] != self.gun.shot_index or
+                    handoff is not None and _distance(self.state['position'],
+                        handoff['position']) >= copied_driver.WAYPOINT_ARRIVAL_RADIUS):
+                self._native_hull_laying = None
+            elif action != 'firing_position':
+                self._release_native_hull_laying('native_pivot_lost_proof', now)
         if action == 'firing_position':
             self._move_episode = None
             return self._ordinary_firing_order(order, now)
@@ -2824,7 +2839,6 @@ class FullPlayerRuntime(object):
                 self.attack_policy.navigation_result(dict(self._last_navigation,
                     action='search_penetration', status='expired', at=now))
             self._move_episode = None
-            self._native_hull_laying = None
             if action == 'retreat' and decision['reason'] == 'no_he_or_verified_penetration':
                 return self._unusable_ammo_retreat(order, now)
             return order
@@ -2894,6 +2908,14 @@ class FullPlayerRuntime(object):
                       fire_allowed=False, combat_mode='player_' + action)
         return result
 
+    def _release_native_hull_laying(self, reason, now):
+        observation = self._native_hull_laying
+        if observation is not None and 'handoff' not in observation:
+            # Rechecking a line at the same position cannot interrupt the
+            # drive that the previous failed pivot just handed back.
+            observation['handoff'] = dict(reason=reason, at=now,
+                                          position=tuple(self.state['position']))
+
     def _ordinary_firing_order(self, order, now):
         """Bind new per-point evidence to the copied existing manoeuvre owner.
 
@@ -2911,12 +2933,17 @@ class FullPlayerRuntime(object):
                            row['kind'] == order.get('target_kind')), None)
             target = target or next(iter(self._targets), None)
             if target is None:
+                self._release_native_hull_laying('native_pivot_lost_proof', now)
                 return order
         solution = candidate.get('solution') or request.get('solution') or {}
         mechanical = candidate.get('mechanical')
         protected = bool(order.get('parking_phase') or order.get('empty_ammo') or
             order.get('combat_mode') in ('base_defense', 'low_health_retreat',
                 'magazine_reload_retreat', 'withdraw'))
+        can_lay_hull = (mechanical == 'hull_laying' and candidate.get('line') == 'clear' and
+                        candidate['shell_index'] == self.gun.shot_index and not protected)
+        if not can_lay_hull:
+            self._release_native_hull_laying('native_pivot_lost_proof', now)
         if candidate.get('line') == 'friendly_blocked':
             blocker = request.get('blocker') or candidate.get('blocker') or {}
             active = self.engine._friendly_repositions.get(self.actor_id)
@@ -2934,37 +2961,35 @@ class FullPlayerRuntime(object):
             if active or protected:
                 return order
             return self._resume_firing_approach(order, target)
-        if (mechanical == 'hull_laying' and candidate.get('line') == 'clear' and
-                candidate['shell_index'] == self.gun.shot_index and not protected):
+        if can_lay_hull:
             identity = self.engine._artillery_target_identity(target)
             observation = self._native_hull_laying
             yaw = float(self.state['yaw'])
-            if observation is None or observation['target'] != identity:
-                observation = self._native_hull_laying = dict(target=identity,
-                    progress_at=now, refused=False)
-            bearing = solution.get('yaw', yaw)
-            error = abs(_angle(bearing - yaw))
-            if error < observation.get('best_error', float('inf')) - NATIVE_ANGLE_TOLERANCE:
-                observation.update(best_error=error, progress_at=now)
-            observation['refused'] = bool(observation['refused'] or
-                'drive' not in self.features or
-                now < self.state.get('_native_rotation_refused_until', 0.) or
-                now - observation['progress_at'] >= MECHANICAL_STALL_SECONDS)
-            if observation['refused']:
-                self._last_navigation = dict(status='refused', action='firing_position',
-                    reason='native_pivot_stalled', owner='copied_ordinary_navigation')
-                return self._resume_firing_approach(order, target)
-            # The copied combat_hull_aim only pivots a stationary engagement;
-            # a synthetic lateral goal incorrectly bypasses this whole branch.
-            result = dict(order, move_position=tuple(self.state['position']),
-                face_position=target['position'], throttle_override=0.,
-                combat_mode='engage', fire_allowed=False)
-            self._last_navigation = dict(status='aligning', action='firing_position',
-                reason=solution.get('mechanical_reason'), owner='copied_combat_hull_aim')
-            return result
-        self._native_hull_laying = None
+            error = abs(_angle(solution.get('yaw', yaw) - yaw))
+            if observation is None or ('handoff' not in observation and observation['target'] != identity):
+                observation = self._native_hull_laying = dict(target=identity, gun=self.gun,
+                    shell=self.gun.shot_index, progress_at=now, progress_yaw=yaw, best_error=error)
+            if 'handoff' not in observation:
+                if (abs(_angle(yaw - observation['progress_yaw'])) >= NATIVE_ANGLE_TOLERANCE and
+                        error < observation['best_error'] - NATIVE_ANGLE_TOLERANCE):
+                    observation.update(best_error=error, progress_at=now, progress_yaw=yaw)
+                if ('drive' not in self.features or
+                        now < self.state.get('_native_rotation_refused_until', 0.) or
+                        now - observation['progress_at'] >= MECHANICAL_STALL_SECONDS):
+                    self._release_native_hull_laying('native_pivot_stalled', now)
+                else:
+                    # The copied combat_hull_aim pivots a stationary engagement.
+                    self._last_navigation = dict(status='aligning', action='firing_position',
+                        reason=solution.get('mechanical_reason'), owner='copied_combat_hull_aim')
+                    return dict(order, move_position=tuple(self.state['position']),
+                        face_position=target['position'], throttle_override=0.,
+                        combat_mode='engage', fire_allowed=False)
+        handoff = (self._native_hull_laying or {}).get('handoff')
         self._last_navigation = dict(status='waiting', action='firing_position',
-            reason=decision.get('reason'), owner='copied_ordinary_navigation')
+            reason=handoff['reason'] if handoff else decision.get('reason'),
+            owner='copied_ordinary_navigation')
+        if handoff is not None:
+            self._last_navigation['pivot_handoff'] = dict(handoff)
         return order if protected else self._resume_firing_approach(order, target)
 
     def _unusable_ammo_retreat(self, order, now):

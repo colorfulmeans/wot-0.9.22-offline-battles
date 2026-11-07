@@ -445,6 +445,69 @@ class MovingTraverseConsumerTests(TraverseHarness, unittest.TestCase):
                 self.assertEqual(0, scene.control.automatic_commits)
                 self.assertIsNone(scene.runtime.attack_policy.search_started)
 
+    def test_amx_1948_flickering_lane_does_not_retake_hull_from_navigation(self):
+        limit = math.radians(10.)
+        for next_event in ('new_position', 'executable_shot'):
+            with self.subTest(next_event=next_event):
+                scene = self.scene(limits=(-limit, limit), clip=3, bearing=.65, rate=0.)
+                runtime = scene.runtime
+                navigator = runtime.engine.navigator
+                next_target = navigator.next_target
+                lane_verdict = runtime.geometry._bot_friendly_path_verdict
+                corner = (-12., 0., 10.)
+                lane_clear = True
+
+                def observed_route(bot, position, goal, path_key, *args, **kwargs):
+                    original = next_target(bot, position, goal, path_key, *args, **kwargs)
+                    if bot != runtime.actor_id or math.hypot(goal[0] - position[0],
+                                                            goal[2] - position[2]) < 3.:
+                        return original
+                    navigator.bot_states[bot].update(navigation_status='safe', last_target=corner)
+                    return corner
+
+                def observed_lane(*args, **kwargs):
+                    return lane_verdict(*args, **kwargs) if lane_clear else dict(clear=False)
+
+                with mock.patch.object(navigator, 'next_target', side_effect=observed_route), \
+                        mock.patch.object(runtime.geometry, '_bot_friendly_path_verdict',
+                                          side_effect=observed_lane):
+                    self.advance_until(scene, lambda: scene.trace[-1]['hull_aiming'])
+                    self.assertGreater(scene.trace[-1]['sender'][1], 0.)
+                    before = tuple(scene.battle._gun_state.ammo)
+                    for index in range(64):
+                        # The native sight verdict changes with hull pose, while the
+                        # hull stays on the same patch of ground in the live incident.
+                        lane_clear = bool(index % 2)
+                        scene.set_hull(.001 * (index + 1))
+                        row = scene.tick()
+                        candidate = runtime.attack_policy.decision['candidate']
+                        self.assertEqual('clear' if lane_clear else 'unknown', candidate['line'])
+                        self.assertEqual('copied_ordinary_navigation',
+                                         runtime._last_navigation['owner'])
+                        if index < 2:
+                            self.assertLess(row['sender'][1], 0., row)
+                        self.assertEqual(corner, row['order']['move_position'])
+                        self.assertFalse(row['hull_aiming'])
+                    self.assertEqual(before, tuple(scene.battle._gun_state.ammo))
+                    self.assertEqual(3, scene.battle._gun_state.clip)
+                    scene.trigger.assert_not_called()
+                    self.assertIsNone(runtime.attack_policy.search_started)
+
+                    if next_event == 'new_position':
+                        scene.position = (-1.49, 0., 0.)
+                        scene.set_hull(.07)
+                        self.assertFalse(scene.tick()['hull_aiming'])
+                        scene.position = (-1.5, 0., 0.)
+                        scene.set_hull(.071)
+                        self.advance_until(scene, lambda: scene.trace[-1]['hull_aiming'])
+                        self.assertGreater(scene.trace[-1]['sender'][1], 0.)
+                    else:
+                        scene.set_hull(scene.bearing)
+                        scene.rotator_enabled = True
+                        self.advance_until(scene, lambda: scene.control.automatic_commits == 1)
+                        self.assertEqual((0., 0., True), scene.trace[-1]['sender'])
+                        self.assertEqual(1, len(scene.launches()))
+
     def test_limited_clip_trigger_commits_three_rounds_without_revalidating_tails(self):
         scene = self.scene(clip=6, burst=3)
         scene.rotator_enabled = True
