@@ -10730,6 +10730,21 @@ class BotRuntime(object):
         own['_radio_ground_goal'] = (key, result)
         return result
 
+    @staticmethod
+    def _observe_occupied_route_arrival(own, position, now, replan_generation):
+        leg = own.get('_occupied_route_leg')
+        if leg is None or len(leg) != 3:
+            return False
+        key, target, metadata = leg
+        if (metadata.get('phase') != 'active' or
+                metadata['epoch'][1] != replan_generation or
+                _distance(position, target) > ai_driver.WAYPOINT_ARRIVAL_RADIUS):
+            return False
+        metadata.update(phase='completed', completed_at=now)
+        own.setdefault('_occupied_route_targets', {})[key] = (
+            now+TACTICAL_REFRESH_SECONDS, None, True)
+        return True
+
     def _occupied_route_target(self, bot_id, position, goal, now, direct_only=False):
         """A bounded temporary bypass of an occupied travel point, never a wait."""
         own = self.states.get(int(bot_id))
@@ -10780,12 +10795,8 @@ class BotRuntime(object):
                     leg = (key, leg[1], metadata)
                     own['_occupied_route_leg'] = leg
                     epoch_action = 'geometry_revalidation'
-            if (leg is not None and metadata.get('phase') != 'completed' and
-                    _distance(position, leg[1]) <= ai_driver.WAYPOINT_ARRIVAL_RADIUS):
-                metadata.update(epoch=epoch, phase='completed', completed_at=now)
-                leg = (key, leg[1], metadata)
-                own['_occupied_route_leg'] = leg
-                cache[key] = (now+TACTICAL_REFRESH_SECONDS, None, True)
+            if self._observe_occupied_route_arrival(own, position, now, epoch[1]):
+                metadata = leg[2]
                 # Retire only this post-navigation modifier. Returning None
                 # leaves the original checked corner and driver/retry owners
                 # in charge; it is not permission to cross the occupied hull.
@@ -11023,6 +11034,12 @@ class BotRuntime(object):
             authority_state['route_wreck_blocked'] = False
             authority_state['_occupied_route_point'] = False
             authority_state['_occupied_route_bypass_observations'] = []
+            # Observe arrival before aim/route ownership can hide the bypass
+            # or the driver can carry the hull beyond its arrival radius.
+            nav_state = getattr(self.navigator, 'bot_states', {}).get(int(bot_id), {})
+            self._observe_occupied_route_arrival(
+                authority_state, position, state.get('now', 0.0),
+                nav_state.get('replan_generation', 0))
         stop_at_goal = mode not in ('route', 'advance')
         if self.navigator is None:
             state['navigation_stop_at_target'] = stop_at_goal

@@ -111,6 +111,39 @@ class RecordedHandoffTests(unittest.TestCase):
         self.assertTrue(own['route_wreck_blocked'])
         self.assertFalse(receipt['occupied_bypass'][-1]['native_clearance_claimed'])
 
+    def test_arrived_amx_bypass_is_not_reissued_after_engage_handoff(self):
+        runtime, grid, _, _ = self.occupied_emil()
+        corner = (54., .267, 102.)
+        bypass = (46.335449569, .323, 104.292305977)
+        reached = (45.6, .3, 104.9)
+        after_handoff = (50.251281614, .298, 102.852890882)
+        key = (grid.cell_for(corner), True)
+        own = runtime.states[12]
+        own.update(team=2, half_length=3.5196011066, half_width=1.6997820139,
+            _occupied_route_leg=(key, bypass, dict(epoch=(0, 1), phase='active')),
+            _occupied_route_targets={key: (4123., bypass, True)})
+        runtime._physical_parking_occupancy.return_value = [
+            (None, (59.306400299, .209700003, 107.579597473), 4.531514173)]
+        runtime.navigator.observe_direct_target = mock.Mock(return_value=None)
+        runtime.navigator.next_target = mock.Mock(return_value=corner)
+        runtime.navigator.remember_runtime_target = mock.Mock()
+        runtime._navigation_height_columns = None
+        runtime._route_lane_target = lambda bot, pos, goal, selected, *args: selected
+        runtime._navigation_target_impl(12, reached, reached,
+            dict(combat_mode='engage', throttle_override=0.),
+            dict(now=4119.962, speed=0., yaw=1.))
+        grid.static_hull_revision += 1
+
+        result = runtime._navigation_target_impl(12, after_handoff, (108.2138, 0., 122.5995),
+            dict(combat_mode='route', route_id='class_td_rim_east', route_index=2),
+            dict(now=4122.763, speed=0., yaw=1.))
+        self.assertEqual(corner, result)
+        runtime.navigator.remember_runtime_target.assert_not_called()
+        receipt = own['_navigation_target_receipt']['occupied_bypass'][-1]
+        self.assertEqual('completed_handoff', receipt['reason'])
+        self.assertEqual(4119.962, receipt['completed_at'])
+        self.assertFalse(receipt['native_clearance_claimed'])
+
     def test_reported_cached_bypass_cannot_readmit_retired_target(self):
         runtime = self.runtime
         p=(180.1784,-9.4646,-261.9659)

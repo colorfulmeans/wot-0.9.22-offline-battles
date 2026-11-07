@@ -2385,8 +2385,8 @@ class LauncherWindow(object):
                 self._log(self._t(
                     "Could not create the error report: %s") % error)
             else:
-                self._log(self._t("Created error report: %s") %
-                          result["path"])
+                display_path = os.path.realpath(result["path"])
+                self._log(self._t("Created error report: %s") % display_path)
                 self._log(self._t("Included files: %s") %
                           ", ".join(result["included"]))
                 if result["missing"]:
@@ -2403,7 +2403,7 @@ class LauncherWindow(object):
                         "Could not select the report in Windows Explorer: "
                         "%s") % error)
                 self.root.after(
-                    0, lambda: self._show_report_send_reminder(result["path"]))
+                    0, lambda: self._show_report_send_reminder(display_path))
             finally:
                 self._report_busy = False
                 self.root.after(0, self._update_action_controls)
@@ -2594,7 +2594,8 @@ class LauncherWindow(object):
             self._log(self._t(
                 "Could not create the error report: %s") % error)
             return None
-        self._log(self._t("Created error report: %s") % result["path"])
+        self._log(self._t("Created error report: %s") %
+                  os.path.realpath(result["path"]))
         self._log(self._t("Included files: %s") %
                   ", ".join(result["included"]))
         return result["path"]

@@ -636,6 +636,11 @@ class _PlayerBehaviorEngine(copied_runtime.BotRuntime):
         return int(state.get('siege_state', 0)) in (
             siege_mechanics.SWITCHING_ON, siege_mechanics.SWITCHING_OFF)
 
+    def _update_bot_siege_intent(self, state, command, target, step):
+        contact = command.pop('_player_siege_contact', None)
+        return copied_runtime.BotRuntime._update_bot_siege_intent(
+            self, state, command, target if target is not None else contact, step)
+
     def _set_bot_siege_state(self, state, siege_state, duration=0., transition_total=None):
         desired = int(siege_state) in (siege_mechanics.ENABLED, siege_mechanics.SWITCHING_ON)
         if int(siege_state) == int(state.get('siege_state', 0)):
@@ -798,7 +803,9 @@ class _PlayerBehaviorEngine(copied_runtime.BotRuntime):
         if candidate is None:
             # Strategic contacts may steer navigation, but cannot publish a
             # second direct aim point while the player policy awaits proof.
-            return dict(command, fire_allowed=False, aim_position=None), None
+            # The copied mode switch uses that contact before the gun can lay.
+            return dict(command, fire_allowed=False, aim_position=None,
+                        _player_siege_contact=target), None
         context = self.player_runtime.geometry._bot_aim_context(source, target)
         sample = candidate['solution'].get('sample_value')
         if context is not None and sample is not None:
@@ -2409,7 +2416,8 @@ class FullPlayerRuntime(object):
                policy['sample'], policy['next_shell'], policy['next_target'], policy['next_sample'],
                policy['next_status'], policy['background_coverage'],
                state.get('gun_aligned'), self.weapon.verified, gun.shot_index, gun.pending_index,
-               self._last_committed_shot_seq, (self._shell_receipt or {}).get('at'))
+               self._last_committed_shot_seq, (self._shell_receipt or {}).get('at'),
+               state.get('siege_state'), state.get('_siege_intent'))
         if key == self._attack_log_key:
             return
         self._attack_log_key, self._attack_log_at = key, now
@@ -2418,6 +2426,7 @@ class FullPlayerRuntime(object):
             loaded=gun.shot_index, queued=gun.pending_index, clip=gun.clip, stock=list(gun.ammo),
             reload=gun.reload_time, aligned=bool(state.get('gun_aligned')),
             shot_seq=self._last_committed_shot_seq, source_verified=self.weapon.verified,
+            siege_state=state.get('siege_state'), siege_intent=state.get('_siege_intent'),
             source_point=self.weapon.source_point or self.weapon.motion_point,
             actual=(state['turret_yaw'], state['gun_pitch']),
             desired=(intention.get('turret_yaw'), intention.get('gun_pitch')),

@@ -1803,8 +1803,8 @@
           "_exact_int"
         ]
       },
-      "copied_lines": 19229,
-      "copied_sha256": "e36f7bbf6d9097ec39b1380eae905ca7193ad48e142fd473d997ba9de220247a",
+      "copied_lines": 19246,
+      "copied_sha256": "b1ee5bde0d2d8da4e52eab2bee68d24ee402cbb466c2c24aa90839039705436a",
       "declarations": [
         {
           "end_line": 180,
@@ -2389,7 +2389,7 @@
           "name": "_server_order_signature"
         },
         {
-          "end_line": 19218,
+          "end_line": 19235,
           "kind": "ClassDef",
           "line": 1996,
           "name": "BotRuntime"
@@ -3799,879 +3799,885 @@
           "name": "BotRuntime._radio_ground_goal"
         },
         {
-          "end_line": 10887,
+          "end_line": 10746,
           "kind": "FunctionDef",
-          "line": 10733,
+          "line": 10734,
+          "name": "BotRuntime._observe_occupied_route_arrival"
+        },
+        {
+          "end_line": 10898,
+          "kind": "FunctionDef",
+          "line": 10748,
           "name": "BotRuntime._occupied_route_target"
         },
         {
-          "end_line": 10766,
+          "end_line": 10781,
           "kind": "FunctionDef",
-          "line": 10754,
+          "line": 10769,
           "name": "BotRuntime._occupied_route_target.finish"
         },
         {
-          "end_line": 10796,
+          "end_line": 10807,
           "kind": "FunctionDef",
-          "line": 10794,
+          "line": 10805,
           "name": "BotRuntime._occupied_route_target.admitted"
         },
         {
-          "end_line": 10818,
+          "end_line": 10829,
           "kind": "FunctionDef",
-          "line": 10816,
+          "line": 10827,
           "name": "BotRuntime._occupied_route_target.occupied"
         },
         {
-          "end_line": 10828,
+          "end_line": 10839,
           "kind": "FunctionDef",
-          "line": 10819,
+          "line": 10830,
           "name": "BotRuntime._occupied_route_target.corridor_available"
         },
         {
-          "end_line": 10892,
+          "end_line": 10903,
           "kind": "FunctionDef",
-          "line": 10890,
+          "line": 10901,
           "name": "BotRuntime.navigation_planning_capability"
         },
         {
-          "end_line": 10917,
+          "end_line": 10928,
           "kind": "FunctionDef",
-          "line": 10894,
+          "line": 10905,
           "name": "BotRuntime._refresh_navigation_crush_profiles"
         },
         {
-          "end_line": 10923,
+          "end_line": 10934,
           "kind": "FunctionDef",
-          "line": 10919,
+          "line": 10930,
           "name": "BotRuntime.navigation_crush_capability"
         },
         {
-          "end_line": 10939,
+          "end_line": 10950,
           "kind": "FunctionDef",
-          "line": 10925,
+          "line": 10936,
           "name": "BotRuntime._navigation_recovery_allowed"
         },
         {
-          "end_line": 10957,
+          "end_line": 10968,
           "kind": "FunctionDef",
-          "line": 10942,
+          "line": 10953,
           "name": "BotRuntime._navigation_target"
         },
         {
-          "end_line": 10996,
+          "end_line": 11007,
           "kind": "FunctionDef",
-          "line": 10960,
+          "line": 10971,
           "name": "BotRuntime._record_navigation_handoff"
         },
         {
-          "end_line": 11332,
+          "end_line": 11349,
           "kind": "FunctionDef",
-          "line": 10998,
+          "line": 11009,
           "name": "BotRuntime._navigation_target_impl"
         },
         {
-          "end_line": 11356,
+          "end_line": 11373,
           "kind": "FunctionDef",
-          "line": 11335,
+          "line": 11352,
           "name": "BotRuntime._player_neighbours"
-        },
-        {
-          "end_line": 11394,
-          "kind": "FunctionDef",
-          "line": 11359,
-          "name": "BotRuntime._traffic_stopping_distance"
         },
         {
           "end_line": 11411,
           "kind": "FunctionDef",
-          "line": 11397,
+          "line": 11376,
+          "name": "BotRuntime._traffic_stopping_distance"
+        },
+        {
+          "end_line": 11428,
+          "kind": "FunctionDef",
+          "line": 11414,
           "name": "BotRuntime._cached_traffic_stopping_distance"
         },
         {
-          "end_line": 11451,
+          "end_line": 11468,
           "kind": "FunctionDef",
-          "line": 11413,
+          "line": 11430,
           "name": "BotRuntime._player_vehicle_profile"
         },
         {
-          "end_line": 11475,
+          "end_line": 11492,
           "kind": "FunctionDef",
-          "line": 11453,
+          "line": 11470,
           "name": "BotRuntime._player_collision_profile"
         },
         {
-          "end_line": 11481,
+          "end_line": 11498,
           "kind": "FunctionDef",
-          "line": 11478,
+          "line": 11495,
           "name": "BotRuntime._native_ram_hit_supported"
         },
         {
-          "end_line": 11557,
+          "end_line": 11574,
           "kind": "FunctionDef",
-          "line": 11483,
+          "line": 11500,
           "name": "BotRuntime._ram_reports"
         },
         {
-          "end_line": 11575,
+          "end_line": 11592,
           "kind": "FunctionDef",
-          "line": 11559,
+          "line": 11576,
           "name": "BotRuntime.ack_human_ram_receipt"
         },
         {
-          "end_line": 11586,
+          "end_line": 11603,
           "kind": "FunctionDef",
-          "line": 11577,
+          "line": 11594,
           "name": "BotRuntime._terminal_human_ram_report"
         },
         {
-          "end_line": 11598,
+          "end_line": 11615,
           "kind": "FunctionDef",
-          "line": 11589,
+          "line": 11606,
           "name": "BotRuntime._contact_motion_body"
         },
         {
-          "end_line": 11610,
+          "end_line": 11627,
           "kind": "FunctionDef",
-          "line": 11600,
+          "line": 11617,
           "name": "BotRuntime._contact_motion_bodies"
         },
         {
-          "end_line": 11696,
+          "end_line": 11713,
           "kind": "FunctionDef",
-          "line": 11612,
+          "line": 11629,
           "name": "BotRuntime._guard_tank_translations"
         },
         {
-          "end_line": 11742,
+          "end_line": 11759,
           "kind": "FunctionDef",
-          "line": 11698,
+          "line": 11715,
           "name": "BotRuntime._settle_unresolved_drive_sweep"
         },
         {
-          "end_line": 11752,
+          "end_line": 11769,
           "kind": "FunctionDef",
-          "line": 11745,
+          "line": 11762,
           "name": "BotRuntime._retained_contact_speed"
         },
         {
-          "end_line": 11921,
+          "end_line": 11938,
           "kind": "FunctionDef",
-          "line": 11754,
+          "line": 11771,
           "name": "BotRuntime._apply_tank_contact_response"
         },
         {
-          "end_line": 11943,
+          "end_line": 11960,
           "kind": "FunctionDef",
-          "line": 11923,
+          "line": 11940,
           "name": "BotRuntime._bleed_contact_push"
         },
         {
-          "end_line": 11954,
+          "end_line": 11971,
           "kind": "FunctionDef",
-          "line": 11946,
+          "line": 11963,
           "name": "BotRuntime._wreck_is_active"
         },
         {
-          "end_line": 11965,
+          "end_line": 11982,
           "kind": "FunctionDef",
-          "line": 11957,
+          "line": 11974,
           "name": "BotRuntime._set_wreck_yaw"
         },
         {
-          "end_line": 11994,
+          "end_line": 12011,
           "kind": "FunctionDef",
-          "line": 11967,
+          "line": 11984,
           "name": "BotRuntime._advance_wreck_yaw"
         },
         {
-          "end_line": 12038,
+          "end_line": 12055,
           "kind": "FunctionDef",
-          "line": 11996,
+          "line": 12013,
           "name": "BotRuntime._try_wreck_swept_pose"
         },
         {
-          "end_line": 12109,
+          "end_line": 12126,
           "kind": "FunctionDef",
-          "line": 12040,
+          "line": 12057,
           "name": "BotRuntime._apply_wreck_contact_response"
         },
         {
-          "end_line": 12120,
+          "end_line": 12137,
           "kind": "FunctionDef",
-          "line": 12111,
+          "line": 12128,
           "name": "BotRuntime._trace_ram_wait"
         },
         {
-          "end_line": 12377,
+          "end_line": 12394,
           "kind": "FunctionDef",
-          "line": 12122,
+          "line": 12139,
           "name": "BotRuntime._resolve_human_ram_receipts"
         },
         {
-          "end_line": 12160,
+          "end_line": 12177,
           "kind": "FunctionDef",
-          "line": 12155,
+          "line": 12172,
           "name": "BotRuntime._resolve_human_ram_receipts.receipt_order"
         },
         {
-          "end_line": 12386,
+          "end_line": 12403,
           "kind": "FunctionDef",
-          "line": 12379,
+          "line": 12396,
           "name": "BotRuntime._record_traffic_wait_contact"
         },
         {
-          "end_line": 12416,
+          "end_line": 12433,
           "kind": "FunctionDef",
-          "line": 12388,
+          "line": 12405,
           "name": "BotRuntime._apply_traffic_wait_lease"
         },
         {
-          "end_line": 12460,
+          "end_line": 12477,
           "kind": "FunctionDef",
-          "line": 12418,
+          "line": 12435,
           "name": "BotRuntime._consume_human_contact_pushes"
         },
         {
-          "end_line": 12777,
+          "end_line": 12794,
           "kind": "FunctionDef",
-          "line": 12463,
+          "line": 12480,
           "name": "BotRuntime._resolve_tank_contacts"
         },
         {
-          "end_line": 12616,
+          "end_line": 12633,
           "kind": "FunctionDef",
-          "line": 12596,
+          "line": 12613,
           "name": "BotRuntime._resolve_tank_contacts.contact_armor_probe"
         },
         {
-          "end_line": 12783,
+          "end_line": 12800,
           "kind": "FunctionDef",
-          "line": 12780,
+          "line": 12797,
           "name": "BotRuntime._turret_state_pose"
         },
         {
-          "end_line": 12793,
+          "end_line": 12810,
           "kind": "FunctionDef",
-          "line": 12785,
+          "line": 12802,
           "name": "BotRuntime._turret_pose_is_clear"
         },
         {
-          "end_line": 12838,
+          "end_line": 12855,
           "kind": "FunctionDef",
-          "line": 12796,
+          "line": 12813,
           "name": "BotRuntime._publish_static_hulls"
         },
         {
-          "end_line": 12849,
+          "end_line": 12866,
           "kind": "FunctionDef",
-          "line": 12841,
+          "line": 12858,
           "name": "BotRuntime._target_velocity"
         },
         {
-          "end_line": 12874,
+          "end_line": 12891,
           "kind": "FunctionDef",
-          "line": 12852,
+          "line": 12869,
           "name": "BotRuntime._exact_shot_direction"
         },
         {
-          "end_line": 12898,
+          "end_line": 12915,
           "kind": "FunctionDef",
-          "line": 12876,
+          "line": 12893,
           "name": "BotRuntime._exact_shot_origin"
         },
         {
-          "end_line": 12909,
+          "end_line": 12926,
           "kind": "FunctionDef",
-          "line": 12901,
+          "line": 12918,
           "name": "BotRuntime._world_barrel_angles"
-        },
-        {
-          "end_line": 12917,
-          "kind": "FunctionDef",
-          "line": 12912,
-          "name": "BotRuntime._dispersal_base_direction"
-        },
-        {
-          "end_line": 12928,
-          "kind": "FunctionDef",
-          "line": 12920,
-          "name": "BotRuntime._local_gun_angles_for_world"
         },
         {
           "end_line": 12934,
           "kind": "FunctionDef",
-          "line": 12931,
+          "line": 12929,
+          "name": "BotRuntime._dispersal_base_direction"
+        },
+        {
+          "end_line": 12945,
+          "kind": "FunctionDef",
+          "line": 12937,
+          "name": "BotRuntime._local_gun_angles_for_world"
+        },
+        {
+          "end_line": 12951,
+          "kind": "FunctionDef",
+          "line": 12948,
           "name": "BotRuntime._terrain_pitch"
         },
         {
-          "end_line": 12940,
+          "end_line": 12957,
           "kind": "FunctionDef",
-          "line": 12937,
+          "line": 12954,
           "name": "BotRuntime._static_gun_value"
         },
         {
-          "end_line": 12960,
+          "end_line": 12977,
           "kind": "FunctionDef",
-          "line": 12943,
+          "line": 12960,
           "name": "BotRuntime._effective_gun_pitch_limits"
         },
         {
-          "end_line": 12983,
+          "end_line": 13000,
           "kind": "FunctionDef",
-          "line": 12962,
+          "line": 12979,
           "name": "BotRuntime._effective_gun_yaw_limits"
         },
         {
-          "end_line": 13001,
+          "end_line": 13018,
           "kind": "FunctionDef",
-          "line": 12986,
+          "line": 13003,
           "name": "BotRuntime._pitch_status_at_correction"
         },
         {
-          "end_line": 13039,
+          "end_line": 13056,
           "kind": "FunctionDef",
-          "line": 13004,
+          "line": 13021,
           "name": "BotRuntime._hydraulic_target_correction"
         },
         {
-          "end_line": 13052,
+          "end_line": 13069,
           "kind": "FunctionDef",
-          "line": 13042,
+          "line": 13059,
           "name": "BotRuntime._active_hydraulic_config"
         },
         {
-          "end_line": 13085,
+          "end_line": 13102,
           "kind": "FunctionDef",
-          "line": 13055,
+          "line": 13072,
           "name": "BotRuntime._update_hydraulic_suspension"
         },
         {
-          "end_line": 13104,
+          "end_line": 13121,
           "kind": "FunctionDef",
-          "line": 13088,
+          "line": 13105,
           "name": "BotRuntime._world_solution_reachable"
         },
         {
-          "end_line": 13193,
+          "end_line": 13210,
           "kind": "FunctionDef",
-          "line": 13106,
+          "line": 13123,
           "name": "BotRuntime._local_ballistic_solution"
         },
         {
-          "end_line": 13131,
+          "end_line": 13148,
           "kind": "FunctionDef",
-          "line": 13115,
+          "line": 13132,
           "name": "BotRuntime._local_ballistic_solution.finish"
         },
         {
-          "end_line": 13224,
+          "end_line": 13241,
           "kind": "FunctionDef",
-          "line": 13195,
+          "line": 13212,
           "name": "BotRuntime.bot_aim_point_reachable"
         },
         {
-          "end_line": 13245,
+          "end_line": 13262,
           "kind": "FunctionDef",
-          "line": 13226,
+          "line": 13243,
           "name": "BotRuntime._gun_angle_target_fraction"
         },
         {
-          "end_line": 13257,
+          "end_line": 13274,
           "kind": "FunctionDef",
-          "line": 13247,
+          "line": 13264,
           "name": "BotRuntime._direct_aim_matches"
         },
         {
-          "end_line": 13269,
+          "end_line": 13286,
           "kind": "FunctionDef",
-          "line": 13260,
+          "line": 13277,
           "name": "BotRuntime._artillery_target_identity"
         },
         {
-          "end_line": 13279,
+          "end_line": 13296,
           "kind": "FunctionDef",
-          "line": 13272,
+          "line": 13289,
           "name": "BotRuntime._artillery_source_pose"
         },
         {
-          "end_line": 13303,
+          "end_line": 13320,
           "kind": "FunctionDef",
-          "line": 13281,
+          "line": 13298,
           "name": "BotRuntime._record_artillery_transition"
         },
         {
-          "end_line": 13326,
+          "end_line": 13343,
           "kind": "FunctionDef",
-          "line": 13305,
+          "line": 13322,
           "name": "BotRuntime._cancel_artillery_intent"
         },
         {
-          "end_line": 13333,
+          "end_line": 13350,
           "kind": "FunctionDef",
-          "line": 13328,
+          "line": 13345,
           "name": "BotRuntime._clear_artillery_intents"
         },
         {
-          "end_line": 13375,
+          "end_line": 13392,
           "kind": "FunctionDef",
-          "line": 13335,
+          "line": 13352,
           "name": "BotRuntime._active_artillery_reproof"
         },
         {
-          "end_line": 13402,
+          "end_line": 13419,
           "kind": "FunctionDef",
-          "line": 13377,
+          "line": 13394,
           "name": "BotRuntime._active_artillery_intent"
         },
         {
-          "end_line": 13485,
+          "end_line": 13502,
           "kind": "FunctionDef",
-          "line": 13404,
+          "line": 13421,
           "name": "BotRuntime._create_artillery_intent"
         },
         {
-          "end_line": 13579,
+          "end_line": 13596,
           "kind": "FunctionDef",
-          "line": 13487,
+          "line": 13504,
           "name": "BotRuntime._artillery_reproof_solution"
         },
         {
-          "end_line": 13608,
+          "end_line": 13625,
           "kind": "FunctionDef",
-          "line": 13581,
+          "line": 13598,
           "name": "BotRuntime._track_gunnery_hold"
         },
         {
-          "end_line": 13623,
+          "end_line": 13640,
           "kind": "FunctionDef",
-          "line": 13610,
+          "line": 13627,
           "name": "BotRuntime._gunnery_error"
         },
         {
-          "end_line": 13665,
+          "end_line": 13682,
           "kind": "FunctionDef",
-          "line": 13625,
+          "line": 13642,
           "name": "BotRuntime._aimed_target"
         },
         {
-          "end_line": 13675,
+          "end_line": 13692,
           "kind": "FunctionDef",
-          "line": 13667,
+          "line": 13684,
           "name": "BotRuntime._gunner_ready"
         },
         {
-          "end_line": 13729,
+          "end_line": 13746,
           "kind": "FunctionDef",
-          "line": 13677,
+          "line": 13694,
           "name": "BotRuntime._ballistic_solution"
         },
         {
-          "end_line": 13742,
+          "end_line": 13759,
           "kind": "FunctionDef",
-          "line": 13732,
+          "line": 13749,
           "name": "BotRuntime._ballistic_solution_signature"
         },
         {
-          "end_line": 13766,
+          "end_line": 13783,
           "kind": "FunctionDef",
-          "line": 13745,
+          "line": 13762,
           "name": "BotRuntime._cadenced_ballistic_solution"
         },
         {
-          "end_line": 13979,
+          "end_line": 13996,
           "kind": "FunctionDef",
-          "line": 13769,
+          "line": 13786,
           "name": "BotRuntime._update_gun_aim"
         },
         {
-          "end_line": 13985,
+          "end_line": 14002,
           "kind": "FunctionDef",
-          "line": 13983,
+          "line": 14000,
           "name": "BotRuntime._shot_los_key"
         },
         {
-          "end_line": 13993,
+          "end_line": 14010,
           "kind": "FunctionDef",
-          "line": 13988,
+          "line": 14005,
           "name": "BotRuntime._shot_los_phase"
         },
         {
-          "end_line": 14007,
+          "end_line": 14024,
           "kind": "FunctionDef",
-          "line": 13995,
+          "line": 14012,
           "name": "BotRuntime._queue_shot_lane_identity"
         },
         {
-          "end_line": 14043,
+          "end_line": 14060,
           "kind": "FunctionDef",
-          "line": 14009,
+          "line": 14026,
           "name": "BotRuntime._prepare_shot_lane_work"
         },
         {
-          "end_line": 14085,
+          "end_line": 14102,
           "kind": "FunctionDef",
-          "line": 14045,
+          "line": 14062,
           "name": "BotRuntime._shot_lane_live_records"
         },
         {
-          "end_line": 14105,
+          "end_line": 14122,
           "kind": "FunctionDef",
-          "line": 14087,
+          "line": 14104,
           "name": "BotRuntime._prioritize_close_lane"
         },
         {
-          "end_line": 14316,
+          "end_line": 14333,
           "kind": "FunctionDef",
-          "line": 14108,
+          "line": 14125,
           "name": "BotRuntime._service_shot_lane_work"
         },
         {
-          "end_line": 14138,
+          "end_line": 14155,
           "kind": "FunctionDef",
-          "line": 14134,
+          "line": 14151,
           "name": "BotRuntime._service_shot_lane_work.retire"
         },
         {
-          "end_line": 14236,
+          "end_line": 14253,
           "kind": "FunctionDef",
-          "line": 14140,
+          "line": 14157,
           "name": "BotRuntime._service_shot_lane_work.attempt"
         },
         {
-          "end_line": 14344,
+          "end_line": 14361,
           "kind": "FunctionDef",
-          "line": 14318,
+          "line": 14335,
           "name": "BotRuntime._merge_observation_shot_lanes"
         },
         {
-          "end_line": 14352,
+          "end_line": 14369,
           "kind": "FunctionDef",
-          "line": 14347,
+          "line": 14364,
           "name": "BotRuntime._shot_lane_query_distance"
         },
         {
-          "end_line": 14403,
+          "end_line": 14420,
           "kind": "FunctionDef",
-          "line": 14354,
+          "line": 14371,
           "name": "BotRuntime._shot_clear"
         },
         {
-          "end_line": 14452,
+          "end_line": 14469,
           "kind": "FunctionDef",
-          "line": 14405,
+          "line": 14422,
           "name": "BotRuntime._apply_blocked_direct_aim"
         },
         {
-          "end_line": 14484,
+          "end_line": 14501,
           "kind": "FunctionDef",
-          "line": 14454,
+          "line": 14471,
           "name": "BotRuntime._refresh_shot_clear"
         },
         {
-          "end_line": 14684,
+          "end_line": 14701,
           "kind": "FunctionDef",
-          "line": 14487,
+          "line": 14504,
           "name": "BotRuntime._pack_observations"
         },
         {
-          "end_line": 14699,
+          "end_line": 14716,
           "kind": "FunctionDef",
-          "line": 14687,
+          "line": 14704,
           "name": "BotRuntime._spg_exact_aligned"
         },
         {
-          "end_line": 14759,
+          "end_line": 14776,
           "kind": "FunctionDef",
-          "line": 14701,
+          "line": 14718,
           "name": "BotRuntime._validated_artillery_receipt"
         },
         {
-          "end_line": 14849,
+          "end_line": 14866,
           "kind": "FunctionDef",
-          "line": 14761,
+          "line": 14778,
           "name": "BotRuntime._reject_stale_artillery_receipt"
         },
         {
-          "end_line": 14916,
+          "end_line": 14933,
           "kind": "FunctionDef",
-          "line": 14851,
+          "line": 14868,
           "name": "BotRuntime._artillery_launch_receipt"
         },
         {
-          "end_line": 15000,
+          "end_line": 15017,
           "kind": "FunctionDef",
-          "line": 14918,
+          "line": 14935,
           "name": "BotRuntime._direct_launch_preview"
         },
         {
-          "end_line": 15009,
+          "end_line": 15026,
           "kind": "FunctionDef",
-          "line": 15003,
+          "line": 15020,
           "name": "BotRuntime._friendly_lane_verdict"
         },
         {
-          "end_line": 15025,
+          "end_line": 15042,
           "kind": "FunctionDef",
-          "line": 15011,
+          "line": 15028,
           "name": "BotRuntime._clear_friendly_reposition"
         },
         {
-          "end_line": 15122,
+          "end_line": 15139,
           "kind": "FunctionDef",
-          "line": 15027,
+          "line": 15044,
           "name": "BotRuntime._mark_friendly_reposition"
         },
         {
-          "end_line": 15147,
+          "end_line": 15164,
           "kind": "FunctionDef",
-          "line": 15124,
+          "line": 15141,
           "name": "BotRuntime._physical_parking_occupancy"
         },
         {
-          "end_line": 15172,
+          "end_line": 15189,
           "kind": "FunctionDef",
-          "line": 15149,
+          "line": 15166,
           "name": "BotRuntime._spg_displaced_hold"
         },
         {
-          "end_line": 15253,
+          "end_line": 15270,
           "kind": "FunctionDef",
-          "line": 15175,
+          "line": 15192,
           "name": "BotRuntime._retry_spg_deployment"
         },
         {
-          "end_line": 15314,
+          "end_line": 15331,
           "kind": "FunctionDef",
-          "line": 15255,
+          "line": 15272,
           "name": "BotRuntime._observe_spg_fire_position"
         },
         {
-          "end_line": 15390,
+          "end_line": 15407,
           "kind": "FunctionDef",
-          "line": 15317,
+          "line": 15334,
           "name": "BotRuntime._retry_spg_fire_position"
         },
         {
-          "end_line": 15356,
+          "end_line": 15373,
           "kind": "FunctionDef",
-          "line": 15348,
+          "line": 15365,
           "name": "BotRuntime._retry_spg_fire_position.select"
         },
         {
-          "end_line": 15543,
+          "end_line": 15560,
           "kind": "FunctionDef",
-          "line": 15393,
+          "line": 15410,
           "name": "BotRuntime._artillery_position_order"
         },
         {
-          "end_line": 15638,
+          "end_line": 15655,
           "kind": "FunctionDef",
-          "line": 15545,
+          "line": 15562,
           "name": "BotRuntime._record_artillery_gate"
         },
         {
-          "end_line": 15646,
+          "end_line": 15663,
           "kind": "FunctionDef",
-          "line": 15641,
+          "line": 15658,
           "name": "BotRuntime._gun_angle_rejected"
         },
         {
-          "end_line": 15659,
+          "end_line": 15676,
           "kind": "FunctionDef",
-          "line": 15648,
+          "line": 15665,
           "name": "BotRuntime._gun_angle_combat_order"
         },
         {
-          "end_line": 15686,
+          "end_line": 15703,
           "kind": "FunctionDef",
-          "line": 15661,
+          "line": 15678,
           "name": "BotRuntime._rear_approach_blocked"
         },
         {
-          "end_line": 15714,
+          "end_line": 15731,
           "kind": "FunctionDef",
-          "line": 15688,
+          "line": 15705,
           "name": "BotRuntime._retain_magazine_followup"
         },
         {
-          "end_line": 15776,
+          "end_line": 15793,
           "kind": "FunctionDef",
-          "line": 15716,
+          "line": 15733,
           "name": "BotRuntime._magazine_followup_order"
         },
         {
-          "end_line": 15913,
+          "end_line": 15930,
           "kind": "FunctionDef",
-          "line": 15778,
+          "line": 15795,
           "name": "BotRuntime._rear_laying_order"
         },
         {
-          "end_line": 15924,
+          "end_line": 15941,
           "kind": "FunctionDef",
-          "line": 15916,
+          "line": 15933,
           "name": "BotRuntime._mechanical_approach_speed"
         },
         {
-          "end_line": 15962,
+          "end_line": 15979,
           "kind": "FunctionDef",
-          "line": 15926,
+          "line": 15943,
           "name": "BotRuntime._record_traffic_pivot"
         },
         {
-          "end_line": 16141,
+          "end_line": 16158,
           "kind": "FunctionDef",
-          "line": 15964,
+          "line": 15981,
           "name": "BotRuntime._gun_angle_order"
         },
         {
-          "end_line": 16208,
+          "end_line": 16225,
           "kind": "FunctionDef",
-          "line": 16143,
+          "line": 16160,
           "name": "BotRuntime._friendly_reposition_order"
         },
         {
-          "end_line": 16226,
+          "end_line": 16243,
           "kind": "FunctionDef",
-          "line": 16211,
+          "line": 16228,
           "name": "BotRuntime._direct_preview_values"
         },
         {
-          "end_line": 16247,
+          "end_line": 16264,
           "kind": "FunctionDef",
-          "line": 16228,
+          "line": 16245,
           "name": "BotRuntime._queue_pending_launch"
         },
         {
-          "end_line": 16272,
+          "end_line": 16289,
           "kind": "FunctionDef",
-          "line": 16249,
+          "line": 16266,
           "name": "BotRuntime._report_fire_alignment"
         },
         {
-          "end_line": 16299,
+          "end_line": 16316,
           "kind": "FunctionDef",
-          "line": 16274,
+          "line": 16291,
           "name": "BotRuntime.ack_projectile_launch"
         },
         {
-          "end_line": 16357,
+          "end_line": 16374,
           "kind": "FunctionDef",
-          "line": 16301,
+          "line": 16318,
           "name": "BotRuntime._commit_native_burst_edge"
         },
         {
-          "end_line": 16466,
+          "end_line": 16483,
           "kind": "FunctionDef",
-          "line": 16359,
+          "line": 16376,
           "name": "BotRuntime._commit_burst_edge"
         },
         {
-          "end_line": 16530,
+          "end_line": 16547,
           "kind": "FunctionDef",
-          "line": 16469,
+          "line": 16486,
           "name": "BotRuntime._fire"
         },
         {
-          "end_line": 16565,
+          "end_line": 16582,
           "kind": "FunctionDef",
-          "line": 16532,
+          "line": 16549,
           "name": "BotRuntime._terminate_active_trigger"
         },
         {
-          "end_line": 16624,
+          "end_line": 16641,
           "kind": "FunctionDef",
-          "line": 16568,
+          "line": 16585,
           "name": "BotRuntime._advance_active_burst"
         },
         {
-          "end_line": 16636,
+          "end_line": 16653,
           "kind": "FunctionDef",
-          "line": 16626,
+          "line": 16643,
           "name": "BotRuntime._bounded_burst_step"
         },
         {
-          "end_line": 16649,
+          "end_line": 16666,
           "kind": "FunctionDef",
-          "line": 16638,
+          "line": 16655,
           "name": "BotRuntime._bank_control_step"
         },
         {
-          "end_line": 16798,
+          "end_line": 16815,
           "kind": "FunctionDef",
-          "line": 16652,
+          "line": 16669,
           "name": "BotRuntime.update"
         },
         {
-          "end_line": 16820,
+          "end_line": 16837,
           "kind": "FunctionDef",
-          "line": 16801,
+          "line": 16818,
           "name": "BotRuntime._scan_moving_destructible_bodies"
         },
         {
-          "end_line": 16840,
+          "end_line": 16857,
           "kind": "FunctionDef",
-          "line": 16822,
+          "line": 16839,
           "name": "BotRuntime._run_update_once"
         },
         {
-          "end_line": 16854,
+          "end_line": 16871,
           "kind": "FunctionDef",
-          "line": 16842,
+          "line": 16859,
           "name": "BotRuntime._cover_job_current"
         },
         {
-          "end_line": 16872,
+          "end_line": 16889,
           "kind": "FunctionDef",
-          "line": 16856,
+          "line": 16873,
           "name": "BotRuntime._planning_local_sweep"
         },
         {
-          "end_line": 19205,
+          "end_line": 19222,
           "kind": "FunctionDef",
-          "line": 16875,
+          "line": 16892,
           "name": "BotRuntime._update_once"
         },
         {
-          "end_line": 17162,
+          "end_line": 17179,
           "kind": "FunctionDef",
-          "line": 17146,
+          "line": 17163,
           "name": "BotRuntime._update_once.planner_sample_direction"
         },
         {
-          "end_line": 17233,
+          "end_line": 17250,
           "kind": "FunctionDef",
-          "line": 17174,
+          "line": 17191,
           "name": "BotRuntime._update_once.sample_pose_clear_impl"
         },
         {
-          "end_line": 17247,
+          "end_line": 17264,
           "kind": "FunctionDef",
-          "line": 17235,
+          "line": 17252,
           "name": "BotRuntime._update_once.sample_pose_clear"
         },
         {
-          "end_line": 17274,
+          "end_line": 17291,
           "kind": "FunctionDef",
-          "line": 17249,
+          "line": 17266,
           "name": "BotRuntime._update_once.sample_clear"
         },
         {
-          "end_line": 17334,
+          "end_line": 17351,
           "kind": "FunctionDef",
-          "line": 17276,
+          "line": 17293,
           "name": "BotRuntime._update_once.sample_clear_impl"
         },
         {
-          "end_line": 17854,
+          "end_line": 17871,
           "kind": "FunctionDef",
-          "line": 17850,
+          "line": 17867,
           "name": "BotRuntime._update_once.current_stopping_distance"
         },
         {
-          "end_line": 19218,
+          "end_line": 19235,
           "kind": "FunctionDef",
-          "line": 19207,
+          "line": 19224,
           "name": "BotRuntime.presentation_states"
         }
       ],
@@ -5170,37 +5176,37 @@
         },
         {
           "copied": false,
-          "line": 12552,
+          "line": 12569,
           "source": "gui.mods.offline_lan_0922.environment_push",
           "target": "gui.mods.offline_lan_0922.environment_push"
         },
         {
           "copied": false,
-          "line": 13109,
+          "line": 13126,
           "source": "gui.mods.offline_lan_0922.native_input_diagnostics.write_json_record",
           "target": "gui.mods.offline_lan_0922.native_input_diagnostics.write_json_record"
         },
         {
           "copied": false,
-          "line": 13302,
+          "line": 13319,
           "source": "gui.mods.offline_lan_0922.native_input_diagnostics.write_json_record",
           "target": "gui.mods.offline_lan_0922.native_input_diagnostics.write_json_record"
         },
         {
           "copied": false,
-          "line": 15603,
+          "line": 15620,
           "source": "gui.mods.offline_lan_0922.native_input_diagnostics.detail_record_ready",
           "target": "gui.mods.offline_lan_0922.native_input_diagnostics.detail_record_ready"
         },
         {
           "copied": false,
-          "line": 15603,
+          "line": 15620,
           "source": "gui.mods.offline_lan_0922.native_input_diagnostics.write_json_record",
           "target": "gui.mods.offline_lan_0922.native_input_diagnostics.write_json_record"
         },
         {
           "copied": false,
-          "line": 16912,
+          "line": 16929,
           "source": "gui.mods.offline_lan_0922.roof_crush_test",
           "target": "gui.mods.offline_lan_0922.roof_crush_test"
         },
@@ -5296,37 +5302,37 @@
         },
         {
           "copied": true,
-          "line": 11015,
+          "line": 11026,
           "source": "gui.mods.offline_lan_0922.ai.local_height.LocalHeightLinks",
           "target": "gui.mods.offline_lan_0922.player_control.copied.ai.local_height.LocalHeightLinks"
         },
         {
           "copied": false,
-          "line": 12047,
+          "line": 12064,
           "source": "gui.mods.offline_lan_0922.native_input_diagnostics.battle_review_record",
           "target": "gui.mods.offline_lan_0922.native_input_diagnostics.battle_review_record"
         },
         {
           "copied": false,
-          "line": 12081,
+          "line": 12098,
           "source": "gui.mods.offline_lan_0922.native_input_diagnostics.battle_review_record",
           "target": "gui.mods.offline_lan_0922.native_input_diagnostics.battle_review_record"
         },
         {
           "copied": false,
-          "line": 12765,
+          "line": 12782,
           "source": "gui.mods.offline_lan_0922.native_input_diagnostics.battle_review_record",
           "target": "gui.mods.offline_lan_0922.native_input_diagnostics.battle_review_record"
         },
         {
           "copied": false,
-          "line": 14674,
+          "line": 14691,
           "source": "gui.mods.offline_lan_0922.native_input_diagnostics.battle_review_record",
           "target": "gui.mods.offline_lan_0922.native_input_diagnostics.battle_review_record"
         },
         {
           "copied": false,
-          "line": 17727,
+          "line": 17744,
           "source": "gui.mods.offline_lan_0922.roof_crush_test",
           "target": "gui.mods.offline_lan_0922.roof_crush_test"
         },
@@ -5362,19 +5368,19 @@
         },
         {
           "copied": false,
-          "line": 11281,
+          "line": 11298,
           "source": "gui.mods.offline_lan_0922.native_input_diagnostics.write_json_record",
           "target": "gui.mods.offline_lan_0922.native_input_diagnostics.write_json_record"
         },
         {
           "copied": false,
-          "line": 11323,
+          "line": 11340,
           "source": "gui.mods.offline_lan_0922.native_input_diagnostics.write_json_record",
           "target": "gui.mods.offline_lan_0922.native_input_diagnostics.write_json_record"
         },
         {
           "copied": false,
-          "line": 11871,
+          "line": 11888,
           "source": "gui.mods.offline_lan_0922.native_input_diagnostics.battle_review_record",
           "target": "gui.mods.offline_lan_0922.native_input_diagnostics.battle_review_record"
         },
@@ -5386,21 +5392,21 @@
         },
         {
           "copied": false,
-          "line": 17731,
+          "line": 17748,
           "source": "gui.mods.offline_lan_0922.native_input_diagnostics.write_json_record",
           "target": "gui.mods.offline_lan_0922.native_input_diagnostics.write_json_record"
         },
         {
           "copied": false,
-          "line": 18446,
+          "line": 18463,
           "source": "gui.mods.offline_lan_0922.native_input_diagnostics.write_json_record",
           "target": "gui.mods.offline_lan_0922.native_input_diagnostics.write_json_record"
         }
       ],
       "module": "bot_runtime",
       "source": "src/res/scripts/client/gui/mods/offline_lan_0922/bot_runtime.py",
-      "source_lines": 19218,
-      "source_sha256": "a885ae2a05563df0a2b19b129ddd96f8e675d3c1fccb44a7171807c53b23150d",
+      "source_lines": 19235,
+      "source_sha256": "4342164430db674cdec32c7c75e1a2ea2514f3df6262812ab18c9335bf41ed60",
       "target": "src/res/scripts/client/gui/mods/offline_lan_0922/player_control/copied/bot_runtime.py"
     },
     {

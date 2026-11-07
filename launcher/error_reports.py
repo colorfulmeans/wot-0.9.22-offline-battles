@@ -1180,8 +1180,9 @@ def select_in_explorer(report_path, runner=None):
         raise core.LauncherError("The error report ZIP is missing.")
     runner = subprocess.Popen if runner is None else runner
     try:
+        # Explorer may run outside the launcher package's AppData view.
         return runner(
-            ["explorer.exe", "/select,", os.path.normpath(report_path)],
+            ["explorer.exe", "/select,", os.path.realpath(report_path)],
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except (IOError, OSError) as error:
         raise core.LauncherError(

@@ -995,7 +995,7 @@ class NativeRuntimeOwnershipTests(unittest.TestCase):
 
 
 class FullRuntimeMissionOwnershipTests(unittest.TestCase):
-    def scene(self, siege=False):
+    def scene(self, siege=False, siege_vehicle='sweden:S11_Strv_103B'):
         import test_player_limited_traverse as fixture
         scene = fixture.TraverseScene()
         scene.setUp()
@@ -1003,7 +1003,7 @@ class FullRuntimeMissionOwnershipTests(unittest.TestCase):
         if siege:
             scene.control.close()
             descriptor = scene.entity.typeDescriptor
-            descriptor.type.name = 'sweden:S11_Strv_103B'
+            descriptor.type.name = siege_vehicle
             descriptor.hasSiegeMode = True
             descriptor.siegeVehicleDescr = copy.deepcopy(descriptor)
             descriptor.defaultVehicleDescr = descriptor
@@ -1076,6 +1076,20 @@ class FullRuntimeMissionOwnershipTests(unittest.TestCase):
                 self.assertTrue(scene.runtime.mission_status()['holding'])
                 request.assert_called_once_with(True, mock.ANY)
                 self.assertTrue(scene.battle._local_siege_pending or scene.battle._local_siege_braking)
+
+    def test_siege_mode_can_be_requested_before_a_firing_lane_is_verified(self):
+        scene = self.scene(siege=True, siege_vehicle='sweden:S21_UDES_03')
+        scene.pose(scene.target, (0., 0., 24.))
+        scene.world = [((-100., -100., 5.), (100., 100., 16.))]
+        scene.runtime.set_mission('hold_position', dict(timeout=180.))
+        request = mock.Mock(wraps=scene.battle._request_player_control_siege)
+        scene.battle._request_player_control_siege = request
+        for unused in range(24):
+            row = scene.tick()
+            self.assertIsNone(scene.control.last_control_failure, row)
+        self.assertTrue(scene.world_queries)
+        request.assert_called_once_with(True, mock.ANY)
+        self.assertEqual(0, scene.control.automatic_commits)
 
     def test_failed_or_cancelled_mission_cannot_admit_a_new_native_siege_transition(self):
         for cancelled in (False, True):

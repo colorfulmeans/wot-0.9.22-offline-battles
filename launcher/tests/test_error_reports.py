@@ -1156,17 +1156,21 @@ class ErrorReportTest(unittest.TestCase):
                 core.LauncherError, "No launcher game session"):
             error_reports.create_report()
 
-    def test_explorer_command_selects_the_exact_zip(self):
+    def test_explorer_command_selects_the_zip_at_its_resolved_path(self):
         report = os.path.join(self.root, "report with spaces.zip")
+        physical = os.path.join(self.root, "LocalCache", "report with spaces.zip")
         self._write(report, b"zip")
         calls = []
 
-        error_reports.select_in_explorer(
-            report, runner=lambda *args, **kwargs: calls.append(
-                (args, kwargs)))
+        with mock.patch.object(error_reports.os.path, "realpath",
+                               return_value=physical) as resolve:
+            error_reports.select_in_explorer(
+                report, runner=lambda *args, **kwargs: calls.append(
+                    (args, kwargs)))
 
+        resolve.assert_called_once_with(report)
         self.assertEqual(
-            ["explorer.exe", "/select,", os.path.normpath(report)],
+            ["explorer.exe", "/select,", physical],
             calls[0][0][0])
 
 
