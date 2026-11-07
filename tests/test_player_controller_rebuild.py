@@ -1153,6 +1153,51 @@ class FullRuntimeMissionOwnershipTests(unittest.TestCase):
                 else:
                     request.assert_called_once_with(expected, mock.ANY)
 
+    def test_udes_waits_for_native_siege_echo_when_the_travel_intent_changes(self):
+        for starting, switching, finished, first, second in (
+                (0, 1, 2, 25., 55.), (2, 3, 0, 55., 25.)):
+            with self.subTest(switching=switching):
+                scene = self.scene(siege=True, siege_vehicle='sweden:S21_UDES_03')
+                runtime, battle = scene.runtime, scene.battle
+                scene.entity.siegeState = starting
+                scene.pose(scene.target, (0., 0., 90.))
+                scene.world = [((-100., -100., 12.), (100., 100., 24.))]
+                request = mock.Mock(wraps=battle._request_player_control_siege)
+                battle._request_player_control_siege = request
+                runtime.set_mission('attack', dict(position=(0., 0., first)))
+                for unused in range(12):
+                    scene.tick()
+                request.assert_called_once_with(starting == 0, mock.ANY)
+                token = runtime._siege_pending
+                sequence = token['sequence']
+                record = battle._records['player:1']
+
+                def present(state, time_left):
+                    scene.entity.siegeState = state
+                    record['presented_siege_state'] = state
+                    record['state'] = dict(record['state'], siege_state=state,
+                        input_seq=sequence, siege_time_left_ms=time_left,
+                        siege_transition_total_ms=2000 if time_left else 0)
+                    battle._apply_siege_state(record, record['state'])
+
+                present(switching, 1900)
+                runtime.set_mission('attack', dict(position=(0., 0., second)))
+                for unused in range(12):
+                    row = scene.tick()
+                    self.assertIsNone(scene.control.last_control_failure, row)
+                    self.assertFalse(runtime._last_order['fire_allowed'])
+                request.assert_called_once()
+                self.assertIs(runtime._siege_pending, token)
+                self.assertEqual(0, scene.control.automatic_commits)
+
+                present(finished, 0)
+                for unused in range(12):
+                    row = scene.tick()
+                    self.assertIsNone(scene.control.last_control_failure, row)
+                self.assertEqual([starting == 0, starting != 0],
+                    [call.args[0] for call in request.call_args_list])
+                self.assertGreater(runtime._siege_pending['sequence'], sequence)
+
     def test_failed_or_cancelled_mission_cannot_admit_a_new_native_siege_transition(self):
         for cancelled in (False, True):
             with self.subTest(cancelled=cancelled):

@@ -639,8 +639,17 @@ class _PlayerBehaviorEngine(copied_runtime.BotRuntime):
 
     def _update_bot_siege_intent(self, state, command, target, step):
         contact = command.pop('_player_siege_contact', None)
+        target = target if target is not None else contact
+        if self._advance_bot_siege(state, step):
+            # The native request owns the transition until a stable echo.
+            # The copied bot's reversal needs its own simulated countdown,
+            # which the foreground actor never starts or advances.
+            command['fire_allowed'] = False
+            state['_siege_intent'] = self._siege_desired(state, command, target)
+            state['_siege_intent_elapsed'] = 0.0
+            return True
         return copied_runtime.BotRuntime._update_bot_siege_intent(
-            self, state, command, target if target is not None else contact, step)
+            self, state, command, target, step)
 
     @staticmethod
     def _siege_desired(state, command, target):
