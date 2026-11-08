@@ -1077,7 +1077,7 @@ class FullRuntimeMissionOwnershipTests(unittest.TestCase):
                 request.assert_called_once_with(True, mock.ANY)
                 self.assertTrue(scene.battle._local_siege_pending or scene.battle._local_siege_braking)
 
-    def test_siege_mode_waits_for_a_verified_future_mode_point(self):
+    def test_visible_siege_contact_enters_before_point_validation(self):
         scene = self.scene(siege=True, siege_vehicle='sweden:S21_UDES_03')
         revision = [0]
         scene.battle._destructibles = types.SimpleNamespace(
@@ -1091,33 +1091,45 @@ class FullRuntimeMissionOwnershipTests(unittest.TestCase):
             row = scene.tick()
             self.assertIsNone(scene.control.last_control_failure, row)
         self.assertTrue(scene.world_queries)
-        request.assert_not_called()
+        # The original planner's visible contact admits siege mode even
+        # while the actual firing lane is blocked. Neither contact nor the
+        # submitted mode request authorizes a physical round.
+        request.assert_called_once_with(True, mock.ANY)
+        token = scene.runtime._siege_pending
+        self.assertIsNotNone(token)
         self.assertEqual(0, scene.control.automatic_commits)
+        self.assertFalse(scene.launches())
         # The native destructible revision makes the old wall proof stale.
         # A changed Python fixture alone is not a production world receipt.
-        # Entry still cannot grant a shot itself.
+        # New point evidence cannot reverse or repeat a submitted native
+        # transition before its sequence-matched mode echo.
         scene.world = []
         revision[0] += 1
-        for unused in range(24):
+        for unused in range(12):
             row = scene.tick()
             self.assertIsNone(scene.control.last_control_failure, row)
-            if request.called:
-                break
+            self.assertFalse(row['order'].get('fire_allowed'))
         request.assert_called_once_with(True, mock.ANY)
+        self.assertIs(token, scene.runtime._siege_pending)
+        self.assertEqual(0, scene.control.automatic_commits)
 
-    def test_unproved_udes_contact_cannot_grant_siege_entry_at_any_travel_distance(self):
+    def test_udes_combat_contact_entry_does_not_depend_on_local_leg_distance(self):
         for distance, has_contact, requests_mode in (
-                (35., True, False), (35.01, True, False), (24., False, False)):
+                (35., True, True), (35.01, True, True),
+                (55., True, True), (24., False, False)):
             with self.subTest(distance=distance, contact=has_contact):
                 scene = self.scene(siege=True, siege_vehicle='sweden:S21_UDES_03')
                 engine, state = scene.runtime.engine, scene.runtime.state
                 request = mock.Mock(wraps=scene.battle._request_player_control_siege)
                 scene.battle._request_player_control_siege = request
                 x, y, z = state['position']
-                contact = dict(alive=True, position=(x, y, z+24.)) if has_contact else None
+                # Use the real current roster identity, not an invented
+                # anonymous target that no planner selected.
+                contact = scene.runtime._targets[0] if has_contact else None
                 for unused in range(6):
                     command = dict(move_position=(x, y, z+distance),
                         movement_intent=True, throttle=1., fire_allowed=False,
+                        combat_mode='engage',
                         _player_siege_contact=contact)
                     engine._update_bot_siege_intent(state, command, None, .1)
                     self.assertNotIn('_player_siege_contact', command)
@@ -1127,7 +1139,7 @@ class FullRuntimeMissionOwnershipTests(unittest.TestCase):
                 else:
                     request.assert_not_called()
 
-    def test_udes_siege_uses_the_attack_destination_with_a_short_local_leg(self):
+    def test_explicit_travel_owner_keeps_mode_choice_with_a_short_local_leg(self):
         for distance, initial, expected in ((35., 0, None), (35.01, 0, None),
                                              (55., 0, None), (55., 2, False)):
             with self.subTest(distance=distance, siege_state=initial):
@@ -1159,6 +1171,7 @@ class FullRuntimeMissionOwnershipTests(unittest.TestCase):
                 self.assertEqual(goal, controls['strategic_move_position'])
                 self.assertEqual(corner, controls['local_target'])
                 self.assertEqual(corner, runtime._last_order['move_position'])
+                self.assertTrue(runtime.firing_position.navigation_owns(runtime._last_order))
                 self.assertEqual(0, scene.control.automatic_commits)
                 self.assertIsNone(runtime.attack_policy.search_started)
                 if expected is None:
@@ -1167,20 +1180,22 @@ class FullRuntimeMissionOwnershipTests(unittest.TestCase):
                 else:
                     request.assert_called_once_with(expected, mock.ANY)
 
-    def test_udes_waits_for_native_siege_echo_when_the_travel_intent_changes(self):
-        for starting, switching, finished, first, second in (
-                (0, 1, 2, 25., 55.), (2, 3, 0, 55., 25.)):
+    def test_udes_waits_for_native_siege_echo_when_control_owner_changes(self):
+        for starting, switching, finished in ((0, 1, 2), (2, 3, 0)):
             with self.subTest(switching=switching):
                 scene = self.scene(siege=True, siege_vehicle='sweden:S21_UDES_03')
                 runtime, battle = scene.runtime, scene.battle
                 scene.entity.siegeState = starting
                 scene.pose(scene.target, (0., 0., 90.))
-                # A concrete future-mode lane qualifies the short leg. The
-                # previous wall-blocked fixture encoded target-only entry.
+                # Change the real mission owner, not a distance threshold:
+                # autonomous ATTACK admits contact; an explicit destination
+                # retains navigation ownership even with the enemy visible.
                 scene.world = []
                 request = mock.Mock(wraps=battle._request_player_control_siege)
                 battle._request_player_control_siege = request
-                runtime.set_mission('attack', dict(position=(0., 0., first)))
+                first = {} if starting == 0 else dict(position=(0., 0., 55.))
+                second = dict(position=(0., 0., 55.)) if starting == 0 else {}
+                runtime.set_mission('attack', first)
                 for unused in range(12):
                     scene.tick()
                 request.assert_called_once_with(starting == 0, mock.ANY)
@@ -1197,7 +1212,7 @@ class FullRuntimeMissionOwnershipTests(unittest.TestCase):
                     battle._apply_siege_state(record, record['state'])
 
                 present(switching, 1900)
-                runtime.set_mission('attack', dict(position=(0., 0., second)))
+                runtime.set_mission('attack', second)
                 for unused in range(12):
                     row = scene.tick()
                     self.assertIsNone(scene.control.last_control_failure, row)

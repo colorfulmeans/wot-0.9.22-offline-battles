@@ -1234,7 +1234,8 @@ class HydraulicReachTests(unittest.TestCase):
         angle = math.radians(-10.)
         direction = (0., -math.sin(angle), math.cos(angle))
         self.assertFalse(mechanical_reach(desc, direction, (0., 0., 0.))['reachable'])
-        config = dict(body=(0., 0., 0.), minimum=math.radians(-11.),
+        config = dict(body=(0., 0., 0.), isAvailable=True, isEnabled=True,
+                      minimum=math.radians(-11.),
                       maximum=math.radians(11.), speed=.1)
         planned = mechanical_reach(desc, direction, (0., 0., 0.), config)
         self.assertTrue(planned['reachable'])

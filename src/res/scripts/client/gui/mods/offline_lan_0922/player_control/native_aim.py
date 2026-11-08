@@ -36,6 +36,103 @@ def _direction(yaw, pitch):
             math.cos(yaw) * math.cos(pitch))
 
 
+def hydraulic_body(position, body, correction, center_z):
+    """Compose the installed local hydraulic pivot with flat native support.
+
+    Adding Euler pitches changes the rotation on rolled ground. This is the
+    same local-aim * base transform used by the native foreground provider,
+    expressed as a value only; neither matrix provider nor gun is mutated.
+    """
+    position, body = _point(position), _point(body)
+    correction, center_z = float(correction), float(center_z)
+    if any(math.isnan(v) or math.isinf(v) for v in (correction, center_z)):
+        raise ValueError('invalid hydraulic transform')
+    offset = hull_aiming.correction_translation(correction, center_z)
+    translated = shot_geometry.transform_vehicle_point(offset, position, *body)
+    axes = [shot_geometry.transform_vehicle_vector(
+        shot_geometry.transform_vehicle_vector(vector, 0., correction, 0.), *body)
+        for vector in ((1., 0., 0.), (0., 1., 0.), (0., 0., 1.))]
+    right, up, forward = axes
+    pitch = math.asin(max(-1., min(1., -forward[1])))
+    if abs(math.cos(pitch)) < 1.e-9:
+        raise ValueError('singular hydraulic body')
+    return translated, (math.atan2(forward[0], forward[2]), pitch,
+                        math.atan2(right[1], up[1]))
+
+
+def hydraulic_reach(descriptor, direction, flat_body, config):
+    """One active-mode direction, native pitch stops and hydraulic range.
+
+    The bounded bisection only inverts local angles. It does not sample
+    terrain, solve future modes, trace lines or certify a firing permission.
+    The caller separately proves any chassis/hydraulic movement it needs.
+    """
+    local = shot_geometry.inverse_transform_vehicle_vector(direction, *flat_body)
+    gun = _field(descriptor, 'gun')
+
+    def at(correction):
+        sine, cosine = math.sin(correction), math.cos(correction)
+        x, y, z = (local[0], cosine * local[1] + sine * local[2],
+                   -sine * local[1] + cosine * local[2])
+        yaw, pitch = math.atan2(x, z), -math.atan2(y, math.hypot(x, z))
+        low, high = gun_pitch_limits.calc_pitch_limits(yaw, _field(gun, 'pitchLimits'))
+        return (hull_aiming.classify_pitch(pitch, low, high, 1.e-8),
+                yaw, pitch, (float(low), float(high)))
+
+    if config is None or not config['isAvailable'] or not config['isEnabled']:
+        raise ValueError('active hydraulic parameters unavailable')
+    neutral = max(config['minimum'], min(config['maximum'], 0.))
+    initial = at(neutral)
+    correction, result = neutral, initial
+    if initial[0]:
+        edge = config['minimum'] if initial[0] < 0 else config['maximum']
+        result = at(edge)
+        if result[0] == initial[0]:
+            return dict(reachable=False, reason='hydraulic_pitch_limit',
+                        local_yaw=result[1], local_pitch=result[2],
+                        pitch_limits=result[3], hydraulic_pitch=edge)
+        failed, correction = neutral, edge
+        for unused in range(32):
+            middle = (failed + correction) * .5
+            if at(middle)[0] == initial[0]:
+                failed = middle
+            else:
+                correction = middle
+        result = at(correction)
+    limits = _field(gun, 'turretYawLimits')
+    yaw_ok = limits is None or (float(limits[0]) - NATIVE_ANGLE_TOLERANCE <=
+        result[1] <= float(limits[1]) + NATIVE_ANGLE_TOLERANCE)
+    return dict(reachable=bool(yaw_ok), needs_hull=not yaw_ok,
+        reason='hydraulic_laying' if yaw_ok else 'yaw_limit',
+        local_yaw=result[1], local_pitch=result[2], pitch_limits=result[3],
+        hydraulic_pitch=correction, hydraulic_speed=config['speed'])
+
+
+def active_hydraulic_pose(runtime, frame):
+    """Read the currently enabled actuator and its actual flat/body pair."""
+    owner = runtime.owner
+    entity = owner._server_entity(owner._server.vehicle_id)
+    if (entity.typeDescriptor is not frame['descriptor'] or
+            getattr(entity, 'siegeState', hull_aiming.DISABLED) != hull_aiming.ENABLED):
+        return None
+    config = hull_aiming.pitch_params(frame['descriptor'])
+    if config is None or not config['isAvailable'] or not config['isEnabled']:
+        return None
+    flat = getattr(owner, '_local_siege_flat_body_matrix', None)
+    if flat is None:
+        raise ValueError('active hydraulic flat pose unavailable')
+    matrix = owner._runtime.math.Matrix(flat)
+    position = _point(matrix.translation)
+    body = _point((matrix.yaw, matrix.pitch, matrix.roll))
+    correction = float(owner._local_siege_aim_pitch)
+    mounted, actual = hydraulic_body(position, body, correction, config['centerZ'])
+    if (any(abs(mounted[i] - frame['pose'][6][i]) > .0001 for i in range(3)) or
+            any(abs(_angle(actual[i] - frame['body'][i])) > NATIVE_ANGLE_TOLERANCE
+                for i in range(3))):
+        raise ValueError('actual hydraulic body disagrees with native observation')
+    return dict(config, position=position, body=body, correction=correction)
+
+
 def mechanical_reach(descriptor, direction, body_ypr, hydraulic=None):
     """Check the mounted yaw and yaw-dependent pitch envelope in body space."""
     yaw, pitch = shot_geometry.world_direction_to_local_gun_angles(
@@ -68,31 +165,11 @@ def mechanical_reach(descriptor, direction, body_ypr, hydraulic=None):
     # The actuator has a separate chassis pitch. Do not enlarge the native
     # gun's own stops, and do not claim that a theoretically reachable ray
     # is already laid. Only the active local siege descriptor supplies travel.
-    base = hydraulic['body']
-
-    def status(correction):
-        local_yaw, local_pitch = shot_geometry.world_direction_to_local_gun_angles(
-            direction, base[0], base[1]+correction, base[2])
-        low, high = gun_pitch_limits.calc_pitch_limits(
-            local_yaw, _field(gun, 'pitchLimits'))
-        return hull_aiming.classify_pitch(local_pitch, low, high, 1.e-7)
-
-    neutral = max(hydraulic['minimum'], min(hydraulic['maximum'], 0.))
-    initial = status(neutral)
-    correction = neutral
-    if initial:
-        boundary = hydraulic['minimum'] if initial < 0 else hydraulic['maximum']
-        if status(boundary) == initial:
-            return result
-        failed, correction = neutral, boundary
-        for unused in range(32):
-            middle = (failed+correction)*.5
-            if status(middle) == initial:
-                failed = middle
-            else:
-                correction = middle
-    result.update(reachable=bool(yaw_ok), needs_hull=bool(not yaw_ok),
-        needs_hydraulic=True, hydraulic_pitch=correction,
+    projected = hydraulic_reach(descriptor, direction, hydraulic['body'], hydraulic)
+    if not projected.get('reachable') and not projected.get('needs_hull'):
+        return result
+    result.update(reachable=projected['reachable'], needs_hull=projected['needs_hull'],
+        needs_hydraulic=True, hydraulic_pitch=projected['hydraulic_pitch'],
         hydraulic_speed=hydraulic['speed'], reason='hydraulic_laying')
     return result
 
@@ -124,7 +201,6 @@ class NativeAimGeometry(object):
             config = hull_aiming.pitch_params(descriptor)
             flat = getattr(owner, '_local_siege_flat_body_matrix', None)
             if (config is not None and config['isAvailable'] and config['isEnabled'] and
-                    bool(_field(descriptor, 'hasSiegeMode', False)) and
                     getattr(entity, 'siegeState', hull_aiming.DISABLED) == hull_aiming.ENABLED and
                     flat is not None):
                 base = owner._runtime.math.Matrix(flat)

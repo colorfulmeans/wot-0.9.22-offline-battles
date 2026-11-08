@@ -1266,15 +1266,15 @@
         },
         {
           "calls": [],
-          "end_line": 15944,
-          "line": 15917,
+          "end_line": 15960,
+          "line": 15933,
           "name": "_projectile_vehicle_matrices",
           "source_sha256": "e23c8f66044ebc5b2ba1ea1874e7a6b75cab798fa557538b7281c01670154c7c"
         },
         {
           "calls": [],
-          "end_line": 15966,
-          "line": 15950,
+          "end_line": 15982,
+          "line": 15966,
           "name": "_projectile_plain_pose",
           "source_sha256": "7d7a748134cd60fde5a4a4d40bde32c2b5ea89a9bfb348b5c8421b03e32391a3"
         },
@@ -1282,15 +1282,15 @@
           "calls": [
             "_ground_y"
           ],
-          "end_line": 21297,
-          "line": 21260,
+          "end_line": 21313,
+          "line": 21276,
           "name": "_sample_ground_plane",
           "source_sha256": "3682fdda674f8eb3155a207ab07533c8c1ee5363b201229ac3cfcabe85b097dd"
         },
         {
           "calls": [],
-          "end_line": 21446,
-          "line": 21410,
+          "end_line": 21462,
+          "line": 21426,
           "name": "_report_local_tree_motion",
           "source_sha256": "056bcfc254acea796d4cd3fb50acf33d848b100fbb1576b316321005f16e241d"
         },
@@ -1300,8 +1300,8 @@
             "_report_local_tree_motion",
             "_vector"
           ],
-          "end_line": 21505,
-          "line": 21448,
+          "end_line": 21521,
+          "line": 21464,
           "name": "_tree_motion_proposal",
           "source_sha256": "2081e21a074172425424f3636c87bf59b4b735cfd25f24da0c28f7c5cd0f6214"
         },
@@ -1310,8 +1310,8 @@
             "_destructible_contact_token",
             "_vector"
           ],
-          "end_line": 21909,
-          "line": 21691,
+          "end_line": 21925,
+          "line": 21707,
           "name": "_destructible_pose_sweep",
           "source_sha256": "9607ea96106cc65a1660a56cdd6a43ea3d27cc1e323bfb6032b187c14dd9f288"
         },
@@ -1319,8 +1319,8 @@
           "calls": [
             "_turret_server_time_ms"
           ],
-          "end_line": 21917,
-          "line": 21911,
+          "end_line": 21933,
+          "line": 21927,
           "name": "_turret_motion_is_clear",
           "source_sha256": "7385b6fcd424f70c7e69bfcd83e730a8bf245b0cc01a3843a0c854086f990ed7"
         },
@@ -1328,8 +1328,8 @@
           "calls": [
             "_vector"
           ],
-          "end_line": 22369,
-          "line": 22225,
+          "end_line": 22385,
+          "line": 22241,
           "name": "_native_world_rotation_is_clear",
           "source_sha256": "c8ae43644ce55063abcb8e8271fd7ff82c6640073f506b5fbc8ca91391da0fc5"
         },
@@ -1338,8 +1338,8 @@
             "_destructible_contact_token",
             "_vector"
           ],
-          "end_line": 22616,
-          "line": 22581,
+          "end_line": 22632,
+          "line": 22597,
           "name": "_complete_bot_tree_contact",
           "source_sha256": "087db5fe4e409c5aefbc637373168dd356de8eae1161ef2f902f8612e3c23cea"
         },
@@ -1348,8 +1348,8 @@
             "_resolve_bot_motion",
             "_resolve_bot_rotation"
           ],
-          "end_line": 22732,
-          "line": 22636,
+          "end_line": 22748,
+          "line": 22652,
           "name": "_probe_bot_local_motion",
           "source_sha256": "7371cc863d16a5f1af636c1b9f04c4b53b3a5bea51b1306a00047e9f137fad5f"
         },
@@ -1363,8 +1363,8 @@
             "_native_world_rotation_is_clear",
             "_tree_motion_proposal"
           ],
-          "end_line": 22829,
-          "line": 22734,
+          "end_line": 22845,
+          "line": 22750,
           "name": "_resolve_bot_rotation",
           "source_sha256": "ccdc8ae47ac15965fad99fd6fe01a5058ab6ec41857d97b2f1944208bfdada25"
         },
@@ -1377,15 +1377,15 @@
             "_turret_motion_is_clear",
             "_vector"
           ],
-          "end_line": 23028,
-          "line": 22831,
+          "end_line": 23044,
+          "line": 22847,
           "name": "_resolve_bot_motion",
           "source_sha256": "6e670368007e6522d37ea2d7733c8ed109a27423e009d9ac2c2172717a755d73"
         },
         {
           "calls": [],
-          "end_line": 23033,
-          "line": 23030,
+          "end_line": 23049,
+          "line": 23046,
           "name": "_collision_shape",
           "source_sha256": "06554b5ca58cf3d1a39bca718ac3a31604419b016f5dda34d84b3f5e6bb3cc54"
         },
@@ -1393,15 +1393,15 @@
           "calls": [
             "_vector"
           ],
-          "end_line": 23579,
-          "line": 23575,
+          "end_line": 23595,
+          "line": 23591,
           "name": "_ram_pose_matrix",
           "source_sha256": "281c2659066d998ce1c290d7b1f5b2381dfd29aa7c3f3f282ae8b36328077836"
         },
         {
           "calls": [],
-          "end_line": 24715,
-          "line": 24694,
+          "end_line": 24731,
+          "line": 24710,
           "name": "_destructible_contact_token",
           "source_sha256": "44e91a45345ae9890215cd35c28abf73a38e81676440a3247bf234a750192265"
         },
@@ -1409,8 +1409,8 @@
           "calls": [
             "_clock"
           ],
-          "end_line": 27568,
-          "line": 27538,
+          "end_line": 27582,
+          "line": 27552,
           "name": "_sight_collision_filter",
           "source_sha256": "366a419b564793fda15ce2be4d0ddf2ebc8499cdcde26fa3813d60dd7e8dbdd0"
         },
@@ -1421,8 +1421,8 @@
             "_turret_server_time_ms",
             "_vector"
           ],
-          "end_line": 27659,
-          "line": 27621,
+          "end_line": 27673,
+          "line": 27635,
           "name": "_spot_geometry",
           "source_sha256": "0c97ecc9bf793406b4beb06538deea0f7e6202ee9f19bf6920ab723b051d3f64"
         },
@@ -1431,8 +1431,8 @@
             "_server_entity",
             "_spot_geometry"
           ],
-          "end_line": 27670,
-          "line": 27661,
+          "end_line": 27684,
+          "line": 27675,
           "name": "_bot_visibility",
           "source_sha256": "d59f8f95847d0e08a82423e0dfb5ce31a7f29fad1800a543bb63481843f22ad9"
         },
@@ -1440,8 +1440,8 @@
           "calls": [
             "_server_entity"
           ],
-          "end_line": 27785,
-          "line": 27728,
+          "end_line": 27799,
+          "line": 27742,
           "name": "_bot_aim_context",
           "source_sha256": "6d4db0070a8cbdff1aee4e6d307c58741b43481aa3b7f65d3150a1a30d9b31bc"
         },
@@ -1449,8 +1449,8 @@
           "calls": [
             "_bot_aim_context"
           ],
-          "end_line": 27814,
-          "line": 27787,
+          "end_line": 27828,
+          "line": 27801,
           "name": "_bot_aim_point",
           "source_sha256": "bd02be26fa67a4f6c49d9b058fead11a6ce1fe383b7b5c118908e487d5497ca2"
         },
@@ -1459,8 +1459,8 @@
             "_descriptor_shot",
             "_vector"
           ],
-          "end_line": 27862,
-          "line": 27816,
+          "end_line": 27876,
+          "line": 27830,
           "name": "_bot_aim_damage_score",
           "source_sha256": "17a14d65d8912c0a5121a1d9eba3be7ba8ab4331de698c0360519f04d09e7122"
         },
@@ -1474,8 +1474,8 @@
             "_vector",
             "_wreck_blocks_bot_path"
           ],
-          "end_line": 27995,
-          "line": 27864,
+          "end_line": 28009,
+          "line": 27878,
           "name": "_bot_firing_lane",
           "source_sha256": "98ffb986c0a6651066914a82c69034878b74d44189d9bdc5dfdb05ebbf96fe2e"
         },
@@ -1483,15 +1483,15 @@
           "calls": [
             "_server_entity"
           ],
-          "end_line": 28032,
-          "line": 27997,
+          "end_line": 28046,
+          "line": 28011,
           "name": "_bot_lane_rows",
           "source_sha256": "c32e7cec295cb1dd4b3b5fbddac4ddae4edb2f3ded3b93308f66099a0118e8ca"
         },
         {
           "calls": [],
-          "end_line": 28058,
-          "line": 28034,
+          "end_line": 28072,
+          "line": 28048,
           "name": "_wreck_lane_evidence",
           "source_sha256": "9372686f3ab761169fde88ca8fdb4916518db23d88ff62c73bf3cec7f8c632dc"
         },
@@ -1502,8 +1502,8 @@
             "_vector",
             "_wreck_lane_evidence"
           ],
-          "end_line": 28147,
-          "line": 28089,
+          "end_line": 28161,
+          "line": 28103,
           "name": "_bot_lane_row_contact",
           "source_sha256": "1843ab6e38c086184770e8c22c17a70f0de4b855db1da92a5d4590f1e4e69984"
         },
@@ -1515,8 +1515,8 @@
             "_record_alive",
             "_wreck_blocks_bot_path"
           ],
-          "end_line": 28206,
-          "line": 28149,
+          "end_line": 28220,
+          "line": 28163,
           "name": "_bot_friendly_path_verdict",
           "source_sha256": "67127f88fd0281513b154e63e37f524a40edb4728f5850767e98d6be2e24fe34"
         },
@@ -1525,8 +1525,8 @@
             "_bot_lane_rows",
             "_record_alive"
           ],
-          "end_line": 28229,
-          "line": 28208,
+          "end_line": 28243,
+          "line": 28222,
           "name": "_bot_lane_wreck_rows",
           "source_sha256": "5f5304dd469daf668dfef9fe2178a988fa63844b5b20bb83117d1203db48a34d"
         },
@@ -1536,8 +1536,8 @@
             "_turret_server_time_ms",
             "_vector"
           ],
-          "end_line": 28244,
-          "line": 28231,
+          "end_line": 28258,
+          "line": 28245,
           "name": "_wreck_blocks_bot_path",
           "source_sha256": "1ead5cafdcd47284f5eab226c5fe77a3b93ebdc0a9be77207039872b4870fdcf"
         },
@@ -1546,8 +1546,8 @@
             "_bot_friendly_path_verdict",
             "_descriptor_shot"
           ],
-          "end_line": 28286,
-          "line": 28246,
+          "end_line": 28300,
+          "line": 28260,
           "name": "_bot_friendly_firing_lane",
           "source_sha256": "c90e5a356ea3561ce1267d081a626301d5972421a9e01eacceff04a0a043d1a9"
         },
@@ -1558,8 +1558,8 @@
             "_projectile_plain_pose",
             "_server_entity"
           ],
-          "end_line": 28322,
-          "line": 28288,
+          "end_line": 28336,
+          "line": 28302,
           "name": "_bot_direct_launch_origin",
           "source_sha256": "7bb018439b05584aa2486a2863d7d822c85d022594e8d555b33a02a20a03496c"
         },
@@ -1567,8 +1567,8 @@
           "calls": [
             "_bot_direct_launch_origin"
           ],
-          "end_line": 28327,
-          "line": 28324,
+          "end_line": 28341,
+          "line": 28338,
           "name": "_bot_artillery_planning_origin",
           "source_sha256": "6940412a9f7ceb50074a4e6043d6ca158213fdf882bc488e9bb771a31e82cb7c"
         },
@@ -1576,22 +1576,22 @@
           "calls": [
             "_bot_aim_context"
           ],
-          "end_line": 28337,
-          "line": 28329,
+          "end_line": 28351,
+          "line": 28343,
           "name": "_bot_artillery_aim_samples",
           "source_sha256": "d6667952a5837b9b7db31844cc8c317155b613bcedd70bfbf21a301b97a98ef1"
         },
         {
           "calls": [],
-          "end_line": 28340,
-          "line": 28339,
+          "end_line": 28354,
+          "line": 28353,
           "name": "_bot_artillery_status",
           "source_sha256": "497af13b1c576b62935c3e1bf7c4aa5422f82f3b81f6e01ba0314427ca3825d3"
         },
         {
           "calls": [],
-          "end_line": 28348,
-          "line": 28342,
+          "end_line": 28362,
+          "line": 28356,
           "name": "_bot_ballistic_solution",
           "source_sha256": "d20c4e0e82b5c51d96dc6f572f593df5baf240c8205e4f2a1ebbebf9d93fb159"
         },
@@ -1600,8 +1600,8 @@
             "_bot_direct_launch_origin",
             "_server_entity"
           ],
-          "end_line": 28388,
-          "line": 28350,
+          "end_line": 28402,
+          "line": 28364,
           "name": "_bot_artillery_launch",
           "source_sha256": "cbfca503d1aece18f5f36739ccef9e16ceaa04b0b49d646868f88f3676c8230c"
         },
@@ -1610,15 +1610,15 @@
             "_bot_friendly_path_verdict",
             "_descriptor_shot"
           ],
-          "end_line": 28417,
-          "line": 28390,
+          "end_line": 28431,
+          "line": 28404,
           "name": "_bot_artillery_friendly_lane",
           "source_sha256": "ef26b620d2091cda3461189f9514305c4e5ff6f227421fa997e8ef16ed74b7f7"
         },
         {
           "calls": [],
-          "end_line": 28423,
-          "line": 28419,
+          "end_line": 28437,
+          "line": 28433,
           "name": "_bot_artillery_cancel",
           "source_sha256": "0b4a330192929f4d7825c593a5cb9d800d390a4407eddf5fdb4f4ebe148ca8bb"
         },
@@ -1628,15 +1628,15 @@
             "_vector",
             "_wreck_blocks_bot_path"
           ],
-          "end_line": 28438,
-          "line": 28425,
+          "end_line": 28452,
+          "line": 28439,
           "name": "_artillery_arc_probe",
           "source_sha256": "07bc5cd129091e315128ebbf625e91e6293e86f99ea6b10a569d5efd4d69b44d"
         },
         {
           "calls": [],
-          "end_line": 29989,
-          "line": 29982,
+          "end_line": 30004,
+          "line": 29997,
           "name": "_record_alive",
           "source_sha256": "e5eb206cc54c0847d6328beed6301705d45b68938124d3145b3de272a59cd0fa"
         },
@@ -1645,8 +1645,8 @@
             "_optional_feature_enabled",
             "_warn_optional_failure"
           ],
-          "end_line": 30147,
-          "line": 30133,
+          "end_line": 30162,
+          "line": 30148,
           "name": "_foliage_camouflage_bonus",
           "source_sha256": "094addf21e8f8d0257361d070eea2168500bec7e0173e36a3f80eb4205e4565d"
         },
@@ -1654,15 +1654,15 @@
           "calls": [
             "_clock"
           ],
-          "end_line": 30925,
-          "line": 30917,
+          "end_line": 30940,
+          "line": 30932,
           "name": "_turret_server_time_ms",
           "source_sha256": "b29c4fbecfd3bf524cdfa4608a01b28375cb153967b98111e8b80cdf46f8685f"
         },
         {
           "calls": [],
-          "end_line": 32133,
-          "line": 32127,
+          "end_line": 32148,
+          "line": 32142,
           "name": "_descriptor_shot",
           "source_sha256": "49c08fb41cc6152601ff03ffff7c9196f587e0cd004570ccfb29a532134a4697"
         }
@@ -1736,7 +1736,7 @@
         "_navigation_obstacle"
       ],
       "source": "src/res/scripts/client/gui/mods/offline_lan_0922/battle_runtime.py",
-      "source_sha256": "9720099b8c0f44ee702888672082c8b489e5296ef957f94f6e059bfeae49f182",
+      "source_sha256": "1d59911aefbcd352d344ce5a7d2322a80cea0e1d701c2880e1c7eb85181430b7",
       "target": "src/res/scripts/client/gui/mods/offline_lan_0922/player_control/copied/battle_geometry.py"
     },
     {

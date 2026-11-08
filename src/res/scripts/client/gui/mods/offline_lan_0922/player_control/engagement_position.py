@@ -25,6 +25,10 @@ _PROTECTED_MODES = ('base_defense', 'low_health_retreat',
                     'magazine_reload_retreat', 'withdraw')
 _ATTACK_MODES = ('engage', 'advance_contact', 'support_hold', 'cover_hold',
                  'cover_peek', 'gun_angle_adjust', 'friendly_lane_reposition')
+_TRAVEL_CONTROL_MODES = _PROTECTED_MODES + (
+    'under_fire_withdraw', 'crossfire_withdraw', 'team_turnback',
+    'team_back_to_base', 'team_attention_cell', 'team_follow',
+    'team_return_base', 'team_defend_base', 'team_hold_position')
 
 
 def _point(value):
@@ -78,7 +82,107 @@ class EngagementPosition(object):
 
     @property
     def exit_required(self):
-        return self.suppressed and not self._travel_stable()
+        # Failure is only a report.  The task route must first accept the
+        # handoff; only that navigation owner may request travel mode.
+        return bool(self.terminal is not None and
+                    self.terminal.get('navigation_owned') and
+                    not self._travel_stable())
+
+    def navigation_owns(self, order, task_only=False):
+        """Observe existing task ownership, not the presence of throttle.
+
+        Local turning, hydraulic laying and ordinary firing-position paths
+        are still combat, even if their destination is far from the original
+        route.  Explicit travel and the existing protected navigation modes
+        retain their old priority.
+        """
+        order = order or {}
+        intents = (order, self.task_order or {})
+        if (self.terminal is not None and self.terminal.get('navigation_owned') or
+                order.get('_player_position_owner') == 'navigation' or
+                any(value.get('combat_mode') in _TRAVEL_CONTROL_MODES or
+                    value.get('empty_ammo') for value in intents) or
+                self.runtime._mission_brakes()):
+            return True
+        # Cover labels are also ordinary engagement behaviours. Only an
+        # actually admitted reload-retreat transaction gives them navigation
+        # ownership. The raw task fence excludes this local transaction so
+        # its original cover/retreat consumer continues advancing it.
+        reload_owner = getattr(self.runtime, '_reload_retreat', None) or {}
+        decision = self.runtime.attack_policy.decision
+        if (not task_only and reload_owner.get('navigation_owned') and
+                decision.get('action') == 'reload_clip' and decision.get('early_reload')):
+            return True
+        mission = getattr(self.runtime, '_mission', None) or {}
+        destination = mission.get('destination')
+        return bool(mission.get('explicit') and destination is not None and
+                    _distance(self.runtime.state['position'], _point(destination)) >
+                    float(mission.get('radius', 2.)))
+
+    def engagement_target(self, order, target=None):
+        """Retain an already selected contact across point-proof waits.
+
+        The original planner still selects contacts and range.  Resolve only
+        its selected identity (or an existing point/contact intention) from
+        this frame's visible roster; never select an arbitrary spotted tank.
+        """
+        visible = tuple(row for row in getattr(self.runtime, '_targets', ())
+                        if row.get('alive', True) and row.get('visible', True))
+        if isinstance(target, dict):
+            identity = _target_key(target)
+            found = next((row for row in visible if _target_key(row) == identity), None)
+            if found is not None:
+                return found
+        for intent in (order or {}, self.task_order or {}):
+            identity, kind = intent.get('target_id'), intent.get('target_kind')
+            if identity is None:
+                continue
+            kind = 'human' if kind == 'player' else kind
+            found = next((row for row in visible if
+                identity in (row.get('id'), row.get('network_id')) and
+                (kind is None or _target_key(row)[0] == kind)), None)
+            if found is not None:
+                return found
+        return None
+
+    def _mode_switch_pending(self):
+        runtime = self.runtime
+        states = ((runtime.state or {}).get('siege_state'),
+                  getattr(getattr(runtime, 'entity', None), 'siegeState', None))
+        return bool(any(state in (siege_mechanics.SWITCHING_ON,
+                                  siege_mechanics.SWITCHING_OFF) for state in states) or
+                    getattr(runtime, '_siege_pending', None) is not None or
+                    getattr(runtime.owner, '_local_siege_pending', None) is not None or
+                    getattr(runtime.owner, '_local_siege_braking', None) is not None)
+
+    def _native_mode_order(self, order, now):
+        """Wait for actual siege mode without a future-pose prerequisite.
+
+        No ordinary firing-position episode or stall clock starts against the
+        travel gun.  The native mode transaction owns this wait.  Once enabled,
+        the same actual-point TD policy owns all laying and local movement.
+        """
+        runtime = self.runtime
+        entity = getattr(runtime, 'entity', None)
+        if not runtime.siege_capable() or self.navigation_owns(order):
+            return None
+        target = self.engagement_target(order)
+        if target is None:
+            return None
+        if (int(runtime.state.get('siege_state', siege_mechanics.DISABLED)) ==
+                siege_mechanics.ENABLED and
+                int(getattr(entity, 'siegeState', siege_mechanics.DISABLED)) ==
+                siege_mechanics.ENABLED and not self._mode_switch_pending()):
+            return None
+        if self.active:
+            self.episode['phase'] = 'siege_transition'
+            self._publish('switching', 'engagement_waits_native_siege', now,
+                          'native_siege_transition')
+        return self._tag(dict(order, target_id=target.get('network_id', target.get('id')),
+            target_kind=target.get('kind'), move_position=tuple(runtime.state['position']),
+            aim_position=None, face_position=None, throttle_override=0.,
+            throttle=0., turn=0., brake=True, movement_intent=False,
+            fire_allowed=False, combat_mode='engage'), 'siege_transition')
 
     def _managed(self):
         runtime = self.runtime
@@ -254,11 +358,10 @@ class EngagementPosition(object):
         episode = self.episode
         self.terminal = dict(episode_id=episode['id'], started_at=episode['started_at'],
                              at=float(now), reason=reason, evidence=dict(evidence or {}),
-                             scope=self._scope(), phase='exit')
+                             scope=self._scope(), phase='handoff', navigation_owned=False)
         self.episode = None
         self.contact_witness = None
         self._clear_local_laws()
-        self.terminal['phase'] = 'exit' if self.exit_required else 'route'
         self._publish('timeout' if 'timeout' in reason or 'stalled' in reason else 'failed',
                       reason, now, terminal=True, phase=self.terminal['phase'],
                       evidence=dict(evidence or {}))
@@ -290,7 +393,8 @@ class EngagementPosition(object):
         identity = self._driver_recovery_key(receipt)
         if identity is not None and identity != episode['driver_seen']:
             episode['driver_seen'] = identity
-            if receipt.get('reason') in ('objective_timeout', 'native_translation_timeout'):
+            if receipt.get('reason') in ('objective_timeout', 'native_translation_timeout',
+                                         'local_stuck'):
                 episode['driver_recovery'] = dict(receipt=dict(receipt),
                     count=int(driver.get('recovery_count', 0)),
                     position=tuple(self.runtime.state['position']))
@@ -314,7 +418,8 @@ class EngagementPosition(object):
         if not self._managed():
             return
         if self.terminal is not None:
-            self.terminal['phase'] = 'exit' if self.exit_required else 'route'
+            if self.terminal.get('navigation_owned'):
+                self.terminal['phase'] = 'exit' if self.exit_required else 'route'
             return
         if self.episode is None:
             return
@@ -384,11 +489,17 @@ class EngagementPosition(object):
                               combat_mode='route', throttle_override=None)
                 runtime.planner._apply_authored_route_order(result, bot, move, now)
         result.update(target_id=None, target_kind=None, aim_position=None, fire_allowed=False)
+        # Publish route ownership before waiting for the travel-mode echo.
+        # The route already owns the next command; transition braking merely
+        # fences physical execution, it is not a condition of the handoff.
+        self.terminal['navigation_owned'] = True
+        result['_player_position_owner'] = 'navigation'
         if self.exit_required:
             result.update(move_position=tuple(runtime.state['position']),
                           throttle_override=0., throttle=0., turn=0., brake=True,
                           movement_intent=False)
         phase = 'exit' if self.exit_required else 'route'
+        self.terminal['phase'] = phase
         self._publish('exiting' if self.exit_required else 'handed_back',
                       self.terminal['reason'], now, phase=phase, terminal=True)
         return self._tag(result, phase)
@@ -397,8 +508,18 @@ class EngagementPosition(object):
         """Fence the late copied attack overlay after native drive solving."""
         if not self._managed() or not self.suppressed:
             return None
+        if not self.terminal.get('navigation_owned'):
+            # A late native/collision callback can report a terminal after
+            # the planner slice.  Admit its original route now, not a stale
+            # combat command, before the mode owner sees the handoff.
+            command = self._route_order(command, self.runtime.now if now is None else now)
+            # The physical driver already solved the abandoned combat order
+            # this tick.  The route owns the next solve, not those stale
+            # throttle/turn values.  Subsequent route-owned commands below
+            # retain their processed controls unchanged.
+            command.update(throttle=0., turn=0., brake=True, movement_intent=False)
         result = dict(command, target_id=None, target_kind=None, aim_position=None,
-                      fire_allowed=False)
+                      fire_allowed=False, _player_position_owner='navigation')
         result.pop('_player_attack_solution', None)
         result.pop('_player_siege_contact', None)
         if self.exit_required:
@@ -438,22 +559,31 @@ class EngagementPosition(object):
         decision = policy.decision
         action = decision.get('action')
         if self.suppressed:
-            if not self.exit_required and (self._native_shot_ready() or
+            if not self._mode_switch_pending() and (self._native_shot_ready() or
                     action in ('search_penetration', 'reload_clip', 'switch_shell', 'retreat') or
                     self._scope_changed(self.terminal['scope'])):
                 self.terminal = None
                 self.receipt = {}
             else:
                 return self._route_order(order, now)
+        if self.navigation_owns(order):
+            if self.active:
+                self._clear_local_laws()
+                self.episode = self.contact_witness = None
+            return None
+        waiting_mode = self._native_mode_order(order, now)
+        if waiting_mode is not None:
+            return waiting_mode
         if action == 'aim':
             if self.active:
                 self._clear_local_laws()
                 self.episode = self.contact_witness = None
             return None
-        preview = getattr(runtime, '_siege_motion_candidate', None)
-        preview = preview if (isinstance(preview, dict) and
-                              action in ('wait', 'preaim', 'firing_position') and
-                              (preview.get('solution') or {}).get('future_reachable')) else None
+        aim_candidate = getattr(runtime, 'siege_aim_candidate', None)
+        motion = aim_candidate() if callable(aim_candidate) else None
+        motion = motion if (isinstance(motion, dict) and
+                            action in ('wait', 'preaim', 'firing_position') and
+                            (motion.get('solution') or {}).get('siege_aim')) else None
         if self._protected(order) or 'drive' not in runtime.features:
             if self.active:
                 self._clear_local_laws()
@@ -480,11 +610,7 @@ class EngagementPosition(object):
         if action in ('wait', 'preaim') and witness is not None and not self.active:
             self._start(now)
             self.episode['phase'] = 'contact_verify'
-        if preview is None and action in ('wait', 'preaim', 'firing_position'):
-            waiting_mode = self._await_mode_validation(order, now)
-            if waiting_mode is not None:
-                return waiting_mode
-        if action != 'firing_position' and preview is None:
+        if action != 'firing_position' and motion is None:
             if self.active and action in ('wait', 'preaim'):
                 self.release_laying('native_pivot_lost_proof', now)
                 if self.episode['phase'] == 'contact_verify':
@@ -500,8 +626,8 @@ class EngagementPosition(object):
         self._start(now)
         candidate = decision.get('candidate') or {}
         request = decision.get('move_request') or {}
-        if preview is not None:
-            candidate = preview
+        if motion is not None:
+            candidate = motion
         target = candidate.get('target') or request.get('target')
         if not isinstance(target, dict):
             target = next((row for row in runtime._targets if
@@ -515,7 +641,7 @@ class EngagementPosition(object):
         solution = candidate.get('solution') or request.get('solution') or {}
         mechanical = candidate.get('mechanical')
         stationary = None
-        if (preview is None and mechanical in ('hull_laying', 'mechanical_limited') and
+        if (motion is None and mechanical in ('hull_laying', 'mechanical_limited') and
                 candidate.get('stationary_plan') is not None and
                 candidate.get('shell_index') == runtime.gun.shot_index):
             current = policy.current_row(candidate, require_line=True)
@@ -528,11 +654,11 @@ class EngagementPosition(object):
                 # stationary turn has a clear firing lane. Only borrow that
                 # future solution for motion; never rewrite the actual row.
                 stationary, solution = planned, planned['solution']
-        can_lay = (preview is not None or stationary is not None or
+        can_lay = (motion is not None or stationary is not None or
                    mechanical == 'hull_laying' and candidate.get('line') == 'clear' and
                    candidate.get('shell_index') == runtime.gun.shot_index)
         if can_lay:
-            lay = self._lay_order(order, candidate, target, solution, now, preview is not None)
+            lay = self._lay_order(order, candidate, target, solution, now)
             if lay is not None:
                 return lay
         else:
@@ -554,7 +680,7 @@ class EngagementPosition(object):
             # Its old friendly lease must not override the new point's owner.
             runtime.engine._clear_friendly_reposition(runtime.actor_id)
         handoff = (self.pivot or {}).get('handoff')
-        mechanical_phase = mechanical in ('hull_laying', 'mechanical_limited', 'siege_projected')
+        mechanical_phase = mechanical in ('hull_laying', 'mechanical_limited', 'hydraulic_laying')
         self.episode['phase'] = 'mechanical' if mechanical_phase and handoff is None else 'ordinary'
         if self.episode['phase'] == 'mechanical':
             # This refusal comes from the policy's actual per-point mechanical
@@ -581,41 +707,7 @@ class EngagementPosition(object):
             self.pivot['handoff'] = dict(reason=reason, at=float(now),
                                         position=tuple(self.runtime.state['position']))
 
-    def _await_mode_validation(self, order, now):
-        """Do not lose an admitted native transition at descriptor rebinding.
-
-        Keeping its stationary lifetime is not keeping the old aim proof.
-        There is deliberately no point/trajectory returned here.  Once the
-        native mode is stable, actual verification shares the existing laying
-        stall allowance instead of receiving a fresh one every pending scan.
-        """
-        if (not self.active or self.pivot is None or not self.pivot.get('projected') or
-                'handoff' in self.pivot):
-            return None
-        runtime = self.runtime
-        mode = int(runtime.state.get('siege_state', siege_mechanics.DISABLED))
-        switching = bool(mode in (siege_mechanics.SWITCHING_ON, siege_mechanics.SWITCHING_OFF) or
-                         getattr(runtime, '_siege_pending', None) is not None or
-                         getattr(runtime.owner, '_local_siege_pending', None) is not None)
-        if not switching and mode != siege_mechanics.ENABLED:
-            return None
-        if switching:
-            phase, reason = 'siege_transition', 'siege_precheck_waits_native_mode'
-        else:
-            if not self.pivot['stable_started']:
-                self.pivot.update(stable_started=True, progress_at=float(now))
-            if now - self.pivot['progress_at'] >= MECHANICAL_STALL_SECONDS:
-                self.release_laying('native_pivot_stalled', now)
-                self.episode['phase'] = 'ordinary'
-                return None
-            phase, reason = 'siege_verify', 'siege_actual_pose_validation_pending'
-        self.episode['phase'] = phase
-        self._publish('switching' if switching else 'checking', reason, now,
-                      'native_siege_transition' if switching else 'native_siege_validation')
-        return self._tag(dict(order, move_position=tuple(runtime.state['position']),
-            throttle_override=0., fire_allowed=False), phase)
-
-    def _lay_order(self, order, candidate, target, solution, now, projected):
+    def _lay_order(self, order, candidate, target, solution, now):
         runtime, state = self.runtime, self.runtime.state
         handoff = (self.pivot or {}).get('handoff')
         if handoff is not None:
@@ -627,36 +719,26 @@ class EngagementPosition(object):
         error = abs(_angle(desired_yaw - yaw))
         hydraulic = float(getattr(runtime.owner, '_local_siege_aim_pitch',
                                   state.get('suspension_pitch', 0.)))
-        desired_pitch = float(solution.get('siege_correction', hydraulic))
+        needs_hydraulic = bool(solution.get('needs_hydraulic'))
+        desired_pitch = float(solution.get('hydraulic_pitch',
+                                           solution.get('siege_correction', hydraulic)))
         pitch_error = abs(desired_pitch - hydraulic)
         identity = runtime.engine._artillery_target_identity(target)
-        mode = int(state.get('siege_state', siege_mechanics.DISABLED))
-        switching = bool(mode in (siege_mechanics.SWITCHING_ON, siege_mechanics.SWITCHING_OFF) or
-                         getattr(runtime, '_siege_pending', None) is not None or
-                         getattr(runtime.owner, '_local_siege_pending', None) is not None)
         if self.pivot is None:
             self.pivot = dict(target=identity, gun=runtime.gun, shell=runtime.gun.shot_index,
                 progress_at=float(now), progress_yaw=yaw, best_error=error,
                 progress_pitch=hydraulic, best_pitch_error=pitch_error,
-                projected=bool(projected),
-                stable_started=not projected or mode == siege_mechanics.ENABLED and not switching)
+                hydraulic=needs_hydraulic)
             runtime._native_hull_laying = self.pivot
         pivot = self.pivot
         if identity != pivot['target']:
             # A new target/point changes the error origin, not elapsed time.
             pivot.update(target=identity, best_error=error, best_pitch_error=pitch_error,
                          progress_yaw=yaw, progress_pitch=hydraulic)
-        if projected and (mode != siege_mechanics.ENABLED or switching):
-            self.episode['phase'] = 'siege_transition'
-            self._publish('switching', 'siege_precheck_waits_native_mode', now,
-                          'native_siege_transition')
-            return self._tag(dict(order, move_position=tuple(state['position']),
-                throttle_override=0., fire_allowed=False), 'siege_transition')
-        if not pivot['stable_started']:
-            pivot.update(stable_started=True, progress_at=float(now))
+        pivot['hydraulic'] = needs_hydraulic
         progressed = (abs(_angle(yaw - pivot['progress_yaw'])) >= NATIVE_ANGLE_TOLERANCE and
                       error < pivot['best_error'] - NATIVE_ANGLE_TOLERANCE or
-                      projected and abs(hydraulic - pivot['progress_pitch']) >= NATIVE_ANGLE_TOLERANCE and
+                      needs_hydraulic and abs(hydraulic - pivot['progress_pitch']) >= NATIVE_ANGLE_TOLERANCE and
                       pitch_error < pivot['best_pitch_error'] - NATIVE_ANGLE_TOLERANCE)
         if progressed:
             pivot.update(best_error=min(error, pivot['best_error']),
@@ -668,7 +750,7 @@ class EngagementPosition(object):
             return None
         self.episode['phase'] = 'native_lay'
         self._publish('aligning', solution.get('mechanical_reason',
-                      'siege_projected_laying' if projected else 'yaw_limit'), now,
+                      'hydraulic_laying' if needs_hydraulic else 'yaw_limit'), now,
                       'copied_combat_hull_aim')
         return self._tag(dict(order, move_position=tuple(state['position']),
             face_position=solution.get('point') or target['position'], throttle_override=0.,
@@ -758,7 +840,7 @@ class EngagementPosition(object):
         self.observe(now)
         if self.suppressed:
             result = dict(self.receipt, terminal=True,
-                          phase='exit' if self.exit_required else 'route')
+                          phase=self.terminal['phase'])
         else:
             result = dict(receipt, lifecycle_owner='player_engagement',
                           episode_id=(self.episode or {}).get('id'))

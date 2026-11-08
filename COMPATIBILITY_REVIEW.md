@@ -1,4 +1,75 @@
-# November 6 unified-trigger and complete foreground-copy rebuild
+# November 8 final siege ownership and ordinary finite-traverse integration
+
+This update starts at `cabfec2569a3acb7d169e876ed69706ec913219a` and
+supersedes that revision's future-mode entry precheck. The current user contract
+is not to prove a hypothetical attack before switching: the existing selected
+visible contact and actual combat ownership request siege; actual task travel
+or retreat ownership requests travel. Target visibility, contact/fire range,
+task priority, and native transition acknowledgement remain existing owners.
+Local combat turning or firing-position movement is not strategic travel,
+including a local leg whose strategic destination exceeds the old 35 m test.
+
+The original Bot and copied navigation/behaviour sources are unchanged. The
+player layer changes only its combat/mode handoff and consumes the original
+movement laws. Explicit task destinations, protected base return and retreat
+cannot be renamed to `engage` by the late attack overlay. A completed ordinary
+recovery first admits the original task route; only that owner requests mode
+exit. An unfinished recovery or pending evidence is not a completed failure.
+
+## Actual geometry, without a second entry planner
+
+- `SiegePrecheck` and its future-descriptor/alternate-ammunition scan are
+  removed. `ActualSiegeAim` consumes one already selected/evaluated point in
+  the currently enabled descriptor. It performs no independent armour, lane,
+  world or all-target scan. Its matched flat-body hydraulic source uses at
+  most six installed native angle calls per selected-point update.
+- The ordinary bounded stationary planner also handles the active hydraulic
+  body's native pivot and flat support. This removes the old unconditional
+  `stationary_hydraulic_pose_requires_native_owner` deferral. A complete
+  current-domain negative can reach the same HE/limited-magazine policy as a
+  normal finite-traverse TD. Unknown support, blocked motion and unfinished
+  proofs still remain distinct from armour failure.
+- The hydraulic transform composes rotations about the actual pivot rather
+  than adding Euler pitches on rolled ground. The actual barrel and the flat
+  hydraulic input pursue the same selected point. Motion-only output never
+  becomes a verified first-trigger source.
+- A mode descriptor rebind keeps target/sample intention for the same physical
+  gun and an already admitted reload transaction, but discards old geometry,
+  armour, lane, current-trigger and next-load proofs. Intent is evaluation
+  priority, not permission to fire or override ammunition ranking.
+- Automatic first edges require the actual enabled mode, matching native
+  observation and no pending mode/braking transaction. A level target cannot
+  fire during travel debounce. An already committed physical trigger keeps
+  its original native ownership; this is not magazine-wide locking.
+- The local native hydraulic/request/drive-lock/state consumers retain the
+  installed outer descriptor's siege capability when a mode child omits its
+  flag. Only the actual local entity can borrow that capability; remote
+  descriptor checks are unchanged. The copy manifest is mechanically
+  refreshed for source hashes/line numbers, not altered copied behaviour.
+
+Horizontal traverse, magazine/trigger structure and siege capability remain
+independent. All loaded HE magazines retain penetration/fallback switching;
+finite non-HE magazines retain immediate original reload retreat after real
+current-domain failure. Next-ammunition ranking, allowed AI queue clearing,
+manual queue ownership, HE expected-HP-damage ranking without a barrel/track
+blacklist, and the distinct eight-second armour search are unchanged.
+
+## Regression and delivery boundary
+
+Obsolete tests requiring future-mode proof or using short/long travel distance
+as the combat-entry criterion are replaced with actual ownership tests. Their
+native braking, sequence/echo, fire admission, source freshness and physical
+ammunition assertions are retained. Added checks cover no-precheck contact
+entry, visibility loss/reacquisition, combat-local movement, protected tasks,
+ordinary-recovery handoff, same-gun intent rebind, zero-pitch active hydraulic
+domain closure and hypothetical siege-magazine capability composition.
+
+Final validation totals and the exact source/build identities are recorded in
+the PR and the v4 handoff for the frozen revision. Controlled native-observation
+tests and CI packaging do not claim a Windows #1513 gameplay or frame-time run.
+Earlier numerical test/package records below describe their own revisions.
+
+# Historical November 6 unified-trigger and complete foreground-copy rebuild
 
 ## Current scope and superseded conclusions
 

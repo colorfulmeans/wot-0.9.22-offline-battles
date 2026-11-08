@@ -474,6 +474,7 @@ class MovingTraverseConsumerTests(TraverseHarness, unittest.TestCase):
                     self.advance_until(scene, lambda: scene.trace[-1]['hull_aiming'])
                     self.assertGreater(scene.trace[-1]['sender'][1], 0.)
                     before = tuple(scene.battle._gun_state.ammo)
+                    completed = None
                     for index in range(64):
                         # The native sight verdict changes with hull pose, while the
                         # hull stays on the same patch of ground in the live incident.
@@ -486,8 +487,27 @@ class MovingTraverseConsumerTests(TraverseHarness, unittest.TestCase):
                                          runtime._last_navigation['owner'])
                         if index < 2:
                             self.assertLess(row['sender'][1], 0., row)
-                        self.assertEqual(corner, row['order']['move_position'])
+                        terminal = runtime.firing_position.terminal
+                        if terminal is not None:
+                            completed = terminal
+                            self.assertEqual('navigation_recovery_stalled', terminal['reason'])
+                            self.assertEqual('local_stuck', terminal['evidence']['reason'])
+                            self.assertGreater(terminal['evidence']['completed_count'], 0)
+                            self.assertFalse(row['order']['fire_allowed'])
+                        if terminal is not None and terminal['navigation_owned']:
+                            # The unchanged native location eventually exhausts
+                            # the real driver's bounded recovery. The fixture's
+                            # original task route ends here, so it holds instead
+                            # of endlessly restarting that combat corner.
+                            self.assertEqual(scene.position, row['order']['move_position'])
+                            self.assertEqual((0., 0., True), row['sender'])
+                            self.assertIsNone(row['order']['target_id'])
+                            self.assertEqual('route', terminal['phase'])
+                        else:
+                            self.assertEqual(corner, row['order']['move_position'])
                         self.assertFalse(row['hull_aiming'])
+                    self.assertIsNotNone(completed)
+                    self.assertTrue(completed['navigation_owned'])
                     self.assertEqual(before, tuple(scene.battle._gun_state.ammo))
                     self.assertEqual(3, scene.battle._gun_state.clip)
                     scene.trigger.assert_not_called()

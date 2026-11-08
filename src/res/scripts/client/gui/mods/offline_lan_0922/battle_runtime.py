@@ -8089,6 +8089,23 @@ class BattleRuntime(object):
         self._refresh_local_stabilised_snapshot()
         return True
 
+    def _local_has_siege_mode(self, entity):
+        """Keep installed local capability when a native child drops its flag.
+
+        Vehicle.onSiegeStateUpdated can expose a plain mode child. Only the
+        current local entity may borrow its retained outer descriptor; remote
+        vehicles and unrelated entities keep their own descriptor contract.
+        """
+        if entity is None:
+            return False
+        if bool(getattr(getattr(entity, 'typeDescriptor', None), 'hasSiegeMode', False)):
+            return True
+        server = getattr(self, '_server', None)
+        identity = getattr(server, 'vehicle_id', None)
+        return bool(identity is not None and
+            self._server_entity(identity) is entity and
+            getattr(getattr(self, '_local_descriptor', None), 'hasSiegeMode', False))
+
     def _update_local_hull_aiming(self, entity, elapsed):
         """Pitch the copied Siege pose without entering native physics.
 
@@ -8101,8 +8118,7 @@ class BattleRuntime(object):
         """
         matrix = self._local_siege_aim_matrix
         descriptor = getattr(entity, 'typeDescriptor', None)
-        if matrix is None or not bool(
-                getattr(descriptor, 'hasSiegeMode', False)):
+        if matrix is None or not self._local_has_siege_mode(entity):
             return False
         states = self._runtime.constants.VEHICLE_SIEGE_STATE
         siege_state = getattr(entity, 'siegeState', states.DISABLED)
@@ -26435,8 +26451,7 @@ class BattleRuntime(object):
 
     def _local_siege_drive_locked(self, entity):
         """Return whether Siege transition owns the local drivetrain."""
-        descriptor = getattr(entity, 'typeDescriptor', None)
-        if not bool(getattr(descriptor, 'hasSiegeMode', False)):
+        if not self._local_has_siege_mode(entity):
             return False
         if self._local_siege_pending is not None:
             return True
@@ -26483,8 +26498,7 @@ class BattleRuntime(object):
                 or self._server is None):
             return False
         entity = self._server_entity(self._server.vehicle_id)
-        descriptor = getattr(entity, 'typeDescriptor', None)
-        if (not bool(getattr(descriptor, 'hasSiegeMode', False)) or
+        if (not self._local_has_siege_mode(entity) or
                 bool(getattr(entity, 'is_engine_dead', False))):
             return False
         enabled = bool(value)
@@ -29410,11 +29424,12 @@ class BattleRuntime(object):
         descriptor = getattr(entity, 'typeDescriptor', None)
         if descriptor is None:
             raise RuntimeError('Siege vehicle descriptor is unavailable')
-        if (not bool(getattr(descriptor, 'hasSiegeMode', False)) and
-                siege_state != disabled):
+        has_mode = (self._local_has_siege_mode(entity) if record.get('local') else
+                    bool(getattr(descriptor, 'hasSiegeMode', False)))
+        if not has_mode and siege_state != disabled:
             raise RuntimeError(
                 'Vehicle without Siege mode received an active state')
-        if not bool(getattr(descriptor, 'hasSiegeMode', False)):
+        if not has_mode:
             record['presented_siege_state'] = disabled
             return False
         gun_edge = None

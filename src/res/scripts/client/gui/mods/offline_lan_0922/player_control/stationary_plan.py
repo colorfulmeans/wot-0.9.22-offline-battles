@@ -17,9 +17,9 @@ import time
 
 from .. import arena_boundary, ballistics, shot_geometry, tank_collision, vehicle_physics
 from ..gun_mechanics import _field
-from .copied import hull_aiming
 from .copied.battle_geometry import DESTRUCTIBLE_POSE_MAX_ANGLE_STEP
-from .native_aim import mechanical_reach, NATIVE_ANGLE_TOLERANCE
+from .native_aim import (mechanical_reach, NATIVE_ANGLE_TOLERANCE,
+                         active_hydraulic_pose, hydraulic_body, hydraulic_reach)
 from .stationary_scope import _finite, _native_motion, _point
 
 
@@ -184,12 +184,8 @@ class StationaryPlanner(object):
             raise _Deferred('stationary_rotation_actuator_unavailable')
         if motion[5] in (1, 3):
             raise _Deferred('stationary_mode_transition_pending')
-        hydraulic = hull_aiming.pitch_params(descriptor)
-        if hydraulic is not None and hydraulic['isAvailable'] and hydraulic['isEnabled']:
-            # Its pivot has a separate native pose/sweep owner. Do not treat
-            # the tilted body as the supporting terrain or certify a neutral
-            # body arc. SiegePrecheck remains the hydraulic planning owner.
-            raise _Deferred('stationary_hydraulic_pose_requires_native_owner')
+        hydraulic = active_hydraulic_pose(runtime, frame)
+        hydraulic_stamp = tuple(sorted(hydraulic.items())) if hydraulic is not None else None
         pivot = _pivot(descriptor, owner)
         for name in ('chassis', 'hull', 'turret', 'gun'):
             _box(_field(_field(descriptor, name), 'hitTester').bbox)
@@ -255,7 +251,8 @@ class StationaryPlanner(object):
                 _point(frame['position']), _point(frame['pose'][6]),
                 frame.get('scene'), motion,
                 tuple(sorted(pivot.items())), mounted_box, bounds, shape, cap,
-                peer_stamp, id(sensor), native_scene, native_support, debris_stamp), pivot, peers, cap
+                peer_stamp, id(sensor), native_scene, native_support, debris_stamp,
+                hydraulic_stamp), pivot, peers, cap
 
     def _budget(self, now, deadline):
         if self._budget_at != now:
@@ -298,7 +295,7 @@ class StationaryPlanner(object):
         if abs(plane['center_y'] - source['center_y']) > _POSITION_EPSILON:
             raise _Deferred('stationary_track_vertical_path_pending')
 
-    def _project_point(self, frame, shell, target, raw, pivot):
+    def _project_point(self, frame, shell, target, raw, pivot, hydraulic=None):
         descriptor, position, body = frame['descriptor'], _point(frame['position']), _point(frame['body'])
         mounted_position = _point(frame['pose'][6])
         displacement = tuple(mounted_position[i] - position[i] for i in range(3))
@@ -319,17 +316,29 @@ class StationaryPlanner(object):
         # A target-centre heading shares the safe arc between its samples.
         # A zero-width gun may require further bounded point-specific turns.
         centre = _point(target['matrix'].translation)
+        support_body = hydraulic['body'] if hydraulic is not None else body
         yaw = math.atan2(centre[0] - position[0], centre[2] - position[2])
+        correction = hydraulic['correction'] if hydraulic is not None else 0.
+        flat_offset = (shot_geometry.inverse_transform_vehicle_vector(
+            tuple(hydraulic['position'][i] - position[i] for i in range(3)), *support_body)
+            if hydraulic is not None else None)
         turret, previous = min(high, max(low, 0.)), None
         for unused in range(PROJECTION_ITERATIONS):
-            delta = _angle(yaw - body[0])
+            delta = _angle(yaw - support_body[0])
             offset = vehicle_physics.track_pivot_offset(pivot, 0., delta)
-            projected_position = vehicle_physics.track_pivot_position(position, body[0], yaw, offset)
-            pitch, roll = vehicle_physics.ground_pose_for_yaw(body[1], body[2], body[0], yaw)
+            projected_position = vehicle_physics.track_pivot_position(position, support_body[0], yaw, offset)
+            pitch, roll = vehicle_physics.ground_pose_for_yaw(
+                support_body[1], support_body[2], support_body[0], yaw)
             projected_body = (yaw, pitch, roll)
+            flat_body = projected_body
             base = tuple(projected_position[i] + displacement[i] for i in range(3))
+            if hydraulic is not None:
+                flat_position = shot_geometry.transform_vehicle_point(
+                    flat_offset, projected_position, *flat_body)
+                base, projected_body = hydraulic_body(
+                    flat_position, flat_body, correction, hydraulic['centerZ'])
             origin, unused_direction = shot_geometry.shot_origin_and_direction(
-                descriptor, base, yaw, pitch, roll, turret, 0.)
+                descriptor, base, projected_body[0], projected_body[1], projected_body[2], turret, 0.)
             solved = ballistics.ballistic_intercept(origin, sample, velocity, speed, gravity)
             if solved is None or solved[2] * speed > maximum + 1.e-6:
                 raise _Deferred('stationary_projected_intercept_pending')
@@ -338,11 +347,19 @@ class StationaryPlanner(object):
             direction = (math.sin(gun_yaw) * math.cos(gun_pitch), -math.sin(gun_pitch),
                          math.cos(gun_yaw) * math.cos(gun_pitch))
             reach = mechanical_reach(descriptor, direction, projected_body)
+            next_correction = correction
+            if hydraulic is not None:
+                active = hydraulic_reach(descriptor, direction, flat_body, hydraulic)
+                if not active.get('reachable') and not active.get('needs_hull'):
+                    raise _Deferred('stationary_hydraulic_pitch_unreachable')
+                next_correction = active['hydraulic_pitch']
+                reach = dict(reach, local_yaw=active['local_yaw'])
             following_turret = min(high, max(low, reach['local_yaw']))
             error = _angle(reach['local_yaw'] - following_turret)
             following_yaw = _angle(yaw + error)
             if (previous is not None and abs(error) < 1.e-7 and
                     abs(_angle(following_turret - turret)) < 1.e-7 and
+                    abs(next_correction - correction) < 1.e-7 and
                     sum((origin[i] - previous[i]) ** 2 for i in range(3)) < 1.e-12):
                 if not reach['reachable']:
                     raise _Deferred('stationary_projected_pitch_pending')
@@ -350,17 +367,52 @@ class StationaryPlanner(object):
                 solution = dict(raw.get('solution') or {})
                 solution.update(point=tuple(aim), aim_position=tuple(aim), source_point=tuple(aim),
                     yaw=gun_yaw, pitch=gun_pitch, direction=direction, origin=origin,
-                    flight_time=flight, path=path, reachable=True, needs_hull=True,
+                    flight_time=flight, path=path, reachable=True,
+                    needs_hull=abs(delta) > NATIVE_ANGLE_TOLERANCE,
                     hull_yaw=yaw, body=projected_body, position=projected_position,
                     stationary_plan=True, source_verified=False, mechanical_reason='stationary_plan')
+                if hydraulic is not None:
+                    solution.update(hydraulic_pitch=correction, siege_correction=correction,
+                        needs_hydraulic=abs(correction - hydraulic['correction']) > NATIVE_ANGLE_TOLERANCE,
+                        flat_body=flat_body, flat_position=flat_position)
                 projected = dict(frame, position=projected_position, body=projected_body, origin=origin)
                 return dict(projected_frame=projected, pivot_offset=offset,
+                    flat_body=flat_body, hydraulic_pitch=correction,
                     prediction=dict(path=path, reach=dict(reach, status='reachable'),
                         solution=solution, sample_point=sample, direction=direction, flight=flight))
-            previous, yaw, turret = origin, following_yaw, following_turret
+            previous, yaw, turret, correction = origin, following_yaw, following_turret, next_correction
         raise _Deferred('stationary_projection_unsettled')
 
-    def _slice(self, frame, source, first, last, offset, peers, cap, now, deadline):
+    def _hydraulic_pose(self, frame, position, body, hydraulic, correction):
+        # Native hydraulic contact uses a flat chassis and a separately
+        # pivoted hull. Match that consumer instead of tilting the terrain.
+        offset = shot_geometry.inverse_transform_vehicle_vector(
+            tuple(hydraulic['position'][i] - frame['position'][i] for i in range(3)),
+            *hydraulic['body'])
+        base = shot_geometry.transform_vehicle_point(offset, position, *body)
+        mounted, actual = hydraulic_body(base, body, correction, hydraulic['centerZ'])
+        pose = dict(x=position[0], y=position[1], z=position[2],
+                    yaw=body[0], pitch=body[1], roll=body[2],
+                    actor_key='player:%d' % self.runtime.owner.client.player_id)
+        pose['hull'] = dict(x=mounted[0], y=mounted[1], z=mounted[2],
+                           yaw=actual[0], pitch=actual[1], roll=actual[2])
+        return pose
+
+    def _hydraulic_sweep(self, frame, before_position, before_body, before_correction,
+                         after_position, after_body, after_correction, hydraulic):
+        probe = getattr(self.runtime.geometry, '_turret_motion_is_clear', None)
+        if not callable(probe):
+            raise _Deferred('stationary_hydraulic_native_sweep_unavailable')
+        before = self._hydraulic_pose(frame, before_position, before_body, hydraulic, before_correction)
+        after = self._hydraulic_pose(frame, after_position, after_body, hydraulic, after_correction)
+        clear = probe(before, after, frame['descriptor'])
+        if clear is not True:
+            raise _Deferred('stationary_hydraulic_sweep_blocked' if clear is False else
+                            'stationary_hydraulic_sweep_pending')
+        return dict(before=before, after=after, native_clear=True)
+
+    def _slice(self, frame, source, first, last, offset, peers, cap, now, deadline,
+               hydraulic=None):
         key = (float(first), float(last), float(offset))
         if key in self._arcs:
             return self._arcs[key]
@@ -394,6 +446,13 @@ class StationaryPlanner(object):
         if not self.runtime.engine._turret_pose_is_clear(
                 view._bots.states[self.runtime.actor_id], start, first, endpoint, last):
             raise _Deferred('stationary_detached_turret_rotation_blocked')
+        hydraulic_receipt = None
+        if hydraulic is not None:
+            final_pitch, final_roll = vehicle_physics.ground_pose_for_yaw(
+                body[1], body[2], body[0], last)
+            hydraulic_receipt = self._hydraulic_sweep(frame, start, (first, pitch, roll),
+                hydraulic['correction'], endpoint, (last, final_pitch, final_roll),
+                hydraulic['correction'], hydraulic)
         clear = view._resolve_bot_rotation(self.runtime.actor_id, start, first, last,
             frame['descriptor'], max(1.e-6, abs(_angle(last - first)) / cap), now,
             cap, pivot_offset=offset, commit_enabled=False)
@@ -406,7 +465,8 @@ class StationaryPlanner(object):
             raise _Deferred('stationary_native_tree_contact_pending')
         receipt = dict(start=start, start_yaw=first, end_yaw=last, pivot_offset=offset,
                        support=tuple(observations), peer_fraction=fraction,
-                       arena_envelope=swept, native_clear=True, tree=dict(tree))
+                       arena_envelope=swept, native_clear=True, tree=dict(tree),
+                       hydraulic=hydraulic_receipt)
         self._arcs[key] = receipt
         return receipt
 
@@ -429,22 +489,32 @@ class StationaryPlanner(object):
             if key in self._plans:
                 return self._plans[key]
             self._budget(now, deadline)
-            proposal = self._project_point(frame, shell, target, raw_prediction, pivot)
-            source = self._support(frame, frame['position'], frame['body'][0], now, deadline)
-            if (abs(source['pitch'] - frame['body'][1]) > NATIVE_ANGLE_TOLERANCE or
-                    abs(source['roll'] - frame['body'][2]) > NATIVE_ANGLE_TOLERANCE):
+            hydraulic = active_hydraulic_pose(self.runtime, frame)
+            proposal = self._project_point(frame, shell, target, raw_prediction, pivot, hydraulic)
+            support_frame = dict(frame, body=hydraulic['body']) if hydraulic is not None else frame
+            support_body = support_frame['body']
+            source = self._support(frame, frame['position'], support_body[0], now, deadline)
+            if (abs(source['pitch'] - support_body[1]) > NATIVE_ANGLE_TOLERANCE or
+                    abs(source['roll'] - support_body[2]) > NATIVE_ANGLE_TOLERANCE):
                 raise _Deferred('stationary_source_support_disagrees')
-            delta = _angle(proposal['projected_frame']['body'][0] - frame['body'][0])
+            delta = _angle(proposal['flat_body'][0] - support_body[0])
             sign = 1. if delta >= 0. else -1.
             count = int(math.floor(abs(delta) / DESTRUCTIBLE_POSE_MAX_ANGLE_STEP))
-            angles = [frame['body'][0] + sign * DESTRUCTIBLE_POSE_MAX_ANGLE_STEP * index
+            angles = [support_body[0] + sign * DESTRUCTIBLE_POSE_MAX_ANGLE_STEP * index
                       for index in range(count + 1)]
             if abs(delta) - count * DESTRUCTIBLE_POSE_MAX_ANGLE_STEP > 1.e-9:
-                angles.append(frame['body'][0] + delta)
+                angles.append(support_body[0] + delta)
             receipts = []
             for first, last in zip(angles, angles[1:]):
-                receipts.append(self._slice(frame, source, first, last, proposal['pivot_offset'],
-                                            peers, cap, now, deadline))
+                receipts.append(self._slice(support_frame, source, first, last, proposal['pivot_offset'],
+                                            peers, cap, now, deadline, hydraulic))
+            hydraulic_receipt = None
+            if hydraulic is not None:
+                self._budget(now, deadline)
+                endpoint = proposal['projected_frame']['position']
+                hydraulic_receipt = self._hydraulic_sweep(frame, endpoint, proposal['flat_body'],
+                    hydraulic['correction'], endpoint, proposal['flat_body'],
+                    proposal['hydraulic_pitch'], hydraulic)
             # A projected negative can only join the global domain after
             # every arc chunk and every native support observation finished.
             if self._dependencies(frame)[0] != dependencies:
@@ -454,7 +524,8 @@ class StationaryPlanner(object):
                 source_support=source, pivot=dict(pivot), pivot_offset=proposal['pivot_offset'],
                 arc=tuple(receipts), support_resolution=DESTRUCTIBLE_POSE_MAX_ANGLE_STEP * .5,
                 projected_position=proposal['projected_frame']['position'],
-                projected_body=proposal['projected_frame']['body'], fire_permission=False)
+                projected_body=proposal['projected_frame']['body'],
+                hydraulic=hydraulic_receipt, fire_permission=False)
             result = dict(proposal, status='proved', proved=True, proof=proof,
                           reason='native_stationary_point_plan', progressing=False)
             self._plans[key] = result

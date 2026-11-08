@@ -1,542 +1,262 @@
-"""Future-mode geometry and native point/contact checks, not Windows proof.
+"""Active hydraulic aim/finite-TD proofs, never prospective mode admission.
 
-The prospective planner cannot enter the actual attack proof table.  Native
-world/component observations below reuse the foreground fire fixture; body
-sweep receipts are explicitly controlled only in the tests of that boundary.
+Native observation fixtures feed production policy, source inversion,
+stationary collision certificates and hydraulic actuation. These tests do
+not establish physical Windows client timing/rendering acceptance.
 """
-import copy
 import math
-import sys
-import types
 import unittest
-from pathlib import Path
 from unittest import mock
 
-sys.path[:0] = [str(Path(__file__).resolve().parents[1] / 'src/res/scripts/client'),
-               str(Path(__file__).resolve().parent)]
-
-from player_native_fixtures import descriptor
-from gui.mods.offline_lan_0922 import ballistics, shot_geometry, siege_mechanics
-from gui.mods.offline_lan_0922.player_control.attack_policy import _mechanical
-from gui.mods.offline_lan_0922.player_control.siege_planning import (
-    SiegePrecheck, PRECHECK_CANDIDATES, PRECHECK_WORLD_CHORDS,
-    native_descriptor_pair, project_solution, projected_body)
+from test_player_siege_engagement import SiegeScene
+from test_player_stationary_plan import install_plan_observations, NativePlanScene
+from gui.mods.offline_lan_0922 import shot_geometry, siege_mechanics
+from gui.mods.offline_lan_0922.player_control import siege_planning
+from gui.mods.offline_lan_0922.player_control.native_aim import (
+    active_hydraulic_pose, hydraulic_body, hydraulic_reach, mechanical_reach)
 
 
-def pitch_limits(gun, minimum, maximum):
-    gun.pitchLimits = dict(absolute=(minimum, maximum),
-        minPitch=((0., minimum), (2. * math.pi, minimum)),
-        maxPitch=((0., maximum), (2. * math.pi, maximum)))
+class ActualHydraulicScene(SiegeScene):
+    def configure_plan(self, **kwargs):
+        self.configure(**kwargs)
+        enabled = self.entity.siegeState
+        self.position = (0., 0., 0.)
+        self.plan_receipts = []
+        install_plan_observations(self)
+        self.entity.siegeState = enabled
+        self.observe()
+        return self
+
+    plan_frame = NativePlanScene.plan_frame
+    plan = NativePlanScene.plan
+
+    def evaluated_row(self, sample=0, mode='penetration'):
+        policy = self.runtime.attack_policy
+        self.observe()
+        policy.frame = policy.evaluator.snapshot(self.now)
+        job = next(job for job in policy._jobs(mode, self.runtime.gun.shot_index)
+                   if job[2]['entity'] is self.target and job[3] == sample)
+        return policy._evaluate(job, self.now, 'foreground')
 
 
-def hydraulic(descriptor, minimum=-.19, maximum=.19, center=-1.):
-    descriptor.type.hullAimingParams = dict(pitch=dict(isAvailable=True,
-        isEnabled=True, wheelsCorrectionAngles=dict(pitchMin=minimum, pitchMax=maximum),
-        wheelsCorrectionSpeed=.3, wheelCorrectionCenterZ=center))
-
-
-def paired(gun_minimum=-.07, gun_maximum=.035, limits=(0., 0.), correction=True):
-    travel = descriptor(0., 0., limits)
-    enabled = descriptor(gun_minimum, gun_maximum, limits)
-    travel.hasSiegeMode = True
-    travel.defaultVehicleDescr, travel.siegeVehicleDescr = travel, enabled
-    if correction:
-        hydraulic(enabled)
-    return travel, enabled
-
-
-class FutureSiegeProjectionTests(unittest.TestCase):
-    shot = dict(speed=1000., gravity=9.81, maxDistance=720.)
-
-    def project(self, travel, point=(0., 20., 100.), body=(0., 0., 0.), velocity=(0., 0., 0.)):
-        return project_solution(travel, (0., 0., 0.), body, self.shot, point, velocity)
-
-    def test_travel_zero_pitch_does_not_reject_future_hydraulic_point(self):
-        travel, enabled = paired()
-        result = self.project(travel)
-        self.assertEqual('ready', result['status'], result)
-        self.assertIs(enabled, result['descriptor'])
-        self.assertEqual('mechanical_limited', _mechanical(
-            travel, result['direction'], (0., 0., 0.))['status'])
-        self.assertEqual('reachable', _mechanical(
-            enabled, result['direction'], result['body'])['status'])
-        self.assertTrue(result['needs_hydraulic'])
-        self.assertFalse(result['reachable'])
-        self.assertFalse(result['source_verified'])
-        self.assertTrue(result['future_reachable'])
-
-    def test_plain_gun_travel_in_future_mode_needs_no_fabricated_hydraulics(self):
-        travel, unused = paired(-.5, .5, correction=False)
-        result = self.project(travel)
-        self.assertEqual('ready', result['status'], result)
-        self.assertFalse(result['needs_hydraulic'])
-        self.assertEqual(0., result['hydraulic_pitch'])
-
-    def test_missing_hydraulic_parameters_remain_unknown_when_correction_is_needed(self):
-        travel, unused = paired(0., 0., correction=False)
-        result = self.project(travel)
-        self.assertEqual(('unknown', 'hydraulic_parameters_unavailable'),
-                         (result['status'], result['reason']))
-
-    def test_outside_combined_envelope_is_not_approved(self):
-        travel, unused = paired()
-        result = self.project(travel, point=(0., 50., 100.))
-        self.assertEqual(('unreachable', 'siege_pitch_limit'),
-                         (result['status'], result['reason']))
-
-    def test_enabled_descriptor_mount_and_hydraulic_pivot_move_actual_origin(self):
-        travel, enabled = paired()
-        enabled.turret.gunPosition = (.3, .5, 1.)
-        result = self.project(travel)
-        self.assertEqual('ready', result['status'], result)
-        origin, direction = shot_geometry.shot_origin_and_direction(enabled,
-            result['position'], *result['body'], result['local_yaw'], result['local_pitch'])
-        for actual, expected in zip(result['origin'], origin):
-            self.assertAlmostEqual(actual, expected, places=6)
-        self.assertNotEqual((0., 2., 0.), result['origin'])
-        self.assertNotEqual((0., 0., 0.), result['position'])
-        for actual, expected in zip(result['direction'], direction):
-            self.assertAlmostEqual(actual, expected, places=6)
-
-    def test_native_gun_pivot_not_barrel_tip_is_the_launch_origin(self):
-        travel, enabled = paired(-.5, .5, correction=False)
-        enabled.turret.gunPosition = (.2, .8, 1.2)
-        first = shot_geometry.shot_origin_and_direction(
-            enabled, (1., 2., 3.), .1, .2, .3, .05, -.4)
-        second = shot_geometry.shot_origin_and_direction(
-            enabled, (1., 2., 3.), .1, .2, .3, .05, .3)
-        self.assertEqual(first[0], second[0])
-        self.assertNotEqual(first[1], second[1])
-
-    def test_roll_composition_matches_exact_nested_native_transform(self):
-        position, body, correction, center = (7., 5., -9.), (.4, .12, -.25), -.15, -1.5
-        transformed, composed = projected_body(position, body, correction, center)
-        from gui.mods.offline_lan_0922.player_control.copied import hull_aiming
-        offset = hull_aiming.correction_translation(correction, center)
-        for value in ((1., 2., 3.), (0., 0., 0.), (0., 0., 10.)):
-            local = shot_geometry.transform_vehicle_vector(value, 0., correction, 0.)
-            local = tuple(local[index] + offset[index] for index in range(3))
-            expected = shot_geometry.transform_vehicle_point(local, position, *body)
-            actual = shot_geometry.transform_vehicle_point(value, transformed, *composed)
-            for first, second in zip(actual, expected):
-                self.assertAlmostEqual(first, second, places=10)
-        self.assertNotAlmostEqual(body[1] + correction, composed[1], places=5)
-
-    def test_pivot_and_target_motion_are_solved_without_modifying_descriptors(self):
-        travel, enabled = paired()
-        old_limits = copy.deepcopy(enabled.gun.pitchLimits)
-        result = self.project(travel, point=(30., 20., 100.), body=(0., .05, .2), velocity=(1., 0., 0.))
-        self.assertEqual('ready', result['status'], result)
-        self.assertTrue(result['needs_hull'])
-        self.assertNotEqual(0., result['hull_yaw'])
-        self.assertGreater(result['point'][0], 30.)
-        self.assertEqual(old_limits, enabled.gun.pitchLimits)
-        self.assertIs(travel, travel.defaultVehicleDescr)
-        final = ballistics.ballistic_position(result['origin'], result['yaw'],
-            result['pitch'], self.shot['speed'], self.shot['gravity'], result['flight_time'])
-        for first, second in zip(final, result['point']):
-            self.assertAlmostEqual(first, second, places=6)
-
-    def test_full_turret_siege_projection_does_not_invent_a_clip_restriction(self):
-        travel, enabled = paired(-.5, .5, limits=None, correction=False)
-        enabled.gun.clip = (4, .5)
-        result = self.project(travel, point=(30., 2., 100.))
-        self.assertEqual('ready', result['status'], result)
-        self.assertFalse(result['needs_hull'])
-        self.assertGreater(result['local_yaw'], .2)
-
-    def test_invalid_shell_and_missing_pair_do_not_become_usable(self):
-        travel, unused = paired()
-        for shot in (dict(self.shot, speed=0.), dict(self.shot, maxDistance=float('nan'))):
-            result = project_solution(travel, (0., 0., 0.), (0., 0., 0.),
-                shot, (0., 20., 100.), (0., 0., 0.))
-            self.assertEqual('unknown', result['status'])
-        travel.siegeVehicleDescr = None
-        self.assertEqual('unknown', self.project(travel)['status'])
-
-    def test_unrelated_old_composite_cannot_prove_the_current_gun(self):
-        travel, enabled = paired()
-        runtime = types.SimpleNamespace(owner=types.SimpleNamespace(_local_descriptor=travel),
-                                        engine=types.SimpleNamespace(_descriptor_pairs={}), actor_id=1)
-        current = descriptor()
-        composite, pair = native_descriptor_pair(runtime, current)
-        self.assertIs(current, composite)
-        self.assertIsNone(pair[1])
-        composite, pair = native_descriptor_pair(runtime, enabled)
-        self.assertIs(travel, composite)
-        self.assertIs(enabled, pair[1])
-
-
-class NativeSiegePrecheckTests(unittest.TestCase):
-    def scene(self, bearing=0., hydraulic_needed=False):
-        import test_player_limited_traverse as fixture
-        scene = fixture.TraverseScene()
+class ActualSiegeAimTests(unittest.TestCase):
+    def scene(self, **kwargs):
+        scene = ActualHydraulicScene()
         scene.setUp()
         self.addCleanup(scene.doCleanups)
-        scene.configure(limits=(0., 0.), bearing=bearing, rate=0.)
-        travel = scene.entity.typeDescriptor
-        enabled = copy.deepcopy(travel)
-        # Rotation tests below explicitly exercise the original centre-arc
-        # probe; a track-centred turn has a different endpoint and proof.
-        enabled.chassis.rotationIsAroundCenter = True
-        travel.hasSiegeMode = True
-        travel.defaultVehicleDescr, travel.siegeVehicleDescr = travel, enabled
-        enabled.hasSiegeMode = False
-        scene.battle._local_descriptor = travel
-        scene.entity.siegeState = siege_mechanics.DISABLED
-        pitch_limits(travel.gun, 0., 0.)
-        pitch_limits(enabled.gun, -.035 if hydraulic_needed else -.8,
-                     .035 if hydraulic_needed else .8)
-        if hydraulic_needed:
-            hydraulic(enabled, minimum=-.3, maximum=.3)
-            scene.pose(scene.target, (0., 8., 40.))
-        scene.siege_precheck = SiegePrecheck(scene.runtime)
-        # Budget tests count actual work, independent of machine/test-suite
-        # scheduling. Production still observes the four-millisecond budget.
-        scene.siege_precheck.clock = lambda: 0.
-        scene.observe()
-        return scene
+        return scene.configure_plan(**kwargs)
 
-    def run_candidate(self, scene, attempts=20):
-        result = None
-        scene.siege_receipts = []
-        for unused in range(attempts):
-            scene.observe()
-            frame = scene.runtime.attack_policy.evaluator.snapshot(scene.now)
-            result = scene.siege_precheck.candidate(frame, scene.now)
-            scene.siege_receipts.append(scene.siege_precheck.status())
-            if result is not None:
-                return result
-            scene.fixture.now += .11
-        return result
+    def test_future_mode_precheck_api_is_removed(self):
+        for name in ('SiegePrecheck', 'project_solution', 'PRECHECK_CANDIDATES'):
+            self.assertFalse(hasattr(siege_planning, name))
 
-    def test_concrete_future_contact_does_not_enter_current_attack_proof_table(self):
-        scene = self.scene(hydraulic_needed=True)
+    def test_disabled_mode_never_inspects_targets_or_native_sources(self):
+        scene = self.scene(enabled=False)
+        frame = scene.runtime.attack_policy.evaluator.snapshot(scene.now)
+        with mock.patch.object(scene.battle._runtime, 'get_shot_angles') as angles:
+            self.assertIsNone(scene.runtime.siege_aim.candidate(frame, scene.now))
+        angles.assert_not_called()
+        self.assertEqual('inactive', scene.runtime.siege_aim.status()['status'])
+
+    def test_actual_selected_point_is_motion_only_and_adds_no_world_armour_work(self):
+        scene = self.scene(enabled_pitch=(0., 0.), hydraulic_center=1.5)
+        row = scene.evaluated_row()
         policy = scene.runtime.attack_policy
-        before = dict(policy.rows)
-        result = self.run_candidate(scene)
-        self.assertIsNotNone(result, scene.siege_precheck.status())
-        self.assertEqual(before, policy.rows)
-        self.assertEqual(('siege_precheck', 'siege_projected'), (result['mode'], result['mechanical']))
+        before_rows, before_world = dict(policy.rows), len(scene.world_queries)
+        with mock.patch.object(policy.evaluator, 'evaluate', side_effect=AssertionError('second evaluator')):
+            result = scene.runtime.siege_aim.candidate(policy.frame, scene.now, row)
+        self.assertIsNotNone(result, scene.runtime.siege_aim.status())
+        self.assertEqual(before_rows, policy.rows)
+        self.assertEqual(before_world, len(scene.world_queries))
         self.assertTrue(result['solution']['needs_hydraulic'])
+        self.assertTrue(result['solution']['siege_aim'])
+        self.assertFalse(result['solution']['reachable'])
         self.assertFalse(result['solution']['source_verified'])
-        self.assertFalse(policy._executable(result, 'penetration'))
-        self.assertTrue(scene.world_queries)
+        self.assertFalse(policy._executable(result))
+        self.assertLessEqual(scene.runtime.siege_aim.status()['native_calls'], siege_planning.NATIVE_SOURCE_CALLS)
+
+    def test_matching_flat_input_inverts_exact_native_actuator_contract(self):
+        scene = self.scene(enabled_pitch=(0., 0.), hydraulic_center=-1.5)
+        row = scene.evaluated_row()
+        helper = scene.runtime.siege_aim
+        candidate = helper.candidate(scene.runtime.attack_policy.frame, scene.now, row)
+        self.assertIsNotNone(candidate, helper.status())
+        source = helper.hydraulic_point(candidate, candidate['solution']['point'])
+        self.assertIsNotNone(source)
+        self.assertTrue(scene.runtime.weapon.preaim(candidate))
+        # Exercise the actual native sender and body-pitch consumer.
+        scene.runtime._siege_aim_candidate = candidate
+        scene.runtime.attack_policy.decision = dict(action='firing_position', candidate=row,
+                                                     reason='native_firing_position')
+        for unused in range(15):
+            scene.actuate_native_source(.1)
+        self.assertAlmostEqual(candidate['solution']['hydraulic_pitch'],
+                               scene.battle._local_siege_aim_pitch, places=6)
         self.assertFalse(scene.battle._projectile_meta)
 
-    def test_wall_contact_is_not_enough_to_request_the_mode(self):
-        scene = self.scene()
-        scene.world = [((-100., -100., 5.), (100., 100., 30.))]
-        result = self.run_candidate(scene)
-        self.assertIsNone(result)
-        self.assertTrue(any(row['reason'] == 'world_blocked' for row in scene.siege_receipts))
-
-    def test_friendly_hull_is_not_a_clear_future_line(self):
-        scene = self.scene()
-        scene.vehicle(43, (0., 0., 20.), team=1)
-        result = self.run_candidate(scene)
-        self.assertIsNone(result)
-        self.assertTrue(any(row['reason'] == 'friendly_blocked' for row in scene.siege_receipts))
-
-    def test_unknown_native_target_data_never_counts_as_future_point(self):
-        scene = self.scene()
-        scene.target.typeDescriptor.hull.hitTester.localHitTest = None
-        result = self.run_candidate(scene)
-        self.assertIsNone(result)
-        self.assertTrue(any(row['reason'] == 'native_armour_unknown' for row in scene.siege_receipts))
-
-    def test_yaw_projection_requires_proved_clear_full_original_rotation(self):
-        for proved, clear, expected in ((False, True, False), (True, False, False), (True, True, True)):
-            with self.subTest(proved=proved, clear=clear):
-                scene = self.scene(bearing=.6)
-                with mock.patch.object(scene.runtime.geometry, '_probe_bot_local_motion',
-                        return_value=dict(proved=proved, clear=clear, reason='test_body_sweep')) as probe:
-                    result = self.run_candidate(scene)
-                self.assertEqual(expected, result is not None, scene.siege_precheck.status())
-                self.assertTrue(probe.called)
-                args = probe.call_args.args
-                self.assertIsNone(args[4])
-                self.assertGreater(abs(args[3] - args[2]), .5)
-                if result is not None:
-                    self.assertTrue(result['solution']['needs_hull'])
-
-    def test_hydraulic_obstacle_refusal_cannot_become_point_proof(self):
-        scene = self.scene(hydraulic_needed=True)
-        with mock.patch.object(scene.runtime.geometry, '_turret_motion_is_clear', return_value=False) as probe:
-            result = self.run_candidate(scene)
-        self.assertIsNone(result)
-        self.assertTrue(probe.called)
-        first, last, unused_descriptor = probe.call_args.args
-        self.assertNotEqual(first['hull']['pitch'], last['hull']['pitch'])
-        self.assertNotEqual(first['hull']['y'], last['hull']['y'])
-        self.assertTrue(any(row['reason'] == 'siege_hydraulic_sweep' for row in scene.siege_receipts))
-
-    def test_track_pivot_does_not_borrow_a_stationary_centre_arc_proof(self):
-        scene = self.scene(bearing=.6)
-        scene.entity.typeDescriptor.siegeVehicleDescr.chassis.rotationIsAroundCenter = False
-        with mock.patch.object(scene.runtime.geometry, '_probe_bot_local_motion',
-                return_value=dict(proved=True, clear=True)) as center_probe:
-            result = self.run_candidate(scene)
-        self.assertIsNone(result)
-        center_probe.assert_not_called()
-        self.assertEqual('siege_track_pivot_projection_pending', scene.siege_precheck.status()['reason'])
-
-    def test_candidate_fence_rejects_target_change_during_native_collision(self):
-        scene = self.scene()
-        moved = [False]
-        def move():
-            if not moved[0]:
-                moved[0] = True
-                scene.pose(scene.target, (0., 0., 80.))
-        scene.on_probe = move
-        scene.observe()
-        frame = scene.runtime.attack_policy.evaluator.snapshot(scene.now)
-        result = scene.siege_precheck.candidate(frame, scene.now)
-        self.assertIsNone(result)
-        self.assertEqual('siege_observation_changed', scene.siege_precheck.status()['reason'])
-
-    def test_same_observation_does_not_replenish_precheck_budget(self):
-        scene = self.scene()
-        scene.world = [((-100., -100., 5.), (100., 100., 30.))]
-        scene.observe()
-        frame = scene.runtime.attack_policy.evaluator.snapshot(scene.now)
-        for unused in range(6):
-            self.assertIsNone(scene.siege_precheck.candidate(frame, scene.now))
-        self.assertLessEqual(scene.siege_precheck._used, PRECHECK_CANDIDATES)
-        self.assertLessEqual(len(scene.world_queries), PRECHECK_WORLD_CHORDS)
-
-    def test_enabled_plain_child_keeps_retained_pair_and_remains_motion_only(self):
-        scene = self.scene(hydraulic_needed=True)
-        first = self.run_candidate(scene)
-        self.assertIsNotNone(first, scene.siege_precheck.status())
-        travel = scene.entity.typeDescriptor
-        scene.entity.typeDescriptor = travel.siegeVehicleDescr
-        scene.entity.siegeState = siege_mechanics.ENABLED
-        scene.fixture.now += .11
-        second = self.run_candidate(scene)
-        self.assertIsNotNone(second, scene.siege_precheck.status())
-        self.assertTrue(second['solution']['needs_hydraulic'])
-        self.assertFalse(second['solution']['reachable'])
-        self.assertFalse(scene.battle._projectile_meta)
-
-    def test_precheck_uses_enabled_shell_ballistics_not_the_travel_object(self):
-        scene = self.scene()
-        enabled = scene.entity.typeDescriptor.siegeVehicleDescr
-        enabled.gun.shots[0].speed *= 1.5
-        result = self.run_candidate(scene)
-        self.assertIsNotNone(result, scene.siege_precheck.status())
-        solution = result['solution']
-        speed = enabled.gun.shots[0].speed
-        final = ballistics.ballistic_position(solution['origin'], solution['yaw'],
-            solution['pitch'], speed, enabled.gun.shots[0].gravity, solution['flight_time'])
-        for first, last in zip(final, solution['point']):
-            self.assertAlmostEqual(first, last, places=6)
-        self.assertIsNot(scene.runtime.gun.shots[0], enabled.gun.shots[0])
-        self.assertNotEqual(scene.runtime.gun.shots[0].speed, speed)
-
-    def test_changed_mode_ammunition_contract_does_not_admit_entry(self):
-        scene = self.scene()
-        scene.entity.typeDescriptor.siegeVehicleDescr.gun.shots[0].shell.compactDescr += 1
-        self.assertIsNone(self.run_candidate(scene))
-        self.assertEqual('siege_loaded_shell_contract_unavailable', scene.siege_precheck.status()['reason'])
-
-    def test_known_siege_with_missing_pair_is_unknown_not_a_non_siege_vehicle(self):
-        scene = self.scene()
-        scene.entity.typeDescriptor.siegeVehicleDescr = None
-        scene.runtime.engine._descriptor_pairs.clear()
-        scene.observe()
-        frame = scene.runtime.attack_policy.evaluator.snapshot(scene.now)
-        self.assertIsNone(scene.siege_precheck.candidate(frame, scene.now))
-        self.assertEqual(('pending', 'siege_descriptor_pair_unavailable'),
-            (scene.siege_precheck.status()['status'], scene.siege_precheck.status()['reason']))
-
-    def test_returning_hydraulics_to_neutral_still_requires_the_motion_sweep(self):
-        scene = self.scene()
-        scene.battle._local_siege_aim_pitch = .1
-        scene.battle._local_siege_flat_body_matrix = scene.body
-        with mock.patch.object(scene.runtime.geometry, '_turret_motion_is_clear', return_value=False) as probe:
-            self.assertIsNone(self.run_candidate(scene))
-        self.assertTrue(probe.called)
-        self.assertTrue(any(row['reason'] == 'siege_hydraulic_sweep' for row in scene.siege_receipts))
-
-    def test_active_physical_trigger_never_invokes_prospective_mode_checks(self):
-        scene = self.scene()
-        scene.observe()
-        frame = scene.runtime.attack_policy.evaluator.snapshot(scene.now)
-        frame['trigger_active'] = True
-        with mock.patch.object(scene.siege_precheck.evaluator, 'evaluate') as evaluate:
-            self.assertIsNone(scene.siege_precheck.candidate(frame, scene.now))
-        evaluate.assert_not_called()
-        self.assertEqual('held', scene.siege_precheck.status()['status'])
-
-    def test_matched_hydraulic_input_is_read_without_another_collision_frontier(self):
-        scene = self.scene(hydraulic_needed=True)
-        row = self.run_candidate(scene)
-        self.assertIsNotNone(row, scene.siege_precheck.status())
-        before = len(scene.world_queries)
-        point = scene.siege_precheck.hydraulic_point(row, row['solution']['point'])
-        self.assertEqual(row['solution']['source_point'], point)
-        self.assertEqual(before, len(scene.world_queries))
-
-    def test_hydraulic_input_cannot_cross_samples_shells_or_weapon_points(self):
-        scene = self.scene(hydraulic_needed=True)
-        row = self.run_candidate(scene)
-        point = row['solution']['point']
-        self.assertIsNotNone(scene.siege_precheck.hydraulic_point(row, point))
-        for changed in (dict(row, sample=row['sample'] + 1),
-                        dict(row, shell_index=1), dict(row, target_key=('bot', 999))):
-            self.assertIsNone(scene.siege_precheck.hydraulic_point(changed, point))
-        self.assertIsNone(scene.siege_precheck.hydraulic_point(row, (100., 100., 100.)))
-
-    def test_target_or_flat_chassis_motion_invalidates_hydraulic_input(self):
-        for moving in ('target', 'chassis'):
-            with self.subTest(moving=moving):
-                scene = self.scene(hydraulic_needed=True)
-                row = self.run_candidate(scene)
-                point = row['solution']['point']
-                self.assertIsNotNone(scene.siege_precheck.hydraulic_point(row, point))
-                if moving == 'target':
-                    scene.pose(scene.target, (1., 8., 40.))
+    def test_source_is_revoked_on_target_motion_shell_change_or_mode_exit(self):
+        for change in ('target', 'shell', 'mode'):
+            with self.subTest(change=change):
+                scene = self.scene()
+                row = scene.evaluated_row()
+                helper = scene.runtime.siege_aim
+                result = helper.candidate(scene.runtime.attack_policy.frame, scene.now, row)
+                self.assertIsNotNone(result, helper.status())
+                if change == 'target':
+                    scene.pose(scene.target, (2., 12., 100.))
+                elif change == 'shell':
+                    scene.runtime.gun.shot_index = 1
                 else:
-                    scene.body.translation = (1., 0., 0.)
-                self.assertIsNone(scene.siege_precheck.hydraulic_point(row, point))
+                    scene.entity.siegeState = siege_mechanics.DISABLED
+                self.assertIsNone(helper.hydraulic_point(result, result['solution']['point']))
 
-    def test_changed_world_or_friendly_lane_invalidates_hydraulic_input(self):
-        scene = self.scene(hydraulic_needed=True)
-        row = self.run_candidate(scene)
-        point = row['solution']['point']
-        self.assertIsNotNone(scene.siege_precheck.hydraulic_point(row, point))
-        with mock.patch.object(scene.battle, '_destructibles',
-                types.SimpleNamespace(_spatial_revision_1513=lambda: 'replacement')):
-            self.assertIsNone(scene.siege_precheck.hydraulic_point(row, point))
-        self.assertIsNotNone(scene.siege_precheck.hydraulic_point(row, point))
-        scene.vehicle(43, (0., 3., 20.), team=1)
-        self.assertIsNone(scene.siege_precheck.hydraulic_point(row, point))
+    def test_mismatched_raw_policy_observation_cannot_publish_a_motion_source(self):
+        scene = self.scene()
+        row = scene.evaluated_row()
+        row = dict(row, pose_stamp=('forged',))
+        helper = scene.runtime.siege_aim
+        self.assertIsNone(helper.candidate(scene.runtime.attack_policy.frame, scene.now, row))
+        self.assertEqual(0, helper.status()['native_calls'])
 
-    def test_hydraulic_input_is_revoked_when_its_actuator_or_shell_changes(self):
-        scene = self.scene(hydraulic_needed=True)
-        row = self.run_candidate(scene)
-        point = row['solution']['point']
-        self.assertIsNotNone(scene.siege_precheck.hydraulic_point(row, point))
-        scene.runtime.state['critical'] = dict(destroyed=['engineHealth'])
-        self.assertIsNone(scene.siege_precheck.hydraulic_point(row, point))
-        scene.runtime.state.pop('critical')
-        scene.runtime.gun.shot_index = 1
-        self.assertIsNone(scene.siege_precheck.hydraulic_point(row, point))
+    def test_target_change_during_native_inverse_revokes_motion_result(self):
+        scene = self.scene()
+        row = scene.evaluated_row()
+        getter = scene.battle._runtime.get_shot_angles
 
-    def test_reset_retires_hydraulic_and_projected_proofs_together(self):
-        scene = self.scene(hydraulic_needed=True)
-        row = self.run_candidate(scene)
-        self.assertIsNotNone(scene.siege_precheck.hydraulic_point(row, row['solution']['point']))
-        scene.siege_precheck.reset()
-        self.assertIsNone(scene.siege_precheck.hydraulic_point(row, row['solution']['point']))
-        self.assertFalse(scene.siege_precheck.evaluator.jobs)
-        self.assertFalse(scene.siege_precheck.evaluator.predictions)
+        def changed(*args):
+            result = getter(*args)
+            scene.pose(scene.target, (4., 12., 100.))
+            return result
+
+        with mock.patch.object(scene.battle._runtime, 'get_shot_angles', changed):
+            helper = scene.runtime.siege_aim
+            self.assertIsNone(helper.candidate(scene.runtime.attack_policy.frame, scene.now, row))
+        self.assertEqual('actual_hydraulic_observation_changed', helper.status()['reason'])
+
+    def test_all_point_certificate_progress_does_not_start_point_by_point_hydraulic_motion(self):
+        scene = self.scene()
+        row = scene.evaluated_row()
+        policy = scene.runtime.attack_policy
+        policy.selected = row['key']
+        policy.decision = dict(action='wait', reason='stationary_domain_review_pending')
+        self.assertIsNone(scene.runtime.siege_aim.candidate(policy.frame, scene.now))
+
+    def test_hydraulic_compose_is_exact_on_rolled_ground_with_nonzero_pivot(self):
+        position, flat, correction, center = (1., 2., 3.), (.4, .13, -.17), -.12, 1.5
+        mounted, actual = hydraulic_body(position, flat, correction, center)
+        local = (.2, .8, 1.3)
+        expected = shot_geometry.transform_vehicle_point(
+            shot_geometry.transform_vehicle_point(local, (0., center * math.sin(correction),
+                center * (1. - math.cos(correction))), 0., correction, 0.), position, *flat)
+        observed = shot_geometry.transform_vehicle_point(local, mounted, *actual)
+        for left, right in zip(expected, observed):
+            self.assertAlmostEqual(left, right, places=10)
+
+    def test_hydraulic_reach_uses_local_composition_not_euler_pitch_addition(self):
+        scene = self.scene(enabled_pitch=(0., 0.))
+        frame = scene.runtime.attack_policy.evaluator.snapshot(scene.now)
+        hydraulic = active_hydraulic_pose(scene.runtime, frame)
+        flat, correction = (.3, .1, .2), -.15
+        unused, actual = hydraulic_body((0., 0., 0.), flat, correction, 0.)
+        direction = shot_geometry.transform_vehicle_vector((0., 0., 1.), *actual)
+        result = hydraulic_reach(frame['descriptor'], direction, flat, hydraulic)
+        self.assertTrue(result['reachable'], result)
+        self.assertAlmostEqual(correction, result['hydraulic_pitch'], places=6)
+        capability = mechanical_reach(frame['descriptor'], direction, flat, dict(hydraulic, body=flat))
+        self.assertTrue(capability['reachable'], capability)
 
 
-class NativeSiegeTravelRecoveryTests(unittest.TestCase):
-    """A refused future track-arc proof must not block actual recovery.
+class ActualHydraulicStationaryTests(unittest.TestCase):
+    scene = ActualSiegeAimTests.scene
+    # Separate current-mode point projections share the existing stationary
+    # frontier/budgets; they are not an additional mode-entry search.
+    def test_zero_pitch_hydraulic_samples_close_independently_without_moving_actor(self):
+        scene = self.scene(enabled_pitch=(0., 0.), hydraulic_center=1.5)
+        original = scene.body.yaw, scene.body.pitch, tuple(scene.body.translation)
+        corrections = []
+        for sample in (0, 1, 2, 3):
+            frame, plan = scene.plan(sample=sample)
+            self.assertEqual('proved', plan['status'], plan)
+            self.assertFalse(plan['proof']['fire_permission'])
+            self.assertIsNotNone(plan['proof']['hydraulic'])
+            solution = plan['prediction']['solution']
+            self.assertTrue(solution['needs_hydraulic'])
+            self.assertFalse(solution['source_verified'])
+            corrections.append(solution['hydraulic_pitch'])
+            self.assertTrue(scene.planner.current(frame, plan['proof']))
+            scene.fixture.now += .11
+        self.assertGreater(len(set(round(v, 5) for v in corrections)), 1)
+        self.assertEqual(original, (scene.body.yaw, scene.body.pitch, tuple(scene.body.translation)))
 
-    Native flat-world observations are the same as the existing real-drive
-    fixture. Policy, copied angle/driver laws, track-pivot integration, body
-    sweeps, mode request/ack, hydraulic actuation and fire stay production.
-    No projected body or yaw is assigned to the physical observation.
-    """
-    def scene(self, side):
-        from test_player_siege_engagement import SiegeScene
-        from test_player_limited_traverse import TraverseScene
-        scene = SiegeScene()
-        scene.setUp()
-        self.addCleanup(scene.doCleanups)
-        scene.configure(enabled=False, enabled_pitch=(0., 0.), hydraulic_center=1.5)
-        scene.pose(scene.target, (side * 50., 12., 100.))
-        TraverseScene.native_flat_drive(scene)
-        battle = scene.battle
-        battle.local_pose = lambda: (tuple(battle._local_position), battle._local_yaw)
-        # Test determinism does not change the candidate/chord budgets or any
-        # native geometry verdict. The production frontier retains its clock.
-        scene.runtime.siege_precheck.clock = lambda: 0.
-        self.observe_drive(scene)
-        return scene
+    def test_hydraulic_contact_blocked_is_pending_not_armour_failure(self):
+        scene = self.scene(enabled_pitch=(0., 0.), hydraulic_center=1.5)
+        with mock.patch.object(scene.runtime.geometry, '_turret_motion_is_clear', return_value=False):
+            frame, plan = scene.plan()
+            row = scene.evaluated_row()
+        self.assertEqual('pending', plan['status'])
+        self.assertEqual('stationary_hydraulic_sweep_blocked', plan['reason'])
+        self.assertEqual('unknown', row['armor'])
+        self.assertNotEqual('excluded', row.get('scope'))
 
-    @staticmethod
-    def observe_drive(scene):
-        from test_player_fire_admission_complete import SpatialPose
-        battle = scene.battle
-        scene.flat_body = SpatialPose()
-        scene.flat_body.setRotateYPR((battle._local_yaw,
-            battle._local_terrain_pitch, battle._local_roll))
-        scene.flat_body.translation = battle._local_position
-        battle._local_siege_flat_body_matrix = scene.flat_body
-        battle._local_matrix = scene.flat_body
-        scene.body = SpatialPose(scene.flat_body)
-        scene.body.preMultiply(battle._local_siege_aim_matrix)
-        battle._local_pose_matrix = scene.body
-        scene.entity.matrix = scene.body
-        scene.entity.position = battle._vector(battle._local_position)
-        scene.update_barrel_observation()
+    def test_outside_hydraulic_range_stays_explicitly_unreachable(self):
+        scene = self.scene(enabled_pitch=(0., 0.))
+        scene.pose(scene.target, (0., 80., 100.))
+        unused, plan = scene.plan()
+        self.assertEqual('pending', plan['status'])
+        self.assertEqual('stationary_hydraulic_pitch_unreachable', plan['reason'])
 
-    def tick_drive(self, scene):
-        # Consume the actual previous native mailbox, including turn inertia
-        # and the physical track-pivot translation, then publish its result.
-        scene.battle._drive_local(.1)
-        self.observe_drive(scene)
-        scene.tick()
+    def test_actual_pitch_change_retires_old_stationary_receipt(self):
+        scene = self.scene(enabled_pitch=(0., 0.))
+        frame, plan = scene.plan()
+        self.assertEqual('proved', plan['status'], plan)
+        scene.battle._local_siege_aim_pitch = -.1
+        self.assertFalse(scene.planner.current(frame, plan['proof']))
 
-    def until(self, scene, condition, limit=160):
-        for unused in range(limit):
-            self.tick_drive(scene)
-            if condition():
-                return
-        self.fail('Actual Siege travel recovery did not complete: %r' % dict(
-            pose=(scene.battle._local_position, scene.battle._local_yaw),
-            precheck=scene.runtime.siege_precheck.status(),
-            position=scene.runtime.firing_position.receipt,
-            pending=scene.runtime._siege_pending,
-            policy=scene.runtime.attack_policy.status()))
+    def test_active_hydraulic_yaw_uses_existing_shortest_arc_and_flat_support(self):
+        scene = self.scene(enabled_pitch=(0., 0.), hydraulic_center=-1.5)
+        scene.pose(scene.target, (math.sin(.6) * 100., 12., math.cos(.6) * 100.))
+        frame, plan = scene.plan()
+        self.assertEqual('proved', plan['status'], plan)
+        self.assertTrue(plan['proof']['arc'])
+        self.assertGreater(plan['prediction']['solution']['hull_yaw'], .5)
+        self.assertTrue(plan['prediction']['solution']['needs_hydraulic'])
+        self.assertTrue(all(receipt['hydraulic']['native_clear'] for receipt in plan['proof']['arc']))
+        self.assertAlmostEqual(0., plan['proof']['source_support']['pitch'])
+        self.assertLess(sum(abs(receipt['end_yaw'] - receipt['start_yaw'])
+                            for receipt in plan['proof']['arc']), math.pi)
 
-    def test_unproved_future_track_arc_recovers_through_actual_native_travel(self):
-        for side in (-1., 1.):
-            with self.subTest(side=side):
-                scene = self.scene(side)
-                runtime, battle = scene.runtime, scene.battle
-                self.assertFalse(scene.enabled_descriptor.chassis.rotationIsAroundCenter)
-                self.assertFalse(battle._local_physics['rotationIsAroundCenter'])
-                self.assertEqual((0., 0.), scene.travel_descriptor.gun.pitchLimits['absolute'])
-                self.tick_drive(scene)
-                self.assertEqual('siege_track_pivot_projection_pending',
-                                 runtime.siege_precheck.status()['reason'])
-                self.assertIsNone(runtime._siege_motion_candidate)
-                self.assertIsNone(runtime._siege_pending)
-                self.assertTrue(runtime.firing_position.active)
-                self.assertEqual(0., battle._sender.forward)
-                self.assertGreater(side * battle._sender.turn, 0.)
-                self.assertFalse(scene.launches())
+    def test_blocked_shortest_active_arc_never_retries_reverse_long_arc(self):
+        scene = self.scene(enabled_pitch=(0., 0.))
+        scene.pose(scene.target, (math.sin(.6) * 100., 12., math.cos(.6) * 100.))
+        scene.catalog_status = 'hard'
+        unused, plan = scene.plan()
+        self.assertEqual('pending', plan['status'], plan)
+        self.assertEqual('stationary_native_rotation_blocked', plan['reason'])
+        self.assertFalse(plan['proved'])
+        self.assertTrue(scene.catalog_calls)
 
-                self.until(scene, lambda: runtime._siege_motion_candidate is not None)
-                preview = runtime._siege_motion_candidate
-                self.assertFalse(preview['solution']['needs_hull'])
-                self.assertFalse(preview['solution']['reachable'])
-                self.assertGreater(side * battle._local_yaw, .3)
-                self.assertNotEqual((0., 0., 0.), tuple(battle._local_position))
-                self.assertFalse(runtime.firing_position.suppressed)
-                self.assertFalse(scene.launches())
-                episode = runtime.firing_position.episode['id']
-
-                self.until(scene, lambda: (runtime._siege_pending or {}).get('sequence') is not None)
-                request = runtime._siege_pending
-                self.assertTrue(request['enabled'])
-                scene.echo_mode(siege_mechanics.SWITCHING_ON, request['sequence'])
-                self.tick_drive(scene)
-                self.assertIs(request, runtime._siege_pending)
-                self.assertFalse(scene.launches())
-                scene.echo_mode(siege_mechanics.ENABLED, request['sequence'])
-                self.until(scene, lambda: bool(scene.launches()))
-                self.assertEqual(episode, runtime.firing_position.sequence)
-                self.assertEqual(1, len(scene.launches()))
-                self.assertTrue(runtime.weapon.verified)
-                self.assertFalse(runtime.firing_position.suppressed)
-                scene.doCleanups()
+    def test_all_known_nonpenetrating_he_points_can_close_then_fallback(self):
+        scene = self.scene(enabled_pitch=(0., 0.), clip=3)
+        scene.set_he(piercing=0.)
+        scene.runtime.gun.ammo[1] = 0
+        for name in ('chassis', 'hull', 'turret', 'gun'):
+            getattr(scene.target.typeDescriptor, name).materials[0].armor = 10000.
+        policy = scene.runtime.attack_policy
+        policy.evaluator.atomic_clock = lambda: 0.
+        for unused in range(160):
+            scene.observe()
+            decision = policy.update(scene.now)
+            policy.background(scene.now)
+            if decision.get('mode') == 'he_fallback' or (
+                    decision.get('candidate') or {}).get('mode') == 'he_fallback':
+                break
+            scene.fixture.now += .11
+        else:
+            self.fail('actual hydraulic finite domain never closed: %r' % policy.status())
+        counts = policy._failure_domain((0,))
+        self.assertTrue(counts['all_failed'], counts)
+        self.assertGreater(counts['projected_failed'], 0)
+        self.assertEqual(0., scene.battle._local_siege_aim_pitch)
 
 
 if __name__ == '__main__':

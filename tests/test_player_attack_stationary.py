@@ -205,36 +205,29 @@ class NativeStationaryCombatTests(unittest.TestCase):
                 self.assertFalse(runtime._mission.get('capture_started'))
                 self.assertNotIn('capture_area', scene.control.last_order)
 
-    def test_prepared_siege_preview_cannot_reacquire_motion_during_native_review_wait(self):
+    def test_active_hydraulic_input_cannot_reacquire_motion_during_native_review_wait(self):
         scene = SiegeScene()
         scene.setUp()
         self.addCleanup(scene.doCleanups)
-        scene.configure(enabled=True, clip=6, enabled_pitch=(-.8, .8))
-        # Synthetic independent dimensions: a mode-switching limited gun
-        # whose enabled envelope needs no hydraulic pitch correction.
-        for descriptor in (scene.travel_descriptor, scene.enabled_descriptor):
-            config = descriptor.type.hullAimingParams['pitch']
-            config.update(isAvailable=False, isEnabled=False)
+        scene.configure(enabled=True, clip=6, enabled_pitch=(0., 0.))
         scene.position = (0., 0., 0.)
-        scene.pose(scene.target, (math.sin(.7) * 40., 0., math.cos(.7) * 40.))
+        scene.pose(scene.target, (math.sin(.7) * 40., 6., math.cos(.7) * 40.))
         install_plan_observations(scene)
         self.restore_native_sweep(scene)
         scene.entity.siegeState = siege_mechanics.ENABLED
         scene.observe()
         runtime, policy = scene.runtime, scene.runtime.attack_policy
-        for unused in range(30):
-            scene.step(.1)
-            policy.frame = policy.evaluator.snapshot(scene.now)
-            runtime._refresh_siege_precheck(scene.now)
-            if runtime.siege_motion_candidate() is not None:
-                break
-        self.assertIsNotNone(runtime.siege_motion_candidate(), runtime.siege_precheck.status())
-        old_motion_point = runtime.siege_motion_candidate()['solution']['source_point']
+        policy.frame = policy.evaluator.snapshot(scene.now)
+        row = policy._evaluate(policy._jobs(shell_index=0)[0], scene.now, 'foreground')
+        policy._choose('firing_position', 'unverified_points_obstructed', row)
+        runtime._refresh_siege_aim(scene.now)
+        self.assertIsNotNone(runtime.siege_aim_candidate(), runtime.siege_aim.status())
+        old_motion_point = runtime.siege_aim_candidate()['solution']['source_point']
         with mock.patch.object(stationary_plan, 'SLICES_PER_TICK', 0):
             scene.tick(actuate=False)
             self.assertTrue(policy.stationary_review_wait(), policy.status())
-            self.assertIsNone(runtime.siege_motion_candidate())
-            self.assertIsNone(runtime._siege_motion_candidate)
+            self.assertIsNone(runtime.siege_aim_candidate())
+            self.assertIsNone(runtime._siege_aim_candidate)
             self.assertIsNone(runtime._siege_pending)
             self.assertEqual(siege_mechanics.ENABLED, scene.entity.siegeState)
             self.assertEqual((0, 0), (scene.battle._sender.forward, scene.battle._sender.turn))

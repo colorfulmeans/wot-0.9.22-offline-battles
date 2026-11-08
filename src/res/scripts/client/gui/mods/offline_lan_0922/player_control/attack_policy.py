@@ -418,7 +418,16 @@ class AttackPolicy(object):
         if not jobs:
             return None
         plan_key = self.selected or (self.loading_plan or self.next_plan or {}).get('key')
-        selected_job = next((job for job in jobs if job[0] == plan_key), None)
+        # A retained aim is a target/sample intention, not an ammunition or
+        # armour proof. In particular, the same HE point may alternate
+        # between penetration and fallback without losing its aim priority.
+        # Rotate the remaining finite frontier as before: an unresolved
+        # preferred target must not starve the other observed enemies.
+        if plan_key is not None:
+            jobs = tuple(job for job in jobs if job[0][1] == plan_key[1]) + tuple(
+                job for job in jobs if job[0][1] != plan_key[1])
+        selected_job = next((job for job in jobs if plan_key is not None and
+                             job[0][1:3] == plan_key[1:3]), None)
         if selected_job is not None:
             row = self._current(selected_job, require_line=True)
             if self._executable(row):
@@ -518,8 +527,16 @@ class AttackPolicy(object):
         return min(rows, key=self._penetration_order)
 
     def _penetration_order(self, row):
-        return (_shell_rank(row['shell']), 0 if row['key'] == self.selected else 1,
+        return (_shell_rank(row['shell']), self._intent_order(row['key']),
                 repr(row['target_key']), repr(row['sample']))
+
+    def _intent_order(self, key):
+        # Keep the existing shell/damage ranking outside this tie-breaker.
+        # A mode rebind may preserve this key while discarding all its rows;
+        # it grants only evaluation/selection priority, never shot authority.
+        if self.selected is None or key[1] != self.selected[1]:
+            return 2
+        return 0 if key[2] == self.selected[2] else 1
 
     def _best_he(self, shell_index=None, exclude=None, plannable=False):
         rows = [row for row in self._rows_for('he_fallback', shell_index,
@@ -529,7 +546,7 @@ class AttackPolicy(object):
             return None
         return min(rows, key=lambda row: (-float((row if self._executable(row, 'he_fallback')
                    else self._planned_evidence(row))['expected_damage']),
-                   0 if row['key'] == self.selected else 1,
+                   self._intent_order(row['key']),
                    _shell_rank(row['shell']), repr(row['target_key']),
                    repr(row['sample'])))
 
@@ -907,7 +924,8 @@ class AttackPolicy(object):
         # is restored if even one object changes during this synchronous pass.
         jobs = sorted(jobs, key=lambda job: (
             0 if job[0][0] == self.frame['loaded'] else 1,
-            _shell_rank(job[1]), repr(job[2]['key']), repr(job[3])))
+            _shell_rank(job[1]), self._intent_order(job[0]),
+            repr(job[2]['key']), repr(job[3])))
         positive = None
         for job in jobs:
             if self.atomic_clock() >= deadline or self._used['atomic'] >= ATOMIC_CANDIDATES:
@@ -957,15 +975,19 @@ class AttackPolicy(object):
             return self._recover_incomplete(now, 'observation_unavailable')
         identity = frame['identity']
         weapon_identity = frame.get('weapon_identity', identity)
-        if self._identity is not None and identity != self._identity:
+        if self._identity is not None and (identity != self._identity or
+                weapon_identity != self._weapon_identity):
             # A native siege descriptor changes every mechanical/trajectory
             # proof, but is not itself a different physical loaded cassette.
-            # Only an already admitted reload transaction may cross that
-            # observation reset; all old point evidence is still discarded.
-            authority = (self.reload_authority if
-                weapon_identity == self._weapon_identity else None)
+            # Retain only the target/sample intention and an already admitted
+            # reload transaction for the same physical gun. Rows, trigger
+            # proof, loading/NEXT plans and all geometry are still discarded.
+            same_weapon = weapon_identity == self._weapon_identity
+            authority = self.reload_authority if same_weapon else None
+            selected = self.selected if same_weapon else None
             self.reset()
             self.reload_authority = authority
+            self.selected = selected
         self._identity = identity
         self._weapon_identity = weapon_identity
         self.frame = frame
@@ -1110,7 +1132,7 @@ class AttackPolicy(object):
             self._end_search()
             self.reload_authority = None
             candidate = min(valid_pen, key=lambda row: (
-                0 if row['key'] == self.selected else 1,
+                self._intent_order(row['key']),
                 0 if row.get('mechanical') == 'hull_laying' else 1,
                 repr(row['target_key']), repr(row['sample'])))
             return self._choose('firing_position', 'current_penetration_obstructed',
@@ -1217,7 +1239,7 @@ class AttackPolicy(object):
         obstructed = [row for row in rows if self._needs_firing_position(row)]
         if obstructed:
             return self._choose('firing_position', 'unverified_points_obstructed',
-                min(obstructed, key=lambda row: (0 if row['key'] == self.selected else 1,
+                min(obstructed, key=lambda row: (self._intent_order(row['key']),
                                                 repr(row['target_key']), repr(row['sample']))))
         if ('budget' in self._atomic_receipt.get('reason', '') and
                 self._atomic_receipt.get('status') != 'all_failed'):
