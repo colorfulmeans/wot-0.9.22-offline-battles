@@ -1422,26 +1422,42 @@ class FullPlayerRuntime(object):
 
     def _observe_attack_lay(self, state, target, intention, now):
         policy = self.attack_policy
-        if policy is None or policy.decision['reason'] == 'no_relevant_enemy':
-            self._attack_lay = None
-            return
-        if policy.decision['action'] != 'aim' or target is None:
-            return
-        if state['gun_aligned']:
-            self._attack_lay = None
-            return
-        candidate = policy.decision['candidate']
-        if candidate is None:
-            return
+        candidate = (self.current_attack_candidate(state, target, for_aim=True)
+                     if policy is not None and policy.decision['action'] == 'aim' else None)
         desired_yaw, desired_pitch = intention.get('turret_yaw'), intention.get('gun_pitch')
-        error = (max(abs(_angle(state['turret_yaw'] - desired_yaw)),
-                     abs(state['gun_pitch'] - desired_pitch))
-                 if desired_yaw is not None and desired_pitch is not None else float('inf'))
+        # The copied motion consumer publishes this frame's accepted controls
+        # before updating the gun. Travelling/turning for its original task is
+        # not six seconds spent continuously executing a stationary aim.
+        order = self._last_order
+        navigation_moving = (not self.combat_stop.stop_allowed and 'drive' in self.features and
+            (abs(order.get('throttle', 0.)) > 1.e-7 or abs(order.get('turn', 0.)) > 1.e-7))
+        if (candidate is None or state['gun_aligned'] or navigation_moving or
+                candidate['shell_index'] != int(self.gun.shot_index) or
+                intention.get('owner') != 'enemy' or intention.get('planning_pending') or
+                (intention.get('target_kind'), intention.get('target_id')) != candidate['target_key'] or
+                desired_yaw is None or desired_pitch is None or not self.weapon.owned() or
+                self.weapon.source_point is None and self.weapon.motion_point is None):
+            # Wait, shell transactions, a missing proof/source and another
+            # owner's intent end this observation; none may age the next aim.
+            self._attack_lay = None
+            return
+        error = max(abs(_angle(state['turret_yaw'] - desired_yaw)),
+                    abs(state['gun_pitch'] - desired_pitch))
+        solution = candidate['solution']
+        # Samples and the actual gun/source lease identify the executed intent.
+        # Per-frame source/target pose stamps and inverse-correction points do
+        # not: their normal submillimetre motion must not renew a stalled aim.
+        identity = (candidate['key'], solution.get('_aim_token'), self.gun,
+                    int(self.gun.shot_index), self.weapon.bound_source)
+        point = _point(solution['point'])
         progress = self._attack_lay
         position = state['position']
-        if progress is None or _distance(progress['position'], position) >= .25:
+        if (progress is None or progress['identity'] != identity or
+                now < progress['progressed_at'] or
+                _distance(progress['position'], position) >= .25 or
+                sum((point[index] - progress['point'][index]) ** 2 for index in range(3)) >= .25 ** 2):
             self._attack_lay = dict(best=error, progressed_at=now,
-                                    verified=self.weapon.verified, position=position)
+                verified=self.weapon.verified, position=position, identity=identity, point=point)
         elif (error < progress['best'] - NATIVE_ANGLE_TOLERANCE or
                 self.weapon.verified and not progress['verified']):
             progress.update(best=error, progressed_at=now, verified=self.weapon.verified)
@@ -2740,10 +2756,11 @@ class FullPlayerRuntime(object):
             # the original planner's reload-in-place rule is the only actuator.
             episode.update(ready=True, reason='native_stationary_reload')
             return dict(order, fire_allowed=False, throttle_override=0.)
-        target = (decision.get('candidate') or {}).get('target') or {}
+        # Replacement ammunition evidence does not own this retreat's facing
+        # or cover lease. Keep the current original order's contact instead.
         focus = next((contact for contact in self.planner._contacts.get(self.state['team'], {}).values()
-                      if contact.get('id') == target.get('network_id') and
-                      contact.get('target_kind') == target.get('kind')), None)
+                      if contact.get('id') == order.get('target_id') and
+                      contact.get('target_kind') == order.get('target_kind')), None)
         # Reuse the original cover lease, route retreat endpoint, progress
         # timeout and arrival terminal. Do not invent a second retreat driver.
         if (focus is not None and self.actor_id in self.planner._cover_states and
