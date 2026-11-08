@@ -1736,7 +1736,7 @@
         "_navigation_obstacle"
       ],
       "source": "src/res/scripts/client/gui/mods/offline_lan_0922/battle_runtime.py",
-      "source_sha256": "2658d5bf0caaa5e42ad5334c8a12a14bd3849a67a553ae2ea3cedae3c87e4ced",
+      "source_sha256": "22c47e6b86c4ccffe96373ba1203a840a4e904ac5e3952ba7dca864786b05f6b",
       "target": "src/res/scripts/client/gui/mods/offline_lan_0922/player_control/copied/battle_geometry.py"
     },
     {
