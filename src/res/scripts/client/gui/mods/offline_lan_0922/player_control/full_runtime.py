@@ -16,7 +16,6 @@ import time
 from .. import equipment_mechanics
 from .. import shot_geometry
 from .. import siege_mechanics
-from .. import tank_collision
 from ..entities.remote_vehicle import (
     collide_vehicle_at_matrix, vehicle_target_bounds_at_matrix)
 from ..projectile_runtime import (
@@ -638,60 +637,6 @@ class _ForegroundGeometry(CopiedBattleGeometry):
             self, source, descriptor, shell_index, fire_seq, yaw, pitch, flight_time)
 
 
-class _PlayerDriveAdapter(copied_runtime.BotAdapter):
-    """Pass locally witnessed vehicle blockage to the existing copied driver."""
-    def __init__(self, *args, **kwargs):
-        copied_runtime.BotAdapter.__init__(self, *args, **kwargs)
-        self.drive_blockers = {}
-
-    def _driver_neighbours(self, state):
-        neighbours = copied_runtime.BotAdapter._driver_neighbours(self, state)
-        if not self.drive_blockers:
-            return neighbours
-        position = state['position']
-        half_length = state['half_length']
-        # Keep the body in the fan while we back away and steer around it.
-        # Scope the exception to the local obstacle and its observed pose.
-        reach = (2. * half_length + copied_driver.WAYPOINT_ARRIVAL_RADIUS +
-                 copied_driver.recovery_probe_distance(half_length))
-        retained = {}
-        for peer in state.get('neighbours', ()):
-            actor = peer['id']
-            witness = self.drive_blockers.get(actor)
-            if (witness is None or not peer.get('alive', True) or
-                    peer.get('team') in (None, state.get('team'))):
-                continue
-            before = witness['peer_position']
-            if (_distance(before, peer['position']) >= 1. or
-                    abs(before[1] - peer['position'][1]) >= tank_collision.CONTACT_BROADPHASE_PADDING or
-                    _distance(position, witness['position']) >= reach):
-                continue
-            retained[actor] = witness
-            neighbours.append(peer)
-        self.drive_blockers = retained
-        return neighbours
-
-    def _hull_contact(self, bot_id, state, position):
-        # Physics has already separated the presented pose by the time the
-        # decision runs. Consume the recent pre-separation witness once.
-        for peer in state.get('neighbours', ()):
-            witness = self.drive_blockers.get(peer['id'])
-            if witness is None or witness.get('consumed'):
-                continue
-            witness['consumed'] = True
-            origin = witness['position']
-            gap = tank_collision.CONTACT_BROADPHASE_PADDING
-            if (0. <= state['now'] - witness['at'] <= .5 and
-                    _distance(position, origin) < gap and abs(position[1] - origin[1]) < gap):
-                self._contact_peers[bot_id] = peer['id']
-                state['_hull_contact_receipt'] = dict(at=state['now'],
-                    separated=[], blocker=peer['id'], drive_refused=True)
-                return dict(peer_id=peer['id'], peer_team=peer['team'], peer_alive=True,
-                    peer_position=peer['position'], normal=witness['normal'],
-                    depth=witness.get('depth', 0.), drive_refused=True)
-        return copied_runtime.BotAdapter._hull_contact(self, bot_id, state, position)
-
-
 class _PlayerBehaviorEngine(copied_runtime.BotRuntime):
     """Override ownership boundaries; execute the complete copied algorithm."""
     def __init__(self, runtime, **kwargs):
@@ -1088,7 +1033,6 @@ class FullPlayerRuntime(object):
         self._manifest = []
         self._last_order = {}
         self._last_navigation = {}
-        self._last_contact_escape_log = None
         self._last_fire_failure = None
         self._mission = None
         self._mission_sequence = 0
@@ -1351,7 +1295,7 @@ class FullPlayerRuntime(object):
             local_sweep_probe=geometry._probe_bot_local_motion,
             world_receipt_probe=geometry._direction_world_receipt,
             water_depth_probe=geometry._water_depth,
-            baked_graph=graph, native_motion=True, adapter_factory=_PlayerDriveAdapter)
+            baked_graph=graph, native_motion=True)
         self.engine = _PlayerBehaviorEngine(self, **kwargs)
         geometry._bots = self.engine
         self.engine.battle_start(message)
@@ -1414,10 +1358,6 @@ class FullPlayerRuntime(object):
             self._siege_pending = None
         self._move_episode = None
         self._native_hull_laying = None
-        adapter = getattr(self.engine, 'adapter', None)
-        if adapter is not None:
-            adapter.drive_blockers.clear()
-        self._last_contact_escape_log = None
         self._implicit_retry = None
         self._strategic_due = 0.
         self._profile_window = None
@@ -2110,16 +2050,6 @@ class FullPlayerRuntime(object):
         else:
             order.pop('capture_pivot_circle', None)
         self._last_order = order
-        escape = order.get('contact_escape')
-        if escape and self.controller is not None:
-            key = escape['peer'], escape['origin'], escape['phase']
-            if key != self._last_contact_escape_log:
-                self._last_contact_escape_log = key
-                witness = self.engine.adapter.drive_blockers.get(escape['peer'])
-                self.controller.record('drive_contact_escape', recovery=escape,
-                    contact=witness if escape['phase'] == 'started' else None,
-                    position=tuple(self.state['position']), throttle=order['throttle'],
-                    turn=order['turn'], path_clear=order['path_clear'])
         if 'fire' in self.features and self.attack_policy is not None:
             action = self.attack_policy.decision['action']
             if action in ('search_penetration', 'firing_position'):
@@ -2610,26 +2540,13 @@ class FullPlayerRuntime(object):
         receipt = dict(contact or {}, position=tuple(position),
                        heading=None if rotation_refused else float(heading),
                        at=now, static=bool(static))
-        planar = receipt.get('source') == 'copied_planar_contact'
-        if planar:
-            # A scrape, pivot, or retreat still touching a hull is not a
-            # refusal of the current drive. Keep the selected escape intact.
-            if not receipt.get('drive_refused'):
-                return
-            actor = receipt.get('peer_network_id')
-            if actor is not None:
-                if receipt.get('peer_kind') != 'bot':
-                    actor = self.engine._human_planner_id(actor)
-                self.engine.adapter.drive_blockers[actor] = dict(receipt)
-            receipt['origin'] = tuple(position)
         if rotation_refused:
             receipt['rotation_refused'] = True
         self._last_navigation = receipt
         self.engine._decision_cache.pop(self.actor_id, None)
         self.engine._motion_probe_cache.pop(self.actor_id, None)
         if not rotation_refused:
-            if not planar:
-                self.engine._invalidate_realised_motion(self.actor_id, heading, 'foreground_contact')
+            self.engine._invalidate_realised_motion(self.actor_id, heading, 'foreground_contact')
             if self._move_episode is not None and static:
                 self._move_episode['goal'] = None
         goal = self._last_order.get('move_position')

@@ -11,7 +11,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src/res/scripts/client'))
-from gui.mods.offline_lan_0922 import equipment_mechanics, gun_mechanics, loadout, tank_collision
+from gui.mods.offline_lan_0922 import equipment_mechanics, gun_mechanics, loadout
 from gui.mods.offline_lan_0922.player_control import full_runtime
 from gui.mods.offline_lan_0922.player_control.copied.ai.planner import build_vehicle_profile
 from test_port_0922_bot_runtime import (_combat_descriptor, _flat_open_graph,
@@ -400,80 +400,6 @@ class FullRuntimeTests(unittest.TestCase):
         self.assertTrue(self.runtime._last_navigation['rotation_refused'])
         self.tick(.2)
         self.assertTrue(self.runtime.active)
-
-    def test_udes_backs_away_from_the_confirmed_kv2_blocker_before_resuming_route(self):
-        self.assertTrue(self.runtime.start(('drive',)))
-        self.tick(.1)
-        adapter = self.runtime.engine.adapter
-        adapter.navigation_target = None
-        origin = (-29.64, .26, -92.42)
-        yaw = -3.10
-        kv2 = dict(id=10, team=2, alive=True, position=(-30., .25, -98.),
-                   yaw=.02984, pitch=-.00067, roll=0., velocity=(0., 0., 0.),
-                   shape=(1.6619, 3.4074, 0., 1.7179),
-                   half_width=1.6619, half_length=3.4074)
-        actor = dict(id=self.runtime.actor_id, team=1, slot=0, position=origin, yaw=yaw,
-                     pitch=.001, roll=0., dt=.1, now=.1, speed=0.,
-                     collision_shape=(1.5967, 2.1248, 0., 2.1858),
-                     half_width=1.5967, half_length=2.1248, neighbours=[kv2])
-        order = dict(combat_mode='advance_contact', move_position=(-26., .26, -94.),
-                     aim_position=(-34., .25, -110.), target_id=14, fire_allowed=False)
-        witness = dict(source='copied_planar_contact', peer=2130706539,
-                       peer_kind='bot', peer_network_id=10, drive_refused=True,
-                       drive_fraction=.1, peer_position=kv2['position'], normal=(.03, .9995),
-                       depth=.01)
-        self.runtime.drive_contact(origin, yaw, .1, static=False,
-                                   contact=dict(witness, drive_refused=False))
-        self.assertFalse(adapter.drive_blockers)
-        self.runtime.drive_contact(origin, yaw, .1, static=False, contact=witness)
-
-        clear = lambda *unused: True
-        first = adapter.decide_with_order(actor, order, clear)
-        self.assertEqual('contact_escape', first['recovery_mode'])
-        self.assertEqual((-1., 0.), (first['throttle'], first['turn']))
-        target = first['move_position']
-        for step in range(1, 42):
-            # The report's enabled-siege reverse cap is 5 km/h. Once the
-            # chassis starts separating, there are no more contact callbacks.
-            fraction = step / 42.
-            actor.update(position=tuple(a + (b - a) * fraction for a, b in zip(origin, target)),
-                         now=.1 + .1 * step, speed=-1.3889)
-            order['move_position'] = (-26., .26, -94. if step % 2 else -90.)
-            retreat = adapter.decide_with_order(actor, order, clear)
-            self.assertEqual(target, retreat['move_position'])
-            self.assertEqual((-1., 0.), (retreat['throttle'], retreat['turn']))
-
-        actor.update(position=target, now=4.3)
-        resumed = adapter.decide_with_order(actor, order, clear)
-        self.assertEqual('completed', resumed['contact_escape']['phase'])
-        self.assertNotEqual('contact_escape', resumed['recovery_mode'])
-        self.assertNotEqual(target, resumed['move_position'])
-        self.assertIn(10, adapter.drive_blockers)
-
-        # With the final destination still behind the KV-2, feed actual hull
-        # sweeps back into the driver. It must get around the same live body.
-        order['move_position'] = (-34., .25, -110.)
-        peer_body = adapter.driver.collision_body(kv2)
-        for unused in range(260):
-            command = adapter.decide_with_order(actor, order, clear)
-            if command['recovery_mode'] == 'arrived':
-                break
-            x, y, z = actor['position']
-            yaw = actor['yaw']
-            gear = -1. if command['throttle'] < 0. else 1.
-            turn = command['turn'] * gear * .5189 * actor['dt']
-            turn *= tank_collision.rotation_fraction(
-                actor['position'], yaw, yaw + turn, actor['collision_shape'], [peer_body])
-            yaw += turn
-            speed = command['throttle'] * 1.3889
-            dx, dz = math.sin(yaw) * speed * actor['dt'], math.cos(yaw) * speed * actor['dt']
-            body = adapter.driver.collision_body(dict(actor, yaw=yaw))
-            self.assertEqual(1., tank_collision.translation_fraction(body, (dx, dz), [peer_body]))
-            actor.update(position=(x + dx, y, z + dz), yaw=yaw, speed=speed,
-                         now=actor['now'] + actor['dt'])
-        else:
-            self.fail('the route did not pass the stationary KV-2')
-        self.assertNotIn(10, adapter.drive_blockers)
 
     def bases(self):
         self.battle._spawn_planner = types.SimpleNamespace(capture_bases={
