@@ -34,13 +34,14 @@ from .copied.battle_geometry import CopiedBattleGeometry
 from .copied.server_bot_ai import BotPlanner
 from .native_aim import NATIVE_ANGLE_TOLERANCE
 from .settling import HaltObservation
+from .engagement_position import EngagementPosition, MECHANICAL_STALL_SECONDS
+from .siege_planning import SiegePrecheck
 
 
 # The original LAN authority builds full-roster strategic orders every 30
 # ticks at 30 Hz. Foreground tactical input and native safety proofs continue
 # every physical frame; only the complete roster assignment has this cadence.
 STRATEGY_SECONDS = 1.0
-MECHANICAL_STALL_SECONDS = 6.0
 PLAYER_PROFILE_SECONDS = 30.0
 PLAYER_PROFILE_STAGES = (
     'player_observe', 'player_attack', 'player_strategy', 'player_traffic',
@@ -532,6 +533,26 @@ class _NativeAimInput(object):
         # The best fresh source may move the gun. It cannot approve a shot.
         return False
 
+    def preaim(self, candidate):
+        """Feed a projected point to the native actuator, never to admission.
+
+        A siege hull may have to pitch before the actual barrel has any legal
+        solution. Its future-mode proof can request that motion, but cannot
+        impersonate an observed muzzle or a verified native inverse.
+        """
+        if not self.runtime._live() or not self.owned():
+            return False
+        solution = candidate.get('solution') or {}
+        point = solution.get('source_point')
+        if point is None or not solution.get('siege_precheck'):
+            return False
+        self.target = candidate.get('target')
+        self.point = _point(solution['point'])
+        self.motion_point = _point(point)
+        self.source_point = self.solution = None
+        self.verified = False
+        return True
+
 
 class _ForegroundGeometry(CopiedBattleGeometry):
     """Copied geometry with local record aliases and independent AI caches."""
@@ -712,21 +733,28 @@ class _PlayerBehaviorEngine(copied_runtime.BotRuntime):
         return copied_runtime.BotRuntime._update_bot_siege_intent(
             self, state, command, target, step)
 
-    @staticmethod
-    def _siege_desired(state, command, target):
-        # The adapter carries the effective travel destination alongside the
-        # local point it can drive to now. Pending paths and short corners
-        # can both be close to the hull while long travel still owns motion.
-        destination = (command.get('control_trace') or {}).get('strategic_move_position')
-        if destination is not None:
-            command = dict(command, move_position=destination)
-        return copied_runtime.BotRuntime._siege_desired(state, command, target)
+    def _siege_desired(self, state, command, target):
+        return self.player_runtime.siege_desired(state, command, target)
 
     def _set_bot_siege_state(self, state, siege_state, duration=0., transition_total=None):
         desired = int(siege_state) in (siege_mechanics.ENABLED, siege_mechanics.SWITCHING_ON)
         if int(siege_state) == int(state.get('siege_state', 0)):
             return False
         return self.player_runtime._siege_request(desired)
+
+    def _gun_angle_order(self, state, order, targets, now, direction_clear):
+        return self.player_runtime.firing_position.gun_angle_order(
+            state, order, targets, now, direction_clear)
+
+    def _friendly_reposition_order(self, state, targets, now):
+        return self.player_runtime.firing_position.friendly_reposition_order(state, targets, now)
+
+    def _mark_friendly_reposition(self, state, command, target, launch, verdict, now):
+        return self.player_runtime.firing_position.mark_friendly_reposition(
+            state, command, target, launch, verdict, now)
+
+    def _rear_laying_order(self, state, order, targets, now):
+        return self.player_runtime.firing_position.rear_laying_order(state, order, targets, now)
 
     def _update_vertical_motion(self, state, *unused_args, **unused_kwargs):
         return bool(state.get('_foreground_support_blocked', False))
@@ -810,6 +838,15 @@ class _PlayerBehaviorEngine(copied_runtime.BotRuntime):
                 self._ballistic_solution_cache[state['id']] = (
                     signature, now + copied_runtime.LOCAL_ACTION_SECONDS, solution)
                 return solution, True
+            projected = runtime.siege_motion_candidate(target)
+            if projected is not None and int(projected['shell_index']) == int(shell_index):
+                # The copied hull-aiming law can steer towards this future
+                # solution. It is kept out of the actual policy frontier and
+                # is explicitly motion-only at the native input boundary.
+                solution = dict(projected['solution'])
+                solution.update(_origin=tuple(solution['origin']), arc='low',
+                                _player_motion_only=True)
+                return solution, True
             if 'fire' in runtime.features:
                 self._ballistic_solution_cache.pop(state['id'], None)
                 return None, False
@@ -867,6 +904,9 @@ class _PlayerBehaviorEngine(copied_runtime.BotRuntime):
         return copied_runtime.BotRuntime._direct_aim_matches(self, state, target, solution)
 
     def _apply_blocked_direct_aim(self, source, command, target, now, probe_budget=None):
+        guarded = self.player_runtime.firing_position.guard_command(command, target, now)
+        if guarded is not None:
+            return guarded
         command, target = copied_runtime.BotRuntime._apply_blocked_direct_aim(
             self, source, command, target, now, probe_budget)
         if 'fire' not in self.player_runtime.features:
@@ -882,6 +922,11 @@ class _PlayerBehaviorEngine(copied_runtime.BotRuntime):
             return command, target
         candidate = self.player_runtime.current_attack_candidate(source, target, for_aim=True)
         if candidate is None:
+            projected = self.player_runtime.siege_motion_candidate()
+            if projected is not None:
+                return dict(command, fire_allowed=False,
+                    aim_position=projected['solution']['point'],
+                    _player_motion_only=True), projected['target']
             # Strategic contacts may steer navigation, but cannot publish a
             # second direct aim point while the player policy awaits proof.
             # The copied mode switch uses that contact before the gun can lay.
@@ -935,7 +980,12 @@ class _PlayerBehaviorEngine(copied_runtime.BotRuntime):
         runtime = self.player_runtime
         tail_active = getattr(runtime.owner, '_local_player_burst', None) is not None
         if 'fire' in runtime.features and runtime.active and not tail_active:
-            runtime.weapon.aim(state, target, command, intention)
+            projected = runtime.siege_motion_candidate(target)
+            if (projected is not None and
+                    runtime.current_attack_candidate(state, target, for_aim=True) is None):
+                runtime.weapon.preaim(projected)
+            else:
+                runtime.weapon.aim(state, target, command, intention)
         rotator = runtime.owner._avatar.gunRotator
         state['turret_yaw'] = float(rotator.turretYaw)
         state['gun_pitch'] = float(rotator.gunPitch)
@@ -1069,6 +1119,9 @@ class FullPlayerRuntime(object):
         self._strategic_contact_signature = None
         self._last_committed_shot_seq = 0
         self._profile_window = None
+        self.firing_position = EngagementPosition(self)
+        self.siege_precheck = SiegePrecheck(self)
+        self._siege_motion_candidate = None
 
     @property
     def gun(self):
@@ -1094,6 +1147,94 @@ class FullPlayerRuntime(object):
     def visible_targets(self):
         return self._targets
 
+    def _stationary_review_wait(self):
+        decision = self.attack_policy.decision
+        return (decision.get('action') == 'wait' and
+                decision.get('reason') == 'stationary_domain_review_pending')
+
+    def siege_motion_candidate(self, target=None):
+        """Current-tick future-pose input, available only in stable siege."""
+        candidate = self._siege_motion_candidate
+        if (candidate is None or not self._live() or self._mission_brakes() or
+                self._stationary_review_wait() or
+                self.attack_policy.decision.get('action') not in
+                    ('aim', 'preaim', 'wait', 'firing_position') or
+                int(getattr(self.entity, 'siegeState', 0)) != siege_mechanics.ENABLED or
+                self._siege_pending is not None or self.firing_position.suppressed or
+                self.firing_position.exit_required):
+            return None
+        if target is not None and (target.get('kind'), target.get('network_id')) != (
+                candidate['target'].get('kind'), candidate['target'].get('network_id')):
+            return None
+        return candidate
+
+    def hydraulic_aim_point(self, entity):
+        """A matched flat-body actuator input, separate from the shot inverse.
+
+        The native gun source is resolved against the actual tilted body.
+        Feeding that inverse back through the uncorrected hydraulic body
+        creates a second pitch goal. Keep both native consumers on the same
+        proved target without granting a projected point fire authority.
+        """
+        if (entity is not self.entity or not self._live() or
+                'fire' not in self.features or self._mission_brakes() or
+                not self.weapon.owned() or self.state is None or
+                self._siege_pending is not None or
+                int(getattr(entity, 'siegeState', 0)) != siege_mechanics.ENABLED or
+                self.firing_position.suppressed or self.firing_position.exit_required):
+            return None
+        candidate = self.current_attack_candidate(self.state, self.weapon.target, for_aim=True)
+        if candidate is None:
+            candidate = self.siege_motion_candidate(self.weapon.target)
+        return self.siege_precheck.hydraulic_point(candidate, self.weapon.point)
+
+    def _refresh_siege_precheck(self, now):
+        if (self._siege_pending is not None or
+                int(getattr(self.entity, 'siegeState', 0)) in
+                    (siege_mechanics.SWITCHING_ON, siege_mechanics.SWITCHING_OFF)):
+            # Preserve only the mode transaction's input during native
+            # switching. siege_motion_candidate explicitly fences it out of
+            # actuator/fire use until a stable mode and a fresh observation.
+            return
+        self._siege_motion_candidate = None
+        if (self._mission_brakes() or self._stationary_review_wait() or
+                self.firing_position.suppressed or
+                self.firing_position.exit_required or
+                self.attack_policy.decision.get('action') not in
+                    ('aim', 'preaim', 'wait', 'firing_position')):
+            return
+        frame = self.attack_policy.frame
+        if frame is None or frame.get('artillery'):
+            return
+        preferred = self.attack_policy.decision.get('candidate')
+        self._siege_motion_candidate = self.siege_precheck.candidate(frame, now, preferred)
+
+    def siege_desired(self, state, command, target):
+        """Keep a native switch atomic; require a future-mode point to enter."""
+        current = int(state.get('siege_state', siege_mechanics.DISABLED))
+        pending = self._siege_pending
+        if pending is not None:
+            return bool(pending['enabled'])
+        if current in (siege_mechanics.SWITCHING_ON, siege_mechanics.SWITCHING_OFF):
+            return current == siege_mechanics.SWITCHING_ON
+        if 'fire' in self.features:
+            if self.firing_position.exit_required or self.firing_position.suppressed:
+                return False
+            if self._stationary_review_wait():
+                return current == siege_mechanics.ENABLED
+            if self.firing_position.active and current == siege_mechanics.ENABLED:
+                return True
+        # A short local corner does not hide a long strategic travel order.
+        destination = (command.get('control_trace') or {}).get('strategic_move_position')
+        if destination is not None:
+            command = dict(command, move_position=destination)
+        if target is None and self._siege_motion_candidate is not None:
+            target = self._siege_motion_candidate['target']
+        desired = copied_runtime.BotRuntime._siege_desired(state, command, target)
+        if 'fire' not in self.features or current == siege_mechanics.ENABLED:
+            return desired
+        return bool(desired and self._siege_motion_candidate is not None)
+
     def current_attack_candidate(self, source, target, for_aim=False):
         policy = self.attack_policy
         if (policy is None or 'fire' not in self.features or not self._live() or
@@ -1112,16 +1253,31 @@ class FullPlayerRuntime(object):
         mode = candidate.get('mode', 'penetration')
         row = policy.current_row(candidate)
         if (row is None or row.get('pose_stamp') != candidate.get('pose_stamp') or
-                row.get('line_stamp') != candidate.get('line_stamp') or
-                (not for_aim and not policy._executable(row, mode)) or
-                (for_aim and (not isinstance(row.get('solution'), dict) or
-                    row.get('mechanical') not in ('reachable', 'hull_laying') or
-                    row.get('line') != 'clear' and policy.decision['action'] != 'preaim'))):
+                row.get('line_stamp') != candidate.get('line_stamp')):
+            return None
+        planned = (policy._planned_evidence(row) if for_aim and
+                   row.get('mechanical') in ('hull_laying', 'mechanical_limited') and
+                   policy._plannable(row, mode) else None)
+        if planned is not None and not (planned.get('solution') or {}).get('needs_hull'):
+            planned = None
+        intention = planned or row
+        if ((not for_aim and not policy._executable(row, mode)) or
+                (for_aim and (not isinstance(intention.get('solution'), dict) or
+                    (row.get('mechanical') not in ('reachable', 'hull_laying') and
+                     planned is None) or
+                    intention.get('line') != 'clear' and policy.decision['action'] != 'preaim'))):
             return None
         if policy.decision['action'] == 'firing_position' and (
-                row.get('mechanical') != 'hull_laying' or
+                (row.get('mechanical') != 'hull_laying' and planned is None) or
                 self._last_navigation.get('owner') != 'copied_combat_hull_aim'):
             return None
+        if planned is not None:
+            # This detached view supplies a safe turn's future direction to
+            # the native aiming law. The policy row keeps its actual blocked
+            # line/mechanical limitation/unknown armour. The fire entrance
+            # above can never accept this planning-only view.
+            return dict(row, solution=dict(planned['solution'], _player_motion_only=True),
+                        _player_stationary_motion=True)
         return row
 
     def _observe_attack_lay(self, state, target, intention, now):
@@ -1343,6 +1499,9 @@ class FullPlayerRuntime(object):
         self._release_next_shell(reason=reason)
         if self.attack_policy is not None:
             self.attack_policy.reset()
+        self.firing_position.reset()
+        self.siege_precheck.reset()
+        self._siege_motion_candidate = None
         self._loading_switch = self._shell_receipt = self._attack_lay = None
         self._manual_shell = None
         self._attack_log_key = None
@@ -1882,6 +2041,7 @@ class FullPlayerRuntime(object):
         order = self._mission_order(order, now)
         self._observe_mission(now)
         if 'fire' in self.features:
+            self.firing_position.remember_task(order)
             order = self.attack_policy.apply_order(order, now)
             if self.attack_policy.decision['action'] == 'aim':
                 self.engine._clear_friendly_reposition(self.actor_id)
@@ -2066,6 +2226,8 @@ class FullPlayerRuntime(object):
                 episode = self._move_episode
                 if episode is not None:
                     navigation['displacement'] = _distance(episode['source'], self.state['position'])
+                if action == 'firing_position':
+                    navigation = self.firing_position.navigation_result(navigation, now)
                 self.attack_policy.navigation_result(navigation)
 
     def _send_drive(self):
@@ -2146,6 +2308,7 @@ class FullPlayerRuntime(object):
         stages = getattr(self.owner, '_local_frame_stages', None)
         marker = _PROFILE_CLOCK() if stages is not None else None
         self._observe(now)
+        self.firing_position.observe(now)
         marker = self._profile_stage(stages, marker, 'player_observe')
         if not self.state['alive']:
             self.stop('actor_destroyed')
@@ -2157,6 +2320,7 @@ class FullPlayerRuntime(object):
                 return self.status()
         if 'fire' in self.features:
             self.attack_policy.update(now)
+            self._refresh_siege_precheck(now)
         marker = self._profile_stage(stages, marker, 'player_attack')
         self._planner_order(now)
         marker = self._profile_stage(stages, marker, 'player_strategy')
@@ -2321,7 +2485,7 @@ class FullPlayerRuntime(object):
             index, plan, reason = policy.next_shell, policy.next_plan, policy.next_status
             if plan is not None and stale_frame:
                 return
-            if plan is not None and not policy._executable(policy.current_row(plan), plan['mode']):
+            if plan is not None and not policy._plannable(policy.current_row(plan), plan['mode']):
                 index, plan, reason = None, None, 'candidate_expired'
         if index is None:
             if lease is not None:
@@ -2457,10 +2621,32 @@ class FullPlayerRuntime(object):
             frame = self.attack_policy.frame
             if frame is not None and not self.attack_policy.evaluator.fence(frame):
                 return
+            candidate = decision.get('candidate')
+            if candidate is not None:
+                current = self.attack_policy.current_row(candidate)
+                if not self.attack_policy._plannable(current, candidate.get('mode', 'penetration')):
+                    return
+                fence = getattr(self.attack_policy.evaluator, 'fence_next', None)
+                if callable(fence) and not fence(frame, (current,), False):
+                    return
             setting = 'CURRENT_SHELLS'
             accepted = self._shell_setting(setting, index)
             applied = bool(accepted and gun.shot_index == index)
         elif action == 'reload_clip' and not reloading:
+            if decision.get('candidate') is None and lease is not None:
+                # A pending comparison may already have cleared the policy
+                # plan while its older native NEXT lease is still installed.
+                # R must not promote that stale queue before the background
+                # cleanup later in this frame. Manual queues are fenced above.
+                self._release_next_shell('partial_reload_plan_pending', required=False)
+                if (not self._live(token) or self.gun is not gun or
+                        self._owned_next_shell is not None or gun.pending_index is not None):
+                    return
+            if gun.clip >= gun.clip_size and gun.pending_index is None:
+                # A full cassette of the same shell has no native R action.
+                # The retreat remains completed while the background seeks
+                # a proved replacement; never fake a reload or spam refusals.
+                return
             setting = 'RELOAD_PARTIAL_CLIP'
             accepted = self._shell_setting(setting)
             applied = bool(accepted and gun.clip == 0 and gun.reload_time > 0.)
@@ -2495,6 +2681,8 @@ class FullPlayerRuntime(object):
             return
         policy = self.attack_policy.status()
         navigation = policy['navigation'] or {}
+        position = dict(self.firing_position.receipt)
+        precheck = self.siege_precheck.status()
         gun, state = self.gun, self.state
         first_edge = self.controller.last_fire_failure
         key = (policy['phase'], policy['reason'], policy['shell'], policy['target'],
@@ -2504,7 +2692,9 @@ class FullPlayerRuntime(object):
                self._last_committed_shot_seq, (self._shell_receipt or {}).get('at'),
                state.get('siege_state'), state.get('_siege_intent'),
                policy['line'], policy['mechanical'], first_edge,
-               navigation.get('owner'), navigation.get('reason'))
+               navigation.get('owner'), navigation.get('reason'),
+               position.get('episode_id'), position.get('status'), position.get('reason'),
+               precheck.get('status'), precheck.get('reason'))
         if key == self._attack_log_key:
             return
         self._attack_log_key, self._attack_log_at = key, now
@@ -2525,7 +2715,7 @@ class FullPlayerRuntime(object):
             reload=gun.reload_time, aligned=bool(state.get('gun_aligned')),
             shot_seq=self._last_committed_shot_seq, source_verified=self.weapon.verified,
             siege_state=state.get('siege_state'), siege_intent=state.get('_siege_intent'),
-            siege_route=siege_route,
+            siege_route=siege_route, siege_precheck=precheck, firing_position=position,
             source_point=self.weapon.source_point or self.weapon.motion_point,
             actual=(state['turret_yaw'], state['gun_pitch']),
             desired=(intention.get('turret_yaw'), intention.get('gun_pitch')),
@@ -2540,6 +2730,12 @@ class FullPlayerRuntime(object):
         receipt = dict(contact or {}, position=tuple(position),
                        heading=None if rotation_refused else float(heading),
                        at=now, static=bool(static))
+        if receipt.get('source') == 'foreground_enemy_translation':
+            # This is an engagement observation, not an ordinary obstacle or
+            # a failed route edge. Keep the existing live-enemy exclusion.
+            if self.firing_position.contact(receipt):
+                self.engine._decision_cache.pop(self.actor_id, None)
+            return
         if rotation_refused:
             receipt['rotation_refused'] = True
         self._last_navigation = receipt
@@ -2704,6 +2900,8 @@ class FullPlayerRuntime(object):
         self._implicit_retry = None
         self._implicit_failures = 0
         self._move_episode = self._reload_retreat = None
+        self.firing_position.reset()
+        self._siege_motion_candidate = None
         self.engine._clear_friendly_reposition(self.actor_id)
         self.state.pop('_gun_angle_adjustment', None)
         if kind == 'hold_position' and not ('position' in payload or 'x' in payload and 'z' in payload):
@@ -2800,6 +2998,21 @@ class FullPlayerRuntime(object):
         if mission['action'] == 'capture_base' and mission.get('capture_area'):
             if not mission['explicit'] and mission['phase'] == 'defending' and not mission.get('capture_started'):
                 return order
+            if (not mission['explicit'] and not mission.get('capture_started') and
+                    (self.firing_position.active or self.firing_position.exit_required or
+                     'fire' in self.features and
+                     (self.attack_policy.decision.get('action') == 'aim' or
+                      self._stationary_review_wait()))):
+                # An automatic route-to-cap is still travel, not a user
+                # command or an active capture hold. Let the engagement's
+                # approved stop/local recovery reach the same driver. Keeping
+                # capture_area here would let its late guard undo that order.
+                result = dict(order)
+                result.pop('capture_area', None)
+                if result.get('combat_mode') == 'base_capture':
+                    result['combat_mode'] = ('engage' if result.get('throttle_override') == 0.
+                                             else 'advance_contact')
+                return result
             return capture_orders.constrain(dict(order, capture_area=mission['capture_area']), self.state)
         if mission['action'] in ('attack', 'return_base', 'hold_position', 'defend_base') and mission.get('destination'):
             destination = mission['destination']
@@ -2911,23 +3124,16 @@ class FullPlayerRuntime(object):
         return self.mission_status()
 
     def _move_order(self, order, now):
-        """Preserve ordinary copied handoffs; bind only the new armour search."""
+        """One ordinary engagement owner; an independent armour-search clock."""
         decision = self.attack_policy.decision
         action = decision.get('action')
-        observation = self._native_hull_laying
-        if observation is not None:
-            handoff = observation.get('handoff')
-            if (action not in ('firing_position', 'wait', 'preaim') or
-                    observation['gun'] is not self.gun or
-                    observation['shell'] != self.gun.shot_index or
-                    handoff is not None and _distance(self.state['position'],
-                        handoff['position']) >= copied_driver.WAYPOINT_ARRIVAL_RADIUS):
-                self._native_hull_laying = None
-            elif action != 'firing_position':
-                self._release_native_hull_laying('native_pivot_lost_proof', now)
+        ordinary = self.firing_position.apply_order(order, now)
+        if ordinary is not None:
+            self._move_episode = None
+            return ordinary
         if action == 'firing_position':
             self._move_episode = None
-            return self._ordinary_firing_order(order, now)
+            return order
         if action != 'search_penetration':
             deadline = (self._move_episode or {}).get('deadline')
             if deadline is not None and now >= deadline:
@@ -3009,88 +3215,13 @@ class FullPlayerRuntime(object):
         return result
 
     def _release_native_hull_laying(self, reason, now):
-        observation = self._native_hull_laying
-        if observation is not None and 'handoff' not in observation:
-            # Rechecking a line at the same position cannot interrupt the
-            # drive that the previous failed pivot just handed back.
-            observation['handoff'] = dict(reason=reason, at=now,
-                                          position=tuple(self.state['position']))
+        self.firing_position.release_laying(reason, now)
 
     def _ordinary_firing_order(self, order, now):
-        """Bind new per-point evidence to the copied existing manoeuvre owner.
-
-        A friend, a mechanical limit, and a world obstruction are different
-        facts. None is a licence to replace the full old navigation/recovery
-        chain with the new eight-second armour-search destination generator.
-        """
-        decision = self.attack_policy.decision
-        candidate = decision.get('candidate') or {}
-        request = decision.get('move_request') or {}
-        target = request.get('target') or candidate.get('target')
-        if not isinstance(target, dict):
-            target = next((row for row in self._targets if
-                           row['network_id'] == order.get('target_id') and
-                           row['kind'] == order.get('target_kind')), None)
-            target = target or next(iter(self._targets), None)
-            if target is None:
-                self._release_native_hull_laying('native_pivot_lost_proof', now)
-                return order
-        solution = candidate.get('solution') or request.get('solution') or {}
-        mechanical = candidate.get('mechanical')
-        protected = bool(order.get('parking_phase') or order.get('empty_ammo') or
-            order.get('combat_mode') in ('base_defense', 'low_health_retreat',
-                'magazine_reload_retreat', 'withdraw'))
-        can_lay_hull = (mechanical == 'hull_laying' and candidate.get('line') == 'clear' and
-                        candidate['shell_index'] == self.gun.shot_index and not protected)
-        if not can_lay_hull:
-            self._release_native_hull_laying('native_pivot_lost_proof', now)
-        if candidate.get('line') == 'friendly_blocked':
-            blocker = request.get('blocker') or candidate.get('blocker') or {}
-            active = self.engine._friendly_repositions.get(self.actor_id)
-            # The original owner must observe and expire its existing lease.
-            # Re-marking at the exact deadline would otherwise renew it before
-            # _friendly_reposition_order can publish its bounded fallback.
-            if active is None and not protected and 'drive' in self.features:
-                command = dict(order, target_id=target['id'])
-                launch = dict(fire_seq=int(self.state.get('fire_seq', 0)) + 1,
-                              shot_yaw=solution.get('yaw', self.state['aim_yaw']))
-                active = self.engine._mark_friendly_reposition(
-                    self.state, command, target, launch, blocker, now)
-            self._last_navigation = dict(status='waiting', action='firing_position',
-                reason='friendly_lane', owner='copied_friendly_reposition')
-            if active or protected:
-                return order
-            return self._resume_firing_approach(order, target)
-        if can_lay_hull:
-            identity = self.engine._artillery_target_identity(target)
-            observation = self._native_hull_laying
-            yaw = float(self.state['yaw'])
-            error = abs(_angle(solution.get('yaw', yaw) - yaw))
-            if observation is None or ('handoff' not in observation and observation['target'] != identity):
-                observation = self._native_hull_laying = dict(target=identity, gun=self.gun,
-                    shell=self.gun.shot_index, progress_at=now, progress_yaw=yaw, best_error=error)
-            if 'handoff' not in observation:
-                if (abs(_angle(yaw - observation['progress_yaw'])) >= NATIVE_ANGLE_TOLERANCE and
-                        error < observation['best_error'] - NATIVE_ANGLE_TOLERANCE):
-                    observation.update(best_error=error, progress_at=now, progress_yaw=yaw)
-                if ('drive' not in self.features or
-                        now < self.state.get('_native_rotation_refused_until', 0.) or
-                        now - observation['progress_at'] >= MECHANICAL_STALL_SECONDS):
-                    self._release_native_hull_laying('native_pivot_stalled', now)
-                else:
-                    # The copied combat_hull_aim pivots a stationary engagement.
-                    self._last_navigation = dict(status='aligning', action='firing_position',
-                        reason=solution.get('mechanical_reason'), owner='copied_combat_hull_aim')
-                    return dict(order, move_position=tuple(self.state['position']),
-                        face_position=target['position'], throttle_override=0.,
-                        combat_mode='engage', fire_allowed=False)
-        handoff = (self._native_hull_laying or {}).get('handoff')
-        self._last_navigation = dict(status='waiting', action='firing_position',
-            reason=handoff['reason'] if handoff else decision.get('reason'),
-            owner='copied_ordinary_navigation')
-        if handoff is not None:
-            self._last_navigation['pivot_handoff'] = dict(handoff)
-        return order if protected else self._resume_firing_approach(order, target)
+        # Kept as an adapter entry for existing callers; no independent state
+        # or second scheduling loop remains here.
+        result = self.firing_position.apply_order(order, now)
+        return order if result is None else result
 
     def _unusable_ammo_retreat(self, order, now):
         mission = self._mission or {}

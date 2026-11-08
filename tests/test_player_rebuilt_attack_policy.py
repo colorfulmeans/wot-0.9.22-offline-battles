@@ -15,7 +15,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src/res/scripts/client'))
 from gui.mods.offline_lan_0922.player_control.attack_policy import (
     AttackPolicy, ATOMIC_CLOSE_INTERVAL, ATOMIC_MAX_JOBS, ATOMIC_WORLD_QUERIES,
-    ATOMIC_ARMOUR_BATCHES, ATOMIC_CANDIDATES, native_source_pose)
+    ATOMIC_ARMOUR_BATCHES, ATOMIC_CANDIDATES, native_source_pose, limited_traverse)
 from gui.mods.offline_lan_0922.player_control.trigger_admission import TriggerAdmission
 
 
@@ -816,12 +816,12 @@ class RebuiltAtomicClosureTests(unittest.TestCase):
 
         scene.value(2, sample=2)
         result = scene.tick(.1, background=False, navigation='path_refused')
-        self.assertEqual('search_penetration', result['action'])
-        self.assertEqual(.1, scene.policy.search_started)
+        self.assertNotEqual('search_penetration', result['action'])
+        self.assertIsNone(scene.policy.search_started)
         self.assertEqual(1, scene.atomic_calls)
 
         scene.prime('he_fallback', index=2)
-        result = scene.tick(scene.policy.search_started + 8., background=False)
+        result = scene.tick(.2, background=False)
         self.assertEqual(('aim', 'current_he_clip_fallback'),
                          (result['action'], result['reason']))
         self.assertEqual(2, result['candidate']['shell_index'])
@@ -945,14 +945,15 @@ class RebuiltFallbackTests(unittest.TestCase):
                     damage=0, result='not_penetrated'), {})
             scene.frame['trigger_active'] = False
             scene.policy.rows.clear()
+            scene.prime(index=2)
             scene.prime('he_fallback')
             result = scene.tick(8.2 + trigger)
             self.assertEqual('aim', result['action'])
             self.assertEqual('he_fallback', result['candidate']['mode'])
             self.assertTrue(scene.policy.fallback)
-            self.assertEqual(0., scene.policy.search_started)
+            self.assertIsNone(scene.policy.search_started)
 
-    def test_new_penetration_only_exits_fallback_at_new_trigger(self):
+    def test_other_shell_penetration_never_discards_loaded_he_even_at_new_trigger(self):
         scene = Observations(clips=6, targets=1, points=1)
         scene.frame['loaded'] = 2
         scene.he(0.)
@@ -963,13 +964,393 @@ class RebuiltFallbackTests(unittest.TestCase):
         self.assertEqual('trigger_active', scene.tick(8.1)['action'])
         scene.frame['trigger_active'] = False
         result = scene.tick(8.2)
-        self.assertEqual(('reload_clip', 1), (result['action'], result['shell_index']))
-        self.assertFalse(scene.policy.fallback)
+        self.assertEqual(('aim', 2), (result['action'], result['candidate']['shell_index']))
+        self.assertTrue(scene.policy.fallback)
+        self.assertEqual(1, scene.policy.next_shell)
 
     def test_no_he_is_retreat_only_after_search_not_after_one_failed_sample(self):
         scene = Observations(targets=1, points=1, he=False)
         self.assertEqual('search_penetration', scene.tick(0.)['action'])
         self.assertEqual('retreat', scene.tick(8.)['action'])
+
+
+class IndependentAmmoTraverseTests(unittest.TestCase):
+    def test_installed_yaw_span_not_vehicle_name_clip_or_siege_decides_exception(self):
+        for limits, expected in ((None, False), ((-math.pi, math.pi), False),
+                ((-3.1, 3.1), True), ((-.2, .2), True), ((0., 0.), True)):
+            with self.subTest(limits=limits):
+                descriptor = SimpleNamespace(gun=SimpleNamespace(turretYawLimits=limits))
+                self.assertEqual(expected, limited_traverse(descriptor))
+
+    def test_every_he_clip_switches_penetration_fallback_and_back_without_eight_seconds(self):
+        for limited in (False, True):
+            for burst in (1, 3):
+                for siege in (False, True):
+                    with self.subTest(limited=limited, burst=burst, siege=siege):
+                        scene = Observations(clips=6, targets=2, points=2)
+                        scene.frame.update(loaded=2, limited_traverse=limited,
+                                           burst_count=burst, siege=siege)
+                        scene.passed(2, target=1)
+                        scene.passed(1, target=2)
+                        scene.he(0., target=2)
+                        scene.he(120., target=2, sample=1)
+                        scene.prime()
+                        scene.prime('he_fallback')
+                        first = scene.tick(0.)
+                        self.assertEqual(('aim', 'penetration', ('bot', 1)),
+                            (first['action'], first['candidate']['mode'], first['candidate']['target_key']))
+                        scene.policy.shot_committed(dict(burst_index=0, burst_count=burst), {})
+                        # A killed weak target cannot retarget an admitted
+                        # physical burst; the next trigger owns the change.
+                        scene.frame['targets'] = scene.frame['targets'][1:]
+                        scene.frame['trigger_active'] = burst > 1
+                        if burst > 1:
+                            self.assertEqual('trigger_active', scene.tick(.1)['action'])
+                            scene.policy.shot_committed(dict(burst_index=burst - 1,
+                                                             burst_count=burst), {})
+                        scene.frame.update(trigger_active=False, clip=6 - burst)
+                        fallback = scene.tick(.2)
+                        self.assertEqual(('aim', 'he_fallback', 2, 1),
+                            (fallback['action'], fallback['candidate']['mode'],
+                             fallback['candidate']['shell_index'], fallback['candidate']['sample']))
+                        self.assertEqual(120., fallback['candidate']['expected_damage'])
+                        self.assertIsNone(scene.policy.search_started)
+                        self.assertIsNone(scene.policy.reload_authority)
+                        self.assertEqual(1, scene.policy.next_shell)
+                        scene.policy.shot_committed(dict(burst_index=0, burst_count=1), {})
+                        # An actual target change revokes the old plate
+                        # certificate and proves a new HE penetration point.
+                        scene.frame['targets'][0]['pose'] = ('enemy', 2, 1)
+                        scene.passed(2, target=2)
+                        restored = scene.tick(.3)
+                        self.assertEqual(('aim', 'penetration', 2),
+                            (restored['action'], restored['candidate']['mode'],
+                             restored['candidate']['shell_index']))
+                        self.assertFalse(scene.policy.fallback)
+                        self.assertIsNone(scene.policy.search_started)
+
+    def test_he_fallback_phase_does_not_turn_expired_negative_proof_into_permission(self):
+        scene = Observations(clips=6, targets=1, points=2)
+        scene.frame['loaded'] = 2
+        scene.he(0.)
+        scene.prime()
+        scene.prime('he_fallback')
+        self.assertEqual('aim', scene.tick(0.)['action'])
+        scene.frame['pose'] = ('source', 1)
+        scene.value(2, sample=1, armor='unknown', line='pending')
+        scene.prime('he_fallback')
+        pending = scene.tick(.1)
+        self.assertNotEqual('aim', pending['action'])
+        self.assertNotEqual('search_penetration', pending['action'])
+        self.assertTrue(scene.policy.fallback)
+        scene.value(2, sample=1)
+        scene.prime(index=2)
+        ready = scene.tick(.2)
+        self.assertEqual(('aim', 'he_fallback'),
+                         (ready['action'], ready['candidate']['mode']))
+        self.assertIsNone(scene.policy.search_started)
+
+    def test_obstructed_he_clip_keeps_remaining_ammo_even_if_other_he_has_contact(self):
+        scene = Observations(clips=6, targets=1, points=1)
+        scene.frame.update(loaded=2, limited_traverse=True)
+        scene.frame['shells'] += (dict(index=3, is_he=True, piercing=140., signature=('he2', 1)),)
+        scene.frame['ammo'] += (30,)
+        scene.value(2, armor='unknown', line='world_blocked')
+        scene.value(2, mode='he_fallback', armor='unknown', line='world_blocked',
+                    contact=True, expected_damage=0.)
+        scene.passed(1)
+        scene.he(200., index=3)
+        scene.prime()
+        scene.prime('he_fallback')
+        scene.policy.fallback = True
+        for now in (0., 1., 9., 40.):
+            result = scene.tick(now)
+            self.assertEqual('firing_position', result['action'])
+            self.assertNotIn('shell_index', result)
+            self.assertEqual(6, scene.frame['clip'])
+            self.assertIsNone(scene.policy.search_started)
+            self.assertIsNone(scene.policy.reload_authority)
+        self.assertEqual(1, scene.policy.next_shell)
+
+    def test_next_rank_pending_clears_plan_even_while_current_he_fallback_is_usable(self):
+        scene = Observations(clips=6, targets=1, points=1)
+        scene.frame['loaded'] = 2
+        scene.he(0.)
+        scene.passed(1)
+        scene.prime()
+        scene.prime('he_fallback')
+        scene.tick(0.)
+        self.assertEqual(1, scene.policy.next_shell)
+        scene.frame['line_revision'] += 1
+        scene.value(0, armor='unknown', line='pending')
+        scene.prime()
+        scene.prime('he_fallback')
+        result = scene.tick(.1)
+        self.assertEqual(('aim', 2), (result['action'], result['candidate']['shell_index']))
+        self.assertIsNone(scene.policy.next_shell)
+        self.assertEqual('higher_rank_pending', scene.policy.next_status)
+
+    def test_next_he_fallback_plan_depends_on_the_completed_penetration_review(self):
+        scene = Observations(clips=6, targets=1, points=1)
+        scene.frame['loaded'] = 2
+        scene.he(0.)
+        scene.prime()
+        scene.prime('he_fallback')
+        scene.tick(0.)
+        self.assertEqual('verified_he_fallback', scene.policy.next_status)
+        self.assertEqual('verified', scene.policy.next_at_edge()[1])
+        self.assertEqual(4, len(scene.policy.next_proofs))
+        # The HE contact remains unchanged, but a distinct penetration
+        # obligation is now pending. The old HE plan cannot approve itself.
+        scene.value(1, armor='pending', line='pending')
+        job = scene.policy._jobs(shell_index=1)[0]
+        scene.policy._evaluate(job, .1, 'background')
+        self.assertEqual((None, 'rank_evidence_changed'), scene.policy.next_at_edge())
+        scene.policy.background(.1)
+        self.assertIsNone(scene.policy.next_plan)
+
+    def test_limited_single_checks_all_stock_then_fallback_without_reload_retreat(self):
+        scene = Observations(targets=1, points=1)
+        scene.frame['limited_traverse'] = True
+        scene.passed(1)
+        scene.prime()
+        result = scene.tick(0.)
+        self.assertEqual(('switch_shell', 1), (result['action'], result['shell_index']))
+        scene.value(1)
+        scene.frame['targets'][0]['pose'] = ('changed', 1)
+        scene.he(0.)
+        scene.prime()
+        scene.prime('he_fallback')
+        result = scene.tick(.1)
+        self.assertEqual(('switch_shell', 2, 'he_fallback'),
+            (result['action'], result['shell_index'], result['candidate']['mode']))
+        self.assertIsNone(scene.policy.search_started)
+        self.assertIsNone(scene.policy.reload_authority)
+
+    def test_limited_non_he_starts_retreat_even_when_replacement_review_is_pending(self):
+        for siege in (False, True):
+            with self.subTest(siege=siege):
+                scene = Observations(clips=6, targets=1, points=1)
+                scene.frame.update(limited_traverse=True, siege=siege)
+                scene.value(1, armor='unknown', line='pending')
+                scene.value(2, armor='unknown', line='pending')
+                result = scene.tick(0.)
+                self.assertEqual(('reload_clip', True, 0),
+                    (result['action'], result['early_reload'], result['shell_index']))
+                self.assertIsNone(result['candidate'])
+                self.assertIsNone(scene.policy.search_started)
+                qualified = scene.policy.reload_authority['qualified_at']
+                for step in range(1, 10):
+                    scene.frame['pose'] = ('retreat_moving', step)
+                    scene.value(0, armor='unknown', line='pending')
+                    result = scene.tick(step * .1)
+                    self.assertEqual('reload_clip', result['action'])
+                    self.assertEqual(qualified, result['reload_qualified_at'])
+                    self.assertIsNone(scene.policy.search_started)
+                # An actual new current-shell opportunity ends the retreat
+                # qualification rather than discarding the newly useful clip.
+                scene.frame['pose'] = ('retreat_new_lane', 11)
+                scene.passed(0)
+                self.assertEqual('aim', scene.tick(1.1)['action'])
+                self.assertIsNone(scene.policy.reload_authority)
+
+    def test_load_start_and_observed_clip_change_end_early_reload_authority(self):
+        for event in ('load_started', 'observed_load', 'gun_changed'):
+            with self.subTest(event=event):
+                scene = Observations(clips=6, targets=1, points=1)
+                scene.frame.update(limited_traverse=True, clip=3)
+                scene.tick(0.)
+                self.assertIsNotNone(scene.policy.reload_authority)
+                if event == 'load_started':
+                    scene.policy.load_started(0)
+                    self.assertIsNone(scene.policy.reload_authority)
+                elif event == 'observed_load':
+                    scene.frame.update(clip=0, reloading=True)
+                else:
+                    scene.frame['identity'] = ('round', 'new_gun')
+                scene.value(0, armor='pending', line='pending')
+                scene.frame['pose'] = ('loading', 1)
+                scene.tick(.1)
+                self.assertIsNone(scene.policy.reload_authority)
+
+    def test_siege_descriptor_change_keeps_reload_transaction_not_old_geometry(self):
+        scene = Observations(clips=6, targets=1, points=1)
+        scene.frame.update(limited_traverse=True, clip=3,
+                           weapon_identity=('round', 'physical_gun'))
+        scene.tick(0.)
+        qualified = scene.policy.reload_authority['qualified_at']
+        self.assertTrue(scene.policy.rows)
+        scene.frame['identity'] = ('round', 'travel_descriptor')
+        for index in (0, 1, 2):
+            scene.value(index, armor='unknown', mechanical='mechanical_limited')
+        result = scene.tick(.1)
+        self.assertEqual('reload_clip', result['action'])
+        self.assertEqual(qualified, scene.policy.reload_authority['qualified_at'])
+        self.assertTrue(all(row['armor'] == 'unknown' for row in scene.policy.rows.values()))
+        self.assertIsNone(scene.policy.search_started)
+        scene.frame['weapon_identity'] = ('round', 'replacement_physical_gun')
+        scene.frame['identity'] = ('round', 'replacement_descriptor')
+        result = scene.tick(.2)
+        self.assertNotEqual('reload_clip', result['action'])
+        self.assertIsNone(scene.policy.reload_authority)
+
+    def test_scope_exclusion_is_separate_from_unknown_geometry_and_empty_domain(self):
+        scene = Observations(clips=6, targets=1, points=2)
+        scene.frame['limited_traverse'] = True
+        scene.value(0, sample=1, armor='unknown', line='clear',
+            mechanical='mechanical_limited', scope='excluded',
+            scope_proof=dict(scope='excluded', reason='complete_native_pitch_envelope'))
+        scene.prime(index=0)
+        result = scene.tick(0.)
+        self.assertEqual('reload_clip', result['action'])
+        domain = scene.policy.failure_domains[(0,)]
+        self.assertEqual((1, 1, 0), (domain['failed'], domain['excluded'], domain['geometry_pending']))
+        self.assertEqual('unknown', scene.policy.rows[0, ('bot', 1), 1, 'penetration']['armor'])
+        scene.policy.reset()
+        scene.value(0, sample=0, armor='unknown', line='clear',
+            mechanical='mechanical_limited', scope='excluded',
+            scope_proof=dict(scope='excluded', reason='complete_native_pitch_envelope'))
+        result = scene.tick(.1)
+        self.assertEqual('firing_position', result['action'])
+        self.assertFalse(scene.policy.failure_domains[(0,)]['all_failed'])
+        self.assertIsNone(scene.policy.search_started)
+
+    def test_pending_geometry_never_borrows_reachable_points_negative_result(self):
+        for limited in (False, True):
+            for mechanical, line in (('hull_laying', 'clear'),
+                    ('mechanical_limited', 'clear'), ('reachable', 'world_blocked')):
+                with self.subTest(limited=limited, mechanical=mechanical, line=line):
+                    scene = Observations(clips=6, targets=1, points=2)
+                    scene.frame['limited_traverse'] = limited
+                    scene.value(0, sample=1, armor='unknown', line=line, mechanical=mechanical)
+                    scene.prime(index=0)
+                    result = scene.tick(0.)
+                    self.assertEqual('firing_position', result['action'])
+                    self.assertFalse(scene.policy.failure_domains[(0,)]['all_failed'])
+                    self.assertIsNone(scene.policy.search_started)
+                    self.assertIsNone(scene.policy.reload_authority)
+
+    @staticmethod
+    def stationary_evidence(armor='failed', contact=None, damage=None, proved=True):
+        return dict(status='proved', proof=dict(proved=proved, source='native_stationary_arc'),
+            line='clear', mechanical='reachable', armor=armor, contact=contact,
+            expected_damage=damage, solution=dict(point=(20., 2., 100.),
+                source_point=(20., 2., 100.), needs_hull=True, reachable=False,
+                source_verified=False))
+
+    def test_stationary_failure_is_counted_separately_and_never_becomes_actual_fire(self):
+        scene = Observations(clips=6, targets=2, points=1)
+        scene.frame.update(limited_traverse=True, clip=3)
+        scene.value(0, target=2, armor='unknown', mechanical='hull_laying',
+                    stationary_plan=self.stationary_evidence())
+        scene.prime(index=0)
+        result = scene.tick(0.)
+        self.assertEqual('reload_clip', result['action'])
+        domain = scene.policy.failure_domains[(0,)]
+        self.assertEqual((1, 1, True),
+            (domain['failed'], domain['projected_failed'], domain['all_failed']))
+        row = scene.policy.rows[0, ('bot', 2), 0, 'penetration']
+        self.assertEqual(('unknown', 'hull_laying'), (row['armor'], row['mechanical']))
+        self.assertFalse(scene.policy._executable(row))
+
+    def test_incomplete_or_invalidated_stationary_arc_cannot_close_failure_domain(self):
+        for state in ('unproved', 'invalidated', 'blocked'):
+            with self.subTest(state=state):
+                scene = Observations(clips=6, targets=2, points=1)
+                scene.frame.update(limited_traverse=True, clip=3)
+                plan = self.stationary_evidence(proved=state != 'unproved')
+                if state == 'blocked':
+                    plan['line'] = 'world_blocked'
+                if state == 'invalidated':
+                    scene.stationary_plan_current = lambda frame, proof: False
+                scene.value(0, target=2, armor='unknown', mechanical='hull_laying',
+                            stationary_plan=plan)
+                scene.prime(index=0)
+                result = scene.tick(0.)
+                self.assertNotEqual('reload_clip', result['action'])
+                self.assertFalse(scene.policy.failure_domains[(0,)]['all_failed'])
+                self.assertIsNone(scene.policy.reload_authority)
+
+    def test_current_he_safe_pivot_penetration_precedes_an_actual_fallback_contact(self):
+        scene = Observations(clips=6, targets=2, points=1)
+        scene.frame.update(loaded=2, limited_traverse=True)
+        scene.value(2, target=2, armor='unknown', mechanical='hull_laying',
+                    stationary_plan=self.stationary_evidence('passed'))
+        scene.he(100., target=1)
+        scene.prime()
+        scene.prime('he_fallback')
+        result = scene.tick(0.)
+        self.assertEqual(('firing_position', 'current_penetration_after_stationary_turn'),
+                         (result['action'], result['reason']))
+        self.assertEqual(('bot', 2), result['candidate']['target_key'])
+        self.assertIsNone(scene.policy.search_started)
+        self.assertFalse(scene.policy.apply_order({})['fire_allowed'])
+        command, unused = scene.policy.select_command({}, {}, {}, 0.)
+        self.assertEqual((20., 2., 100.), command['aim_position'])
+        self.assertFalse(command['fire_allowed'])
+
+    def test_next_rank_uses_safe_stationary_plan_but_first_trigger_rejects_it(self):
+        scene = Observations(clips=6, targets=1, points=1)
+        scene.passed(0)
+        scene.value(2, armor='unknown', mechanical='hull_laying',
+                    stationary_plan=self.stationary_evidence('passed'))
+        scene.prime()
+        result = scene.tick(0.)
+        self.assertEqual(('aim', 0), (result['action'], result['candidate']['shell_index']))
+        self.assertEqual(2, scene.policy.next_shell)
+        planned, status = scene.policy.next_at_edge()
+        self.assertEqual('verified', status)
+        self.assertTrue(scene.policy._plannable(planned))
+        self.assertFalse(scene.policy._executable(planned))
+        scene.stationary_plan_current = lambda frame, proof: False
+        self.assertEqual((None, 'candidate_expired'), scene.policy.next_at_edge())
+
+    def test_next_he_fallback_does_not_require_current_clip_to_be_in_fallback(self):
+        scene = Observations(clips=6, targets=1, points=1)
+        scene.frame['ammo'] = (6, 30, 30)
+        scene.passed(0)
+        scene.he(0.)
+        scene.prime()
+        scene.prime('he_fallback')
+        result = scene.tick(0.)
+        self.assertEqual(('aim', 0), (result['action'], result['candidate']['shell_index']))
+        self.assertFalse(scene.policy.fallback)
+        self.assertEqual((2, 'he_fallback', 'verified_he_fallback'),
+            (scene.policy.next_shell, scene.policy.next_plan['mode'], scene.policy.next_status))
+        planned, status = scene.policy.next_at_edge()
+        self.assertEqual((2, 'verified'), (planned['shell_index'], status))
+        self.assertIsNone(scene.policy.search_started)
+
+    def test_checked_blocked_unknown_rank_cannot_authorise_next_he_fallback(self):
+        for blocked in ('world_blocked', 'friendly_blocked'):
+            with self.subTest(blocked=blocked):
+                scene = Observations(clips=6, targets=1, points=1)
+                scene.frame['ammo'] = (6, 30, 30)
+                scene.passed(0)
+                scene.value(1, armor='unknown', line=blocked)
+                scene.he(20.)
+                scene.prime()
+                scene.prime('he_fallback')
+                result = scene.tick(0.)
+                self.assertEqual('aim', result['action'])
+                self.assertIsNone(scene.policy.next_plan)
+                self.assertEqual('fallback_evidence_incomplete', scene.policy.next_status)
+                self.assertFalse(scene.policy.failure_domains[(1, 2)]['all_failed'])
+
+    def test_current_he_fallback_damage_rank_includes_a_proved_stationary_turn(self):
+        scene = Observations(clips=6, targets=2, points=1)
+        scene.frame.update(loaded=2, limited_traverse=True)
+        scene.he(0., target=1)
+        scene.value(2, target=2, mode='he_fallback', armor='unknown',
+            mechanical='hull_laying', stationary_plan=self.stationary_evidence(
+                'failed', contact=True, damage=50.))
+        scene.prime()
+        scene.prime('he_fallback')
+        result = scene.tick(0.)
+        self.assertEqual(('firing_position', 'current_he_clip_fallback_after_stationary_turn'),
+            (result['action'], result['reason']))
+        self.assertEqual(('bot', 2), result['candidate']['target_key'])
+        self.assertFalse(scene.policy._executable(result['candidate'], 'he_fallback'))
 
 
 class LaunchGeometryDomainTests(unittest.TestCase):
