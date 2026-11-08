@@ -8,6 +8,7 @@ certify Windows physics or frame pacing, and the actuator grants no navigation
 ownership.
 """
 import math
+import random
 import sys
 import unittest
 from unittest import mock
@@ -83,6 +84,9 @@ class FiniteTrackingScene(OwnershipScene):
 
 class NativeTrackingContinuityTests(unittest.TestCase):
     def scene(self):
+        random_state = random.getstate()
+        self.addCleanup(random.setstate, random_state)
+        random.seed(119)
         scene = FiniteTrackingScene()
         scene.setUp()
         self.addCleanup(scene.doCleanups)
@@ -149,7 +153,7 @@ class NativeTrackingContinuityTests(unittest.TestCase):
         for target, point in zip(targets, ((0., 0., 40.), (-28., 0., 45.), (28., 0., 45.))):
             scene.pose(target, point)
         gun = scene.runtime.gun
-        gun.reload = 7.
+        gun.reload = 20.
         gun.shots[1].shell.kind = 'HIGH_EXPLOSIVE'
         gun.shots[1].shell.explosionRadius = 5.
         gun.shots[1].piercingPower = (10., 10.)
@@ -167,34 +171,47 @@ class NativeTrackingContinuityTests(unittest.TestCase):
         initial = tuple(gun.ammo)
         candidates = set()
         waiting = []
-        for index in range(65):
-            # Real observed armour revisions make different AP candidates
-            # qualify, without injecting policy decisions or firing grants.
-            soft = targets[1 + (index // 8) % 2]
+        for soft in targets[1:]:
+            # Hold each real armour change until the policy acknowledges its
+            # candidate. Fixed frame windows can miss resumable native work,
+            # and an unchanged plate must not invalidate that work every tick.
             for target in targets:
+                armor = 300. if target is soft else 10000.
+                changed = False
                 for component in ('chassis', 'hull', 'turret', 'gun'):
-                    getattr(target.typeDescriptor, component).materials[0].armor = (
-                        300. if target is soft else 10000.)
-                scene.battle._records['bot:%s' % target.id]['armor_revision'] = index
-            scene.tick()
-            row = scene.trace[-1]
-            self.assertEqual(1, gun.shot_index)
-            self.assertGreater(gun.reload_time, 0.)
-            self.assertFalse(scene.launches())
-            self.assertEqual(initial, tuple(gun.ammo))
-            if row['action'] == 'switch_shell':
-                candidates.add(row['candidate'][1])
-                waiting.append(row)
-                self.assertEqual(row['original'].get('target_id'),
-                                 row['applied'].get('target_id'))
-                self.assertEqual(navigation_view(row['original'])['face_position'],
-                                 navigation_view(row['applied'])['face_position'])
-                self.assertNotEqual(row['candidate'], row['selected'])
-            self.assertNotEqual('native_lay_stalled', row['reason'])
+                    material = getattr(target.typeDescriptor, component).materials[0]
+                    changed = changed or material.armor != armor
+                    material.armor = armor
+                if changed:
+                    record = scene.battle._records['bot:%s' % target.id]
+                    record['armor_revision'] = record.get('armor_revision', 0) + 1
+            for unused in range(75):
+                scene.tick()
+                row = scene.trace[-1]
+                self.assertEqual(1, gun.shot_index)
+                self.assertGreater(gun.reload_time, 0.)
+                self.assertFalse(scene.launches())
+                self.assertEqual(initial, tuple(gun.ammo))
+                if row['action'] == 'switch_shell':
+                    candidates.add(row['candidate'][1])
+                    waiting.append(row)
+                    self.assertEqual(row['original'].get('target_id'),
+                                     row['applied'].get('target_id'))
+                    self.assertEqual(navigation_view(row['original'])['face_position'],
+                                     navigation_view(row['applied'])['face_position'])
+                    self.assertNotEqual(row['candidate'], row['selected'])
+                self.assertNotEqual('native_lay_stalled', row['reason'])
+                if (row['action'] == 'switch_shell' and
+                        row['candidate'][1] == ('bot', soft.id)):
+                    break
+            else:
+                self.fail('native policy did not acknowledge target %s: %r' %
+                          (soft.id, scene.runtime.status()))
         self.assertTrue(waiting, 'the real policy must request replacement during manual loading')
         self.assertGreaterEqual(len(candidates), 2)
-        for unused in range(230):
+        for unused in range(500):
             scene.tick()
+            self.assertNotEqual('native_lay_stalled', scene.trace[-1]['reason'])
             if scene.launches():
                 break
         self.assertEqual([0], [shot['shell_index'] for shot in scene.launches()], scene.runtime.status())
