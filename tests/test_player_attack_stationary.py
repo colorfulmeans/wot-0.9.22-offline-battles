@@ -156,6 +156,12 @@ class NativeStationaryCombatTests(unittest.TestCase):
             for material in getattr(other.typeDescriptor, name).materials.values():
                 material.armor = 10000.
         scene.set_he(1.)
+        # Multi-yaw negative closure belongs to a reviewed full-validation
+        # HESH pair; ordinary HE now has its separate one-point policy.
+        descriptor = scene.entity.typeDescriptor
+        descriptor.name = descriptor.type.name = 'uk:GB83_FV4005'
+        descriptor.gun.name = '_183mm_AT_Gun'
+        scene.battle._gun_state.shots[0].shell.name = '_183mm_HESH'
         self.piercing(scene, 1, 1000.)
         scene.rotator_enabled = True
         policy, qualified = scene.runtime.attack_policy, None

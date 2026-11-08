@@ -1,4 +1,91 @@
-# November 9: preserve recovery and complete stationary gun handoffs
+# November 9 follow-up: one-point ordinary HE and exact HESH exceptions
+
+This follow-up starts at `23c340737abf316cab6c395ed581c87d88ad271c` and
+implements the user's reviewed five-pair whitelist. It deliberately replaces
+the earlier full-domain penetration search for ordinary HE only. Original BOT
+admission, navigation, recovery, routes and their copied implementation remain
+unchanged. Physical HE damage, magazine protection, the 65% penetration test,
+actual-barrel admission and the other confirmed ammunition rules remain in force.
+
+## Pinned mounted-shot identities
+
+The installed CN HD 0.9.22.0.1 #1513 resources were reviewed across all ten
+nations: 680 vehicle definitions and 1,280 vehicle/gun/HE combinations, with
+no parsing errors. The whitelist is a set of exact national gun and shell
+identities, not a penetration threshold, display-name match, shell slot or
+vehicle-wide exception. Runtime names must agree with the vehicle nation.
+
+| Vehicle | Gun identity / displayed gun | Shell identity / displayed shell | Reviewed penetration |
+| --- | --- | --- | --- |
+| FV215b (183) | `uk:_183mm_L4` / 183 mm L4 | `uk:_183mm_HESH` / HESH Mk.1 | 230 mm |
+| FV4005 | `uk:_183mm_AT_Gun` / 183 mm L4 | `uk:_183mm_HESH` / HESH Mk.1 | 230 mm |
+| Centurion Mk.VII (7/1) | `uk:_105mm_Gun_L7` / 105 mm RO L7A1 | `uk:_105mm_HESH_L7` / HESH-T L-37 | 210 mm |
+| Charioteer | `uk:_105mm_AT_Gun_L7` / 105 mm L7 AT | `uk:_105mm_HESH_L7` / HESH-T L-37 | 210 mm |
+| FV4004 Conway | `uk:_5_5inch_AT_Gun` / BL 5.5 inch | `uk:_5_5inch_HESH_Mk_1` / HESH Mk.1 | 200 mm |
+
+All AP, APCR and HEAT retain full verification. Only the five HE pairs above
+join that strategy; all other HE use one penetration sample on the current
+preferred admitted target. Same-gun low-penetration HE, the retired FV4202 gun,
+missing identities and mismatched national prefixes do not enter the whitelist.
+The classification never changes `is_he`, blast damage or loaded HE ownership.
+
+## Ordinary HE flow and bounded work
+
+An ordinary HE trial prefers the current gun intention, otherwise the original
+BOT's selected admitted contact. A genuine reachable, clear-lane armour failure
+ends that penetration trial. Unknown geometry, obstruction, mechanical limits
+and an exhausted work budget do not count as penetration failures. The trial is
+a strategy decision, not a claim that every point on every enemy failed. Target
+or mounted-shot changes retire it; source settling alone does not repeatedly
+restart the same completed trial.
+
+A single-shot gun then advances the original ranked alternative-ammunition
+verification and switches only to a proved candidate. An unresolved alternative
+does not authorize premature HE fallback. With no usable alternative, the
+existing HE contact/damage fallback remains available. A loaded HE magazine
+instead goes straight to its current-clip fallback and keeps its remaining
+rounds. NEXT is independently ranked and cannot discard that loaded cassette.
+Foreground, background, atomic closure and final NEXT review share the same
+classification and completed-trial state. Existing full-verification and
+eight-second rules continue for their original qualifying situations.
+
+The follow-up report ending `004817-5b9b49aa5eb6` contains eight committed shots,
+including five HE hits which destroyed the E100 WT. It also exposes repeated
+source-pose invalidations while the hull settled, and new atomic receipts only
+54 ms and 92 ms apart after admitted-enemy changes. Those receipt intervals are
+not an estimate of all native armour calls, and attack-log sample counts are
+not a collision count.
+
+Admission-domain changes still revoke policy authority, while preserving the
+two-second atomic cadence and exact physical observations for retained targets.
+Lifecycle/weapon changes reset them. Source and target proof fingerprints stay
+exact. A bounded cache may reuse raw collision hits only for identical native
+Vector3 ray endpoints, target pose/components/revisions, shell and lifecycle;
+current range-dependent penetration is resolved again. Line, mechanical and
+launch permission are never inherited from that raw-hit cache. Departed targets
+are pruned. This avoids redundant collision work when native inputs coincide;
+it does not promise reuse for every small movement or claim a measured FPS gain.
+
+## Verification boundary
+
+Thirty-six new regressions cover the five exact whitelist pairs and rejected near matches,
+single-point versus full-search behaviour, pending alternatives, background and
+NEXT continuity, cache invalidation and atomic cadence. Continuous controller
+tests execute the real PlayerControl, battle shooting and ammunition transaction:
+they check emitted projectiles, burst grouping, reload/switch completion and
+exact deductions through target motion/death and task exit. Ten continuous
+shooting cases include the original eight-second AP-magazine search followed
+by a real HE reload and committed shot. Load-edge checks keep NEXT, early
+reload, an empty magazine and ammunition exhaustion consistent. An existing
+foreground slot is reserved for current HE contact after alternative negative
+proof closes, preventing settling-source starvation without increasing the
+two-candidate budget. Native terrain,
+collision and actuator observations remain controlled fixtures, so this is not
+a claim of Windows BigWorld gameplay acceptance. The frozen-source CI results
+and matching fresh Windows package are recorded in PR119 at delivery. No merge,
+tag or Release is part of this follow-up.
+
+# Earlier November 9 repair: preserve recovery and complete stationary gun handoffs
 
 The STB-1 report ending `231948-95b3bdc93d42` used `b0d31317`, build
 `colorfulmeans-42490816495-1`. Its two foreground handoff failures are distinct

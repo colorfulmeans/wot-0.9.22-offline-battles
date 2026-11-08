@@ -20,11 +20,17 @@ from gui.mods.offline_lan_0922.player_control.trigger_admission import TriggerAd
 
 
 class Observations(object):
-    def __init__(self, clips=1, targets=2, points=2, he=True):
+    def __init__(self, clips=1, targets=2, points=2, he=True, he_validation='full'):
         shells = [dict(index=0, is_he=False, piercing=200., signature=('ap', 1)),
                   dict(index=1, is_he=False, piercing=300., signature=('apcr', 1))]
         if he:
-            shells.append(dict(index=2, is_he=True, piercing=100., signature=('he', 1)))
+            # These historical complete-domain tests exercise the reviewed
+            # L7 HESH role. Ordinary HE tests request single_point explicitly.
+            shells.append(dict(index=2, is_he=True,
+                piercing=210. if he_validation == 'full' else 100., signature=('he', 1),
+                validation_mode=he_validation, gun_identity='uk:_105mm_Gun_L7',
+                shell_identity=('uk:_105mm_HESH_L7' if he_validation == 'full' else
+                                'uk:_105mm_HE_L7')))
         self.frame = dict(identity=('round', 'gun'), pose=('source', 0),
             position=(0., 0., 0.), loaded=0, clip=clips, clip_size=clips,
             ammo=tuple(30 for shell in shells), reloading=False,
@@ -683,14 +689,16 @@ class RebuiltSearchAndClipTests(unittest.TestCase):
         scene.frame['combat_signature'] = ('admitted', 1)
         first = scene.tick(0., navigation=None)['move_request']['episode_id']
         scene.frame['combat_signature'] = ('admitted', 2)
-        second = scene.tick(1., navigation=None)['move_request']['episode_id']
+        scene.tick(1., navigation=None)
+        self.assertEqual(1, scene.atomic_calls)
+        second = scene.tick(2.01, navigation=None)['move_request']['episode_id']
         self.assertNotEqual(first, second)
-        scene.policy.navigation_result(dict(action='search_penetration', at=1.,
+        scene.policy.navigation_result(dict(action='search_penetration', at=2.01,
             episode_id=first, status='accepted', attempted=True))
         self.assertIsNone(scene.policy.search_started)
-        scene.policy.navigation_result(dict(action='search_penetration', at=1.,
+        scene.policy.navigation_result(dict(action='search_penetration', at=2.01,
             episode_id=second, status='accepted', attempted=True))
-        self.assertEqual(1., scene.policy.search_started)
+        self.assertEqual(2.01, scene.policy.search_started)
 
     def test_qualification_does_not_start_clock_and_real_route_refusal_does(self):
         scene = Observations(targets=1, points=1, he=False)
@@ -1519,13 +1527,15 @@ class NativeAtomicClosureTests(native_fire.AutomaticFireScene):
         shell, target = frame['shells'][0], frame['targets'][0]
         self.assertIsNotNone(evaluator._prediction(frame, shell, target, target['samples'][0]))
         self.assertTrue(evaluator.predictions)
+        prediction = evaluator.predictions[(shell['index'], target['key'], target['samples'][0])]
         runtime.combat_stop.signature = ('admitted', 2)
         self.assertFalse(evaluator.fence(frame))
         self.assertFalse(evaluator.fence_next(frame, [], ranked_domain=False))
         refreshed = evaluator.snapshot(self.now)
         self.assertEqual(frame['identity'], refreshed['identity'])
         self.assertNotEqual(frame['combat_signature'], refreshed['combat_signature'])
-        self.assertFalse(evaluator.predictions)
+        self.assertIs(prediction, evaluator.predictions[
+            (shell['index'], target['key'], target['samples'][0])])
         self.assertTrue(evaluator.fence(refreshed))
 
     def test_remote_ally_outside_lane_region_keeps_proof_until_it_enters(self):
