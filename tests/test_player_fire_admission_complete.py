@@ -1214,9 +1214,22 @@ class AutomaticFireAdmissionTests(AutomaticFireScene):
         witness = receipts[0][1]['contact']
         self.assertEqual((-1., -0.), witness['normal'])
         self.assertEqual('copied_planar_contact', witness['source'])
+        self.assertFalse(witness['drive_refused'])
+        # Only the limiting sweep peer and travel into its SAT normal count
+        # as a driving refusal. An existing overlap can still back away.
+        self.battle._report_player_planar_contacts(
+            own, [peer], 0., .1, self.now, (.2, 0.), {42}, .5)
+        refusal = receipts[1][1]['contact']
+        self.assertTrue(refusal['drive_refused'])
+        self.assertEqual(42, refusal['peer_network_id'])
+        self.assertEqual(.5, refusal['drive_fraction'])
+        self.assertEqual(math.pi / 2., refusal['attempted_heading'])
+        self.battle._report_player_planar_contacts(
+            own, [peer], 0., .1, self.now, (-.2, 0.), {42}, .5)
+        self.assertFalse(receipts[2][1]['contact']['drive_refused'])
         peer['x'] = 10.
         self.battle._report_player_planar_contacts(own, [peer], 0., .1, self.now)
-        self.assertEqual(1, len(receipts))
+        self.assertEqual(3, len(receipts))
 
 
 class HydraulicReachTests(unittest.TestCase):

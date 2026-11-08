@@ -625,16 +625,19 @@ class BotAdapter(object):
                 'withdrawal_aim': goal_distance <= 30.0 and exposed,
                 'target_yaw': face_yaw, 'recovery_mode': 'reverse_withdraw'}
 
+    def _driver_neighbours(self, state):
+        # Perception and physical contacts retain all actors. Only driver
+        # avoidance ignores living opponents; wrecks remain pushable bodies.
+        return [peer for peer in state.get('neighbours', ())
+                if (not peer.get('alive', True) or
+                    state.get('team') is None or peer.get('team') is None or
+                    peer.get('team') == state.get('team'))]
+
     @observed('driver.order')
     def _drive_order(self, bot_id, state, position, strategic,
                      direction_clear):
-        # Perception and physical contacts retain all actors. Only driver
-        # avoidance ignores living opponents; wrecks remain pushable bodies.
         original_neighbours = state.get('neighbours')
-        state['neighbours'] = [peer for peer in state.get('neighbours', ())
-                               if (not peer.get('alive', True) or
-                                   state.get('team') is None or peer.get('team') is None or
-                                   peer.get('team') == state.get('team'))]
+        state['neighbours'] = self._driver_neighbours(state)
         try:
             return self._drive_order_controls(bot_id, state, position, strategic,
                                               direction_clear)
@@ -715,7 +718,8 @@ class BotAdapter(object):
             self._wreck_history.get(bot_id, {}).get(
                 contact['peer_id'], {}).get('exhausted', False))
         if (not parked and not combat_hold and not exhausted_wreck and contact_plan is None and contact is not None and
-                (side_contact or (strategic.get('throttle_override') is not None and
+                (contact.get('drive_refused') or side_contact or
+                 (strategic.get('throttle_override') is not None and
                  (not contact['peer_alive'] or contact['peer_team'] != state.get('team'))))):
             contact_plan = self._contact_escape_plan(
                 state, position, direction_clear, contact)

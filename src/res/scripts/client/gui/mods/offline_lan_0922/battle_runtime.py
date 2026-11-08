@@ -24323,9 +24323,19 @@ class BattleRuntime(object):
         others = self._contact_tanks(
             position, own['shape'], dt, extra_reach=math.hypot(*travel))
         drive_fraction = 1.0
+        drive_hits = None
         if start_position is not None:
             start_body = dict(own, x=start_position[0], z=start_position[2])
-            fraction = tank_collision.translation_fraction(start_body, travel, others)
+            control = getattr(self, '_player_control', None)
+            automatic = getattr(control, 'owns_automatic_drive', None)
+            throttle = getattr(self, '_local_drive_throttle', 0.0)
+            if (others and throttle * self._local_speed > 1.e-9 and
+                    throttle * (math.sin(yaw)*travel[0]+math.cos(yaw)*travel[1]) > 1.e-9 and
+                    callable(automatic) and automatic() and
+                    not control.halted and control.override is None):
+                drive_hits = []
+            fraction = tank_collision.translation_fraction(
+                start_body, travel, others, contacts=drive_hits)
             drive_fraction = fraction
             position = (start_position[0]+travel[0]*fraction, position[1],
                         start_position[2]+travel[1]*fraction)
@@ -24348,7 +24358,10 @@ class BattleRuntime(object):
             if physical.get('physical_velocity') is not None:
                 physical['vx'], physical['vz'] = physical['physical_velocity']
             physical_others.append(physical)
-        self._report_player_planar_contacts(own, physical_others, yaw, dt, now)
+        drive_blockers = (set(other_id for other_id, at in drive_hits
+                              if at <= drive_fraction + 1.e-9) if drive_hits else ())
+        self._report_player_planar_contacts(
+            own, physical_others, yaw, dt, now, travel, drive_blockers, drive_fraction)
         contact = tank_collision.resolve_tank(
             own, physical_others, now=now,
             ram_cooldowns=self._local_ram_cooldowns,
@@ -24482,7 +24495,8 @@ class BattleRuntime(object):
         self._local_push_x, self._local_push_z = push_x, push_z
         return self._resolve_local_turret_contacts(entity, position, yaw, dt)
 
-    def _report_player_planar_contacts(self, own, others, yaw, dt, now):
+    def _report_player_planar_contacts(self, own, others, yaw, dt, now,
+                                       travel=(0., 0.), drive_blockers=(), drive_fraction=1.):
         """Publish the copied solver's actual SAT witness to player driving.
 
         This is an observed physical overlap, not a centre-distance steering
@@ -24492,7 +24506,7 @@ class BattleRuntime(object):
         if not callable(callback):
             return
         from .vehicle_stack import planar_pair
-        heading = float(yaw) + (math.pi if self._local_speed < 0. else 0.)
+        overlap_heading = float(yaw) + (math.pi if self._local_speed < 0. else 0.)
         for other in others:
             record, remote = other.get('_record') or {}, other.get('_vehicle')
             peer = getattr(remote, 'id', record.get('engine_id'))
@@ -24508,9 +24522,15 @@ class BattleRuntime(object):
             if contact is None:
                 continue
             position = (own['x'], own['y'], own['z'])
+            refused = (other['id'] in drive_blockers and
+                       travel[0]*contact[0]+travel[1]*contact[1] < -1.e-9)
+            heading = math.atan2(*travel) if refused else overlap_heading
             witness = dict(peer=peer, normal=tuple(contact[:2]), position=position,
+                peer_kind=other.get('kind'), peer_network_id=other.get('network_id'),
                 peer_position=(other['x'], other['y'], other['z']), at=float(now),
                 attempted_heading=heading, own_shape=own['shape'], peer_shape=other['shape'],
+                drive_refused=refused, drive_fraction=drive_fraction if refused else None,
+                depth=contact[2],
                 source='copied_planar_contact')
             callback(position, heading, dt, static=False, contact=witness)
 
