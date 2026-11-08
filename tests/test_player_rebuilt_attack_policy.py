@@ -48,10 +48,6 @@ class Observations(object):
         self.atomic_receipt = {}
         self.invalidated = []
         self.policy = AttackPolicy(SimpleNamespace(), evaluator=self)
-        # These finite facts have no native query duration. Keep policy-domain
-        # assertions independent of host load; wall-budget tests supply their
-        # own advancing clock explicitly.
-        self.policy.atomic_clock = lambda: 0.
 
     def snapshot(self, now):
         value = copy.deepcopy(self.frame)

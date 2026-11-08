@@ -978,16 +978,13 @@ class AttackPolicy(object):
             if action == 'search_penetration':
                 self.search_authority['episode_id'] = episode_id
         self.decision = row
-        if action in ('aim', 'preaim', 'firing_position') and candidate is not None:
+        if action in ('aim', 'preaim', 'firing_position', 'switch_shell', 'reload_clip') and candidate is not None:
             # Intent stability and evidence validity are separate lifetimes.
             # A zero-width gun must be able to finish laying toward one point
             # even though every hull step invalidates that point's old proof.
             self.selected = candidate['key']
-        elif action not in ('trigger_active', 'wait', 'switch_shell', 'reload_clip'):
+        elif action not in ('trigger_active', 'wait'):
             self.selected = None
-        # A load proposal can wait behind manual input or a native reload.
-        # Keep its candidate as replacement evidence, not current gun intent:
-        # only load_started may install the accepted shell's loading_plan.
         if action == 'aim' or reason == 'no_relevant_enemy':
             self._evidence_wait_since = None
         if (reason == 'no_relevant_enemy' or action not in ('aim', 'preaim', 'wait')
@@ -1654,8 +1651,7 @@ class AttackPolicy(object):
         result = dict(order or {})
         if self.stationary_review_wait():
             return self._stationary_review_order(result)
-        candidate = (decision.get('candidate') if decision['action'] not in
-                     ('switch_shell', 'reload_clip') else None)
+        candidate = decision.get('candidate')
         if candidate is not None:
             target = candidate['target']
             owner = getattr(getattr(self, 'runtime', None), 'combat_stop', None)
@@ -1701,8 +1697,7 @@ class AttackPolicy(object):
         result['_player_attack'] = decision
         if self.stationary_review_wait():
             return self._stationary_review_order(result), target
-        candidate = (decision.get('candidate') if decision['action'] not in
-                     ('switch_shell', 'reload_clip') else None)
+        candidate = decision.get('candidate')
         if candidate is not None:
             selected = candidate['target']
             # The driver has already solved this frame for its selected
