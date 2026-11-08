@@ -24,8 +24,10 @@ class SiegeLaunchBoundaryTests(unittest.TestCase):
         runtime.actor_id = 77
         runtime.active = True
         runtime.features = {'fire', 'drive'}
-        state = dict(id=77, siege_state=mode, gun_aligned=True)
+        state = dict(id=77, siege_state=mode, gun_aligned=True,
+                     position=(0., 0., 0.), profile=dict(class_tag='TD'))
         runtime.engine = SimpleNamespace(states={77: state})
+        runtime.planner = SimpleNamespace(_target_decisions={})
         runtime._identity = ('round', 77)
         runtime._binding = lambda: runtime._identity
         runtime._live = lambda *args: True
@@ -33,8 +35,22 @@ class SiegeLaunchBoundaryTests(unittest.TestCase):
         runtime.pose_stamp = lambda: ('current', 1)
         runtime.weapon.owned = lambda: True
         runtime.weapon.verified = True
-        context = dict(source_pose=runtime.pose_stamp())
+        target = dict(kind='bot', id=42, network_id=42, position=(0., 0., 40.),
+                      visible=True, alive=True)
+        runtime._targets = [target]
+        # This unit starts at an already-selected original planner order;
+        # cold-start LOS/admission is exercised by the full ownership suite.
+        runtime.combat_stop.accept(dict(combat_mode='engage', target_kind='bot', target_id=42))
+        context = dict(source_pose=runtime.pose_stamp(), target=target)
         return runtime, battle, state, context
+
+    def test_navigation_handoff_revokes_an_earlier_automatic_trigger_context(self):
+        runtime, unused_battle, unused_state, context = self.scene(clip=6)
+        self.assertIsNone(runtime.authorize_trigger(context, runtime.entity, runtime.gun, None))
+        runtime.combat_stop.accept(dict(combat_mode='route', move_position=(100., 0., 0.)))
+        self.assertEqual('original_combat_not_admitted', runtime.authorize_trigger(
+            context, runtime.entity, runtime.gun, None))
+        self.assertEqual(6, runtime.gun.clip)
 
     def test_travel_and_both_transition_states_refuse_automatic_first_edge(self):
         for mode in (siege_mechanics.DISABLED, siege_mechanics.SWITCHING_ON,

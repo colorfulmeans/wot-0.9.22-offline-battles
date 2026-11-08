@@ -60,6 +60,17 @@ def _target_key(target):
                              target.get('network_id', target.get('id'))))
 
 
+def _combat_targets(runtime):
+    # Runtime admission belongs to the original copied BOT. The fallback
+    # supports observation-only fixtures which predate that runtime seam.
+    targets = getattr(runtime, 'combat_targets', None)
+    return targets() if targets is not None else runtime.visible_targets()
+
+
+def _combat_signature(runtime):
+    return getattr(getattr(runtime, 'combat_stop', None), 'signature', None)
+
+
 def _shell_rank(shell):
     return (0 if shell.get('is_he') else 1,
             float(shell['piercing']), int(shell['index']))
@@ -234,6 +245,7 @@ class AttackPolicy(object):
         self.failure_domains = {}
         self._identity = None
         self._weapon_identity = None
+        self._combat_signature = None
         self._magazine = None
         self._foreground_at = None
         self._background_at = None
@@ -257,7 +269,8 @@ class AttackPolicy(object):
                 target.get('pose'), target.get('velocity'),
                 shell.get('signature', (int(shell['index']),
                                        bool(shell.get('is_he')),
-                                       float(shell['piercing']))))
+                                       float(shell['piercing']))),
+                frame.get('combat_signature'))
 
     def _line_stamp(self, frame, region=None):
         local_stamp = getattr(self.evaluator, 'lane_stamp', None)
@@ -689,7 +702,7 @@ class AttackPolicy(object):
         old = plan['pose_stamp']
         new = self._stamp(frame, job[1], job[2])
         changes = [part for part, before, after in zip(
-            ('identity', 'source', 'target', 'velocity', 'shell'), old, new)
+            ('identity', 'source', 'target', 'velocity', 'shell', 'combat_domain'), old, new)
             if before != after]
         if 'source' in changes and 'planning_pose' in frame:
             details['source_parts'] = tuple(part for part, before, after in zip(
@@ -861,7 +874,7 @@ class AttackPolicy(object):
         if action in ('firing_position', 'search_penetration'):
             if self.decision.get('action') != action:
                 self._move_episode += 1
-            episode_id = (self._identity, action, self._move_episode)
+            episode_id = (self._identity, self._combat_signature, action, self._move_episode)
             row['move_request'] = dict(kind=action, reason=reason,
                 target=candidate.get('target') if candidate else None,
                 sample=candidate.get('sample') if candidate else None,
@@ -975,10 +988,14 @@ class AttackPolicy(object):
             return self._recover_incomplete(now, 'observation_unavailable')
         identity = frame['identity']
         weapon_identity = frame.get('weapon_identity', identity)
+        combat_signature = frame.get('combat_signature')
         if self._identity is not None and (identity != self._identity or
-                weapon_identity != self._weapon_identity):
+                weapon_identity != self._weapon_identity or
+                combat_signature != self._combat_signature):
             # A native siege descriptor changes every mechanical/trajectory
             # proof, but is not itself a different physical loaded cassette.
+            # A changed admitted combat domain likewise retires geometric
+            # evidence, not an already granted retreat/reload transaction.
             # Retain only the target/sample intention and an already admitted
             # reload transaction for the same physical gun. Rows, trigger
             # proof, loading/NEXT plans and all geometry are still discarded.
@@ -990,6 +1007,7 @@ class AttackPolicy(object):
             self.selected = selected
         self._identity = identity
         self._weapon_identity = weapon_identity
+        self._combat_signature = combat_signature
         self.frame = frame
         self.failure_domains = {}
         self._frame_invalid = False
@@ -1418,17 +1436,24 @@ class AttackPolicy(object):
         candidate = decision.get('candidate')
         if candidate is not None:
             target = candidate['target']
-            result.update(target_id=target.get('network_id', target.get('id')),
-                          target_kind=target.get('kind'),
-                          aim_position=self.intent_solution(candidate).get('point'),
-                          face_position=target.get('position'))
+            owner = getattr(getattr(self, 'runtime', None), 'combat_stop', None)
+            if owner is not None and not owner.stop_allowed:
+                # The complete admitted domain still informs ammo/armour
+                # decisions. It does not donate an authored advance, cover
+                # leg or mission's target/facing to another policy candidate.
+                # During travel only refine the already selected gun target.
+                selected = (result.get('target_kind'), result.get('target_id'))
+                if _target_key(target) != selected:
+                    return dict(result, fire_allowed=False)
+                result['aim_position'] = self.intent_solution(candidate).get('point')
+            else:
+                result.update(target_id=target.get('network_id', target.get('id')),
+                              target_kind=target.get('kind'),
+                              aim_position=self.intent_solution(candidate).get('point'),
+                              face_position=target.get('position'))
         result['shell_index'] = (decision.get('shell_index', self.frame['loaded'])
                                  if self.frame is not None else result.get('shell_index'))
         if decision['action'] == 'aim':
-            position = self.frame.get('position')
-            if position is not None:
-                result.update(move_position=position, throttle_override=0.,
-                              combat_mode='engage')
             result['fire_allowed'] = not self.frame.get('reloading')
         else:
             result['fire_allowed'] = False
@@ -1440,13 +1465,11 @@ class AttackPolicy(object):
                 self.frame is not None)
 
     def _stationary_review_order(self, order):
-        # This short evidence wait is an explicit stopped input intent, not
-        # a bare "wait" that leaves strategic navigation turning the source
-        # underneath a multi-frame stationary-domain observation.
-        return dict(order or {}, move_position=self.frame['position'],
-            target_id=None, target_kind=None, aim_position=None, face_position=None,
-            throttle_override=0., throttle=0., turn=0., brake=True,
-            fire_allowed=False, combat_mode='engage')
+        # CombatStop owns the short stop before the driver runs. This late
+        # shooting overlay cannot park the route or discard its target.
+        result = dict(order or {}, aim_position=None, fire_allowed=False)
+        result.pop('_player_attack_solution', None)
+        return result
 
     def select_command(self, source, command, target, now):
         decision = self.decision
@@ -1455,11 +1478,22 @@ class AttackPolicy(object):
         result = dict(command)
         result['_player_attack'] = decision
         if self.stationary_review_wait():
-            return self._stationary_review_order(result), None
+            return self._stationary_review_order(result), target
         candidate = decision.get('candidate')
         if candidate is not None:
-            target = candidate['target']
-            result['target_id'] = target.get('id')
+            selected = candidate['target']
+            # The driver has already solved this frame for its selected
+            # contact. A late shooting callback may refine that contact's
+            # point, never silently retarget the solved hull movement.
+            if (not isinstance(target, dict) or
+                    _target_key(selected) != _target_key(target) or
+                    result.get('target_id') is not None and result['target_id'] not in
+                    (target.get('id'), target.get('network_id')) or
+                    result.get('target_kind') is not None and
+                    result['target_kind'] != target.get('kind')):
+                result['fire_allowed'] = False
+                result.pop('_player_attack_solution', None)
+                return result, target
             solution = self.intent_solution(candidate)
             result.update(aim_position=solution.get('point'),
                           _player_attack_solution=solution)
@@ -1537,6 +1571,7 @@ class NativeAttackEvaluator(object):
         self.atomic_receipt = {}
         self._atomic_predictions = {}
         self._atomic_prices = {}
+        self._combat_signature = None
         self.atomic_clock = _WALL_CLOCK
         self.atomic_deadline = float('inf')
         self.stationary_planner = stationary_plan.StationaryPlanner(runtime)
@@ -1551,8 +1586,13 @@ class NativeAttackEvaluator(object):
         origin = _point(origin)
         pose = native_source_pose(runtime, origin)
         body = pose[1]
+        combat_signature = _combat_signature(runtime)
+        if combat_signature != self._combat_signature:
+            self.jobs.clear()
+            self.predictions.clear()
+            self._combat_signature = combat_signature
         targets, observations = [], {}
-        for raw in runtime.visible_targets():
+        for raw in _combat_targets(runtime):
             if not raw.get('alive', True):
                 continue
             target = runtime.target_entity(raw)
@@ -1600,6 +1640,7 @@ class NativeAttackEvaluator(object):
         planning_pose = _planning_pose(pose)
         frame = dict(identity=(owner._generation, id(gun), id(descriptor.gun)),
             weapon_identity=(owner._generation, id(gun)),
+            combat_signature=combat_signature,
             source=source, pose=pose, planning_pose=planning_pose,
             position=pose[0], body=body, origin=origin,
             descriptor=descriptor, entity=entity, loaded=int(gun.shot_index),
@@ -1777,6 +1818,8 @@ class NativeAttackEvaluator(object):
     def _fence(self, frame, rows=None, ranked_domain=True):
         try:
             owner = self.owner
+            if _combat_signature(self.runtime) != frame.get('combat_signature'):
+                return False
             if rows is not None:
                 for row in rows:
                     plan = row.get('stationary_plan')
@@ -1806,7 +1849,7 @@ class NativeAttackEvaluator(object):
                     elif self.lane_stamp(live, region) != row['line_stamp']:
                         return False
                 target_keys = set(row['target_key'] for row in rows)
-            observed = dict((_target_key(row), row) for row in self.runtime.visible_targets()
+            observed = dict((_target_key(row), row) for row in _combat_targets(self.runtime)
                             if row.get('alive', True))
             if ranked_domain and set(observed) != set(target['key'] for target in frame['targets']):
                 return False

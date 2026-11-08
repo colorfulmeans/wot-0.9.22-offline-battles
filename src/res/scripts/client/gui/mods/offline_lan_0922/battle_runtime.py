@@ -24352,19 +24352,7 @@ class BattleRuntime(object):
         drive_fraction = 1.0
         if start_position is not None:
             start_body = dict(own, x=start_position[0], z=start_position[2])
-            control = getattr(self, '_player_control', None)
-            watch_enemy = bool(getattr(control, 'active', False) and
-                'drive' in getattr(control, 'features', ()) and
-                'fire' in getattr(control, 'features', ()) and
-                abs(float(getattr(self._sender, 'forward', 0.))) > .01)
-            contacts = [] if watch_enemy else None
-            fraction = (tank_collision.translation_fraction(start_body, travel, others,
-                                                            contacts=contacts)
-                        if watch_enemy else
-                        tank_collision.translation_fraction(start_body, travel, others))
-            if contacts and fraction < 1.:
-                self._report_player_translation_block(
-                    start_body, travel, others, contacts, fraction, dt)
+            fraction = tank_collision.translation_fraction(start_body, travel, others)
             drive_fraction = fraction
             position = (start_position[0]+travel[0]*fraction, position[1],
                         start_position[2]+travel[1]*fraction)
@@ -24520,40 +24508,6 @@ class BattleRuntime(object):
                 position = candidate
         self._local_push_x, self._local_push_z = push_x, push_z
         return self._resolve_local_turret_contacts(entity, position, yaw, dt)
-
-    def _report_player_translation_block(self, own, travel, others, contacts, fraction, dt):
-        """Publish an existing sweep's first live-enemy block, not an obstacle.
-
-        The physical fraction is unchanged. The engagement owner may stop to
-        inspect a firing point; ordinary navigation must not add live enemies
-        to its static/friendly avoidance roster as a consequence.
-        """
-        callback = getattr(getattr(self, '_player_control', None), 'drive_contact', None)
-        forward = float(getattr(self._sender, 'forward', 0.))
-        heading = float(own['yaw']) + (math.pi if forward < 0. else 0.)
-        if (not callable(callback) or abs(forward) <= .01 or
-                travel[0] * math.sin(heading) + travel[1] * math.cos(heading) <= 1.e-9):
-            return
-        first = set(identity for identity, at in contacts if at <= fraction + 1.e-7)
-        for other in others:
-            if (other['id'] not in first or other.get('alive') is not True or
-                    int(other.get('team', 0)) not in (1, 2) or
-                    int(other['team']) == int(own['team'])):
-                continue
-            record = other.get('_record') or {}
-            remote = other.get('_vehicle')
-            peer = getattr(remote, 'id', other.get('engine_id', record.get('engine_id')))
-            if peer is None:
-                continue
-            position = (own['x'], own['y'], own['z'])
-            witness = dict(source='foreground_enemy_translation', enemy_blocking=True,
-                peer=peer, peer_id=other.get('network_id'),
-                peer_kind='human' if other.get('kind') == 'player' else other.get('kind'),
-                team=int(other['team']), peer_alive=True, fraction=float(fraction),
-                position=position, peer_position=(other['x'], other['y'], other['z']),
-                attempted_heading=heading, movement=tuple(travel), at=float(self._clock()))
-            callback(position, heading, dt, static=False, contact=witness)
-            return
 
     def _report_player_planar_contacts(self, own, others, yaw, dt, now):
         """Publish the copied solver's actual SAT witness to player driving.

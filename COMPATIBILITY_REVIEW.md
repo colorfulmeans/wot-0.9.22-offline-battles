@@ -1,4 +1,111 @@
-# November 8 final siege ownership and ordinary finite-traverse integration
+# November 8 correction: original BOT admission/navigation owns the boundary
+
+This repair starts at `60984c54d1cbd40c85ff6fdd2fe6853b1403964d`.
+It supersedes the preceding update's claim that keeping copied navigation
+source unchanged was sufficient to preserve its behaviour. The copied files
+were unchanged, but the foreground wrapper replaced their decisions. That was
+outside the requested scope: new shooting logic is invoked only after the
+original BOT admits combat; only combat stopping moves into that shooting
+boundary. Ordinary travel, noncombat stopping and recovery are not redesigned.
+
+## Native failure evidence and the repaired ownership seam
+
+Both November 8 reports ending `210820-2cddb05a7741` and
+`212206-2cddb05a7741` identify the same current `60984c54` package,
+`colorfulmeans-42480128167-1`. The STB-1 report contains the new
+`class_mt_rim_east` authored route and `baked_route_connected`: its
+`random_default` allocation label is not evidence of an ancient route file.
+At 21:17:15.376 the original route/no-eligible-lane decision was replaced by a
+foreground engagement. At 21:17:54.256 the original selected eligible enemy 5,
+while the foreground moved toward enemy 2, which the original planner had
+rejected for `no_local_lane`. Changing routes was a downstream consequence of
+the unauthorized combat/movement handoff, not a valid response to armour
+failure. Some later contacts/shots were genuine; the reports do not imply
+every engagement was false.
+
+- Remove the independent `EngagementPosition` controller, its contact-driven
+  acquisition, suppression/terminal route decisions and wrappers around the
+  original friendly, rear-laying and mechanical recovery methods.
+- Capture the original planner/mission order before invoking the new shooting
+  policy. `CombatStop` admits only that selected live enemy and the original
+  eligible candidate domain. An unrelated visible, out-of-policy or blocked
+  contact cannot start the new point scan, stop the route or supply movement
+  evidence. The final automatic-trigger boundary checks the same admission.
+- Preserve selected-first priority, then original eligible ranking. Proof
+  identity uses the admitted set, not its incidental score ordering: reordering
+  the same enemies cannot restart the all-enemy eight-second search.
+- Feed the original one-hertz strategic observer its original lane freshness
+  interval, not the 0.2-second shot-check cache lifetime. A fresh negative lane
+  remains a known negative, not a permanently pending observation. This changes
+  neither actual-barrel launch verification nor the original range policy.
+- Apply combat stop/release before the unchanged driver. Actual aiming may
+  stop only an admitted combat-owned order. A bounded stationary review also
+  fixes that hold's face before driving, so the live-target overlay cannot
+  rotate the hull and erase the evidence being reviewed. Existing active
+  friendly/mechanical/rear recovery leases retain their own clocks.
+- Ordinary authored advance, cover travel, capture/parking and explicit
+  destinations keep their target, face, destination and control fields. The
+  late shooting callback may refine the same target's gun point, not retarget
+  a movement solution that the driver already computed. A motion-only siege
+  input obeys the same target identity; it cannot bypass that late gate.
+- Restore ordinary recovery by inheriting the original methods. New points
+  may release an admitted combat stop or feed a current friendly/mechanical
+  refusal into those methods; they do not select a new strategic route.
+  The separately authorized eight-second all-enemy armour search remains
+  separate from obstruction/mechanical recovery.
+- A new explicit travel mission retires only the preceding combat's temporary
+  magazine-followup/rear-laying stop leases. A real first-shot test exposed
+  the old followup hold rewriting `team_return_base` to `engage`; this handoff
+  now preserves the return destination immediately. Already committed physical
+  trigger tails, ammo/reload ownership and route/path state are not cancelled.
+  While that explicit destination still owns travel, its target is not donated
+  to the copied rear-hull laying consumer (which does not know player-only
+  `team_*` task names). Otherwise a rear enemy could recreate the retired hold
+  on the next frame. No solved throttle/turn/route field is overwritten.
+  Capture arrival uses the original current circle occupancy, not the generic
+  two-metre destination radius or a historical `capture_started` flag. The
+  original circle-edge track-arc constraint remains the movement authority.
+- Remove the newly added global enemy-translation collision callback and
+  restore the original SAT call. Collision evidence cannot acquire combat.
+  Ordinary planar contact reporting and native hydraulics remain intact.
+
+Siege still follows the original combat/navigation owner: enter after genuine
+combat admission, remain enabled during local combat recovery, exit for
+navigation/retreat takeover with the original native acknowledgement. No
+hypothetical future-pose/penetration entry proof is restored. Actual enabled
+geometry, finite traverse, single-shot/magazine/machinegun trigger structure,
+HE evaluation and next-load controls remain the existing shooting pipeline.
+
+## Verification corrections, not relaxed acceptance
+
+The old suite could pass while expecting the erroneous ownership. Replace
+those expectations rather than retaining a second navigator to satisfy them:
+
+- Never-admitted visible enemies must leave original route/controls intact;
+  real obstruction recovery tests first acquire a genuine original lane.
+- Pure gun/geometry fixtures explicitly advance the original lane/planner
+  schedule. Cold-start integration separately uses no prewarmed lane and
+  reaches a real projectile through the normal full control loop.
+- Native aiming fixtures place actual base circles away from spawn unless
+  testing capture. Capture-specific fixtures explicitly assert that the new
+  combat stop does not own their movement or circle.
+- Replace deleted global episode/suppression/forced-route expectations with
+  inherited recovery lifetime, native progress, stale/foreign evidence,
+  pre-driver stop and protected-task tests.
+- Regress the two reported boundaries with AMX/STB configurations: empty
+  opening, blocked-only contact, original selected enemy 5 versus rejected 2,
+  authored route/native control equality, lost/reacquired contact, and
+  protected return/advance. Keep actual native first-edge, clip/HE/NEXT,
+  finite-traverse and mode-sequence assertions.
+
+The exact frozen-tree test counts, source commit and fresh CI artifact identity
+are recorded in PR119 with delivery. The original BOT/navigation/copied code
+and route resources are unchanged; the copy manifest only tracks source-line
+movement after removing the global collision hook. Automated native-observation
+fixtures and package verification are not a native Windows #1513 gameplay or
+frame-time acceptance run. No merge, tag or release is part of this repair.
+
+# Historical November 8 siege ownership and ordinary finite-traverse integration
 
 This update starts at `cabfec2569a3acb7d169e876ed69706ec913219a` and
 supersedes that revision's future-mode entry precheck. The current user contract

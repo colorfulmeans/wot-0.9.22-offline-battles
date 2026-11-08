@@ -57,9 +57,22 @@ class NativeStationaryCombatTests(unittest.TestCase):
         scene.battle.client.effective_params['gun']['shots'][index][
             'source_shot']['piercingPower'] = (value, value)
 
+    @staticmethod
+    def admit_contacts(scene):
+        # Advance only the original observation/planner schedule after adding
+        # another real entity. The evaluator may not silently include every
+        # red dot before the original BOT has admitted its lane.
+        scene.observe()
+        for target in scene.runtime.visible_targets():
+            scene.runtime.engine._shot_clear(scene.runtime.state, target, scene.now, force=True)
+        scene.runtime._strategic_due = 0.
+        scene.runtime._planner_order(scene.now)
+        scene.runtime.attack_policy.reset()
+
     def test_multi_yaw_negative_domain_finishes_before_original_turn_can_erase_it(self):
         scene = self.scene(limits=(-.1, .1), clip=6, burst=1, bearing=.65, rate=.8)
         scene.vehicle(43, (math.sin(-.85) * 40., 0., math.cos(-.85) * 40.), team=2)
+        self.admit_contacts(scene)
         self.piercing(scene, 0, 1.)
         self.piercing(scene, 1, 1000.)
         scene.battle._gun_state.clip = 3
@@ -138,6 +151,7 @@ class NativeStationaryCombatTests(unittest.TestCase):
     def test_he_multi_yaw_failure_uses_loaded_clip_fallback_without_eight_second_search(self):
         scene = self.scene(limits=(-.1, .1), clip=6, burst=1, bearing=0., rate=.8)
         other = scene.vehicle(43, (math.sin(.8) * 40., 0., math.cos(.8) * 40.), team=2)
+        self.admit_contacts(scene)
         for name in ('chassis', 'hull', 'turret', 'gun'):
             for material in getattr(other.typeDescriptor, name).materials.values():
                 material.armor = 10000.
@@ -182,7 +196,7 @@ class NativeStationaryCombatTests(unittest.TestCase):
             self.assertEqual('hull_laying', evaluator._atomic_predictions[job[0]]['reach']['status'])
         self.assertFalse(scene.launches())
 
-    def test_automatic_unstarted_capture_cannot_override_finite_native_review_stop(self):
+    def test_native_review_cannot_override_original_implicit_capture_owner(self):
         scene = self.scene(limits=(-.1, .1), clip=6, burst=1, bearing=.7, rate=.8)
         scene.battle._last_snapshot = dict(capture_bases={
             '1': [dict(id='1:0', x=0., y=0., z=-45., radius=6.)],
@@ -197,13 +211,15 @@ class NativeStationaryCombatTests(unittest.TestCase):
         with mock.patch.object(stationary_plan, 'SLICES_PER_TICK', 0):
             for unused in range(8):
                 scene.tick()
-                self.assertTrue(runtime.attack_policy.stationary_review_wait())
-                self.assertEqual((0, 0),
-                    (scene.battle._sender.forward, scene.battle._sender.turn))
-                self.assertEqual((0., 0., 0.), scene.position)
-                self.assertAlmostEqual(0., scene.body.yaw)
+                self.assertFalse(runtime.combat_stop.active)
+                self.assertFalse(runtime.attack_policy.stationary_review_wait())
+                self.assertEqual('original_navigation', runtime.attack_policy.decision['reason'])
+                self.assertEqual('base_capture', runtime.combat_stop.task_order['combat_mode'])
+                self.assertEqual((45., 0., 0.),
+                    runtime._last_order['control_trace']['strategic_move_position'])
+                self.assertIsNone(runtime.attack_policy.search_started)
                 self.assertFalse(runtime._mission.get('capture_started'))
-                self.assertNotIn('capture_area', scene.control.last_order)
+                self.assertFalse(scene.launches())
 
     def test_active_hydraulic_input_cannot_reacquire_motion_during_native_review_wait(self):
         scene = SiegeScene()

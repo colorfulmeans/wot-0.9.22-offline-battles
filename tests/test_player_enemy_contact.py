@@ -1,15 +1,14 @@
-"""Existing physical translation witnesses enter engagement, not avoidance.
+"""Ordinary physical translation never creates a new engagement owner.
 
 The native-world boundary supplies flat support and observed peer bodies.
-The SAT sweep/response, foreground event adapter and engagement decisions
-remain production consumers; these tests are not native Windows acceptance.
+The production SAT sweep/response and original planar-contact feedback must
+remain unchanged by player automation. These are not native Windows tests.
 """
 import types
 import unittest
 from unittest import mock
 
 import test_port_0922_battle_runtime as battle_fixtures
-import test_player_limited_traverse as player_fixtures
 from test_port_0922_tank_collision import tank_collision, _tank
 
 
@@ -44,26 +43,39 @@ class EnemyTranslationTests(unittest.TestCase):
         with mock.patch('sys.stdout'):
             return battle._resolve_local_tank_contacts(entity, (0., 0., distance), 0., .1)
 
-    def test_live_enemy_receipt_does_not_change_physical_fraction_or_response(self):
+    def test_player_activation_preserves_original_sat_fraction_and_response(self):
         results = []
-        counts = []
+        sweeps = []
+        original = tank_collision.translation_fraction
         for active in (False, True):
             battle, entity, events = self.physical_scene(active=active)
+            fractions = []
+
+            def observe_sweep(*args, **kwargs):
+                # Ordinary navigation retains the original three-argument
+                # sweep, not the newer enemy-translation observation path.
+                self.assertEqual(3, len(args))
+                self.assertEqual({}, kwargs)
+                fraction = original(*args, **kwargs)
+                fractions.append(fraction)
+                return fraction
+
             with mock.patch.object(tank_collision, 'translation_fraction',
-                                   wraps=tank_collision.translation_fraction) as sweep:
+                                   side_effect=observe_sweep) as sweep:
                 position = self.move(battle, entity)
-                counts.append(sweep.call_count)
+                self.assertGreater(sweep.call_count, 0)
+                self.assertEqual((0., 10.), sweep.call_args_list[0].args[1])
+                sweeps.append(tuple(fractions))
             results.append((position, battle._local_speed,
                             battle._local_push_x, battle._local_push_z))
-            enemy = [row for row in events if row.get('enemy_blocking')]
-            self.assertEqual(int(active), len(enemy))
-            if active:
-                self.assertEqual(('foreground_enemy_translation', 11, 'bot', 11),
-                    (enemy[0]['source'], enemy[0]['peer'], enemy[0]['peer_kind'], enemy[0]['peer_id']))
-                self.assertGreaterEqual(enemy[0]['fraction'], 0.)
-                self.assertLess(enemy[0]['fraction'], 1.)
+            self.assertGreaterEqual(fractions[0], 0.)
+            self.assertLess(fractions[0], 1.)
+            self.assertLess(position[2], 10.)
+            self.assertFalse(any(row.get('enemy_blocking') for row in events))
+            self.assertFalse(any(row.get('source') == 'foreground_enemy_translation'
+                                 for row in events))
         self.assertEqual(results[0], results[1])
-        self.assertEqual(counts[0], counts[1])
+        self.assertEqual(sweeps[0], sweeps[1])
 
     def test_friends_wrecks_and_movement_opposite_input_are_not_enemy_entry(self):
         for alive, team, forward in ((False, 2, 1.), (True, 1, 1.),
@@ -82,37 +94,39 @@ class EnemyTranslationTests(unittest.TestCase):
         self.move(battle, entity, 20.)
         self.assertFalse(any(row.get('enemy_blocking') for row in events))
 
-    def test_physical_witness_stops_initial_check_then_yields_to_ordinary_finding(self):
-        scene = player_fixtures.TraverseScene()
-        scene.setUp()
-        self.addCleanup(scene.doCleanups)
-        scene.configure(limits=None, tag='mediumTank', bearing=0.)
-        target = scene.runtime.visible_targets()[0]
+    def test_ordinary_navigation_collision_cannot_emit_combat_entry(self):
         battle, entity, unused = self.physical_scene()
-        peer = dict(_tank(1000000 + scene.target.id, 0., 8.),
-            network_id=target['network_id'], engine_id=scene.target.id,
-            kind='bot', team=2, alive=True)
-        battle._contact_tanks = lambda *args, **kwargs: [peer]
-        battle._player_control = scene.control
+        control = battle._player_control
+        control.last_order = dict(action='move', target=None, reason='route',
+                                  destination=(0., 0., 200.))
+        before = dict(control.last_order)
+        control.drive_contact = mock.Mock()
+        position = self.move(battle, entity)
+        # The swept enemy still physically blocks the route. It does not
+        # supply an independent "enemy_blocking" engagement-admission event.
+        self.assertLess(position[2], 10.)
+        control.drive_contact.assert_not_called()
+        self.assertEqual(before, control.last_order)
 
-        def pending_geometry():
-            raise RuntimeError('world observation pending')
-
-        scene.on_probe = pending_geometry
-        self.move(battle, entity)
-        self.assertIsNotNone(scene.runtime.firing_position.contact_witness)
-        first = scene.tick()
-        self.assertIsNone(first['failure'])
-        self.assertEqual('contact_verify', scene.runtime.firing_position.episode['phase'])
-        self.assertEqual((0., 0.), first['sender'][:2])
-        moving = False
-        for unused in range(70):
-            row = scene.tick()
-            self.assertIsNone(row['failure'], row)
-            self.assertIsNone(scene.runtime.attack_policy.search_started)
-            moving = moving or bool(row['sender'][0] or row['sender'][1])
-        self.assertTrue(moving, scene.trace[-4:])
-        self.assertFalse(scene.launches())
+    def test_original_planar_contact_feedback_is_preserved(self):
+        battle, unused, events = self.physical_scene()
+        own = dict(id=-1, kind='player', network_id=1, x=0., y=0., z=0.,
+                   yaw=0., pitch=0., roll=0., shape=(1., 2., 0., 2.))
+        for team, alive in ((1, True), (2, True), (2, False)):
+            with self.subTest(team=team, alive=alive):
+                events[:] = []
+                peer = dict(_tank(1000011, 1.5, 1., shape=(1., 2., 0., 2.)),
+                    network_id=11, kind='bot', team=team, alive=alive,
+                    _record=dict(engine_id=11))
+                battle._report_player_planar_contacts(own, [peer], 0., .1, 10.)
+                self.assertEqual(1, len(events))
+                self.assertEqual('copied_planar_contact', events[0]['source'])
+                self.assertEqual((-1., -0.), events[0]['normal'])
+                self.assertEqual(11, events[0]['peer'])
+                self.assertNotIn('enemy_blocking', events[0])
+                peer['x'] = 10.
+                battle._report_player_planar_contacts(own, [peer], 0., .1, 10.1)
+                self.assertEqual(1, len(events))
 
 
 if __name__ == '__main__':

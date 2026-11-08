@@ -19,6 +19,7 @@ class ReloadAuthorityLifecycleTests(unittest.TestCase):
 
     def limited_scene(self):
         scene = self.scene(clip=6, burst=3)
+        shell_fixtures.FullShellSettingsTests.move_from_previous_route_point(scene)
         scene.entity.typeDescriptor.gun.turretYawLimits = (-.2, .2)
         gun = scene.battle._gun_state
         gun.clip = 3
@@ -31,6 +32,9 @@ class ReloadAuthorityLifecycleTests(unittest.TestCase):
         return scene
 
     def qualify(self, scene):
+        # Native armour/point work is authorized only after the copied BOT
+        # has selected this visible contact through its real lane query.
+        scene.admit()
         policy = scene.runtime.attack_policy
         self.assertIsInstance(policy.evaluator, attack_policy.NativeAttackEvaluator)
         for unused in range(120):
@@ -75,8 +79,8 @@ class ReloadAuthorityLifecycleTests(unittest.TestCase):
             if step < 10:
                 # A real observed source change expires every old armour
                 # row, without inventing a new tactical reload transaction.
-                scene.position = (.001 * step, 0., 0.)
-                scene.origin = (.001 * step, 2., 0.)
+                scene.position = (.001 * step, 0., 12.)
+                scene.origin = (.001 * step, 2., 12.)
                 scene.set_hull(0.)
             scene.step(.11)
             decision = policy.update(scene.now)
@@ -148,6 +152,7 @@ class ReloadAuthorityLifecycleTests(unittest.TestCase):
         scene.setUp()
         self.addCleanup(scene.doCleanups)
         scene.configure(enabled=True, clip=3, enabled_pitch=(-.8, .8))
+        shell_fixtures.FullShellSettingsTests.move_from_previous_route_point(scene)
         gun, runtime = scene.battle._gun_state, scene.runtime
         gun.clip = 2
         for shot in gun.shots:

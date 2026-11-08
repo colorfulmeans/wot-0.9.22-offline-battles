@@ -9,6 +9,7 @@ the withdrawal check also executes the complete copied retreat state machine.
 These tests do not establish Windows native or BigWorld physics acceptance.
 """
 import copy
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -24,6 +25,12 @@ class FullShellSettingsTests(unittest.TestCase):
         scene = fixtures.TraverseScene()
         scene.setUp()
         self.addCleanup(scene.doCleanups)
+        # These are combat/reload boundary tests, not capture parking tests.
+        # Supply actual off-origin bases so the spawn is not interpreted as
+        # an enemy capture circle by the synthetic arena's fallback metadata.
+        scene.battle._spawn_planner = SimpleNamespace(capture_bases={
+            '1': [dict(x=0., z=-45., radius=6.)],
+            '2': [dict(x=45., z=45., radius=6.)]})
         scene.configure(limits=None, tag='mediumTank', clip=clip,
                         burst=burst, bearing=0., rate=0.)
         self.assertIsInstance(scene.battle._sender, _LANInputSender)
@@ -47,10 +54,38 @@ class FullShellSettingsTests(unittest.TestCase):
 
         scene.battle.change_vehicle_setting = setting
         scene.observe()
+        # The isolated shell consumer still needs a real prior combat grant.
+        # This runs native lane observation and the unchanged BOT planner;
+        # it does not fabricate an active flag or a tactical decision.
+        scene.admit()
+        self.assertTrue(scene.runtime.combat_stop.stop_allowed)
         # The native battle owns the reload clock. Establish its first sample
         # before testing elapsed time; a first-ever sample has no prior gap.
         scene.battle._advance_local_gun_to(scene.entity, scene.now)
         return scene
+
+    @staticmethod
+    def move_from_previous_route_point(scene):
+        """Supply an observed pose ahead of the original spawn route point.
+
+        The unchanged planner already owns a proved route anchor at spawn.
+        A non-arrived retreat test must actually be away from that anchor;
+        an arbitrary -24 movement argument cannot replace route history.
+        """
+        point = (0., 0., 12.)
+        scene.battle._local_position = point
+        if hasattr(scene, 'set_hull'):
+            scene.position = point
+            scene.origin = (0., 2., 12.)
+            scene.set_hull(0.)
+        else:
+            scene.flat_body.translation = scene.body.translation = point
+            scene.entity.matrix = scene.body
+            scene.entity.position = scene.battle._runtime.math.Vector3(point)
+            scene.battle.local_pose = lambda: (
+                scene.battle._local_position, scene.body.yaw)
+            scene.update_barrel_observation()
+        scene.observe()
 
     @staticmethod
     def input_checkpoint(scene):
@@ -94,7 +129,7 @@ class FullShellSettingsTests(unittest.TestCase):
                 self.assertEqual((1, 0), (gun.shot_index, gun.clip))
                 old_point = scene.runtime.weapon.point
                 scene.pose(scene.target, (9., 0., 40.))
-                preaim = None
+                preaim, resumed = None, False
                 for unused in range(160):
                     self.tick_weapon(scene)
                     policy = scene.runtime.attack_policy
@@ -105,10 +140,28 @@ class FullShellSettingsTests(unittest.TestCase):
                                 self.assertEqual(1, preaim[0])
                         self.assertFalse(scene.control.last_order['fire_allowed'])
                     if gun.reload_time == 0. and preaim is not None and len(scene.launches()) == 1:
+                        if scene.runtime.combat_stop.active:
+                            self.assertEqual(preaim, policy.decision['candidate']['key'])
+                        else:
+                            # The native reload clock may finish before the
+                            # original one-hertz planner hands its retreat
+                            # hold back to combat. The new policy cannot
+                            # manufacture that handoff to preserve a preaim.
+                            task = scene.runtime.combat_stop.task_order
+                            self.assertEqual('magazine_reload_retreat', task['combat_mode'])
+                            self.assertEqual('magazine_reload_hold', task['tactical_phase'])
+                            self.assertEqual('movement_lease',
+                                task['tactical_evidence']['selection']['outcome'])
+                            self.assertIsNone(policy.decision['candidate'])
+                            self.assertFalse(scene.control.last_order['fire_allowed'])
+                    if preaim is not None and len(scene.launches()) == 2:
+                        self.assertTrue(scene.runtime.combat_stop.active)
                         self.assertEqual(preaim, policy.decision['candidate']['key'])
+                        resumed = True
                     if len(scene.launches()) >= 3:
                         break
                 self.assertIsNotNone(preaim, scene.trace[-3:])
+                self.assertTrue(resumed, 'the original planner must restore the proved loading point')
                 self.assertEqual([0, 1, 1], [shot['shell_index'] for shot in scene.launches()])
                 self.assertEqual([0, 8], gun.ammo)
                 self.assertFalse(scene.runtime.attack_policy.search_started)
@@ -627,6 +680,7 @@ class FullShellSettingsTests(unittest.TestCase):
 
     def test_real_global_failure_plan_waits_for_copied_retreat_attempt_before_early_reload(self):
         scene = self.scene()
+        self.move_from_previous_route_point(scene)
         gun = scene.battle._gun_state
         gun.clip = 3
         for index, piercing in enumerate((1., 1000.)):

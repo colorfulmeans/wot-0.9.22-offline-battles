@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src/res/scripts/client'))
 from gui.mods.offline_lan_0922.player_control.attack_policy import (
-    AttackPolicy, ATOMIC_CLOSE_INTERVAL, ATOMIC_MAX_JOBS, ATOMIC_WORLD_QUERIES,
+    AttackPolicy, NativeAttackEvaluator, ATOMIC_CLOSE_INTERVAL, ATOMIC_MAX_JOBS, ATOMIC_WORLD_QUERIES,
     ATOMIC_ARMOUR_BATCHES, ATOMIC_CANDIDATES, native_source_pose, limited_traverse)
 from gui.mods.offline_lan_0922.player_control.trigger_admission import TriggerAdmission
 
@@ -50,9 +50,10 @@ class Observations(object):
 
     def fence(self, frame):
         return (frame['identity'], frame['pose'], frame['scene'], frame['line_revision'],
-                frame['targets'], frame['shells']) == (
+                frame['targets'], frame['shells'], frame.get('combat_signature')) == (
                 self.frame['identity'], self.frame['pose'], self.frame['scene'],
-                self.frame['line_revision'], self.frame['targets'], self.frame['shells'])
+                self.frame['line_revision'], self.frame['targets'], self.frame['shells'],
+                self.frame.get('combat_signature'))
 
     def begin_atomic(self, frame, jobs, now):
         self.atomic_calls += 1
@@ -110,7 +111,7 @@ class Observations(object):
 
 
 class RebuiltForegroundTests(unittest.TestCase):
-    def test_first_current_point_stops_before_background_and_atomic(self):
+    def test_first_current_point_is_ready_without_taking_movement_ownership(self):
         scene = Observations()
         scene.passed()
         result = scene.tick(0., background=False)
@@ -119,8 +120,9 @@ class RebuiltForegroundTests(unittest.TestCase):
         self.assertEqual('foreground', scene.calls[0][1])
         self.assertEqual(0, scene.atomic_calls)
         order = scene.policy.apply_order(dict(move_position=(30., 0., 50.), throttle_override=1.))
-        self.assertEqual((0., 0., 0.), order['move_position'])
-        self.assertEqual(0., order['throttle_override'])
+        self.assertEqual((30., 0., 50.), order['move_position'])
+        self.assertEqual(1., order['throttle_override'])
+        self.assertNotIn('combat_mode', order)
         self.assertTrue(order['fire_allowed'])
         scene.policy.background(0.)
         self.assertEqual(2, sum(row[1] == 'background' for row in scene.calls))
@@ -276,9 +278,85 @@ class RebuiltForegroundTests(unittest.TestCase):
         scene = Observations()
         scene.passed(0, sample=1)
         scene.tick(0.)
-        command, target = scene.policy.select_command({}, dict(fire_allowed=False), None, 0.)
+        selected = scene.policy.decision['candidate']['target']
+        order = scene.policy.apply_order({})
+        command, target = scene.policy.select_command({}, dict(order, fire_allowed=False), selected, 0.)
         self.assertTrue(command['fire_allowed'])
         self.assertEqual(101, target['id'])
+
+    def test_shooting_intent_preserves_every_solved_movement_field(self):
+        scene = Observations()
+        scene.passed()
+        scene.tick(0.)
+        movement = dict(move_position=(30., 0., 50.), throttle_override=.75,
+            throttle=.8, turn=-.25, brake=False, combat_mode='route',
+            route_id='default', path=((0., 0., 0.), (30., 0., 50.)))
+        applied = scene.policy.apply_order(movement)
+        selected = scene.policy.decision['candidate']['target']
+        command, target = scene.policy.select_command({}, applied, selected, 0.)
+        self.assertIs(selected, target)
+        for key, value in movement.items():
+            self.assertEqual(value, applied[key], key)
+            self.assertEqual(value, command[key], key)
+        self.assertNotIn('fire_allowed', movement)
+        self.assertTrue(command['fire_allowed'])
+
+    def test_stationary_review_only_closes_fire_without_parking_or_erasing_contact(self):
+        scene = Observations()
+        scene.tick(0.)
+        scene.policy.decision = dict(action='wait',
+            reason='stationary_domain_review_pending', candidate=None)
+        target = scene.frame['targets'][0]['value']
+        order = dict(move_position=(30., 0., 50.), throttle_override=.75,
+            throttle=.8, turn=-.25, brake=False, combat_mode='route',
+            target_id=target['network_id'], target_kind=target['kind'],
+            face_position=target['position'], fire_allowed=True,
+            aim_position=(0., 1., 20.), _player_attack_solution={'stale': True})
+        applied = scene.policy.apply_order(order)
+        command, selected = scene.policy.select_command({}, order, target, 0.)
+        self.assertIs(target, selected)
+        for result in (applied, command):
+            for key in ('move_position', 'throttle_override', 'throttle', 'turn',
+                        'brake', 'combat_mode', 'target_id', 'target_kind', 'face_position'):
+                self.assertEqual(order[key], result[key], key)
+            self.assertIsNone(result['aim_position'])
+            self.assertFalse(result['fire_allowed'])
+            self.assertNotIn('_player_attack_solution', result)
+        self.assertTrue(order['fire_allowed'])
+
+    def test_late_shooting_callback_cannot_retarget_driver_or_create_contact(self):
+        scene = Observations()
+        scene.passed(target=2)
+        scene.tick(0.)
+        for target in (None, scene.frame['targets'][0]['value']):
+            with self.subTest(target=target):
+                order = dict(target_id=target['id'] if target else None,
+                    target_kind=target['kind'] if target else None,
+                    throttle=.8, turn=-.25, brake=False,
+                    aim_position=(5., 1., 20.), fire_allowed=True)
+                command, selected = scene.policy.select_command({}, order, target, 0.)
+                self.assertIs(target, selected)
+                self.assertEqual(order['target_id'], command['target_id'])
+                self.assertEqual(order['target_kind'], command['target_kind'])
+                self.assertEqual(order['aim_position'], command['aim_position'])
+                self.assertEqual((.8, -.25, False),
+                    (command['throttle'], command['turn'], command['brake']))
+                self.assertFalse(command['fire_allowed'])
+                self.assertNotIn('_player_attack_solution', command)
+
+    def test_late_shooting_callback_rejects_mismatched_command_identity(self):
+        scene = Observations()
+        scene.passed()
+        scene.tick(0.)
+        target = scene.policy.decision['candidate']['target']
+        for identity in (dict(target_id=999, target_kind='bot'),
+                         dict(target_id=target['id'], target_kind='human')):
+            command, selected = scene.policy.select_command({},
+                dict(identity, fire_allowed=True), target, 0.)
+            self.assertIs(target, selected)
+            self.assertFalse(command['fire_allowed'])
+            for key, value in identity.items():
+                self.assertEqual(value, command[key])
 
     def test_current_selection_stays_stable_until_next_trigger(self):
         scene = Observations()
@@ -600,6 +678,20 @@ class RebuiltEvidenceTests(unittest.TestCase):
 
 
 class RebuiltSearchAndClipTests(unittest.TestCase):
+    def test_new_combat_domain_cannot_reuse_an_old_movement_receipt(self):
+        scene = Observations(targets=1, points=1, he=False)
+        scene.frame['combat_signature'] = ('admitted', 1)
+        first = scene.tick(0., navigation=None)['move_request']['episode_id']
+        scene.frame['combat_signature'] = ('admitted', 2)
+        second = scene.tick(1., navigation=None)['move_request']['episode_id']
+        self.assertNotEqual(first, second)
+        scene.policy.navigation_result(dict(action='search_penetration', at=1.,
+            episode_id=first, status='accepted', attempted=True))
+        self.assertIsNone(scene.policy.search_started)
+        scene.policy.navigation_result(dict(action='search_penetration', at=1.,
+            episode_id=second, status='accepted', attempted=True))
+        self.assertEqual(1., scene.policy.search_started)
+
     def test_qualification_does_not_start_clock_and_real_route_refusal_does(self):
         scene = Observations(targets=1, points=1, he=False)
         first = scene.tick(0., navigation=None)
@@ -1285,7 +1377,8 @@ class IndependentAmmoTraverseTests(unittest.TestCase):
         self.assertEqual(('bot', 2), result['candidate']['target_key'])
         self.assertIsNone(scene.policy.search_started)
         self.assertFalse(scene.policy.apply_order({})['fire_allowed'])
-        command, unused = scene.policy.select_command({}, {}, {}, 0.)
+        target = result['candidate']['target']
+        command, unused = scene.policy.select_command({}, scene.policy.apply_order({}), target, 0.)
         self.assertEqual((20., 2., 100.), command['aim_position'])
         self.assertFalse(command['fire_allowed'])
 
@@ -1373,6 +1466,68 @@ import test_player_fire_admission_complete as native_fire
 
 
 class NativeAtomicClosureTests(native_fire.AutomaticFireScene):
+    def combat_evaluator(self, targets):
+        # Native geometry remains real; only the already-completed original
+        # BOT admission result is supplied at the explicit observation seam.
+        runtime = SimpleNamespace(owner=self.battle, gun=self.runtime.gun,
+            geometry=self.runtime.geometry, now=self.now,
+            current_source=self.runtime.current_source,
+            target_entity=self.runtime.target_entity,
+            attack_search_drive_available=self.runtime.attack_search_drive_available,
+            visible_targets=self.runtime.visible_targets,
+            combat_targets=lambda: targets,
+            combat_stop=SimpleNamespace(signature=('admitted', 1)))
+        return NativeAttackEvaluator(runtime), runtime
+
+    def test_native_attack_domain_is_only_original_bot_admitted_contacts(self):
+        other = self.vehicle(43, (10., 0., 100.), team=2)
+        self.observe()
+        visible = self.runtime.visible_targets()
+        self.assertEqual(2, len(visible))
+        accepted = next(target for target in visible if target['engine_id'] == other.id)
+        evaluator, runtime = self.combat_evaluator([accepted])
+
+        def forbidden_visible_scan():
+            self.fail('combat admission must not be replaced by all visible targets')
+
+        runtime.visible_targets = forbidden_visible_scan
+        frame = evaluator.snapshot(self.now)
+        self.assertEqual((('bot', other.id),), tuple(row['key'] for row in frame['targets']))
+        self.assertTrue(evaluator.fence(frame))
+        runtime.combat_targets = lambda: []
+        self.assertFalse(evaluator.fence(frame))
+        empty = evaluator.snapshot(self.now)
+        self.assertEqual((), empty['targets'])
+
+    def test_observation_only_fixture_without_admission_method_still_has_targets(self):
+        evaluator, runtime = self.combat_evaluator([])
+        del runtime.combat_targets
+        del runtime.combat_stop
+        frame = evaluator.snapshot(self.now)
+        self.assertEqual((('bot', self.target.id),),
+                         tuple(row['key'] for row in frame['targets']))
+        self.assertIsNone(frame['combat_signature'])
+        self.assertTrue(evaluator.fence(frame))
+
+    def test_changed_combat_authority_expires_frame_without_changing_native_identity(self):
+        evaluator, runtime = self.combat_evaluator(self.runtime.visible_targets())
+        frame = evaluator.snapshot(self.now)
+        self.assertTrue(evaluator.fence(frame))
+        self.assertEqual(runtime.combat_stop.signature, frame['combat_signature'])
+        self.assertEqual((self.battle._generation, id(runtime.gun),
+                          id(self.entity.typeDescriptor.gun)), frame['identity'])
+        shell, target = frame['shells'][0], frame['targets'][0]
+        self.assertIsNotNone(evaluator._prediction(frame, shell, target, target['samples'][0]))
+        self.assertTrue(evaluator.predictions)
+        runtime.combat_stop.signature = ('admitted', 2)
+        self.assertFalse(evaluator.fence(frame))
+        self.assertFalse(evaluator.fence_next(frame, [], ranked_domain=False))
+        refreshed = evaluator.snapshot(self.now)
+        self.assertEqual(frame['identity'], refreshed['identity'])
+        self.assertNotEqual(frame['combat_signature'], refreshed['combat_signature'])
+        self.assertFalse(evaluator.predictions)
+        self.assertTrue(evaluator.fence(refreshed))
+
     def test_remote_ally_outside_lane_region_keeps_proof_until_it_enters(self):
         self.pose(self.target, (0., 0., 100.))
         friend = self.vehicle(71, (85., 0., 45.), 1)
@@ -1409,9 +1564,24 @@ class NativeAtomicClosureTests(native_fire.AutomaticFireScene):
         policy.atomic_time_budget = .25
         return policy
 
-    def test_actual_turret_keeps_rotating_between_frames_but_negative_domain_closes(self):
-        policy = self.hardened_target()
+    def admit_search_domain(self):
+        """Advance the original lane/target law after enabling drive or peers."""
+        self.battle._spawn_planner = SimpleNamespace(capture_bases={
+            '1': [dict(x=0., z=-45., radius=6.)],
+            '2': [dict(x=45., z=45., radius=6.)]})
         self.runtime.features.add('drive')
+        self.runtime.set_mission('attack', {})
+        self.observe()
+        for target in self.runtime.visible_targets():
+            self.runtime.engine._shot_clear(self.runtime.state, target, self.now, force=True)
+        self.runtime._strategic_due = 0.
+        self.runtime._planner_order(self.now)
+        self.assertTrue(self.runtime.combat_stop.stop_allowed,
+                        self.runtime.combat_stop.receipt)
+
+    def test_actual_turret_keeps_rotating_between_frames_but_negative_domain_closes(self):
+        self.admit_search_domain()
+        policy = self.hardened_target()
         for step in range(25):
             self.target.appearance.turretMatrix.setRotateY(.01 * step)
             self.step(.1)
@@ -1520,6 +1690,8 @@ class NativeAtomicClosureTests(native_fire.AutomaticFireScene):
         gun.clip_size = gun.clip = 1
         for shot in gun.shots:
             shot.speed, shot.gravity, shot.maxDistance = 600., 9.81, 3000.
+        self.admit_search_domain()
+        self.assertEqual(15, len(self.runtime.combat_targets()))
         for record in self.battle._records.values():
             target = self.battle._server_entity(record.get('engine_id'))
             if target is None or target is self.entity:
@@ -1528,7 +1700,6 @@ class NativeAtomicClosureTests(native_fire.AutomaticFireScene):
                 for material in getattr(target.typeDescriptor, name).materials.values():
                     material.armor = 10000.
         policy = self.runtime.attack_policy
-        self.runtime.features.add('drive')
         policy.reset()
         policy.atomic_time_budget = ATOMIC_WALL_SECONDS
         policy.evaluator.jobs.clear()

@@ -6,17 +6,27 @@ wrapper, admission and physical shot transaction are not replaced. These are
 consumer regressions, not Windows BigWorld physics acceptance.
 """
 import unittest
+import math
+from unittest import mock
 
 import test_player_limited_traverse as fixtures
 
 
 class FullControlArbitrationTests(unittest.TestCase):
-    def scene(self, distance=190., clip=6, burst=3, speed=0.):
+    def scene(self, distance=190., clip=6, burst=3, speed=0., cold_start=False):
         scene = fixtures.TraverseScene()
         scene.setUp()
         self.addCleanup(scene.doCleanups)
-        scene.configure(limits=None, tag='mediumTank', clip=clip,
-                        burst=burst, bearing=0.)
+        if cold_start:
+            # This helper normally schedules an isolated shot-fixture
+            # admission. A cold-loop regression must start before that
+            # helper; all actual planner/lane consumers remain production.
+            with mock.patch.object(scene, 'admit', return_value=None):
+                scene.configure(limits=None, tag='mediumTank', clip=clip,
+                                burst=burst, bearing=0.)
+        else:
+            scene.configure(limits=None, tag='mediumTank', clip=clip,
+                            burst=burst, bearing=0.)
         scene.pose(scene.target, (0., 0., distance))
         scene.runtime.attack_policy.reset()
         scene.rotator_enabled = True
@@ -32,7 +42,12 @@ class FullControlArbitrationTests(unittest.TestCase):
                 return row
         self.fail('foreground transition did not finish: %r' % scene.trace[-4:])
 
-    def test_medium_range_current_shell_proof_stops_at_final_native_sender(self):
+    @staticmethod
+    def original_order(scene):
+        return next(order for order in scene.runtime._strategic_result['orders']
+                    if order['id'] == scene.runtime.actor_id)
+
+    def test_medium_range_proof_preserves_the_original_movement_owner(self):
         for distance, speed in ((185., 0.), (189.256, -3.07),
                                 (194.574, 3.64), (195., 0.)):
             with self.subTest(distance=distance, speed=speed):
@@ -42,11 +57,27 @@ class FullControlArbitrationTests(unittest.TestCase):
                 self.assertEqual('passed', candidate['armor'])
                 self.assertEqual('clear', candidate['line'])
                 self.assertEqual(scene.target.id, candidate['target']['engine_id'])
-                self.assertEqual((0., 0., True), row['sender'], row)
-                self.assertEqual('engage', scene.runtime._last_order['combat_mode'])
+                original = self.original_order(scene)
+                self.assertEqual(('bot', scene.target.id),
+                    original['tactical_evidence']['selection']['selected'])
+                # A ready shot does not turn authored-route advance into a
+                # newly invented stop or an approach to the enemy's position.
+                if original['combat_mode'] in ('advance', 'flank', 'take_cover',
+                                               'cover_return', 'cover_peek'):
+                    applied = scene.runtime.engine._server_orders[scene.runtime.actor_id]
+                    self.assertEqual(original['combat_mode'], applied['combat_mode'])
+                    self.assertEqual(tuple(original['move_position'][axis]
+                                           for axis in ('x', 'y', 'z')),
+                                     tuple(applied['move_position']))
+                    self.assertNotEqual(0., applied.get('throttle_override'))
+                else:
+                    self.assertEqual((0., 0., True), row['sender'], row)
+                    self.assertEqual('engage', scene.runtime._last_order['combat_mode'])
 
     def test_ready_lane_reaches_real_fire_transaction_without_shadow_gun_debit(self):
-        scene = self.scene(clip=6, burst=3)
+        # This scene specifically tests a firing hold. Distant authored
+        # advance is covered above and must keep its original movement owner.
+        scene = self.scene(distance=60., clip=6, burst=3)
         before = list(scene.battle._gun_state.ammo)
         self.advance_until(scene, lambda result: bool(scene.launches()))
         self.assertEqual(1, len(scene.launches()))
@@ -54,6 +85,100 @@ class FullControlArbitrationTests(unittest.TestCase):
         self.assertEqual(5, scene.battle._gun_state.clip)
         self.assertEqual((0., 0., True), scene.trace[-1]['sender'])
         self.assertEqual(1, scene.control.shot_commits)
+
+    def test_return_base_after_real_first_shot_releases_combat_hold_but_not_physical_tail(self):
+        scene = self.scene(distance=60., clip=6, burst=3)
+        runtime, gun = scene.runtime, scene.battle._gun_state
+        initial_ammo = tuple(gun.ammo)
+        self.advance_until(scene, lambda result: bool(scene.launches()))
+        self.assertEqual(1, len(scene.launches()))
+        self.assertIsNotNone(runtime.state.get('_magazine_followup'))
+        tail = scene.battle._local_player_burst
+        self.assertIsNotNone(tail)
+        ammo_after_first = tuple(gun.ammo)
+        remaining = gun._burst_remaining
+
+        runtime.set_mission('return_base', dict(timeout=180.))
+        self.assertNotIn('_magazine_followup', runtime.state)
+        self.assertEqual('priority_handoff', runtime.state['_magazine_followup_terminal']['reason'])
+        self.assertIs(tail, scene.battle._local_player_burst)
+        self.assertEqual(remaining, gun._burst_remaining)
+        self.assertEqual(ammo_after_first, tuple(gun.ammo))
+
+        row = scene.tick()
+        self.assertIsNone(scene.control.last_control_failure, row)
+        self.assertEqual('team_return_base', runtime._last_order['combat_mode'])
+        self.assertEqual((0., 0., -45.), runtime._last_order['move_position'])
+        self.assertNotEqual('combat_hold',
+                            runtime._last_order['control_trace']['action_owner'])
+        self.assertFalse(runtime.combat_stop.active)
+        self.assertEqual('original_combat_not_admitted', runtime.authorize_trigger(
+            dict(source_pose=runtime.pose_stamp()), scene.entity, gun, None))
+        self.assertIs(tail, scene.battle._local_player_burst)
+
+        # Completing an already committed descriptor burst is a physical
+        # transaction, not permission to start another engagement/trigger.
+        scene.advance(.01)
+        scene.advance(.1)
+        self.assertEqual([0, 1, 2], [launch['burst_index'] for launch in scene.launches()])
+        self.assertEqual(initial_ammo[0] - 3, gun.ammo[0])
+        self.assertIsNone(scene.battle._local_player_burst)
+        self.assertEqual(3, scene.control.shot_commits)
+        self.assertEqual(1, scene.trigger.call_count)
+        row = scene.tick()
+        self.assertEqual('team_return_base', runtime._last_order['combat_mode'])
+        self.assertNotEqual('combat_hold',
+                            runtime._last_order['control_trace']['action_owner'])
+
+    def test_explicit_travel_does_not_recreate_rear_laying_or_reverse_its_route_turn(self):
+        # A real rear target must still trigger the unchanged BOT laying law
+        # before the player hands the hull to a new explicit travel task.
+        # Both signs matter: an assertion that the vehicle merely turns would
+        # miss the enemy's opposing turn stealing the destination's input.
+        for bearing in (-2.4, 2.4):
+            for kind in ('return_base', 'defend_base', 'attack',
+                         'hold_position', 'capture_base'):
+                with self.subTest(bearing=bearing, mission=kind):
+                    scene = fixtures.TraverseScene()
+                    scene.setUp()
+                    self.addCleanup(scene.doCleanups)
+                    scene.configure(limits=(-.2, .2), tag='AT-SPG', clip=1,
+                                    burst=1, bearing=bearing)
+                    runtime = scene.runtime
+                    scene.battle._gun_state.reload_time = 30.
+                    goal = (-math.copysign(40., bearing), 0., 40.)
+                    bases = scene.battle._spawn_planner.capture_bases
+                    for team in ('1', '2'):
+                        bases[team] = [dict(x=goal[0], z=goal[2], radius=6.)]
+                    for unused in range(3):
+                        scene.tick()
+                    self.assertTrue(runtime.state['hull_aiming'])
+                    self.assertIsNotNone(runtime.state.get('_rear_aim_episode'))
+                    self.assertLess(scene.trace[-1]['sender'][1] * goal[0], 0.)
+
+                    payload = dict(timeout=180.)
+                    if kind in ('attack', 'hold_position'):
+                        payload['position'] = goal
+                    runtime.set_mission(kind, payload)
+                    self.assertNotIn('_rear_aim_episode', runtime.state)
+                    expected_mode = 'base_capture' if kind == 'capture_base' else 'team_' + kind
+                    for frame in range(12):
+                        row = scene.tick()
+                        self.assertIsNone(scene.control.last_control_failure, row)
+                        self.assertFalse(runtime.combat_stop.active, row)
+                        self.assertFalse(runtime.state['hull_aiming'], row)
+                        for name in ('_rear_aim_episode', '_rear_hull_aim',
+                                     '_rear_motion_lease'):
+                            self.assertNotIn(name, runtime.state, row)
+                        order = runtime._last_order
+                        self.assertEqual(expected_mode, order['combat_mode'], row)
+                        self.assertEqual(goal, order['move_position'], row)
+                        self.assertNotEqual('combat_hold',
+                            order['control_trace']['action_owner'], row)
+                        self.assertGreaterEqual(row['sender'][1] * goal[0], 0., row)
+                        if frame == 0:
+                            self.assertGreater(row['sender'][1] * goal[0], 0., row)
+                    scene.trigger.assert_not_called()
 
     def test_pending_native_geometry_cannot_retain_an_unproved_stationary_hold(self):
         scene = self.scene()
@@ -74,17 +199,55 @@ class FullControlArbitrationTests(unittest.TestCase):
         self.assertGreater(moving, 0, scene.trace[-4:])
         self.assertFalse(scene.launches())
 
+    def test_visible_but_never_admitted_blocked_target_cannot_start_combat(self):
+        scene = self.scene(distance=60., clip=1, burst=1, cold_start=True)
+        scene.world = [((-100., -100., 5.), (100., 100., 15.))]
+        policy = scene.runtime.attack_policy
+        with mock.patch.object(policy, 'update', wraps=policy.update) as evaluate:
+            for unused in range(50):
+                row = scene.tick()
+                self.assertIsNone(scene.control.last_control_failure, row)
+                original = self.original_order(scene)
+                selection = original['tactical_evidence']['selection']
+                self.assertIsNone(selection['selected'], selection)
+                self.assertIsNone(scene.runtime._last_order.get('target_id'), row)
+                self.assertNotIn(row['action'], ('aim', 'firing_position', 'search_penetration'))
+                self.assertIsNone(policy.search_started)
+            evaluate.assert_not_called()
+        self.assertIn('no_local_lane',
+            [candidate['reason'] for candidate in selection['candidates']])
+        self.assertFalse(policy.navigation_receipt)
+        scene.trigger.assert_not_called()
+
     def test_reopened_lane_retires_the_firing_position_navigation_receipt(self):
         scene = self.scene(distance=60., clip=1, burst=1)
+        # First acquire a real copied-BOT target through passive native LOS.
+        # A wall present since spawn is not permission to start recovery.
+        scene.battle._gun_state.reload_time = 10.
+        self.advance_until(scene, lambda result: result['action'] == 'aim')
+        original = self.original_order(scene)
+        self.assertEqual(('bot', scene.target.id),
+                         original['tactical_evidence']['selection']['selected'])
+        scene.trigger.assert_not_called()
+
         scene.world = [((-100., -100., 5.), (100., 100., 15.))]
-        self.advance_until(scene, lambda result: result['action'] == 'firing_position')
+        scene.set_hull(.01)
+        self.advance_until(scene, lambda result:
+            result['action'] == 'firing_position' and
+            self.original_order(scene)['combat_mode'] == 'advance_contact')
         policy = scene.runtime.attack_policy
-        self.assertEqual('copied_ordinary_navigation', policy.navigation_receipt['owner'])
+        original = self.original_order(scene)
+        self.assertEqual(('bot', scene.target.id),
+                         original['tactical_evidence']['selection']['selected'])
+        self.assertEqual('movement_lease',
+                         original['tactical_evidence']['selection']['outcome'])
+        self.assertEqual(scene.target.id, scene.runtime._last_order['target_id'])
         self.assertIsNone(policy.search_started)
         scene.trigger.assert_not_called()
 
         scene.world = []
-        scene.set_hull(.01)
+        scene.set_hull(.02)
+        scene.battle._gun_state.reload_time = 0.
         row = self.advance_until(scene, lambda result: result['action'] == 'aim')
         self.assertEqual((0., True), row['sender'][::2])
         self.assertFalse(policy.navigation_receipt)
@@ -95,8 +258,12 @@ class FullControlArbitrationTests(unittest.TestCase):
         scene = self.scene()
         goal = (0., 0., 24.)
         scene.runtime.set_mission('attack', dict(position=goal))
-        row = self.advance_until(scene, lambda result: result['action'] == 'aim')
+        row = self.advance_until(scene, lambda result:
+            self.original_order(scene)['tactical_evidence']['selection']['selected'] ==
+            ('bot', scene.target.id) and
+            bool(result['sender'][0] or result['sender'][1]))
         self.assertEqual(goal, scene.runtime._last_order.get('move_position'), row)
+        self.assertEqual('team_attack', scene.runtime._last_order['combat_mode'])
         self.assertTrue(row['sender'][0] or row['sender'][1], row)
 
     def test_dead_target_does_not_leave_a_stale_aim_hold_in_the_real_driver(self):

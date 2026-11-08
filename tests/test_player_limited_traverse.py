@@ -46,6 +46,12 @@ class TraverseScene(fire_tests.AutomaticFireScene):
         self.battle.local_pose = lambda: (self.position, self.body.yaw)
         self.battle._avatar.inputHandler.handleKeyEvent = lambda *args: None
         self.battle._local_speed = self.battle._local_turn_speed = 0.
+        # Ordinary aiming fixtures do not start inside an implicit enemy
+        # capture circle. Capture-specific cases supply their observed circle
+        # below through the snapshot and retain the original capture owner.
+        self.battle._spawn_planner = types.SimpleNamespace(capture_bases={
+            '1': [dict(x=0., z=-45., radius=6.)],
+            '2': [dict(x=45., z=45., radius=6.)]})
         self.battle._runtime.get_shot_angles = self.source_angles
         session = mock.patch.dict(os.environ, {'WOT_OFFLINE_TEST_CONTROL_SESSION': 'limited-traverse'})
         session.start()
@@ -67,6 +73,13 @@ class TraverseScene(fire_tests.AutomaticFireScene):
                 '1': [dict(id='1:0', x=0., y=0., z=-40., radius=12.)],
                 '2': [dict(id='2:0', x=0., y=0., z=0., radius=12.)]},
                 capture_contributors={'2:0': [1]})
+        if tag != 'SPG':
+            self.admit()
+            # Admission legitimately inspects a native lane. The individual
+            # geometry/re-entry tests below must observe their own changed
+            # world rather than inherit those setup-only proof caches.
+            self.runtime.attack_policy.reset()
+            self.runtime.attack_policy.evaluator = attack_policy.NativeAttackEvaluator(self.runtime)
         return self
 
     def set_hull(self, yaw):
@@ -83,6 +96,7 @@ class TraverseScene(fire_tests.AutomaticFireScene):
         return self.get_angles(*args)
 
     def evaluate(self, sample_index=0, complete=True, mode='penetration'):
+        self.admit()
         policy = self.runtime.attack_policy
         for unused in range(80 if complete else 1):
             self.observe()
@@ -337,6 +351,8 @@ class LimitedTraverseConsumerTests(TraverseHarness, unittest.TestCase):
         self.assertEqual(0., scene.battle._sender.forward)
         self.assertGreater(scene.battle._sender.turn, 0.)
         self.assertIsNone(scene.runtime._mission)
+        self.assertFalse(scene.runtime.combat_stop.stop_allowed)
+        self.assertTrue(scene.runtime.combat_stop.task_order.get('capture_area'))
         self.assertEqual(0, scene.control.automatic_commits)
         self.assertIsNone(scene.runtime.attack_policy.search_started)
 
@@ -352,8 +368,15 @@ class LimitedTraverseConsumerTests(TraverseHarness, unittest.TestCase):
                     args={}, timeout_seconds=15., replace=True,
                     expires_at=scene.control.gateway.wall_clock()+15.)
                 self.assertEqual('accepted', scene.control.gateway.submit(request, scene.now)['status'])
-                self.advance_until(scene, lambda: bool(scene.runtime.state.get('hull_aiming')))
+                def original_capture_can_aim():
+                    self.assertEqual('capturing', scene.runtime._mission['phase'])
+                    self.assertFalse(scene.runtime.combat_stop.explicit_travel,
+                        'Inside the original capture circle is not point-arrival travel')
+                    return bool(scene.runtime.state.get('hull_aiming'))
+                self.advance_until(scene, original_capture_can_aim)
                 self.assertEqual(((0., center), 30.), scene.control.last_order['capture_pivot_circle'])
+                self.assertFalse(scene.runtime.combat_stop.stop_allowed)
+                self.assertIsNone(scene.runtime.attack_policy.search_started)
                 self.assertEqual(0., scene.battle._sender.forward)
                 self.assertGreater(scene.battle._sender.turn, 0.)
                 before = tuple(scene.battle._local_position), scene.battle._local_yaw
@@ -365,6 +388,51 @@ class LimitedTraverseConsumerTests(TraverseHarness, unittest.TestCase):
                     self.assertGreater(after[1], before[1])
                     self.assertGreater(after[0][2], before[0][2])
                 self.assertEqual(0, scene.control.automatic_commits)
+
+    def test_capture_arrival_uses_current_circle_and_ground_contact_not_history(self):
+        for change in ('outside_circle', 'airborne_inside_circle'):
+            with self.subTest(change=change):
+                scene = self.scene(capture=True)
+                runtime = scene.runtime
+                request = dict(scene.control.identity(), id='capture-arrival',
+                    action='capture_base', args={}, timeout_seconds=15., replace=True,
+                    expires_at=scene.control.gateway.wall_clock()+15.)
+                self.assertEqual('accepted', scene.control.gateway.submit(request, scene.now)['status'])
+                scene.tick()
+                self.assertEqual('capturing', runtime._mission['phase'])
+                self.assertTrue(runtime._mission['capture_started'])
+                self.assertFalse(runtime.combat_stop.explicit_travel)
+                self.assertFalse(runtime.combat_stop.stop_allowed)
+
+                # Observe real position/grounded changes through the normal
+                # foreground state boundary. The historical capture_started
+                # flag deliberately remains true after leaving or jumping.
+                if change == 'outside_circle':
+                    scene.position = (0., 0., 12.01)
+                    scene.set_hull(scene.body.yaw)
+                else:
+                    scene.battle._local_airborne = True
+                scene.tick()
+                self.assertEqual('capture_travel', runtime._mission['phase'])
+                self.assertTrue(runtime._mission['capture_started'])
+                self.assertTrue(runtime.combat_stop.explicit_travel)
+                self.assertFalse(runtime.combat_stop.active)
+                self.assertFalse(runtime.combat_stop.stop_allowed)
+                self.assertIsNone(runtime.attack_policy.decision.get('candidate'))
+
+                # Re-entering on the ground restores the original circle
+                # arrival; no stale travel or historical permission is kept.
+                scene.position = (0., 0., 0.)
+                scene.set_hull(scene.body.yaw)
+                scene.battle._local_airborne = False
+                scene.tick()
+                self.assertEqual('capturing', runtime._mission['phase'])
+                self.assertTrue(runtime._mission['capture_started'])
+                self.assertFalse(runtime.combat_stop.explicit_travel)
+                self.assertFalse(runtime.combat_stop.stop_allowed)
+                self.assertEqual(0, scene.control.automatic_commits)
+                self.assertFalse(scene.launches())
+                scene.doCleanups()
 
 
 class MovingTraverseConsumerTests(TraverseHarness, unittest.TestCase):
@@ -445,7 +513,7 @@ class MovingTraverseConsumerTests(TraverseHarness, unittest.TestCase):
                 self.assertEqual(0, scene.control.automatic_commits)
                 self.assertIsNone(scene.runtime.attack_policy.search_started)
 
-    def test_amx_1948_flickering_lane_does_not_retake_hull_from_navigation(self):
+    def test_amx_1948_flickering_lane_leaves_recovery_to_the_original_driver(self):
         limit = math.radians(10.)
         for next_event in ('new_position', 'executable_shot'):
             with self.subTest(next_event=next_event):
@@ -474,7 +542,7 @@ class MovingTraverseConsumerTests(TraverseHarness, unittest.TestCase):
                     self.advance_until(scene, lambda: scene.trace[-1]['hull_aiming'])
                     self.assertGreater(scene.trace[-1]['sender'][1], 0.)
                     before = tuple(scene.battle._gun_state.ammo)
-                    completed = None
+                    handed_off = False
                     for index in range(64):
                         # The native sight verdict changes with hull pose, while the
                         # hull stays on the same patch of ground in the live incident.
@@ -482,32 +550,19 @@ class MovingTraverseConsumerTests(TraverseHarness, unittest.TestCase):
                         scene.set_hull(.001 * (index + 1))
                         row = scene.tick()
                         candidate = runtime.attack_policy.decision['candidate']
-                        self.assertEqual('clear' if lane_clear else 'unknown', candidate['line'])
-                        self.assertEqual('copied_ordinary_navigation',
-                                         runtime._last_navigation['owner'])
-                        if index < 2:
-                            self.assertLess(row['sender'][1], 0., row)
-                        terminal = runtime.firing_position.terminal
-                        if terminal is not None:
-                            completed = terminal
-                            self.assertEqual('navigation_recovery_stalled', terminal['reason'])
-                            self.assertEqual('local_stuck', terminal['evidence']['reason'])
-                            self.assertGreater(terminal['evidence']['completed_count'], 0)
-                            self.assertFalse(row['order']['fire_allowed'])
-                        if terminal is not None and terminal['navigation_owned']:
-                            # The unchanged native location eventually exhausts
-                            # the real driver's bounded recovery. The fixture's
-                            # original task route ends here, so it holds instead
-                            # of endlessly restarting that combat corner.
-                            self.assertEqual(scene.position, row['order']['move_position'])
-                            self.assertEqual((0., 0., True), row['sender'])
-                            self.assertIsNone(row['order']['target_id'])
-                            self.assertEqual('route', terminal['phase'])
-                        else:
-                            self.assertEqual(corner, row['order']['move_position'])
-                        self.assertFalse(row['hull_aiming'])
-                    self.assertIsNotNone(completed)
-                    self.assertTrue(completed['navigation_owned'])
+                        if candidate is not None:
+                            self.assertFalse(runtime.attack_policy._executable(candidate))
+                        pivot = runtime.combat_stop.pivot or {}
+                        if pivot.get('handoff') is not None:
+                            handed_off = True
+                            # Tiny source/lane changes cannot renew the
+                            # attack-owned pivot. Original recovery may steer,
+                            # wait or complete according to its unchanged law;
+                            # no new controller forces a route or terminal stop.
+                            self.assertNotEqual('native_lay',
+                                runtime.combat_stop.receipt.get('reason'))
+                        self.assertFalse(row['order']['fire_allowed'])
+                    self.assertTrue(handed_off)
                     self.assertEqual(before, tuple(scene.battle._gun_state.ammo))
                     self.assertEqual(3, scene.battle._gun_state.clip)
                     scene.trigger.assert_not_called()
@@ -516,7 +571,9 @@ class MovingTraverseConsumerTests(TraverseHarness, unittest.TestCase):
                     if next_event == 'new_position':
                         scene.position = (-1.49, 0., 0.)
                         scene.set_hull(.07)
-                        self.assertFalse(scene.tick()['hull_aiming'])
+                        scene.tick()
+                        self.assertNotEqual('native_lay',
+                            runtime.combat_stop.receipt.get('reason'))
                         scene.position = (-1.5, 0., 0.)
                         scene.set_hull(.071)
                         self.advance_until(scene, lambda: scene.trace[-1]['hull_aiming'])

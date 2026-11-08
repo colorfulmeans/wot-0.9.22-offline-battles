@@ -1077,7 +1077,7 @@ class FullRuntimeMissionOwnershipTests(unittest.TestCase):
                 request.assert_called_once_with(True, mock.ANY)
                 self.assertTrue(scene.battle._local_siege_pending or scene.battle._local_siege_braking)
 
-    def test_visible_siege_contact_enters_before_point_validation(self):
+    def test_originally_admitted_siege_contact_enters_before_point_validation(self):
         scene = self.scene(siege=True, siege_vehicle='sweden:S21_UDES_03')
         revision = [0]
         scene.battle._destructibles = types.SimpleNamespace(
@@ -1091,8 +1091,10 @@ class FullRuntimeMissionOwnershipTests(unittest.TestCase):
             row = scene.tick()
             self.assertIsNone(scene.control.last_control_failure, row)
         self.assertTrue(scene.world_queries)
-        # The original planner's visible contact admits siege mode even
-        # while the actual firing lane is blocked. Neither contact nor the
+        # configure acquired the original planner's clear lane before this
+        # wall appeared. That retained original combat lease admits siege,
+        # not mere visibility of a never-admitted blocked target. Neither
+        # the retained contact nor the
         # submitted mode request authorizes a physical round.
         request.assert_called_once_with(True, mock.ANY)
         token = scene.runtime._siege_pending
@@ -1126,6 +1128,14 @@ class FullRuntimeMissionOwnershipTests(unittest.TestCase):
                 # Use the real current roster identity, not an invented
                 # anonymous target that no planner selected.
                 contact = scene.runtime._targets[0] if has_contact else None
+                if not has_contact:
+                    scene.battle._records['bot:42']['spot_visible'] = False
+                    scene.observe()
+                    scene.runtime._strategic_due = 0.
+                    scene.runtime._planner_order(scene.now)
+                    self.assertFalse(scene.runtime.combat_stop.active)
+                else:
+                    self.assertTrue(scene.runtime.combat_stop.active)
                 for unused in range(6):
                     command = dict(move_position=(x, y, z+distance),
                         movement_intent=True, throttle=1., fire_allowed=False,
@@ -1171,7 +1181,7 @@ class FullRuntimeMissionOwnershipTests(unittest.TestCase):
                 self.assertEqual(goal, controls['strategic_move_position'])
                 self.assertEqual(corner, controls['local_target'])
                 self.assertEqual(corner, runtime._last_order['move_position'])
-                self.assertTrue(runtime.firing_position.navigation_owns(runtime._last_order))
+                self.assertTrue(runtime.combat_stop.navigation_owns(runtime._last_order))
                 self.assertEqual(0, scene.control.automatic_commits)
                 self.assertIsNone(runtime.attack_policy.search_started)
                 if expected is None:

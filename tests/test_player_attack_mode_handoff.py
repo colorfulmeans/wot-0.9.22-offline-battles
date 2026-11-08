@@ -45,6 +45,65 @@ class AttackModeIntentTests(unittest.TestCase):
         self.assertEqual(.1, result['candidate']['observed_at'])
         self.assertTrue(all(row is not first for row in scene.policy.rows.values()))
 
+    def test_combat_authority_change_discards_old_proofs_but_keeps_aim_preference(self):
+        scene = self.scene()
+        scene.frame['combat_signature'] = ('admitted', 1)
+        first = self.select_later_point(scene)
+        scene.prime()
+        scene.policy.background(0.)
+        self.assertIsNotNone(scene.policy.next_plan)
+        scene.policy.load_started(0, first)
+        self.assertIsNotNone(scene.policy.loading_plan)
+        scene.tick(.01, background=False)
+        self.assertEqual(first['key'], scene.policy.selected)
+        identity = scene.frame['identity']
+        for shell in scene.frame['shells']:
+            for target in (1, 2):
+                for sample in (0, 1):
+                    scene.value(shell['index'], target, sample,
+                                armor='unknown', line='pending')
+        scene.frame['combat_signature'] = ('admitted', 2)
+        result = scene.tick(.1, background=False)
+        self.assertEqual(identity, scene.frame['identity'])
+        self.assertNotEqual('aim', result['action'])
+        self.assertEqual(first['key'], scene.policy.selected)
+        refreshed = scene.policy.current_row(first)
+        if refreshed is not None:
+            self.assertIsNot(first, refreshed)
+            self.assertNotEqual(first['pose_stamp'], refreshed['pose_stamp'])
+            self.assertEqual(('unknown', 'pending'),
+                             (refreshed['armor'], refreshed['line']))
+        self.assertIsNone(scene.policy.next_plan)
+        self.assertIsNone(scene.policy.loading_plan)
+        self.assertIsNone(scene.policy.trigger)
+        self.assertIsNone(scene.policy.search_authority)
+        self.assertIsNone(scene.policy.reload_authority)
+        self.assertFalse(scene.policy.apply_order({})['fire_allowed'])
+        self.assertTrue(scene.policy.rows)
+        for row in scene.policy.rows.values():
+            self.assertEqual(('admitted', 2), row['pose_stamp'][-1])
+            self.assertNotEqual(first['pose_stamp'], row['pose_stamp'])
+
+    def test_combat_domain_change_preserves_already_granted_reload_transaction(self):
+        scene = self.scene(clips=6, targets=1, points=1)
+        scene.frame.update(limited_traverse=True, clip=3,
+                           combat_signature=('combat', True))
+        scene.passed(1)
+        scene.prime()
+        decision = scene.tick(0.)
+        self.assertEqual(('reload_clip', True),
+                         (decision['action'], decision['early_reload']))
+        authority = scene.policy.reload_authority
+        self.assertIsNotNone(authority)
+        scene.frame['combat_signature'] = ('cover_movement', False)
+        scene.frame['pose'] = ('moving_to_cover', 1)
+        scene.value(1, armor='unknown', line='pending')
+        decision = scene.tick(.1, background=False)
+        self.assertIs(authority, scene.policy.reload_authority)
+        self.assertEqual(('reload_clip', True, authority['qualified_at']),
+            (decision['action'], decision['early_reload'], decision['reload_qualified_at']))
+        self.assertIsNone(scene.policy.search_authority)
+
     def test_failed_retained_point_prefers_another_point_of_the_same_target(self):
         scene = self.scene()
         first = self.select_later_point(scene)
@@ -173,6 +232,13 @@ class NativeModeIntentTests(unittest.TestCase):
         scene.configure(enabled=True, enabled_pitch=(-.8, .8))
         other = scene.vehicle(43, (0., 0., 80.), team=2)
         scene.battle._records['bot:42']['spot_visible'] = False
+        scene.observe()
+        for target in scene.runtime.visible_targets():
+            scene.runtime.engine._shot_clear(scene.runtime.state, target, scene.now, force=True)
+        scene.runtime._strategic_due = 0.
+        scene.runtime._planner_order(scene.now)
+        self.assertEqual((('bot', other.id),),
+                         scene.runtime.combat_stop.receipt['admitted'])
         policy = scene.runtime.attack_policy
         for unused in range(60):
             scene.step(.1)
@@ -259,7 +325,7 @@ class NativeHydraulicMagazineRulesTests(unittest.TestCase):
             face_position=scene.target.position, fire_allowed=False)
         retreat = runtime._reload_order(order, scene.now)
         self.assertEqual('magazine_reload_retreat', retreat['combat_mode'])
-        self.assertTrue(runtime.firing_position.navigation_owns(retreat))
+        self.assertTrue(runtime.combat_stop.navigation_owns(retreat))
         self.assertFalse(runtime.siege_desired(runtime.state, retreat, runtime._targets[0]))
         self.assertEqual((0, 2, before), (gun.shot_index, gun.clip, tuple(gun.ammo)))
         self.assertFalse(scene.launches())
@@ -309,7 +375,7 @@ class NativeHydraulicMagazineRulesTests(unittest.TestCase):
             policy=runtime.attack_policy.decision.get('reason'),
             hydraulic=runtime.siege_aim.status(),
             pitch=scene.battle._local_siege_aim_pitch,
-            position=runtime.firing_position.receipt))
+            position=runtime.combat_stop.receipt))
         self.assertEqual(siege_mechanics.ENABLED, scene.entity.siegeState)
         self.assertTrue(runtime.weapon.verified)
         self.assertEqual(before[0] - 1, gun.ammo[0])
@@ -326,7 +392,7 @@ class NativeHydraulicMagazineRulesTests(unittest.TestCase):
         self.assertFalse(runtime._siege_pending['enabled'])
         self.assertEqual(siege_mechanics.ENABLED, scene.entity.siegeState)
         self.assertFalse(runtime._siege_fire_ready())
-        self.assertEqual('siege_mode_not_ready', runtime.authorize_trigger(
+        self.assertEqual('original_combat_not_admitted', runtime.authorize_trigger(
             dict(source_pose=runtime.pose_stamp()), scene.entity, gun, None))
         self.assertEqual(1, len(scene.launches()))
         self.assertTrue(scene.battle._local_siege_drive_locked(scene.entity))
@@ -346,7 +412,10 @@ class NativeHydraulicMagazineRulesTests(unittest.TestCase):
         self.assertIsNone(runtime._siege_pending)
         self.assertFalse(scene.battle._local_siege_drive_locked(scene.entity))
         self.assertEqual('team_return_base', runtime._last_order['combat_mode'])
-        self.assertFalse(runtime._last_order['fire_allowed'])
+        self.assertFalse(runtime.combat_stop.active)
+        self.assertIsNone(runtime.attack_policy.decision.get('candidate'))
+        self.assertEqual('original_combat_not_admitted', runtime.authorize_trigger(
+            dict(source_pose=runtime.pose_stamp()), scene.entity, gun, None))
         self.assertEqual(1, len(scene.launches()))
 
     def test_remote_vehicle_cannot_borrow_installed_local_siege_capability(self):
@@ -391,8 +460,10 @@ class NativeHydraulicMagazineRulesTests(unittest.TestCase):
         # native mode debounce has not submitted an exit request yet.
         self.assertEqual(siege_mechanics.ENABLED, scene.entity.siegeState)
         self.assertIsNone(runtime._siege_pending)
-        self.assertFalse(runtime._last_order['fire_allowed'])
-        self.assertIsNone(runtime.weapon.target)
+        self.assertFalse(runtime.combat_stop.active)
+        self.assertIsNone(runtime.attack_policy.decision.get('candidate'))
+        self.assertEqual('original_combat_not_admitted', runtime.authorize_trigger(
+            dict(source_pose=runtime.pose_stamp()), scene.entity, gun, None))
         self.assertNotEqual(old_point, runtime.weapon.motion_point)
         self.assertIsNone(runtime.siege_aim_candidate())
         self.assertIsNone(runtime.siege_aim._lease)
@@ -400,7 +471,7 @@ class NativeHydraulicMagazineRulesTests(unittest.TestCase):
         self.assertIsNone(runtime.siege_aim.hydraulic_point(candidate, old_point))
         # The copied hull-forward resting source is allowed; the old enemy
         # hydraulic source and all its firing authority are not.
-        self.assertEqual('hull_forward_rest',
+        self.assertNotEqual('player_siege_hydraulic',
             runtime.state['_diagnostic_aim_intent']['owner'])
         self.assertEqual(before, tuple(gun.ammo))
         self.assertFalse(scene.launches())

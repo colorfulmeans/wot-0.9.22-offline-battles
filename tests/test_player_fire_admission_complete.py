@@ -195,8 +195,28 @@ class AutomaticFireScene(unittest.TestCase):
         self.battle._last_frame_time = self.now
         self.runtime._observe(self.now)
 
+    def admit(self):
+        """Acquire through the real BOT lane/planner before isolated gun tests.
+
+        The full-loop ownership tests deliberately do NOT use this helper:
+        their cold-start test must exercise the ordinary passive lane service.
+        Here only scheduling is advanced; neither geometry nor target admission
+        is mocked, and the selected enemy still has to pass the original law.
+        """
+        self.observe()
+        if self.runtime.combat_stop.active:
+            return
+        target = next(row for row in self.runtime.visible_targets()
+                      if row.get('engine_id') == self.target.id)
+        self.runtime.engine._shot_clear(self.runtime.state, target, self.now, force=True)
+        self.runtime._strategic_due = 0.
+        self.runtime._planner_order(self.now)
+        self.assertTrue(self.runtime.combat_stop.active,
+                        self.runtime.combat_stop.receipt)
+
     def lay(self, move_barrel=True, sample_index=0, mode='penetration', target_velocity=None):
         """Evaluate one actual plate, then use the native source verifier."""
+        self.admit()
         gun = self.battle._gun_state
         sample = shot_geometry.ordered_vehicle_aim_samples(self.target.typeDescriptor)[sample_index]
         point = shot_geometry.vehicle_aim_point(sample, dict(position=tuple(self.target.position)))
