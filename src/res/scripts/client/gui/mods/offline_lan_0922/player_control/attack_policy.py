@@ -709,8 +709,9 @@ class AttackPolicy(object):
         moving on every frame. This separately rate-limited frontier can close
         a small moving domain within strict work/time limits. A larger stable
         domain retains only its still-current rows across bounded attempts.
-        Any missing/blocked point, unfinished budget or changed pose remains
-        unknown. A positive current-shell result stops this work immediately.
+        Missing or blocked points keep the certificate open while the rest
+        of the budget checks other points. A positive current-shell result
+        stops this work immediately.
         """
         if now < self._atomic_at + ATOMIC_CLOSE_INTERVAL:
             return None
@@ -751,8 +752,13 @@ class AttackPolicy(object):
             if self._executable(row):
                 positive = row
                 break
-            if (row.get('armor') != 'failed' or row.get('line') != 'clear' or
-                    row.get('mechanical') != 'reachable'):
+            if ('first_unresolved' not in self._atomic_receipt and (
+                    row['armor'] != 'failed' or row['line'] != 'clear' or
+                    row['mechanical'] != 'reachable')):
+                self._atomic_receipt['first_unresolved'] = dict(
+                    key=row['key'], reason=row.get('reason'), armor=row['armor'],
+                    line=row['line'], mechanical=row['mechanical'])
+            if self.frame.get('lane_missing'):
                 break
         if not fence(self.frame):
             self.rows.clear()

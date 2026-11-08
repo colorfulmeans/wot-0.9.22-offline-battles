@@ -801,6 +801,41 @@ class RebuiltAtomicClosureTests(unittest.TestCase):
         self.assertIsNone(scene.policy.search_started)
         self.assertNotEqual('search_penetration', result['action'])
 
+    def test_pending_he_point_does_not_delay_proving_the_other_points(self):
+        scene = Observations(clips=3, targets=1, points=9)
+        scene.frame['loaded'] = 2
+        scene.value(2, sample=2, armor='unknown', line='pending')
+        scene.he(0.)
+
+        result = scene.tick(0., background=False)
+        self.assertNotEqual('search_penetration', result['action'])
+        self.assertIsNone(scene.policy.search_started)
+        receipt = scene.policy.status()['atomic']
+        self.assertEqual('incomplete', receipt['status'])
+        self.assertEqual('pending', receipt['first_unresolved']['line'])
+
+        scene.value(2, sample=2)
+        result = scene.tick(.1, background=False, navigation='path_refused')
+        self.assertEqual('search_penetration', result['action'])
+        self.assertEqual(.1, scene.policy.search_started)
+        self.assertEqual(1, scene.atomic_calls)
+
+        scene.prime('he_fallback', index=2)
+        result = scene.tick(scene.policy.search_started + 8., background=False)
+        self.assertEqual(('aim', 'current_he_clip_fallback'),
+                         (result['action'], result['reason']))
+        self.assertEqual(2, result['candidate']['shell_index'])
+        self.assertEqual(0., result['candidate']['expected_damage'])
+
+    def test_first_blocked_point_does_not_hide_later_usable_he_point(self):
+        scene = Observations(clips=3, targets=15, points=9)
+        scene.frame['loaded'] = 2
+        scene.value(2, sample=0, armor='unknown', line='world_blocked')
+        scene.passed(2, sample=5)
+        result = scene.tick(0., background=False)
+        self.assertEqual(('aim', 5), (result['action'], result['candidate']['sample']))
+        self.assertIsNone(scene.policy.search_started)
+
     def test_oversized_atomic_universe_is_unknown_not_a_truncated_success(self):
         scene = Observations(clips=1, targets=31, points=9)
         self.assertGreater(31 * 9 * 3, ATOMIC_MAX_JOBS)
