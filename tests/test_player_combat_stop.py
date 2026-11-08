@@ -863,6 +863,8 @@ class SiegeOriginalOwnershipTests(unittest.TestCase):
         runtime.current_attack_candidate = lambda source, target, for_aim=False: (
             FullPlayerRuntime.current_attack_candidate(runtime, source, target, for_aim))
         runtime._siege_fire_ready = lambda: FullPlayerRuntime._siege_fire_ready(runtime)
+        runtime.consume_gun_handoff = lambda source, command, target, now: (
+            FullPlayerRuntime.consume_gun_handoff(runtime, source, command, target, now))
         scene.policy.select_command = lambda source, command, target, now: (
             AttackPolicy.select_command(scene.policy, source, command, target, now))
         command = dict(scene.raw_order, throttle=.5, turn=.2, brake=False,

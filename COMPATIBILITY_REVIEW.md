@@ -1,4 +1,70 @@
-# November 8 correction: original BOT admission/navigation owns the boundary
+# November 9: preserve recovery and complete stationary gun handoffs
+
+The STB-1 report ending `231948-95b3bdc93d42` used `b0d31317`, build
+`colorfulmeans-42490816495-1`. Its two foreground handoff failures are distinct
+from armour failure or an ammunition shortage. The original BOT navigation,
+copied behaviour, authored routes and confirmed shell/magazine/HE rules remain
+the baseline for this repair.
+
+## Observed failure chains
+
+- From 23:12:37.712 to 23:14:35.432, 103 attack observations retained the
+  same horizontal position; 84 recorded steering and their nonzero signs
+  reversed 36 times. A budget-pending point switched the foreground order
+  from `engage` to `advance_contact`. The original mechanical consumer then
+  correctly retired its manoeuvre as a priority handoff, although the original
+  planner had not requested one. The next mechanical sample restarted it.
+  At source clock 217.591995 the attack proof and mechanical terminal match:
+  the adapter retired the recovery begun at 214.221 and it restarted at 217.669.
+- During capture, the original task retained bot23 while the shot policy had
+  a proved, admitted bot22 point. The task's lack of combat-stop ownership
+  prevented that gun target from reaching the consumer. The resulting null
+  target produced `hull_forward_rest`, while the policy retained the positive
+  candidate. The native-laying timeout did not run for a null target. The last
+  61 attack observations retained shot sequence 11 with a ready gun and four
+  HE shells. Source verification described the resting input, not the selected
+  enemy's point.
+- The report contains 11 committed shots, independently acknowledged by the
+  server. Five HE shots hit and destroyed bot29 (Waffentrager E100) at 23:15:08.
+  The failure was prolonged and recurring, with intermittent successful fire;
+  it was not zero firing for the entire battle. The final capture completed at
+  23:19:24. The installed STB-1 is a full-traverse single-shot configuration,
+  not a magazine or hydraulic-mode vehicle.
+
+## Repair and verification boundaries
+
+The foreground stop adapter preserves an existing original mechanical
+manoeuvre across provisional ordinary points. The original consumer still owns
+its start/progress clocks, destination, arrival, failure cooldown and genuine
+task handoffs. A current proved shot can release it as before. This does not
+replace the recovery algorithm or introduce another navigation lifetime.
+
+Protected stationary tasks keep their navigation target, face, route and
+movement. A separately admitted gun intention may be consumed only while its
+proof and task remain current and the original hull law confirms unchanged
+movement controls. Execution refusal is separate from armour evidence: a
+candidate which cannot be consumed must not indefinitely retain the gun, nor
+be counted as an armour failure. Actual launch still requires the existing
+native source, alignment, trajectory, first-edge admission and ammunition
+transaction. The full armour comparison domain, shell priorities, HE fallback,
+magazine protection, NEXT ownership and eight-second rules are unchanged.
+
+New continuous regressions first fail against the reported implementation,
+then exercise the foreground controller and unchanged recovery/gun consumers.
+They verify recovery continuity and genuine terminal outcomes, protected-task
+control equality, native gun input, committed projectiles and exact ammunition
+deduction. All 20 new cases pass: six recovery continuity cases, eleven
+protected-task handoff cases and three ammunition-boundary cases. Coverage
+includes repeated shots, target death/reselection, actual HE burst tails with
+an independent AP NEXT plan, and positive armour evidence which the current
+navigation cannot consume. All 46 copied modules and 1,433 declarations remain
+unchanged from the reported implementation. Native terrain/collision and
+actuator observations remain test
+fixtures; these checks are not Windows BigWorld gameplay acceptance. Exact
+frozen-source validation and the matching fresh Windows artifact are recorded
+in PR119 at delivery. No merge, tag or Release is part of this repair.
+
+# Historical November 8 correction: original BOT admission/navigation owns the boundary
 
 This repair starts at `60984c54d1cbd40c85ff6fdd2fe6853b1403964d`.
 It supersedes the preceding update's claim that keeping copied navigation

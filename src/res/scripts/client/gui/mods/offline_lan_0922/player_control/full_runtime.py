@@ -904,6 +904,7 @@ class _PlayerBehaviorEngine(copied_runtime.BotRuntime):
         if not self.player_runtime.combat_stop.active:
             return command, target
         policy = self.player_runtime.attack_policy
+        command, target = self.player_runtime.consume_gun_handoff(source, command, target, now)
         command, target = policy.select_command(source, command, target, now)
         if not self.player_runtime._siege_fire_ready():
             # A newly ready point cannot reopen fire while the mode request
@@ -1313,6 +1314,111 @@ class FullPlayerRuntime(object):
             return dict(row, solution=dict(planned['solution'], _player_motion_only=True),
                         _player_stationary_motion=True)
         return row
+
+    def _gun_handoff_preserves_controls(self, candidate, command):
+        """Prove a gun-only target cannot change the already solved BOT input.
+
+        Capture/parking and fire-only control may keep a different admitted
+        gun target from their navigation target. The original hull law still
+        runs later, so evaluate that same pure law before donating the target.
+        A limited gun outside its actual arc never gains a new turn here.
+        """
+        owner, state = self.combat_stop, self.state
+        if (not owner.active or not owner.combat_owned or owner.stop_allowed or
+                owner.explicit_travel or self._mission_brakes() or
+                not owner.contains(candidate.get('target')) or
+                not self.attack_policy._executable(candidate, candidate.get('mode', 'penetration'))):
+            return False
+        task = owner.task_order
+        if 'drive' in self.features and (task.get('throttle_override') != 0. or
+                _distance(_point(task.get('move_position') or state['position']),
+                          state['position']) > copied_driver.WAYPOINT_ARRIVAL_RADIUS):
+            return False
+        if (not command or command.get('movement_intent', True) or
+                abs(float(command.get('throttle', 0.))) > .01 or
+                any(state.get(name) for name in ('_gun_angle_adjustment',
+                    '_rear_aim_episode', '_rear_hull_aim', '_rear_motion_lease')) or
+                self.actor_id in self.engine._friendly_repositions):
+            return False
+        descriptor = self.engine._descriptors.get(self.actor_id, {})
+        limits = self.engine._gun_yaw_limits.get(self.actor_id)
+        if limits is None:
+            limits = copied_driver.gun_yaw_limits(descriptor)
+        minimum, maximum, limited = limits
+        target = candidate['target']
+        point = target['position']  # the copied live-target overlay uses this centre
+        dx, dz = point[0] - state['x'], point[2] - state['z']
+        distance = math.hypot(dx, dz)
+        yaw = math.atan2(dx, dz) if distance > .1 else state['yaw']
+        if limited:
+            pitch = -math.atan2(point[1] + 1. - state['y'], max(.5, distance))
+            signature = self.engine._ballistic_solution_signature(
+                state, target, descriptor, state.get('shell_index', 0))
+            cached = self.engine._ballistic_solution_cache.get(self.actor_id)
+            if cached is not None and cached[0] == signature:
+                yaw, pitch = cached[2]['yaw'], cached[2]['pitch']
+            local = self.engine._local_gun_angles_for_world(state, yaw, pitch)
+            if local is None:
+                return False
+            yaw = state['yaw'] + local[0]
+        turn, throttle = float(command.get('turn', 0.)), float(command.get('throttle', 0.))
+        proposed = copied_driver.combat_hull_aim(
+            state['yaw'], yaw, minimum, maximum, turn, throttle,
+            command.get('recovery_mode', 'drive'),
+            not command.get('empty_ammo') and command.get('combat_mode') != 'base_defense' and
+                not command.get('parking_phase'),
+            combat_mode=command.get('combat_mode'),
+            movement_intent=command.get('movement_intent', True),
+            withdrawal_aim=command.get('withdrawal_aim', False),
+            rear_turn=0., allow_rear_start=not state.get('_rear_motion_blocked', False))
+        return bool(not proposed[2] and abs(proposed[0] - turn) <= 1.e-12 and
+                    abs(proposed[1] - throttle) <= 1.e-12)
+
+    def attack_candidate_consumable(self, candidate):
+        owner = self.combat_stop
+        target = candidate.get('target') or {}
+        selected = (owner.task_order.get('target_kind'), owner.task_order.get('target_id'))
+        if owner.stop_allowed or (target.get('kind'), target.get('network_id')) == selected:
+            return True
+        return self._gun_handoff_preserves_controls(candidate, self._last_order)
+
+    def prepare_gun_handoff(self, now):
+        """Record the gun intention before the original driver consumes its task."""
+        self._gun_handoff = None
+        candidate = self.attack_policy.decision.get('candidate')
+        owner = self.combat_stop
+        if (self.attack_policy.decision.get('action') != 'aim' or candidate is None or
+                owner.stop_allowed or not self.attack_candidate_consumable(candidate)):
+            return
+        original = (owner.task_order.get('target_kind'), owner.task_order.get('target_id'))
+        selected = candidate['target']
+        if (selected.get('kind'), selected.get('network_id')) != original:
+            self._gun_handoff = dict(at=now, generation=self.generation,
+                original=original, candidate=candidate['key'])
+
+    def consume_gun_handoff(self, source, command, target, now):
+        """Refine only the gun after proving the original movement is unchanged."""
+        lease = getattr(self, '_gun_handoff', None)
+        candidate = self.attack_policy.decision.get('candidate')
+        if (lease is None or lease['at'] != now or lease['generation'] != self.generation or
+                candidate is None or lease['candidate'] != candidate['key'] or
+                target is None or lease['original'] !=
+                    (target.get('kind'), target.get('network_id')) or
+                command.get('target_id') not in (target.get('id'), target.get('network_id')) or
+                command.get('target_kind') not in (None, target.get('kind'))):
+            return command, target
+        selected = candidate['target']
+        current = self.current_attack_candidate(source, selected)
+        if current is None or not self._gun_handoff_preserves_controls(current, command):
+            # This is an execution refusal, never an armour/geometry failure.
+            # The next frontier can consume the original target instead of
+            # retaining an impossible aim until a shot which cannot happen.
+            self.attack_policy.selected = None
+            self.attack_policy._choose('wait', 'gun_target_handoff_refused')
+            self._gun_handoff = None
+            return dict(command, fire_allowed=False), target
+        return dict(command, target_id=selected.get('network_id', selected.get('id')),
+            target_kind=selected.get('kind'), stable_hull_face=True), selected
 
     def _observe_attack_lay(self, state, target, intention, now):
         policy = self.attack_policy
@@ -2082,6 +2188,7 @@ class FullPlayerRuntime(object):
         order = self._mission_order(order, now)
         self._observe_mission(now)
         self.combat_stop.accept(order)
+        self._gun_handoff = None
         if 'fire' in self.features:
             artillery = (self.state.get('profile') or {}).get('class_tag') == 'SPG'
             if self.combat_stop.active or artillery:
@@ -2090,6 +2197,7 @@ class FullPlayerRuntime(object):
                         reason='engagement_waits_native_siege', candidate=None)
                 else:
                     self.attack_policy.update(now)
+                self.prepare_gun_handoff(now)
                 self._refresh_siege_aim(now)
                 order = self.attack_policy.apply_order(order, now)
                 order = self.combat_stop.apply_order(order, now)

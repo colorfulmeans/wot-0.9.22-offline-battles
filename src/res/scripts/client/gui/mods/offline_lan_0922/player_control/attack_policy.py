@@ -333,6 +333,13 @@ class AttackPolicy(object):
             return row.get('contact') is True and row.get('expected_damage') is not None
         return row.get('armor') == 'passed'
 
+    def _executable_current(self, row, mode='penetration'):
+        """Current gun consumption is separate from the global armour domain."""
+        if not self._executable(row, mode):
+            return False
+        allowed = getattr(getattr(self, 'runtime', None), 'attack_candidate_consumable', None)
+        return not callable(allowed) or allowed(row)
+
     @classmethod
     def _planned_evidence(cls, row):
         """A proved future stationary pose is planning data, never fire data."""
@@ -443,7 +450,7 @@ class AttackPolicy(object):
                              job[0][1:3] == plan_key[1:3]), None)
         if selected_job is not None:
             row = self._current(selected_job, require_line=True)
-            if self._executable(row):
+            if self._executable_current(row):
                 return row
         # Refresh a retained point first, but never let one pending point
         # prevent all other points or enemies from receiving a budget slice.
@@ -466,12 +473,12 @@ class AttackPolicy(object):
             if (row is None or not projected_complete and
                     (row.get('armor') in ('pending', 'unknown') or row.get('line') != 'clear')):
                 row = self._evaluate(job, now, 'foreground')
-            if self._executable(row):
+            if self._executable_current(row):
                 return row
         # A prior frame/background proof can be the earliest useful point.
         for job in jobs:
             row = self._current(job, require_line=True)
-            if self._executable(row):
+            if self._executable_current(row):
                 return row
         return None
 
@@ -551,10 +558,11 @@ class AttackPolicy(object):
             return 2
         return 0 if key[2] == self.selected[2] else 1
 
-    def _best_he(self, shell_index=None, exclude=None, plannable=False):
+    def _best_he(self, shell_index=None, exclude=None, plannable=False, consumable=False):
         rows = [row for row in self._rows_for('he_fallback', shell_index,
                 executable=not plannable, plannable=plannable)
-                if row['shell_index'] != exclude]
+                if row['shell_index'] != exclude and
+                    (not consumable or self._executable_current(row, 'he_fallback'))]
         if not rows:
             return None
         return min(rows, key=lambda row: (-float((row if self._executable(row, 'he_fallback')
@@ -860,6 +868,10 @@ class AttackPolicy(object):
             replacement_status=status if alternative is None else 'verified')
 
     def _choose(self, action, reason, candidate=None, **fields):
+        if (action == 'aim' and candidate is not None and
+                not self._executable_current(candidate, candidate.get('mode', 'penetration'))):
+            action, reason, candidate = 'wait', 'current_shot_navigation_owned', None
+            self.selected = None
         row = dict(action=action, reason=reason, candidate=candidate,
                    next_shell=self.next_shell,
                    phase=('preaiming' if action == 'preaim' or action == 'aim' and
@@ -972,7 +984,7 @@ class AttackPolicy(object):
         self._atomic_receipt.update(getattr(self.evaluator, 'atomic_receipt', {}))
         self._atomic_receipt['elapsed_ms'] = (self.atomic_clock() - started) * 1000.
         return (positive if positive is not None and
-                positive['shell_index'] == self.frame['loaded'] and self._executable(positive)
+                positive['shell_index'] == self.frame['loaded'] and self._executable_current(positive)
                 else None)
 
     def update(self, now, frame=None):
@@ -1144,6 +1156,13 @@ class AttackPolicy(object):
         if current is not None:
             self._end_search(penetration_found=True)
             return self._choose('aim', 'current_shell_verified', current)
+        if any(self._executable(row) for row in self._rows_for('penetration', loaded, fresh_line=True)):
+            # A proved plate can belong to a different gun target while the
+            # original navigation is still moving or laying the hull. Keep
+            # that positive evidence for ammunition/background decisions, but
+            # do not retain an aim which the current command cannot consume.
+            self.selected = None
+            return self._choose('wait', 'current_shot_navigation_owned')
         valid_pen = [row for row in self._rows_for('penetration', loaded, fresh_line=True)
                      if row.get('armor') == 'passed' and self._needs_firing_position(row)]
         if valid_pen:
@@ -1275,15 +1294,19 @@ class AttackPolicy(object):
         # ranked next-load plan, even when the same shell wins both searches.
         best = self._best_he(loaded if protected_clip else None, plannable=True)
         current = self._best_he(loaded, plannable=True)
+        # Preserve damage ranking across currently consumable points. A
+        # navigation-owned candidate remains a positive global observation,
+        # but cannot monopolise the loaded trigger over another legal point.
+        runnable = self._best_he(loaded, consumable=True)
         if is_magazine and current is not None:
             if self._executable(current, 'he_fallback'):
-                return self._choose('aim', 'current_he_clip_fallback', current)
+                return self._choose('aim', 'current_he_clip_fallback', runnable or current)
             return self._choose('firing_position', 'current_he_clip_fallback_after_stationary_turn',
                                 current)
         if best is not None:
             if best['shell_index'] == loaded:
                 if self._executable(best, 'he_fallback'):
-                    return self._choose('aim', 'he_fallback_contact', best)
+                    return self._choose('aim', 'he_fallback_contact', runnable or best)
                 return self._choose('firing_position', 'he_fallback_after_stationary_turn', best)
             if is_magazine:
                 self._grant_early_reload(now, 'he_fallback_plan')

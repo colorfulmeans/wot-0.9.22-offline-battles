@@ -320,6 +320,15 @@ class CombatStop(object):
             runtime._last_navigation = dict(status='waiting', action='firing_position',
                 reason=decision.get('reason'), owner='copied_gun_angle_recovery')
             return dict(order, fire_allowed=False)
+        if runtime.state.get('_gun_angle_adjustment') is not None:
+            # A provisional ordinary point does not complete the original
+            # mechanical manoeuvre. Changing this combat hold to advance
+            # would make its unchanged consumer retire it as a new task.
+            # Keep its original lease until that consumer reaches a terminal
+            # state; verified aim and genuine task handoffs still exit above.
+            runtime._last_navigation = dict(status='waiting', action='firing_position',
+                reason=decision.get('reason'), owner='copied_gun_angle_recovery')
+            return dict(order, fire_allowed=False)
         runtime._last_navigation = dict(status='waiting', action='firing_position',
             reason=decision.get('reason'), owner='copied_ordinary_navigation')
         # Only release an attack-owned hold; preserve authored advance, cover,

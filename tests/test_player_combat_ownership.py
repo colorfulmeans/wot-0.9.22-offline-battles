@@ -280,13 +280,19 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
             for field in NAVIGATION_FIELDS:
                 if field not in ('aim_position', 'fire_allowed'):
                     self.assertEqual(original[field], applied[field], field)
-            candidate = scene.runtime.attack_policy.decision.get('candidate')
-            if candidate and candidate['target']['network_id'] == 2:
+            policy = scene.runtime.attack_policy
+            candidates = [row for row in policy.rows.values()
+                if row['target']['network_id'] == 2 and row.get('armor') == 'passed'
+                and row.get('line') == 'clear']
+            if candidates:
                 alternative_reviewed = True
                 self.assertEqual(('passed', 'clear'),
-                    (candidate['armor'], candidate['line']))
+                    (candidates[0]['armor'], candidates[0]['line']))
                 self.assertFalse(scene.applied_order()['fire_allowed'])
                 self.assertFalse(scene.control.last_order['fire_allowed'])
+                self.assertNotEqual('aim', policy.decision['action'],
+                    'a positive global observation is not a consumable travel target')
+                self.assertIsNone(policy.selected)
             self.assertFalse(scene.launches())
         self.assertTrue(alternative_reviewed,
             'both admitted enemies must be evaluated without retargeting navigation')
