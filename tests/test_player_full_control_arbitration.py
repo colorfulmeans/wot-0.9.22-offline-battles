@@ -197,6 +197,9 @@ class FullControlArbitrationTests(unittest.TestCase):
         scene = self.scene(distance=60., clip=1, burst=1, cold_start=True)
         scene.world = [((-100., -100., 5.), (100., 100., 15.))]
         policy = scene.runtime.attack_policy
+        owner = scene.runtime.combat_stop
+        rejected_proposals = 0
+        initial_ammo = tuple(scene.battle._gun_state.ammo)
         with mock.patch.object(policy, 'update', wraps=policy.update) as evaluate:
             for unused in range(50):
                 row = scene.tick()
@@ -209,19 +212,45 @@ class FullControlArbitrationTests(unittest.TestCase):
                 self.assertEqual('route', original['combat_mode'])
                 self.assertEqual('route', scene.runtime._last_order['combat_mode'])
                 self.assertFalse(scene.runtime.combat_stop.combat_owned)
+                self.assertFalse(owner.stop_allowed)
+                self.assertFalse(owner.physical_recovery_active())
+                self.assertFalse(policy.navigation_receipt,
+                    'candidate-only review cannot publish an accepted combat movement')
+                self.assertEqual('candidate_evaluation_only', owner.receipt['reason'])
+                self.assertEqual('task', owner.receipt['movement_owner'])
                 self.assertEqual({scene.target.id}, {target['network_id']
                     for target in scene.runtime.combat_targets()})
                 self.assertNotIn(row['action'], ('aim', 'search_penetration'))
                 self.assertFalse(scene.runtime._last_order['fire_allowed'])
                 self.assertIsNone(policy.search_started)
+                self.assertIsNone(policy.search_authority)
+                if row['action'] == 'firing_position':
+                    # A completed native inspection may propose recovery.
+                    # An unproved plate behind a wall cannot acquire the
+                    # authored route from the sole movement owner.
+                    candidate = policy.current_row(policy.decision['candidate'],
+                                                   require_line=True)
+                    self.assertIsNotNone(candidate)
+                    self.assertEqual('world_blocked', candidate['line'])
+                    self.assertEqual('unknown', candidate['armor'])
+                    self.assertEqual('reachable', candidate['mechanical'])
+                    self.assertEqual('unverified_points_obstructed', row['reason'])
+                    rejected_proposals += 1
+                else:
+                    self.assertEqual('wait', row['action'])
+                    self.assertTrue(policy.stationary_review_wait())
+                    self.assertIsNone(policy.decision.get('candidate'))
+                self.assertIsNone(owner._proposal())
             self.assertGreater(evaluate.call_count, 0)
         self.assertEqual(['eligible'],
             [candidate['reason'] for candidate in selection['candidates']])
         self.assertFalse(selection['candidates'][0]['local_lane'])
-        self.assertEqual('wait', policy.decision['action'])
-        self.assertTrue(policy.stationary_review_wait())
+        # Completion, not the last frame's asynchronous review phase, is the
+        # progress contract. Permanent waiting must not satisfy this test.
+        self.assertGreater(rejected_proposals, 0)
         self.assertFalse(policy.navigation_receipt,
             'candidate-only review cannot publish an accepted combat movement')
+        self.assertEqual(initial_ammo, tuple(scene.battle._gun_state.ammo))
         scene.trigger.assert_not_called()
 
     def test_reopened_lane_retires_the_firing_position_navigation_receipt(self):

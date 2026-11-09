@@ -139,6 +139,20 @@ Additional actual-native slow-query cases retain unknown, vanished-blocker
 and freshly executable alternative controls. Work quotas and time limits
 are unchanged. This does not solve general moving global negative closure.
 
+The next full run exposed a test migration error, not a second movement
+owner: this follow-up had changed the cold wall-blocked candidate test's
+original `firing_position` expectation into a mandatory final `wait`.
+Actual 50-frame traces from `909ac352`, `3e2806e8` and `9b5c4309` all retain
+the authored route, no combat owner, no accepted navigation receipt and no
+shot. The policy's completed, fresh `world_blocked`/unknown-armour proposal
+is rejected by the existing `CombatStop._proposal()`; it cannot acquire
+movement or bootstrap ownership on the next callback. The `3e` final wait
+was incidental proof-refresh timing, not the contract. The corrected test
+retains the original 50-frame bound, requires a completed rejected proposal
+within it, and checks actual ownership and no physical phase on every frame.
+It does not force a particular final pending/completed sampling phase or
+change production admission to satisfy that erroneous assertion.
+
 Stale evidence, live-target identity, manual mission, native friendly-fire,
 actual ammo debit, route resumption, target death and burst-tail protections
 must remain asserted. A replacement test that checks only an order label or
