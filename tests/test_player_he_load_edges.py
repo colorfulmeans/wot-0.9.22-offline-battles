@@ -86,7 +86,7 @@ class OrdinaryHELoadEdgesTests(unittest.TestCase):
         self.assertFalse(scene.policy.apply_order({})['fire_allowed'])
         self.assertEqual(0, scene.policy.next_at_edge()[0]['shell_index'])
 
-    def test_settling_source_can_consume_fresh_he_after_real_atomic_ap_failure(self):
+    def test_settling_source_can_consume_fresh_he_independently_of_next_ap(self):
         scene = Observations(targets=1, points=9, he_validation='single_point')
         scene.frame.update(loaded=2, ammo=(30, 0, 30))
         scene.he(80.)
@@ -101,8 +101,8 @@ class OrdinaryHELoadEdgesTests(unittest.TestCase):
         self.assertEqual('aim', decision['action'], decision)
         self.assertEqual('he_fallback', decision['candidate']['mode'])
         self.assertEqual(scene.frame['pose'], decision['candidate']['pose_stamp'][1])
-        self.assertTrue(scene.policy._all_failed((0,)),
-                        'current-frame AP failure is still required before contact use')
+        self.assertTrue(scene.policy._executable_current(decision['candidate'], 'he_fallback'))
+        self.assertIsNone(scene.policy.reload_authority)
         probes = [call for call in scene.calls if call[2] == 2 and call[-1] == 'penetration']
         self.assertEqual(1, len(probes))
 

@@ -92,7 +92,7 @@ class HEVerificationFlowTests(unittest.TestCase):
         self.assertEqual((initial[0] - 1, initial[1]), tuple(gun.ammo))
         self.assertEqual(1, scene.control.shot_commits)
 
-    def test_ordinary_he_first_point_failure_loads_verified_ap_and_really_fires(self):
+    def test_ordinary_he_first_point_failure_fires_current_he_before_next_ap(self):
         scene, target = self.scene(layered=True)
         gun, policy = scene.battle._gun_state, scene.runtime.attack_policy
         initial = tuple(gun.ammo)
@@ -106,9 +106,9 @@ class HEVerificationFlowTests(unittest.TestCase):
                 candidate = policy.decision['candidate']
                 saw_switch.append((candidate['shell_index'], candidate['armor'], candidate['line']))
         self.run_until_shots(scene, observe=observe)
-        self.assertIn((1, 'passed', 'clear'), saw_switch)
-        self.assertEqual([1], [shot['shell_index'] for shot in scene.launches()])
-        self.assertEqual((initial[0], initial[1] - 1), tuple(gun.ammo))
+        self.assertEqual([], saw_switch)
+        self.assertEqual([0], [shot['shell_index'] for shot in scene.launches()])
+        self.assertEqual((initial[0] - 1, initial[1]), tuple(gun.ammo))
         self.assertEqual(1, scene.control.shot_commits)
         # The same native target has a penetrable upper HE point. Ordinary
         # HE must finish its chosen lower point instead of scanning to it.
@@ -138,12 +138,12 @@ class HEVerificationFlowTests(unittest.TestCase):
         self.assertEqual(3, gun.clip)
         self.assertEqual(3, scene.control.shot_commits)
 
-    def test_single_he_failure_waits_for_late_ap_plate_before_any_fallback(self):
+    def test_single_he_does_not_wait_for_late_ap_plate_to_execute_fallback(self):
         scene, target = self.scene(layered=True)
         gun, policy = scene.battle._gun_state, scene.runtime.attack_policy
         # Both shells fail the first lower plates; AP's later upper sample
-        # is a real penetration. A finite frontier must finish that review
-        # before a single HE round is allowed to fall back to contact damage.
+        # is a real penetration. That finite independent NEXT review must not
+        # prevent the currently loaded HE from executing legal contact damage.
         gun.shots[1].piercingPower = (200., 200.)
         scene.battle.client.effective_params['gun']['shots'][1]['source_shot'][
             'piercingPower'] = (200., 200.)
@@ -161,16 +161,13 @@ class HEVerificationFlowTests(unittest.TestCase):
                 self.assertFalse(scene.launches())
                 self.assertEqual(initial, tuple(gun.ammo))
                 self.assertEqual(0, gun.shot_index)
-                self.assertFalse(policy.fallback,
-                    'unknown AP points must not authorize single-shot HE fallback')
-                self.assertNotEqual('he_fallback',
-                    (policy.decision.get('candidate') or {}).get('mode'))
+                self.assertNotEqual('switch_shell', policy.decision['action'])
             if scene.launches():
                 break
         self.assertTrue(pending_frames, 'the native AP review must actually span frames')
         self.assertIn(4, verified_samples)
-        self.assertEqual([1], [shot['shell_index'] for shot in scene.launches()], policy.status())
-        self.assertEqual((initial[0], initial[1] - 1), tuple(gun.ammo))
+        self.assertEqual([0], [shot['shell_index'] for shot in scene.launches()], policy.status())
+        self.assertEqual((initial[0] - 1, initial[1]), tuple(gun.ammo))
         self.assertEqual(1, scene.control.shot_commits)
 
     def test_only_ordinary_he_left_uses_real_fallback_after_its_failed_point(self):
@@ -274,8 +271,8 @@ class HEVerificationFlowTests(unittest.TestCase):
             getattr(target.typeDescriptor, component).hitTester.available = True
         scene.pose(target, (20.1, 0., 40.))
         self.run_until_shots(scene)
-        self.assertEqual([1], [shot['shell_index'] for shot in scene.launches()])
-        self.assertEqual((initial[0], initial[1] - 1), tuple(gun.ammo))
+        self.assertEqual([0], [shot['shell_index'] for shot in scene.launches()])
+        self.assertEqual((initial[0] - 1, initial[1]), tuple(gun.ammo))
 
     def test_blocked_he_point_is_not_armour_failure_even_with_a_verified_ap_point(self):
         scene, target = self.scene()
@@ -328,8 +325,8 @@ class HEVerificationFlowTests(unittest.TestCase):
         self.assertEqual(1, len(scene.launches()), 'a moved target must not consume the old aim')
         self.run_until_shots(scene, count=2)
         self.assertEqual(2, scene.runtime.weapon.target['network_id'])
-        self.assertEqual([0, 1], [shot['shell_index'] for shot in scene.launches()])
-        self.assertEqual((initial[0] - 1, initial[1] - 1), tuple(gun.ammo))
+        self.assertEqual([0, 0], [shot['shell_index'] for shot in scene.launches()])
+        self.assertEqual((initial[0] - 2, initial[1]), tuple(gun.ammo))
         scene.runtime.set_mission('return_base', {})
         for unused in range(30):
             self.tick(scene)
@@ -337,6 +334,45 @@ class HEVerificationFlowTests(unittest.TestCase):
             self.assertFalse(scene.runtime.combat_stop.active)
             self.assertIsNone(scene.runtime._gun_handoff)
         self.assertEqual(2, scene.control.shot_commits)
+
+    def test_real_current_he_load_finishes_then_verified_ap_loads_and_fires(self):
+        for clip in (1, 3):
+            with self.subTest(clip=clip):
+                scene, target = self.scene(clip=clip, armor=30.)
+                scene.set_he(piercing=1.)
+                gun, policy = scene.battle._gun_state, scene.runtime.attack_policy
+                initial = tuple(gun.ammo)
+                # Let the native frontier complete while the observed barrel
+                # has not yet followed its real aim source. No decision,
+                # ammunition receipt or readiness result is mocked.
+                for unused in range(80):
+                    scene.fixture.now += .1
+                    scene.battle._last_frame_time = scene.now
+                    scene.control.update(.1, scene.now)
+                    self.assertFalse(scene.launches())
+                    self.assertEqual(0, gun.shot_index)
+                    if policy.next_shell == 1 and gun.pending_index == 1:
+                        break
+                self.assertEqual(1, policy.next_shell, policy.status())
+                self.assertEqual(1, gun.pending_index)
+                saw_ap_loading = []
+
+                def observe():
+                    launches = scene.launches()
+                    if len(launches) < clip:
+                        self.assertEqual(0, gun.shot_index)
+                        self.assertIsNone(policy.reload_authority)
+                    if gun.shot_index == 1 and gun.reload_time > 0.:
+                        saw_ap_loading.append(scene.now)
+                    self.assertIsNone(policy.search_started)
+
+                self.run_until_shots(scene, count=clip + 1, steps=400, observe=observe)
+                self.assertEqual([0] * clip + [1],
+                    [shot['shell_index'] for shot in scene.launches()])
+                self.assertTrue(saw_ap_loading, 'the actual AP load must start')
+                self.assertEqual((initial[0] - clip, initial[1] - 1), tuple(gun.ammo))
+                self.assertEqual(clip + 1, scene.control.shot_commits)
+                scene.doCleanups()
 
 
 if __name__ == '__main__':

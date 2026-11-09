@@ -102,9 +102,7 @@ class CombatControl(object):
             if self.combat_stop.active and key in visible)
 
     def _stationary_review_wait(self):
-        decision = self.attack_policy.decision
-        return (decision.get('action') == 'wait' and
-                decision.get('reason') == 'stationary_domain_review_pending')
+        return self.attack_policy.stationary_review_wait()
 
     def siege_aim_candidate(self, target=None):
         """Current enabled-mode actuator input, never a mode-entry gate."""
@@ -707,6 +705,7 @@ class CombatControl(object):
             self._move_episode = None
             return order
         if action != 'search_penetration':
+            search_was_moving = self._move_episode is not None
             deadline = (self._move_episode or {}).get('deadline')
             if deadline is not None and now >= deadline:
                 self.attack_policy.navigation_result(dict(self._last_navigation,
@@ -717,6 +716,9 @@ class CombatControl(object):
             if self._last_navigation.get('action') in ('firing_position', 'search_penetration'):
                 self._last_navigation = {}
             self._move_episode = None
+            if search_was_moving and action != 'aim':
+                return dict(self.combat_stop._stop(order, 'penetration_search_finished', now),
+                            fire_allowed=False)
             return order
         request = decision.get('move_request') or {}
         identity = request.get('episode_id')
@@ -779,7 +781,11 @@ class CombatControl(object):
         episode['deadline'] = request.get('deadline')
         self._last_navigation['deadline'] = episode['deadline']
         if goal is None:
-            return self._resume_firing_approach(order, target)
+            # A rejected local search edge does not authorize a direct chase
+            # to the enemy centre. Keep the search episode/clock and try its
+            # next checked edge on a subsequent control callback.
+            return dict(self.combat_stop._stop(order, 'penetration_search_no_checked_edge', now),
+                        fire_allowed=False)
         result = dict(order, move_position=goal, throttle_override=None,
                       fire_allowed=False, combat_mode='player_' + action)
         return result
@@ -789,19 +795,6 @@ class CombatControl(object):
 
     def _ordinary_firing_order(self, order, now):
         return self.combat_stop.apply_order(order, now)
-
-    def _resume_firing_approach(self, order, target):
-        # Keep existing route, traffic and recovery control when it
-        # already has a destination. Release only an attack-owned stop.
-        position = self.state['position']
-        goal = order.get('move_position') or position
-        if ('drive' not in self.features or self._mission_brakes() or
-                order.get('parking_phase') or order.get('empty_ammo') or
-                order.get('combat_mode') == 'base_defense' or
-                order.get('throttle_override') != 0. and _distance(_point(goal), position) > 1.):
-            return order
-        return self.engine._gun_angle_combat_order(self.state,
-            dict(order, aim_position=target['position'], face_position=target['position']))
 
     def _accept_combat_order(self, order, now):
         """Apply the same combat owner after the shared strategic order."""

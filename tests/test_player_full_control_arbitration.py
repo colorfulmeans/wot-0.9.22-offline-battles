@@ -218,7 +218,8 @@ class FullControlArbitrationTests(unittest.TestCase):
         self.assertEqual(['eligible'],
             [candidate['reason'] for candidate in selection['candidates']])
         self.assertFalse(selection['candidates'][0]['local_lane'])
-        self.assertEqual('firing_position', policy.decision['action'])
+        self.assertEqual('wait', policy.decision['action'])
+        self.assertTrue(policy.stationary_review_wait())
         self.assertFalse(policy.navigation_receipt,
             'candidate-only review cannot publish an accepted combat movement')
         scene.trigger.assert_not_called()
@@ -238,7 +239,7 @@ class FullControlArbitrationTests(unittest.TestCase):
         scene.set_hull(.01)
         self.advance_until(scene, lambda result:
             result['action'] == 'firing_position' and
-            scene.runtime._last_order['combat_mode'] == 'advance_contact')
+            scene.runtime.combat_stop.physical_recovery_active())
         policy = scene.runtime.attack_policy
         original = self.original_order(scene)
         self.assertEqual(('bot', scene.target.id),

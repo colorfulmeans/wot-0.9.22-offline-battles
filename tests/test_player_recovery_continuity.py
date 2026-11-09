@@ -22,6 +22,9 @@ class OriginalRecoveryContinuityTests(unittest.TestCase):
         scene.runtime.gun.clip_size = scene.runtime.gun.clip = 1
         scene.runtime.engine._gun_yaw_limits[1] = (-math.pi, math.pi, False)
         scene.candidate.update(mechanical='mechanical_limited', line='clear')
+        scene.raw_order.update(combat_mode='route', target_id=None, target_kind=None,
+            move_position=(20., 0., -30.), throttle_override=None,
+            aim_position=None, fire_allowed=False)
         return scene
 
     @staticmethod
@@ -59,16 +62,17 @@ class OriginalRecoveryContinuityTests(unittest.TestCase):
                 self.assertEqual('relocation_stalled', terminal['reason'])
                 self.assertGreaterEqual(terminal['progress_age'], 6.)
                 self.assertEqual(-8. if reverse else 8., marker['destination'][2])
-                self.assertEqual('advance_contact', result['combat_mode'])
+                self.assertEqual('route', result['combat_mode'])
+                self.assertEqual((20., 0., -30.), result['move_position'])
                 self.assertIsNone(scene.policy.search_started)
                 self.assertEqual(1, scene.runtime.gun.clip)
-                # Only the original failure cooldown governs re-entry.
+                # A failed phase cannot reclaim the same route on each tick.
                 scene.candidate.update(mechanical='mechanical_limited', line='clear')
                 scene.decide('firing_position')
                 self.consume(scene, terminal['sampled_at'] + .1, clear)
                 self.assertNotIn('_gun_angle_adjustment', scene.state)
-                self.assertEqual('bounded_attempt_rejected',
-                                 scene.state['_gun_angle_handoff']['reason'])
+                self.assertFalse(scene.owner.stop_allowed)
+                self.assertEqual('ineligible', scene.state['_gun_angle_handoff']['reason'])
 
     def test_original_arrival_completes_during_pending_evidence(self):
         scene = self.scene()
@@ -121,7 +125,7 @@ class OriginalRecoveryContinuityTests(unittest.TestCase):
                 result = self.consume(scene, .1)
                 self.assertEqual(before, result)
                 self.assertNotIn('_gun_angle_adjustment', scene.state)
-                self.assertEqual('priority_handoff',
+                self.assertEqual('combat_task_handoff',
                                  scene.state['_gun_angle_last_terminal']['reason'])
 
     def test_verified_shot_releases_recovery_without_waiting_for_timeout(self):
@@ -132,36 +136,41 @@ class OriginalRecoveryContinuityTests(unittest.TestCase):
         result = self.consume(scene, .1)
         self.assertNotIn('_gun_angle_adjustment', scene.state)
         self.assertNotIn('_gun_angle_refusal', scene.state)
-        self.assertEqual('mechanical_refusal_cleared',
+        self.assertEqual('verified_shot',
                          scene.state['_gun_angle_last_terminal']['reason'])
         self.assertEqual('engage', result['combat_mode'])
         self.assertTrue(result['fire_allowed'])
 
-    def test_pending_without_original_recovery_still_requests_ordinary_approach(self):
+    def test_pending_without_original_recovery_does_not_request_ordinary_approach(self):
         scene = self.scene()
         scene.candidate.update(mechanical='reachable', line='clear', armor='failed')
         scene.decide('firing_position', reason='global_snapshot_budget_pending')
         result = self.consume(scene, 0.)
-        self.assertEqual('advance_contact', result['combat_mode'])
+        self.assertEqual('engage', result['combat_mode'])
+        self.assertEqual(scene.state['position'], result['move_position'])
+        self.assertEqual(0., result['throttle_override'])
         self.assertNotIn('_gun_angle_adjustment', scene.state)
 
-    def test_query_wait_keeps_an_accepted_approach_without_a_legacy_recovery_marker(self):
+    def test_query_wait_keeps_the_accepted_finite_physical_recovery(self):
         scene = self.scene()
         scene.candidate.update(mechanical='reachable', line='world_blocked', armor='passed')
         scene.decide('firing_position', reason='current_penetration_obstructed')
-        approach = scene.apply(0.)
-        self.assertEqual('advance_contact', approach['combat_mode'])
-        self.assertIsNone(approach['throttle_override'])
-        for name in ('_gun_angle_adjustment', '_rear_aim_episode', '_rear_motion_lease'):
-            self.assertNotIn(name, scene.state)
+        self.consume(scene, 0.)
+        approach = self.consume(scene, 2.1)
+        marker = scene.state['_gun_angle_adjustment']
+        self.assertEqual('gun_angle_adjust', approach['combat_mode'])
+        self.assertEqual(1., approach['throttle_override'])
+        self.assertNotEqual(scene.target['position'], approach['move_position'])
         self.assertFalse(scene.runtime.engine._friendly_repositions)
         scene.decide('wait', candidate=False, reason='stationary_domain_review_pending')
-        for now in (.1, .2, .3):
-            waiting = scene.apply(now)
+        for now in (2.2, 2.3, 2.4):
+            waiting = self.consume(scene, now)
             for name in ('combat_mode', 'move_position', 'throttle_override', 'target_id'):
                 self.assertEqual(approach[name], waiting[name])
             self.assertTrue(scene.owner.combat_owned)
             self.assertTrue(scene.owner.stop_allowed)
+            self.assertIs(marker, scene.state['_gun_angle_adjustment'])
+            self.assertEqual(0., marker['start'])
             self.assertFalse(waiting['fire_allowed'])
 
 
@@ -241,10 +250,16 @@ class FullRecoveryAndFireTests(unittest.TestCase):
         scene.pose(target, (20., 20., 40.))
         self.assertEqual({5: True}, scene.sample_original_lanes())
         policy = scene.runtime.attack_policy
-        policy.atomic_time_budget = 0.
-        scene.tick()
+        # Complete the real stationary alternatives before the physical
+        # phase is authorized; a pending first point is no movement proof.
+        policy.atomic_time_budget = .25
+        for unused in range(120):
+            scene.tick()
+            if scene.runtime.state.get('_gun_angle_adjustment') is not None:
+                break
         marker = scene.runtime.state.get('_gun_angle_adjustment')
         self.assertIsNotNone(marker, policy.status())
+        policy.atomic_time_budget = 0.
         started = marker['start']
         reasons = set()
         initial_ammo = tuple(scene.battle._gun_state.ammo)
@@ -262,8 +277,8 @@ class FullRecoveryAndFireTests(unittest.TestCase):
             self.assertFalse(scene.launches())
             self.assertEqual(initial_ammo, tuple(scene.battle._gun_state.ammo))
             self.assertIsNone(policy.search_started)
-        self.assertIn('global_snapshot_budget_pending', reasons)
-        self.assertIn('unverified_points_obstructed', reasons)
+        self.assertTrue(reasons.intersection(('global_snapshot_budget_pending',
+            'stationary_alternatives_pending')), reasons)
         # A newly observable, penetrable target point is a real firing exit.
         # The native actuator must consume the new source before admission;
         # actual launch and GunState debit are asserted, not just action=aim.

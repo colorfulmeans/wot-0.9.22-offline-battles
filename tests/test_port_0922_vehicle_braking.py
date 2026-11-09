@@ -17,6 +17,8 @@ class VehicleBrakingTests(unittest.TestCase):
         peer['position'] = (0., 8., 7.5)
         self.assertEqual(1., self.safe(own, [peer], coast=2.)['throttle'])
         peer.update(position=(0., 3., 7.5), team=2)
+        self.assertEqual(0., self.safe(own, [peer], coast=2.)['throttle'])
+        peer['position'] = (0., 8., 7.5)
         self.assertEqual(1., self.safe(own, [peer], coast=2.)['throttle'])
 
     def setUp(self):
@@ -26,16 +28,17 @@ class VehicleBrakingTests(unittest.TestCase):
         return self.traffic.safe_controls(
             own, order or command(), peers, now, lambda: coast)
 
-    def test_same_heading_allies_brake_and_opponents_keep_drive(self):
-        for peer_id, team in ((29, 1), (100001, 1), (100002, 2)):
+    def test_same_heading_hulls_brake_independent_of_team_or_order_mode(self):
+        for peer_id, team in ((29, 1), (100001, 1), (29, 2), (100002, 2)):
             for mode in ('route', 'advance', 'advance_contact', 'brawl'):
                 own = body(25, 0., 0., speed=0.)
                 peer = body(peer_id, 0., 7., speed=0., team=team)
                 for now in (0., 1.5, 2., 10., 30.):
                     stopped = self.safe(
                         own, [peer], dict(command(), combat_mode=mode), now=now)
-                    self.assertEqual(0. if team == 1 else 1., stopped['throttle'])
-                    self.assertEqual(team == 1, bool(stopped.get('brake', False)))
+                    self.assertEqual(0., stopped['throttle'])
+                    self.assertTrue(stopped.get('brake', False))
+                    self.assertEqual(peer_id, stopped['forward_blocked_by'])
                 self.assertEqual(1., self.safe(own, [])['throttle'])
 
     def test_leader_parallel_side_contact_and_reverse_escape_keep_progress(self):

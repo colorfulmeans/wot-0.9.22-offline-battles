@@ -638,9 +638,10 @@ class AutomaticFireAdmissionTests(AutomaticFireScene):
         self.step()
         self.assertFalse(self.friendly_verdict()['clear'])
         self.assertFalse(self.fire())
-        # The copied dead/debris guard intentionally has no ally escape
-        # metadata; it is reported as a closed, unproved lane.
-        self.assertEqual('auto_lane_geometry_unknown', self.control.last_fire_failure)
+        # A confirmed corpse collision is physical obstruction, not unknown
+        # geometry or a live ally's cooperative escape request.
+        self.assertEqual('auto_world_blocked', self.control.last_fire_failure)
+        self.assertEqual('wreck', self.admission.receipt['blocker']['blocker_kind'])
         self.assert_unspent()
 
     def test_wreck_envelope_refines_a_gap_and_skips_a_missed_box(self):
@@ -718,7 +719,8 @@ class AutomaticFireAdmissionTests(AutomaticFireScene):
         self.battle._projectile_server_time_ms = 1234
         self.battle._projectile_server_local_time = self.now
         self.assertFalse(self.fire())
-        self.assertEqual('auto_lane_geometry_unknown', self.control.last_fire_failure)
+        self.assertEqual('auto_world_blocked', self.control.last_fire_failure)
+        self.assertEqual('debris', self.admission.receipt['blocker']['blocker_kind'])
         self.assertTrue(obstacle.block_distance.called)
         self.assertEqual(1234, obstacle.block_distance.call_args.args[2])
         self.assert_unspent()

@@ -484,21 +484,11 @@ class BotAdapter(object):
     @observed('driver.order')
     def _drive_order(self, bot_id, state, position, strategic,
                      direction_clear):
-        # Perception and physical contacts retain all actors. Only driver
-        # avoidance ignores living opponents; wrecks remain pushable bodies.
-        original_neighbours = state.get('neighbours')
-        state['neighbours'] = [peer for peer in state.get('neighbours', ())
-                               if (not peer.get('alive', True) or
-                                   state.get('team') is None or peer.get('team') is None or
-                                   peer.get('team') == state.get('team'))]
-        try:
-            return self._drive_order_controls(bot_id, state, position, strategic,
-                                              direction_clear)
-        finally:
-            if original_neighbours is None:
-                state.pop('neighbours', None)
-            else:
-                state['neighbours'] = original_neighbours
+        # A living opponent occupies the same physical corridor as an ally.
+        # Keep the borrowed roster intact for every driver sweep; team-only
+        # cooperation remains the TrafficCoordinator's separate responsibility.
+        return self._drive_order_controls(bot_id, state, position, strategic,
+                                          direction_clear)
 
     def _drive_order_controls(self, bot_id, state, position, strategic,
                                        direction_clear):

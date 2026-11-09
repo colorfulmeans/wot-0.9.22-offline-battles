@@ -176,23 +176,44 @@ class SharedMultiBotCombatTests(unittest.TestCase):
                     scene.engine._actor_controls[actor].attack_policy.atomic_clock)
             peer_shots_before = collections.Counter(event['id'] for event in scene.launches_observed)
             deadline = start + SEARCH_SECONDS
+            first_he_load = None
             for unused in range(180):
                 frame = scene.step()
-                self.assertEqual(start, failing.attack_policy.search_started)
-                self.assertEqual(deadline, failing.attack_policy.status()['search_deadline'])
                 for actor in (12, 13, 14, 15, 16):
                     self.assertIsNone(scene.engine._actor_controls[actor].attack_policy.search_started)
                 if scene.now < deadline - 1.e-6:
+                    self.assertEqual(start, failing.attack_policy.search_started)
+                    self.assertEqual(deadline, failing.attack_policy.status()['search_deadline'])
                     self.assertEqual(0, failing.gun.shot_index)
                     self.assertEqual('search_penetration', failing.attack_policy.decision['action'])
+                elif failing.gun.shot_index == 2:
+                    if first_he_load is None:
+                        first_he_load = scene.now
+                    # The completed search belongs to the AP load. A real
+                    # subsequent HE load must not preserve/restart that timer.
+                    self.assertIn(failing.attack_policy.search_started, (start, None))
+                else:
+                    self.assertEqual(start, failing.attack_policy.search_started)
             self.assertGreater(scene.now, deadline)
+            self.assertIsNotNone(first_he_load)
+            self.assertGreaterEqual(first_he_load, deadline)
+            for unused in range(100):
+                scene.step()
+                self.assertIsNone(failing.attack_policy.search_started)
+                for actor in (12, 13, 14, 15, 16):
+                    self.assertIsNone(scene.engine._actor_controls[actor].attack_policy.search_started)
+                if any(event['id'] == 11 for event in scene.launches_observed):
+                    break
         self.assert_private_state_and_real_debits(scene)
         peer_shots_after = collections.Counter(event['id'] for event in scene.launches_observed)
         # The physically moving search actor may change a peer's native ray;
         # require actual continued team fire, without prescribing who wins it.
         self.assertGreater(sum(peer_shots_after[a]-peer_shots_before[a] for a in (12, 13, 14, 15, 16)), 10)
-        self.assertEqual((24, 0, 12), tuple(failing.gun.ammo))
-        self.assertFalse(any(event['id'] == 11 for event in scene.launches_observed))
+        fallback_shots = [event for event in scene.launches_observed if event['id'] == 11]
+        self.assertEqual(1, len(fallback_shots), failing.attack_policy.status())
+        self.assertEqual([2], [event['shell_index'] for event in fallback_shots])
+        self.assertGreater(fallback_shots[0]['evidence']['at'], first_he_load)
+        self.assertEqual((24, 0, 11), tuple(failing.gun.ammo))
         self.assert_budget_receipts(scene)
 
     def test_atomic_deadline_keeps_partial_native_failure_pending_while_peers_fire(self):

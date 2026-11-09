@@ -881,7 +881,14 @@ class HeadOnOwnerTests(unittest.TestCase):
         human_queue=[];published_human=None
         sign=-1 if reverse else 1
         human_yaw=math.pi if reverse else 0.
-        with mock.patch('sys.stdout'):
+        # This experiment prescribes both physical pedal inputs, not an AI
+        # decision to ram. _FixedAdapter fixes the planned pedal but the final
+        # automatic traffic guard can still replace it with braking. Hold only
+        # that decision boundary fixed; retain the real drive, world/hull sweeps,
+        # momentum solver, publication delays and reciprocal contact receipts.
+        with mock.patch('sys.stdout'), mock.patch.object(
+                worker._traffic_coordinator, 'safe_controls',
+                side_effect=lambda body, command, *unused, **kwargs: dict(command)):
             for tick in range(hz*6):
                 clock[0]=(tick+1)*dt
                 battle._local_speed=self.module.vehicle_physics.longitudinal_step(

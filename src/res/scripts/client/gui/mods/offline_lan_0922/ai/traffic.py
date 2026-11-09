@@ -154,8 +154,6 @@ def _reference_braking_roster(body, neighbours, throttle):
     speed = _dot(_velocity(body), _axes(body)[1])
     peers = [peer for peer in neighbours
              if peer['id'] != body['id'] and peer.get('alive', True) and
-             (body.get('team') is None or peer.get('team') is None or
-              peer.get('team') == body.get('team')) and
              _same_level(body, peer)]
     # Braking against current travel must remain available. At rest the
     # intended gear determines which hull face needs a clear corridor.
@@ -476,10 +474,11 @@ class TrafficCoordinator(object):
 
     def safe_controls(self, body, command, neighbours, now, stopping_distance,
                       step=1.0 / 30.0):
-        """Brake before allied hulls after planning and gun aiming.
+        """Brake before living hulls after planning and gun aiming.
 
         This guard is independent of friendly leases and tactical modes. In
         particular a player does not have to publish a cooperative Bot order.
+        An enemy is a physical obstacle, never a cooperative yield partner.
         It changes controls only: momentum, contact mass and player pushing
         remain owned by physics. Re-evaluate even when a decision is cached.
         """

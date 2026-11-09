@@ -309,7 +309,7 @@ class OrdinaryHEContinuityTests(unittest.TestCase):
         probes = [call for call in scene.calls if call[2] == 2 and call[-1] == 'penetration']
         self.assertEqual(1, len(probes))
 
-    def test_blocked_unknown_alternative_cannot_authorize_single_he_fallback(self):
+    def test_blocked_unknown_alternative_cannot_veto_loaded_he_or_authorize_next(self):
         for blocker in ('world_blocked', 'friendly_blocked'):
             with self.subTest(blocker=blocker):
                 scene = Observations(targets=1, points=1, he_validation='single_point')
@@ -319,12 +319,14 @@ class OrdinaryHEContinuityTests(unittest.TestCase):
                 for tick in range(5):
                     decision = scene.tick(tick * .1)
                     self.assertFalse(scene.policy._all_failed((0,)))
-                    self.assertFalse(scene.policy.fallback)
-                    self.assertNotEqual('he_fallback',
+                    self.assertTrue(scene.policy.fallback)
+                    self.assertEqual('aim', decision['action'])
+                    self.assertEqual('he_fallback',
                         (decision.get('candidate') or {}).get('mode'))
+                    self.assertEqual(2, decision['candidate']['shell_index'])
                     self.assertIsNone(scene.policy.next_plan)
                 # Once that same alternative is actually checked and fails,
-                # the ordinary HE decision may legitimately use contact.
+                # NEXT may also rank HE. CURRENT never needed that AP failure.
                 scene.value(0, armor='failed', line='clear')
                 scene.frame['line_revision'] += 1
                 for tick in range(5, 10):

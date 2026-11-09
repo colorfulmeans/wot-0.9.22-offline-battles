@@ -349,6 +349,7 @@ class EmbeddedSharedImportOrderTests(unittest.TestCase):
         policy_module = importlib.import_module(
             'gui.mods.offline_lan_0922.vehicle_control.attack_policy')
         runtime = types.ModuleType('embedded_movement_runtime')
+        runtime.now = 0.
         runtime.state = dict(position=(0., 0., 0.),
                              profile=dict(class_tag='AT-SPG'))
         runtime.features = frozenset(('drive', 'fire'))
@@ -375,8 +376,9 @@ class EmbeddedSharedImportOrderTests(unittest.TestCase):
         blocked = dict(target=target, armor='unknown', line='world_blocked',
             mechanical='unknown', solution=dict(yaw=0.), mode='penetration')
         policy.decision = dict(action='firing_position', candidate=blocked)
+        runtime.now = 1.
         accepted = owner.accept(route)
-        result = owner.finish(owner.resolve(accepted, 1.))
+        result = owner.finish(owner.resolve(accepted, runtime.now))
         self.assertTrue(owner.active)
         self.assertFalse(owner.combat_owned)
         self.assertFalse(owner.stop_allowed)
@@ -386,7 +388,8 @@ class EmbeddedSharedImportOrderTests(unittest.TestCase):
 
         current = dict(blocked, armor='passed', line='clear', mechanical='reachable')
         policy.decision = dict(action='aim', candidate=current)
-        admitted = owner.finish(owner.resolve(owner.accept(route), 2.))
+        runtime.now = 2.
+        admitted = owner.finish(owner.resolve(owner.accept(route), runtime.now))
         self.assertTrue(owner.combat_owned)
         self.assertTrue(owner.stop_allowed)
         self.assertEqual('engage', admitted['combat_mode'])
@@ -399,7 +402,8 @@ class EmbeddedSharedImportOrderTests(unittest.TestCase):
         self.assertIsNone(policy.current_target_key())
         runtime.state['position'] = (1., 0., 1.)
         next_route = dict(route, route_index=2, move_position=dict(x=60., y=0., z=140.))
-        continued = owner.finish(owner.resolve(owner.accept(next_route), 3.))
+        runtime.now = 3.
+        continued = owner.finish(owner.resolve(owner.accept(next_route), runtime.now))
         self.assertTrue(owner.combat_owned)
         self.assertEqual(episode, owner.receipt['episode'])
         self.assertEqual(first_receipt, runtime.state['_combat_movement_owner'])
@@ -407,7 +411,8 @@ class EmbeddedSharedImportOrderTests(unittest.TestCase):
         self.assertEqual(12, continued['target_id'])
 
         target.update(alive=False, health=0)
-        released = owner.finish(owner.resolve(owner.accept(route), 4.))
+        runtime.now = 4.
+        released = owner.finish(owner.resolve(owner.accept(route), runtime.now))
         self.assertFalse(owner.active)
         self.assertFalse(owner.combat_owned)
         self.assertFalse(owner.stop_allowed)
@@ -419,7 +424,8 @@ class EmbeddedSharedImportOrderTests(unittest.TestCase):
         candidate = dict(target=target, armor='unknown', line='clear',
             mechanical='mechanical_limited', solution=dict(yaw=1.), mode='penetration')
         runtime.attack_policy.decision = dict(action='firing_position', candidate=candidate)
-        admitted = owner.resolve(owner.accept(route), 1.)
+        runtime.now = 1.
+        admitted = owner.resolve(owner.accept(route), runtime.now)
         self.assertTrue(owner.combat_owned)
         # finish consumes the existing recovery driver's output; this fixture
         # does not claim to generate or physically execute that recovery.
@@ -427,12 +433,14 @@ class EmbeddedSharedImportOrderTests(unittest.TestCase):
                         move_position=(8., 0., 3.), throttle_override=None)
         owner.finish(recovery)
         runtime.attack_policy.decision = dict(action='wait', candidate=None)
-        continued = owner.finish(owner.resolve(owner.accept(route), 2.))
+        runtime.now = 2.
+        continued = owner.finish(owner.resolve(owner.accept(route), runtime.now))
         self.assertEqual((8., 0., 3.), continued['move_position'])
         self.assertEqual('advance_contact', continued['combat_mode'])
         self.assertTrue(owner.stop_allowed)
         travel = dict(route, combat_mode='team_return_base')
-        self.assertEqual(travel, owner.finish(owner.resolve(owner.accept(travel), 3.)))
+        runtime.now = 3.
+        self.assertEqual(travel, owner.finish(owner.resolve(owner.accept(travel), runtime.now)))
         self.assertFalse(owner.combat_owned)
         self.assertNotIn('_combat_movement_owner', runtime.state)
 

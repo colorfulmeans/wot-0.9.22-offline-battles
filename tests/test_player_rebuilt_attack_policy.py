@@ -198,8 +198,10 @@ class RebuiltForegroundTests(unittest.TestCase):
                     if alternate:
                         self.assertEqual(('aim', 1), (result['action'], result['candidate']['sample']))
                     else:
-                        self.assertEqual(('firing_position', 'unknown', 'passed'),
-                            (result['action'], result['candidate']['line'], result['candidate']['armor']))
+                        self.assertEqual('wait', result['action'])
+                        refused = scene.policy.rows[first['key']]
+                        self.assertEqual(('unknown', 'passed'),
+                                         (refused['line'], refused['armor']))
                         self.assertFalse(scene.policy.apply_order({})['fire_allowed'])
                     self.assertIsNone(scene.policy.search_started)
                 if not alternate:
@@ -221,7 +223,7 @@ class RebuiltForegroundTests(unittest.TestCase):
                          (result['action'], result['candidate']['shell_index']))
         self.assertIsNone(scene.policy.search_started)
 
-    def test_repeated_native_refusals_across_points_release_stationary_aim(self):
+    def test_repeated_refusals_do_not_turn_query_age_into_movement_authority(self):
         for refusal in ('auto_front_vehicle', 'auto_lane_geometry_unknown'):
             with self.subTest(refusal=refusal):
                 scene = Observations(targets=5, points=9)
@@ -233,23 +235,16 @@ class RebuiltForegroundTests(unittest.TestCase):
                     now = step / 5.
                     scene.frame['pose'] = ('source', 1.e-8 * step)
                     result = scene.tick(now)
-                    if result['action'] != 'aim':
-                        break
+                    self.assertEqual('aim', result['action'])
                     point = result['candidate']
                     attempted.add(point['key'])
                     scene.policy.admission_failed(point, refusal)
 
                 self.assertGreater(len(attempted), 1)
-                self.assertEqual(('firing_position', 'native_lane_stalled'),
+                self.assertEqual(('aim', 'current_shell_verified'),
                                  (result['action'], result['reason']))
-                self.assertLessEqual(now, ATOMIC_CLOSE_INTERVAL + .2)
                 self.assertIsNone(scene.policy.search_started)
-                order = scene.policy.apply_order(dict(
-                    move_position=(10., 0., 10.), throttle_override=1.))
-                self.assertEqual((10., 0., 10.), order['move_position'])
-                self.assertFalse(order['fire_allowed'])
-                self.assertEqual('firing_position', scene.tick(now + .1)['action'])
-                self.assertEqual('aim', scene.tick(now + ATOMIC_CLOSE_INTERVAL)['action'])
+                self.assertNotIn('move_request', result)
 
     def test_committed_alternative_clears_native_refusal_wait(self):
         scene = Observations(targets=1, points=3)
@@ -265,25 +260,22 @@ class RebuiltForegroundTests(unittest.TestCase):
         scene.policy.admission_failed(point, 'auto_front_vehicle')
         self.assertEqual('aim', scene.tick(2.3)['action'])
 
-    def test_lane_recovery_waits_for_displacement_even_after_commands_are_accepted(self):
+    def test_physical_lane_receipt_not_a_timer_owns_recovery(self):
         for departed in (False, True):
             with self.subTest(departed=departed):
-                scene = Observations(targets=2, points=9)
+                scene = Observations(targets=1, points=1)
                 scene.frame['search_drive'] = True
-                for target in (1, 2):
-                    for sample in range(9):
-                        scene.passed(target=target, sample=sample)
-                for now in (0., ATOMIC_CLOSE_INTERVAL):
-                    point = scene.tick(now)['candidate']
-                    scene.policy.admission_failed(point, 'auto_front_vehicle')
-
-                release_at = 2. * ATOMIC_CLOSE_INTERVAL
-                entered = scene.tick(release_at - .1)
-                self.assertEqual('native_lane_stalled', entered['reason'])
+                scene.passed()
+                point = scene.tick(0.)['candidate']
+                scene.policy.admission_failed(point, 'auto_front_vehicle',
+                    dict(kind='vehicle', vehicle_id=8, hostile=True, actor_key=('bot', 8)))
+                scene.value(0, armor='passed', line='enemy_blocked')
+                entered = scene.tick(.1)
+                self.assertEqual('current_penetration_obstructed', entered['reason'])
                 scene.policy.navigation_result(dict(
                     action='firing_position', status='accepted', turn=1.,
-                    position=(0., 0., 0.), at=release_at - .1))
-                parked = scene.tick(release_at + .1)
+                    position=(0., 0., 0.), at=.1))
+                parked = scene.tick(8.)
                 self.assertEqual('firing_position', parked['action'])
                 self.assertEqual(entered['move_request']['episode_id'],
                                  parked['move_request']['episode_id'])
@@ -291,9 +283,10 @@ class RebuiltForegroundTests(unittest.TestCase):
                 if departed:
                     scene.frame['position'] = (2., 0., 0.)
                     scene.frame['pose'] = ('source', 1)
-                    self.assertEqual('aim', scene.tick(release_at + .2)['action'])
                 else:
-                    self.assertEqual('aim', scene.tick(release_at + 4.)['action'])
+                    scene.frame['line_revision'] += 1
+                scene.passed()
+                self.assertEqual('aim', scene.tick(8.1)['action'])
                 self.assertIsNone(scene.policy.search_started)
 
     def test_copied_other_sample_refusal_does_not_override_verified_sample(self):
@@ -661,7 +654,7 @@ class RebuiltEvidenceTests(unittest.TestCase):
         self.assertEqual(('passed', 'pending'), (candidate['armor'], candidate['line']))
         self.assertIsNone(scene.policy.search_started)
 
-    def test_missing_evidence_releases_wait_to_ordinary_firing_position(self):
+    def test_missing_evidence_never_grants_firing_position_authority(self):
         scene = Observations(targets=1, points=1, he=False)
         scene.allow_atomic = False
         for index in (0, 1):
@@ -671,7 +664,8 @@ class RebuiltEvidenceTests(unittest.TestCase):
             scene.move_target(1, now)
             result = scene.tick(now)
             self.assertIsNone(scene.policy.search_started)
-        self.assertEqual('firing_position', result['action'])
+        self.assertEqual('wait', result['action'])
+        self.assertNotIn('move_request', result)
         self.assertEqual('penetration_evidence_incomplete', result['reason'])
 
     def test_pose_away_then_return_cannot_resurrect_old_proof(self):
@@ -806,25 +800,23 @@ class RebuiltSearchAndClipTests(unittest.TestCase):
                 self.assertEqual(plan['key'], ready['candidate']['key'])
                 self.assertTrue(scene.policy.apply_order({})['fire_allowed'])
 
-    def test_single_all_ammo_domain_and_magazine_current_only(self):
+    def test_both_single_and_magazine_require_the_all_ammo_domain(self):
         for clips in (1, 6):
             scene = Observations(clips=clips, targets=1, points=2)
             scene.value(1, armor='pending', line='pending')
             result = scene.tick(0.)
-            self.assertEqual(clips > 1, result['action'] == 'search_penetration')
+            self.assertNotEqual('search_penetration', result['action'])
+            self.assertIsNone(scene.policy.search_authority)
 
-    def test_magazine_preserves_clip_for_eight_seconds_before_alternative_reload(self):
+    def test_failed_magazine_reloads_verified_alternative_without_penetration_search(self):
         scene = Observations(clips=6, targets=1, points=2)
         scene.passed(1)
         scene.prime()
-        for step in range(80):
-            result = scene.tick(step * .1)
-            self.assertEqual('search_penetration', result['action'])
-            self.assertEqual(6, scene.frame['clip'])
-            self.assertEqual(0., scene.policy.search_started)
-        result = scene.tick(8.)
+        result = scene.tick(0.)
         self.assertEqual(('reload_clip', 1, True),
                          (result['action'], result['shell_index'], result['early_reload']))
+        self.assertEqual(6, scene.frame['clip'], 'policy cannot mutate physical ammunition')
+        self.assertIsNone(scene.policy.search_started)
 
     def test_empty_clip_reloads_without_eight_second_attempt(self):
         scene = Observations(clips=6)
@@ -924,9 +916,9 @@ class RebuiltSearchAndClipTests(unittest.TestCase):
 
 class RebuiltAtomicClosureTests(unittest.TestCase):
     def test_continuously_rotating_target_gets_one_frame_complete_failure(self):
-        scene = Observations(clips=6, targets=3, points=9)
+        scene = Observations(clips=6, targets=1, points=9)
         for step in range(30):
-            for target in range(1, 4):
+            for target in range(1, 2):
                 scene.move_target(target, step)
             result = scene.tick(step * .1)
             self.assertEqual('search_penetration', result['action'])
@@ -1022,7 +1014,7 @@ class RebuiltAtomicClosureTests(unittest.TestCase):
         result = scene.tick(0.)
         self.assertLessEqual(scene.policy._used['atomic'], ATOMIC_CANDIDATES)
         self.assertIsNone(scene.policy.search_started)
-        self.assertEqual('firing_position', result['action'])
+        self.assertEqual('wait', result['action'])
         self.assertEqual('global_snapshot_budget_pending', result['reason'])
 
     def test_wall_clock_cap_is_checked_between_candidates_and_never_fake_failure(self):
@@ -1036,7 +1028,7 @@ class RebuiltAtomicClosureTests(unittest.TestCase):
         result = scene.tick(0.)
         self.assertLessEqual(scene.policy._used['atomic'], 3)
         self.assertIsNone(scene.policy.search_started)
-        self.assertEqual('firing_position', result['action'])
+        self.assertEqual('wait', result['action'])
         self.assertEqual('atomic_frame_budget_exhausted', scene.policy.status()['atomic']['reason'])
 
 
@@ -1089,7 +1081,8 @@ class RebuiltFallbackTests(unittest.TestCase):
         scene.he(140., target=3, sample=2)
         decision = scene.tick(0., background=False)
         self.assertNotEqual('aim', decision['action'])
-        self.assertGreater(scene.policy.status()['he_comparison']['pending'], 0)
+        self.assertFalse(scene.policy._single_point_failed(2),
+                         'all candidate enemies need their own ordinary HE trial')
         for step in range(1, 20):
             decision = scene.tick(step * .1)
             self.assertLessEqual(scene.policy._used['foreground'], scene.policy.foreground_budget)
@@ -1130,9 +1123,10 @@ class RebuiltFallbackTests(unittest.TestCase):
         scene.tick(0.)
         scene.prime('he_fallback')
         result = scene.tick(8.)
-        self.assertEqual(('switch_shell', 3, ('bot', 2), 1),
-            (result['action'], result['shell_index'], result['candidate']['target_key'],
+        self.assertEqual(('aim', 2, ('bot', 3), 2),
+            (result['action'], result['candidate']['shell_index'], result['candidate']['target_key'],
              result['candidate']['sample']))
+        self.assertEqual(3, scene.policy.next_shell)
 
     def test_he_clip_remains_useful_even_when_other_he_damage_is_higher(self):
         scene = Observations(clips=6, targets=1, points=1)
@@ -1345,7 +1339,7 @@ class IndependentAmmoTraverseTests(unittest.TestCase):
         scene.policy.background(.1)
         self.assertIsNone(scene.policy.next_plan)
 
-    def test_limited_single_checks_all_stock_then_fallback_without_early_reload(self):
+    def test_limited_single_checks_all_stock_and_eight_seconds_before_fallback(self):
         scene = Observations(targets=1, points=1)
         scene.frame['limited_traverse'] = True
         scene.passed(1)
@@ -1358,12 +1352,15 @@ class IndependentAmmoTraverseTests(unittest.TestCase):
         scene.prime()
         scene.prime('he_fallback')
         result = scene.tick(.1)
+        self.assertEqual('search_penetration', result['action'])
+        self.assertEqual(.1, scene.policy.search_started)
+        result = scene.tick(8.1)
         self.assertEqual(('switch_shell', 2, 'he_fallback'),
             (result['action'], result['shell_index'], result['candidate']['mode']))
-        self.assertIsNone(scene.policy.search_started)
+        self.assertEqual(.1, scene.policy.search_started)
         self.assertIsNone(scene.policy.reload_authority)
 
-    def test_limited_non_he_qualifies_reload_even_when_replacement_review_is_pending(self):
+    def test_limited_non_he_waits_until_replacement_is_verified_before_reload(self):
         for siege in (False, True):
             with self.subTest(siege=siege):
                 scene = Observations(clips=6, targets=1, points=1)
@@ -1371,10 +1368,15 @@ class IndependentAmmoTraverseTests(unittest.TestCase):
                 scene.value(1, armor='unknown', line='pending')
                 scene.value(2, armor='unknown', line='pending')
                 result = scene.tick(0.)
-                self.assertEqual(('reload_clip', True, 0),
-                    (result['action'], result['early_reload'], result['shell_index']))
-                self.assertIsNone(result['candidate'])
+                self.assertEqual('wait', result['action'])
+                self.assertIsNone(scene.policy.reload_authority)
                 self.assertIsNone(scene.policy.search_started)
+                scene.passed(1)
+                scene.value(2)
+                scene.prime()
+                result = scene.tick(.05)
+                self.assertEqual(('reload_clip', True, 1),
+                    (result['action'], result['early_reload'], result['shell_index']))
                 qualified = scene.policy.reload_authority['qualified_at']
                 for step in range(1, 10):
                     scene.frame['pose'] = ('physically_moving', step)
@@ -1395,6 +1397,8 @@ class IndependentAmmoTraverseTests(unittest.TestCase):
             with self.subTest(event=event):
                 scene = Observations(clips=6, targets=1, points=1)
                 scene.frame.update(limited_traverse=True, clip=3)
+                scene.passed(1)
+                scene.prime()
                 scene.tick(0.)
                 self.assertIsNotNone(scene.policy.reload_authority)
                 if event == 'load_started':
@@ -1413,6 +1417,8 @@ class IndependentAmmoTraverseTests(unittest.TestCase):
         scene = Observations(clips=6, targets=1, points=1)
         scene.frame.update(limited_traverse=True, clip=3,
                            weapon_identity=('round', 'physical_gun'))
+        scene.passed(1)
+        scene.prime()
         scene.tick(0.)
         qualified = scene.policy.reload_authority['qualified_at']
         self.assertTrue(scene.policy.rows)
@@ -1433,12 +1439,13 @@ class IndependentAmmoTraverseTests(unittest.TestCase):
     def test_scope_exclusion_is_separate_from_unknown_geometry_and_empty_domain(self):
         scene = Observations(clips=6, targets=1, points=2)
         scene.frame['limited_traverse'] = True
+        scene.frame['ammo'] = (30, 0, 0)
         scene.value(0, sample=1, armor='unknown', line='clear',
             mechanical='mechanical_limited', scope='excluded',
             scope_proof=dict(scope='excluded', reason='complete_native_pitch_envelope'))
         scene.prime(index=0)
         result = scene.tick(0.)
-        self.assertEqual('reload_clip', result['action'])
+        self.assertEqual('search_penetration', result['action'])
         domain = scene.policy.failure_domains[(0,)]
         self.assertEqual((1, 1, 0), (domain['failed'], domain['excluded'], domain['geometry_pending']))
         self.assertEqual('unknown', scene.policy.rows[0, ('bot', 1), 1, 'penetration']['armor'])
@@ -1481,7 +1488,7 @@ class IndependentAmmoTraverseTests(unittest.TestCase):
                     stationary_plan=self.stationary_evidence())
         scene.prime(index=0)
         result = scene.tick(0.)
-        self.assertEqual('reload_clip', result['action'])
+        self.assertEqual('search_penetration', result['action'])
         domain = scene.policy.failure_domains[(0,)]
         self.assertEqual((1, 1, True),
             (domain['failed'], domain['projected_failed'], domain['all_failed']))
@@ -1610,6 +1617,43 @@ import test_player_fire_admission_complete as native_fire
 
 
 class NativeAtomicClosureTests(native_fire.AutomaticFireScene):
+    def test_known_wreck_or_debris_lane_receipt_is_obstruction_not_unknown(self):
+        geometry = self.runtime.geometry
+        original = geometry._bot_friendly_path_verdict
+        self.addCleanup(setattr, geometry, '_bot_friendly_path_verdict', original)
+        for kind in (None, 'wreck', 'debris'):
+            with self.subTest(kind=kind):
+                # This is the geometry -> evaluator receipt boundary. The
+                # native wreck collision itself is covered by the report
+                # replay and geometry collision tests, not this adapter case.
+                verdict = dict(clear=False)
+                if kind is not None:
+                    verdict.update(blocked=True, blocker_kind=kind,
+                                   blocker_id=1010, blocker_position=(0., 0., 50.))
+                geometry._bot_friendly_path_verdict = lambda *args: dict(verdict)
+                policy = self.runtime.attack_policy
+                policy.reset()
+                policy.evaluator.jobs.clear()
+                for unused in range(30):
+                    self.step(.1)
+                    policy.frame = policy.evaluator.snapshot(self.now)
+                    row = policy._evaluate(policy._jobs(shell_index=0)[0],
+                                           self.now, 'foreground')
+                    if row['line'] != 'pending':
+                        break
+                if kind is None:
+                    self.assertEqual(('unknown', 'lane_geometry_unavailable'),
+                                     (row['line'], row['reason']))
+                    self.assertFalse(policy._needs_firing_position(row))
+                else:
+                    self.assertEqual(('world_blocked', kind + '_blocked'),
+                                     (row['line'], row['reason']))
+                    self.assertEqual(kind, row['blocker']['blocker_kind'])
+                    self.assertTrue(policy._needs_firing_position(row))
+                self.assertEqual('unknown', row['armor'])
+                self.assertFalse(policy._all_failed((0,)))
+                self.assertFalse(policy._executable(row))
+
     def combat_evaluator(self, targets):
         # Native geometry remains real; only the already-completed original
         # BOT admission result is supplied at the explicit observation seam.
@@ -1868,7 +1912,8 @@ class NativeAtomicClosureTests(native_fire.AutomaticFireScene):
             if policy.search_started is not None:
                 break
         self.assertIsNotNone(policy.search_started, policy.status())
-        self.assertGreater(ordinary_navigation_requests, 0)
+        self.assertEqual(0, ordinary_navigation_requests,
+                         'an unfinished global proof is not ordinary movement authority')
         self.assertEqual(405, len(policy._jobs()))
         self.assertTrue(policy._all_failed((0, 1, 2)))
         self.assertGreater(step, 0)

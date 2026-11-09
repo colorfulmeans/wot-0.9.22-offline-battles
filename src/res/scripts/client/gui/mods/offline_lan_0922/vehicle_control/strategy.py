@@ -1221,6 +1221,15 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
     def _protect_capture_order(self, order, bot, target):
         """Circle occupancy belongs to every arrival, not a three-Bot squad."""
         actor = bot['id']
+        if (self._combat_movement_task(bot) is not None and
+                self._task_combat(order, bot)):
+            # Crossing a circle during an admitted combat manoeuvre is not
+            # arrival of the suspended route. Creating a capture constraint
+            # here revoked that same movement receipt on the next callback,
+            # then the route terminal manufactured a permanent hold. Explicit
+            # capture/travel orders still pass through their task owner.
+            self._capture_arrivals.pop(actor, None)
+            return
         if (target is None or actor in self._travel_tasks or
                 actor in self._route_recoveries or order.get('team_command') or
                 order.get('defense_base_id')):

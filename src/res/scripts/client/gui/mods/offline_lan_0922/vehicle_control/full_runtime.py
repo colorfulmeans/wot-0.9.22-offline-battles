@@ -604,7 +604,7 @@ class _ForegroundGeometry(SharedBattleGeometry):
     def _server_entity(self, entity_id):
         return self.player_runtime.owner._server_entity(entity_id)
 
-    def _wreck_blocks_bot_path(self, rows, points, lane_ends=()):
+    def _wreck_blocks_bot_path(self, rows, points, lane_ends=(), receipt=None):
         """An envelope hit only selects the chord for native component tests."""
         radius = PROJECTILE_BROADPHASE_RADIUS
         radius_sq = radius ** 2
@@ -635,10 +635,12 @@ class _ForegroundGeometry(SharedBattleGeometry):
                         vehicle, body, self._vector(segment[0]), self._vector(segment[1]),
                         math_module, chassis_matrix=chassis):
                     self._wreck_lane_evidence(record, vehicle, points, True)
+                    if receipt is not None:
+                        receipt.update(self._wreck_blocker_receipt(record, vehicle, position))
                     return True
             self._wreck_lane_evidence(record, vehicle, points, False)
         # Landed turrets remain separate obstacles on the server clock.
-        return SharedBattleGeometry._wreck_blocks_bot_path(self, (), points, lane_ends)
+        return SharedBattleGeometry._wreck_blocks_bot_path(self, (), points, lane_ends, receipt)
 
     def _bot_direct_launch_origin(self, source, descriptor, shell_index,
                                   fire_seq, yaw, pitch, flight_time=0.):

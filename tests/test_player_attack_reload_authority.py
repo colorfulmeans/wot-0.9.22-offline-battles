@@ -43,7 +43,7 @@ class ReloadAuthorityLifecycleTests(unittest.TestCase):
             self.assertIsNone(policy.search_started)
             if decision['action'] == 'reload_clip' and decision.get('early_reload'):
                 return decision
-        self.fail('native complete failure did not qualify limited-gun reload: %r' % policy.status())
+        self.fail('verified alternative did not qualify current-failed reload: %r' % policy.status())
 
     def test_limited_reload_keeps_qualification_across_pose_changes_without_retreat_wait(self):
         scene = self.limited_scene()
@@ -94,7 +94,7 @@ class ReloadAuthorityLifecycleTests(unittest.TestCase):
         self.assertEqual(1, len(observed))
         receipt = observed[0]
         self.assertEqual(applied_at, receipt['now'])
-        self.assertEqual('limited_traverse_current_clip_failed', receipt['decision']['reason'])
+        self.assertEqual('current_shell_all_armour_failed', receipt['decision']['reason'])
         self.assertEqual('passed', receipt['decision']['candidate']['armor'])
         self.assertEqual(before, gun.ammo)
         self.assertEqual((1, 0), (gun.shot_index, gun.clip))
@@ -143,8 +143,10 @@ class ReloadAuthorityLifecycleTests(unittest.TestCase):
         shell_fixtures.FullShellSettingsTests.move_from_previous_route_point(scene)
         gun, runtime = scene.battle._gun_state, scene.runtime
         gun.clip = 2
-        for shot in gun.shots:
-            shot.piercingPower = (1., 1.)
+        for index, piercing in enumerate((1., 1000.)):
+            gun.shots[index].piercingPower = (piercing, piercing)
+            scene.battle.client.effective_params['gun']['shots'][index][
+                'source_shot']['piercingPower'] = (piercing, piercing)
         policy = runtime.attack_policy
         policy.reset()
         policy.atomic_time_budget = .25

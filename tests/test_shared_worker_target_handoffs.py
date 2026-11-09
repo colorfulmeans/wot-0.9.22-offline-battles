@@ -27,10 +27,18 @@ class SharedWorkerTargetHandoffTests(unittest.TestCase):
         self.assertEqual(('bot', 14), binding.attack_policy.current_target_key())
         self.assertEqual('aim', binding.attack_policy.decision['action'])
         self.move_actor(scene, 12, (-16., 0., 0.))
-        for unused in range(15):
+        source = tuple(binding.state['position'])
+        committed = int(binding.state['fire_seq'])
+        # A real blocker now finishes the shared stationary-alternative
+        # frontier before granting movement. Wait for that event instead of
+        # assuming a partial scan is an early relocation certificate.
+        for unused in range(200):
             scene.step()
             if 11 in engine._friendly_repositions:
                 break
+            self.assertEqual(source, tuple(binding.state['position']))
+            self.assertEqual(committed, binding.state['fire_seq'])
+            self.assertIsNone(binding.attack_policy.search_started)
         self.assertEqual('firing_position', binding.attack_policy.decision['action'])
         marker = engine._friendly_repositions[11]
         self.assertEqual(14, marker['target_id'])
@@ -64,7 +72,10 @@ class SharedWorkerTargetHandoffTests(unittest.TestCase):
             self.assertIsNone(scene.engine._server_orders[11]['target_id'])
             self.assertEqual(15, scene.engine._server_orders[11]['initial_target_hint']['target_id'])
             self.assertEqual(('bot', 14), binding.attack_policy.current_target_key())
-            self.assertEqual('firing_position', binding.attack_policy.decision['action'])
+            decision = binding.attack_policy.decision
+            self.assertIn(decision['action'], ('firing_position', 'wait'))
+            if decision['action'] == 'wait':
+                self.assertEqual('stationary_alternatives_pending', decision['reason'])
             self.assertIs(marker, scene.engine._friendly_repositions.get(11),
                           'The raw macro hint cancelled the retained shared recovery.')
             self.assertEqual(original, marker,
@@ -80,13 +91,28 @@ class SharedWorkerTargetHandoffTests(unittest.TestCase):
         self.set_armor(scene, 15, 30.)
         self.move_actor(scene, 15, (-5., 0., 5.))
         scene.next_plan = 0.
-        scene.step()
+        for unused in range(100):
+            scene.step()
+            if binding.attack_policy.current_target_key() == ('bot', 15):
+                break
+            # The fresh contact's real native frontier may finish on the
+            # following callback. It cannot cancel the old movement owner
+            # before the replacement actually qualifies.
+            self.assertIs(marker, scene.engine._friendly_repositions.get(11))
         self.assertEqual(('bot', 15), binding.attack_policy.current_target_key())
         self.assertEqual('aim', binding.attack_policy.decision['action'])
         self.assertNotIn(11, scene.engine._friendly_repositions)
         event = binding.state['_friendly_reposition_event']
-        self.assertEqual('target_changed', event['outcome'])
+        # The shared phase now retires its own exact marker once the native
+        # replacement is proved, before the old physical target-change hook.
+        self.assertEqual('verified_shot', event['outcome'])
         self.assertEqual(marker['identity'], event['marker']['identity'])
+        self.assertEqual(('bot', 15), binding.combat_stop._intent_target)
+        self.assertIsNone(binding.combat_stop._physical_recovery)
+        candidate = binding.attack_policy.decision['candidate']
+        evidence = binding.attack_policy.current_row(candidate, require_line=True)
+        self.assertEqual(('clear', 'passed', 'reachable'),
+                         tuple(evidence[name] for name in ('line', 'armor', 'mechanical')))
 
     def test_explicit_shared_hold_task_takes_over_recovery(self):
         scene, binding, unused_marker = self.scene_with_friendly_recovery()

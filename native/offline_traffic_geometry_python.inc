@@ -136,8 +136,6 @@ PyObject *prepare_call(PyObject *source, PyObject *raw, PyObject *tuning,
     const double throttle = finite_number(items(tuning)[0]);
     const Row own = row_values(source, true);
     const auto own_id = identity(field(source, ID));
-    PyObject *own_team = field(source, TEAM);
-    if (!absent(own_team)) identity(own_team);
     std::vector<Row> rows;
     rows.reserve(static_cast<size_t>(size(raw)));
     for (Py_ssize_t i = 0; i < size(raw); ++i) {
@@ -146,9 +144,8 @@ PyObject *prepare_call(PyObject *source, PyObject *raw, PyObject *tuning,
         if (identity(field(peer, ID)) == own_id) continue;
         PyObject *alive = field(peer, ALIVE);
         if (alive && (alive == none_object || finite_number(alive) == 0.)) continue;
-        PyObject *team = field(peer, TEAM);
-        if (!absent(own_team) && !absent(team) &&
-                identity(team) != identity(own_team)) continue;
+        // Braking and the final pivot sweep are physical checks, not allied
+        // cooperation. Opcode 8 still owns the team-only crossing roster.
         Row row = row_values(peer, false);
         row.index = i;
         rows.push_back(row);

@@ -177,7 +177,7 @@ class FullShellSettingsTests(unittest.TestCase):
         self.assertEqual([(scene.settings.CURRENT_SHELLS, 102)],
             [call for call in scene.setting_calls if call[0] == scene.settings.CURRENT_SHELLS])
 
-    def test_failed_ordinary_he_switches_during_native_load_and_fires_replacement(self):
+    def test_current_ordinary_he_finishes_loading_and_fires_before_verified_next_ap(self):
         scene = self.scene(clip=1, burst=1, third=True)
         runtime, gun = scene.runtime, scene.battle._gun_state
         he = gun.shots[2]
@@ -195,36 +195,35 @@ class FullShellSettingsTests(unittest.TestCase):
         self.assertIsNone(runtime._loading_switch)
         runtime.attack_policy.reset()
         scene.setting_calls[:] = []
-        setting, observed = scene.battle.change_vehicle_setting, []
-
-        def observe_current(code, value):
-            if code == scene.settings.CURRENT_SHELLS:
-                observed.append(dict(reload_time=gun.reload_time,
-                                     decision=copy.deepcopy(runtime.attack_policy.decision)))
-            return setting(code, value)
-
-        scene.battle.change_vehicle_setting = observe_current
         before = list(gun.ammo)
         scene.rotator_enabled = True
-        switched = None
+        queued_while_loading = False
+        ap_loading_after_he = False
         for unused in range(160):
-            was_loading = gun.reload_time > 0.
             self.tick_weapon(scene)
-            if gun.shot_index == 0 and switched is None:
-                switched = dict(runtime._shell_receipt)
-                self.assertTrue(was_loading)
-                self.assertGreater(observed[0]['reload_time'], 0.)
-                self.assertEqual('passed', observed[0]['decision']['candidate']['armor'])
-                self.assertEqual(('CURRENT_SHELLS', True, 'ordinary_he_point_failed'),
-                    (switched['setting'], switched['accepted'], switched['reason']))
+            launches = scene.launches()
+            if not launches:
+                self.assertEqual(2, gun.shot_index)
                 self.assertEqual(before, gun.ammo)
-                self.assertIs(gun, runtime._loading_switch)
-            if scene.launches():
+                self.assertNotIn(runtime.attack_policy.decision['action'],
+                                 ('switch_shell', 'reload_clip'))
+                if gun.reload_time > 0. and gun.pending_index == 0:
+                    queued_while_loading = True
+                    self.assertEqual('passed', runtime.attack_policy.next_plan['armor'])
+            elif len(launches) == 1:
+                self.assertEqual(2, launches[0]['shell_index'])
+                self.assertEqual(0, gun.shot_index)
+                if not ap_loading_after_he:
+                    self.assertGreater(gun.reload_time, 0.)
+                    ap_loading_after_he = True
+            if len(launches) >= 2:
                 break
-        self.assertIsNotNone(switched, scene.trace[-3:])
-        self.assertEqual([0], [shot['shell_index'] for shot in scene.launches()])
-        self.assertEqual([before[0] - 1, before[1], before[2]], gun.ammo)
-        self.assertEqual([(scene.settings.CURRENT_SHELLS, 101)],
+        self.assertTrue(queued_while_loading, scene.trace[-3:])
+        self.assertTrue(ap_loading_after_he, scene.trace[-3:])
+        self.assertEqual([2, 0], [shot['shell_index'] for shot in scene.launches()])
+        self.assertEqual([before[0] - 1, before[1], before[2] - 1], gun.ammo)
+        self.assertEqual([(scene.settings.NEXT_SHELLS, 101)], scene.setting_calls)
+        self.assertEqual([],
             [call for call in scene.setting_calls if call[0] == scene.settings.CURRENT_SHELLS])
 
     def test_manual_current_ap_still_accepts_a_verified_he_for_the_very_next_load(self):
@@ -710,7 +709,7 @@ class FullShellSettingsTests(unittest.TestCase):
         self.assertFalse(scene.setting_calls)
         self.assertFalse(scene.launches())
 
-    def test_real_global_failure_plan_applies_qualified_reload_without_a_retreat_attempt(self):
+    def test_real_verified_alternative_reloads_without_penetration_search_or_retreat(self):
         scene = self.scene()
         self.move_from_previous_route_point(scene)
         gun = scene.battle._gun_state
@@ -723,29 +722,25 @@ class FullShellSettingsTests(unittest.TestCase):
         policy = scene.runtime.attack_policy
         policy.reset()
         self.assertIsInstance(policy.evaluator, attack_policy.NativeAttackEvaluator)
-        search_started = None
-        # Use the actual route-attempt boundary without actuating the vehicle.
+        # Only CURRENT AP fails. The other stocked shell has real positive
+        # evidence, so this is not the global no-penetration search domain.
         for unused in range(140):
             scene.step(.11)
             decision = policy.update(scene.now)
             policy.background(scene.now)
-            if decision['action'] == 'search_penetration':
-                scene.runtime._move_order({}, scene.now)
-            if policy.search_started is not None and search_started is None:
-                search_started = policy.search_started
+            self.assertNotEqual('search_penetration', decision['action'])
+            self.assertIsNone(policy.search_started)
             self.assertEqual((0, 3, 0.), (gun.shot_index, gun.clip, gun.reload_time))
             if decision['action'] == 'reload_clip' and decision.get('early_reload'):
                 break
         else:
             self.fail('real native evidence did not produce an early reload plan: %r' % policy.status())
-        self.assertIsNotNone(search_started)
-        self.assertGreaterEqual(scene.now - search_started, attack_policy.SEARCH_SECONDS)
+        self.assertEqual('current_shell_all_armour_failed', decision['reason'])
         self.assertEqual(1, decision['shell_index'])
         self.assertEqual('passed', decision['candidate']['armor'])
         self.assertTrue(scene.world_queries)
-        # Eight seconds of genuine no-penetration search still qualify this
-        # transaction. Once qualified, native loading is immediate: neither
-        # an old retreat endpoint nor its progress timeout is a prerequisite.
+        # A verified alternate authorizes loading in place. Neither an
+        # eight-second negative search nor a tactical retreat is prerequisite.
         self.assertFalse(hasattr(scene.runtime, '_reload_order'))
         self.assertFalse(hasattr(scene.runtime, '_reload_retreat'))
         task_before = copy.deepcopy(scene.runtime.combat_stop.task_order)
@@ -781,23 +776,21 @@ class FullShellSettingsTests(unittest.TestCase):
             return settings(code, value)
 
         scene.battle.change_vehicle_setting = observe_setting
-        search_started = None
         for unused in range(230):
             row = scene.tick()
             self.assertIsNone(scene.control.last_control_failure, row)
-            if scene.runtime.attack_policy.search_started is not None and search_started is None:
-                search_started = scene.runtime.attack_policy.search_started
+            self.assertIsNone(scene.runtime.attack_policy.search_started)
+            self.assertNotEqual('search_penetration', row['action'])
             self.assertEqual(before, gun.ammo)
             if accepted:
                 break
             self.assertEqual((0, 3, 0.), (gun.shot_index, gun.clip, gun.reload_time))
         else:
             self.fail('complete foreground loop never consumed its valid alternate clip: %r' % scene.trace[-3:])
-        self.assertIsNotNone(search_started)
         self.assertEqual(1, len(accepted))
         receipt = accepted[0]
-        self.assertGreaterEqual(receipt['now'] - search_started, attack_policy.SEARCH_SECONDS)
         self.assertEqual('reload_clip', receipt['decision']['action'])
+        self.assertEqual('current_shell_all_armour_failed', receipt['decision']['reason'])
         self.assertTrue(receipt['decision']['early_reload'])
         self.assertEqual('passed', receipt['decision']['candidate']['armor'])
         self.assertNotIn(receipt['mode'],

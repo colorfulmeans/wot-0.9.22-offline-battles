@@ -14720,7 +14720,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual((0.0, 0.0, 55.0), battle._artillery_arc_probe(
             (0.0, 3.0, 45.0), (0.0, 0.0, 60.0)))
 
-    def test_frozen_direct_and_spg_paths_reject_a_wreck_without_ally_metadata(self):
+    def test_frozen_direct_and_spg_paths_reject_a_known_wreck_without_ally_escape(self):
         runtime, battle, source, target, descriptor = self._bot_lane_scene()
         source.update(team=1, fire_seq=0)
         self._bot_lane_wreck(
@@ -14739,7 +14739,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
                     source, target, descriptor, 0, launch),
                 battle._bot_artillery_friendly_lane(
                     source, target, descriptor, 0, receipt)):
-            self.assertEqual({'clear': False}, verdict)
+            self.assertFalse(verdict['clear'])
+            self.assertTrue(verdict['blocked'])
+            self.assertEqual('wreck', verdict['blocker_kind'])
 
     def test_frozen_path_rejects_landed_turret_and_ignores_wreck_splash(self):
         runtime, battle, source, unused_target, unused = self._bot_lane_scene()
@@ -14751,8 +14753,10 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         battle._detached_turret_obstacles = types.SimpleNamespace(
             block_distance=lambda *unused_args: 40.0)
-        self.assertEqual({'clear': False}, battle._bot_friendly_path_verdict(
-            source, path, splash_radius=10.0))
+        verdict = battle._bot_friendly_path_verdict(source, path, splash_radius=10.0)
+        self.assertFalse(verdict['clear'])
+        self.assertTrue(verdict['blocked'])
+        self.assertEqual('debris', verdict['blocker_kind'])
 
     def test_bot_friendly_lane_uses_the_frozen_dispersed_parabola(self):
         runtime = _runtime()

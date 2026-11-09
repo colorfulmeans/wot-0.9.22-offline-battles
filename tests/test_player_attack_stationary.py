@@ -86,10 +86,10 @@ class NativeStationaryCombatTests(unittest.TestCase):
                 sender=(scene.battle._sender.forward, scene.battle._sender.turn),
                 arcs=len(scene.planner._arcs)))
             self.assertIsNone(scene.control.last_control_failure)
-            if policy.decision['reason'] == 'limited_traverse_current_clip_failed':
+            if policy.decision['reason'] == 'current_shell_all_armour_failed':
                 break
         final = receipts[-1]
-        self.assertEqual('limited_traverse_current_clip_failed', final['decision']['reason'],
+        self.assertEqual('current_shell_all_armour_failed', final['decision']['reason'],
                          [(r['decision']['reason'], r['yaw'], r['arcs']) for r in receipts])
         self.assertGreater(len(receipts), 1)
         self.assertTrue(any(r['decision']['reason'] == 'stationary_domain_review_pending'
@@ -127,7 +127,7 @@ class NativeStationaryCombatTests(unittest.TestCase):
         self.assertEqual([19, 10], scene.battle._gun_state.ammo)
         self.assertIsNone(policy.search_started)
 
-    def test_budget_wait_is_physically_stopped_but_does_not_restart_its_two_second_window(self):
+    def test_budget_wait_stays_physically_stopped_until_real_native_work_can_resume(self):
         scene = self.scene(limits=(-.1, .1), clip=6, burst=1, bearing=.7, rate=.8)
         policy = scene.runtime.attack_policy
         observed = []
@@ -143,12 +143,21 @@ class NativeStationaryCombatTests(unittest.TestCase):
         self.assertTrue(waits, observed)
         self.assertTrue(all(r[3:5] == (0, 0) for r in waits), waits)
         self.assertEqual(1, len(set(r[5] for r in waits)))
-        self.assertLessEqual(waits[-1][0] - waits[0][0], 2.01)
-        self.assertTrue(any(r[1] == 'firing_position' for r in observed), observed)
+        self.assertGreater(waits[-1][0] - waits[0][0], 3.)
+        self.assertFalse(any(r[1] == 'firing_position' for r in observed), observed)
         self.assertIsNone(policy.search_started)
         self.assertFalse(scene.launches())
+        # Releasing the same real native budget, not waiting out a timer,
+        # permits the stationary plan to complete and the original turn.
+        for unused in range(80):
+            scene.tick()
+            if policy.decision['action'] == 'firing_position':
+                break
+        self.assertEqual('firing_position', policy.decision['action'])
+        self.assertTrue(policy._plannable(policy.decision['candidate']))
+        self.assertFalse(scene.launches())
 
-    def test_he_multi_yaw_failure_uses_loaded_clip_fallback_without_eight_second_search(self):
+    def test_he_reviewed_enemy_fallback_does_not_wait_for_another_yaw_domain(self):
         scene = self.scene(limits=(-.1, .1), clip=6, burst=1, bearing=0., rate=.8)
         other = scene.vehicle(43, (math.sin(.8) * 40., 0., math.cos(.8) * 40.), team=2)
         self.admit_contacts(scene)
@@ -156,8 +165,9 @@ class NativeStationaryCombatTests(unittest.TestCase):
             for material in getattr(other.typeDescriptor, name).materials.values():
                 material.armor = 10000.
         scene.set_he(1.)
-        # Multi-yaw negative closure belongs to a reviewed full-validation
-        # HESH pair; ordinary HE now has its separate one-point policy.
+        # The selected enemy must have a complete negative point domain for
+        # full-validation HESH. Another yaw domain cannot hold up its legal
+        # contact shot, nor count as negative before native review finishes.
         descriptor = scene.entity.typeDescriptor
         descriptor.name = descriptor.type.name = 'uk:GB83_FV4005'
         descriptor.gun.name = '_183mm_AT_Gun'
@@ -168,9 +178,24 @@ class NativeStationaryCombatTests(unittest.TestCase):
         started = scene.now
         for unused in range(120):
             scene.tick()
-            domain = policy.failure_domains.get((0,), {})
-            if domain.get('all_failed') and domain.get('projected_failed'):
-                qualified = copy.deepcopy(domain)
+            candidate = policy.decision.get('candidate')
+            if (candidate is not None and candidate.get('mode') == 'he_fallback' and
+                    candidate['target_key'] in policy._loaded_he_fallback_targets(0)):
+                selected_rows = [policy._current(job, require_line=True)
+                    for job in policy._jobs(shell_index=0)
+                    if job[0][1] == candidate['target_key']]
+                self.assertTrue(selected_rows)
+                for row in selected_rows:
+                    self.assertIsNotNone(row)
+                    if row.get('scope') == 'excluded':
+                        self.assertEqual('excluded', row['scope_proof']['scope'])
+                        continue
+                    proof = (row if row['mechanical'] == 'reachable' else
+                             policy._planned_evidence(row))
+                    self.assertIsNotNone(proof)
+                    self.assertEqual(('clear', 'reachable', 'failed'),
+                                     (proof['line'], proof['mechanical'], proof['armor']))
+                qualified = copy.deepcopy(selected_rows)
             self.assertIsNone(policy.search_started)
             self.assertEqual(0, scene.battle._gun_state.shot_index)
             self.assertIsNone(policy.reload_authority)

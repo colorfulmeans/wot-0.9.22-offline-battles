@@ -1,4 +1,4 @@
-"""Planning rotations retain allied safety and fresh sequential poses."""
+"""Planning rotations retain living-hull safety and fresh sequential poses."""
 import copy
 import unittest
 from unittest import mock
@@ -28,18 +28,18 @@ class PlanningRotationTests(unittest.TestCase):
     def tearDown(self):
         self.fixture.tearDown()
 
-    def test_native_roster_keeps_allies_wreck_policy_and_live_state_identity(self):
+    def test_native_roster_keeps_all_living_hulls_wreck_policy_and_live_state_identity(self):
         from gui.mods.offline_lan_0922 import native_math as module
         backend = mock.Mock(rotation_current=mock.Mock())
         before = copy.deepcopy((self.runtime.states, self.supplied))
         with mock.patch.object(module, '_load', return_value=backend), mock.patch.object(
                 module, 'call', return_value=.75) as call:
-            for push, expected in ((False, [2, 4]), (True, [2])):
+            for push, expected in ((False, [2, 3, 4]), (True, [2, 3])):
                 value = self.runtime._planning_rotation_fraction_for(
                     self.source, (0., 0., 0.), 0., .4, self.supplied, push)
                 self.assertEqual(.75, value)
                 args = call.call_args[0]
-                self.assertEqual([1000001], [peer['id'] for peer in args[5]])
+                self.assertEqual([1000001, 1000002], [peer['id'] for peer in args[5]])
                 self.assertEqual(expected, [key for key, raw in args[6]])
                 self.assertIs(self.runtime.states[2], args[6][0][1])
             self.runtime.states[2]['x'] = 9.
@@ -59,7 +59,7 @@ class PlanningRotationTests(unittest.TestCase):
                     for push in (False, True):
                         peers = [p for p in self.runtime._neighbours_for(self.source, self.supplied)
                                  if (not p.get('alive', True) and not push) or
-                                 (p.get('alive', True) and p.get('team') == 1)]
+                                 p.get('alive', True)]
                         expected = self.fixture.module.tank_collision.rotation_fraction(
                             (0., 0., 0.), 0., .4, self.source['collision_shape'], peers)
                         actual = self.runtime._planning_rotation_fraction_for(
@@ -92,7 +92,7 @@ class PlanningRotationTests(unittest.TestCase):
             self.assertEqual(9., call.call_args[0][6][0][1]['x'])
             self.runtime._planning_rotation_fraction_for(
                 self.source, (0., 0., 0.), 0., .8, self.supplied, True, cache)
-            self.assertEqual([2], [key for key, raw in call.call_args[0][6]])
+            self.assertEqual([2, 3], [key for key, raw in call.call_args[0][6]])
             self.assertEqual(2, len(cache))
             # New decisions rebuild membership, including death/team changes.
             self.runtime.states[3]['team'] = 1

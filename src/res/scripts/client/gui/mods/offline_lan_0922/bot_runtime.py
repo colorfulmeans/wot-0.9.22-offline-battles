@@ -6972,8 +6972,9 @@ class BotRuntime(SharedEngineControl):
                                         supplied, allow_wreck_push=False, rosters=None):
         """Project current poses, reusing membership only inside one decision."""
         def admitted(peer):
-            return ((not peer.get('alive', True) and not allow_wreck_push) or
-                    (peer.get('alive', True) and peer.get('team') == state.get('team')))
+            # Every living hull vetoes a colliding planning turn. The optional
+            # wreck-push permission never authorizes turning through an enemy.
+            return peer.get('alive', True) or not allow_wreck_push
         roster_key = (state.get('id'), bool(allow_wreck_push))
         roster = rosters.get(roster_key) if rosters is not None else None
         if roster is None:
@@ -13635,7 +13636,7 @@ class BotRuntime(SharedEngineControl):
         """Slew the rendered turret and barrel through the 0.8.2 limits."""
         descriptor = self._descriptors.get(state['id'], {})
         ballistic_solution = command.get('_ballistic_solution')
-        planning_pending = False
+        planning_pending = bool(command.get('_shared_aim_pending'))
         if str((state.get('profile') or {}).get('class_tag') or '') == 'SPG':
             signature = self._ballistic_solution_signature(
                 state, target, descriptor, state.get('shell_index', 0))
@@ -15512,6 +15513,10 @@ class BotRuntime(SharedEngineControl):
 
     def _gun_angle_combat_order(self, state, order, arrived=False):
         """End a mechanical action without surrendering the selected enemy."""
+        control = getattr(self, '_actor_controls', {}).get(state['id'])
+        owner = getattr(control, 'combat_stop', None)
+        if owner is not None and owner.stop_allowed and owner.physical_recovery_active():
+            return owner.physical_recovery_terminal(order, arrived)
         result = dict(order)
         result.update(fire_allowed=False, throttle_override=None)
         if arrived:
@@ -15641,6 +15646,12 @@ class BotRuntime(SharedEngineControl):
 
     def _rear_laying_order(self, state, order, targets, now):
         """Finish one bounded mechanical laying attempt before route handoff."""
+        control = getattr(self, '_actor_controls', {}).get(state['id'])
+        owner = getattr(control, 'combat_stop', None)
+        if owner is not None and owner.stop_allowed:
+            # The shared native-lay episode already owns this gun/hull task.
+            # Do not install a second rear-target movement episode here.
+            return order
         if order.get('empty_ammo'):return order
         if spg_route_travel.owns_hull(order):
             for key in ('_rear_motion_lease', '_rear_aim_episode', '_rear_hull_aim',
@@ -15829,14 +15840,20 @@ class BotRuntime(SharedEngineControl):
         """Bound ordinary mechanical-angle recovery; parking and SPGs own theirs.
 
         Two seconds of hull facing, then one checked eight-metre destination.
-        Arrival retries aim; failed attempts yield to checked combat approach,
-        never ordinary route travel or target/launch-proof deletion.
+        Arrival retries aim. Shared actors return a failed attempt to their
+        paused route through the combat owner; standalone physical consumers
+        retain their checked-approach handoff.
         A new best translation/alignment renews its six-second stall clock;
         merely issuing an order or changing targets does not. Failed local
         attempts keep an eight-second retry cooldown without hiding the enemy
         or suppressing an independently proved native firing lane.
         Actual gun solving and native motion remain authoritative throughout.
         """
+        control = getattr(self, '_actor_controls', {}).get(state['id'])
+        owner = getattr(control, 'combat_stop', None)
+        if (owner is not None and owner.stop_allowed and
+                not owner.physical_recovery_active()):
+            return order
         approach_speed, speed_basis = self._mechanical_approach_speed(state)
         blocked_contact = (speed_basis == 'realised_player_contact' and abs(approach_speed) <= 1.0)
         eligible = (not order.get('empty_ammo') and (state.get('profile') or {}).get('class_tag') != 'SPG' and
@@ -15904,6 +15921,8 @@ class BotRuntime(SharedEngineControl):
             marker = {'start': now, 'destination': None,
                       'selected': False}
             state['_gun_angle_adjustment'] = marker
+        if owner is not None and owner.physical_recovery_active():
+            owner.bind_physical_recovery(marker)
         receipt['candidate_checks'] = marker.get('candidate_checks')
         elapsed = now - marker['start']
         result = dict(order)
@@ -18575,14 +18594,20 @@ class BotRuntime(SharedEngineControl):
                            pending_intent is not None or
                            pending_reproof is not None))
             command['_ballistic_solution'] = ballistic_solution
+            aim_command, aim_target = self._shared_gun_aim_input(
+                state, command, target, now)
             previous_turret_yaw = state.get('turret_yaw', 0.0)
             weapon_tick = {} if self._native_simulation is not None else None
             if weapon_tick is None:
                 unused_desired_yaw, unused_horizontal = self._update_gun_aim(
-                    state, command, target, step)
+                    state, aim_command, aim_target, step)
             else:
                 unused_desired_yaw, unused_horizontal = self._update_gun_aim(
-                    state, command, target, step, weapon_tick)
+                    state, aim_command, aim_target, step, weapon_tick)
+            if aim_command.get('_shared_aim_pending'):
+                # Retained gun facing is not a renewed shot certificate.
+                # Keep the original command/target for all fire consumers.
+                state['gun_aligned'] = False
             turret_speed = abs(_angle_delta(
                 state.get('turret_yaw', 0.0), previous_turret_yaw)) / max(
                 step, 1.0e-9)

@@ -301,24 +301,43 @@ class NativeHydraulicMagazineRulesTests(unittest.TestCase):
             scene.fixture.now += .11
         self.fail('native enabled-mode magazine review did not complete: %r' % policy.status())
 
-    def test_actual_enabled_nonhe_partial_clip_failure_reloads_in_place_without_eight_seconds(self):
+    def test_actual_enabled_nonhe_partial_clip_waits_for_verified_replacement_then_reloads(self):
         scene = self.scene()
         runtime, gun = scene.runtime, scene.runtime.gun
         gun.shots[0].piercingPower = (0., 0.)
-        # The remaining shell descriptor is genuinely incomplete. This must
-        # not keep a proved-useless finite-traverse cassette in combat until
-        # a replacement is ready; normal partial loading remains available.
+        # An incomplete alternative is not a global negative certificate or
+        # permission to discard the current cassette. Once the same native
+        # descriptor becomes complete and penetrable, reload it in place.
+        speed = gun.shots[1].speed
         gun.shots[1].speed = None
         before = tuple(gun.ammo)
-        decision = self.review_until(scene, lambda row:
-            row['action'] == 'reload_clip' and row.get('early_reload'))
+        self.review_until(scene, lambda row:
+            runtime.attack_policy._failure_domain((0,))['all_failed'])
         domain = runtime.attack_policy._failure_domain((0,))
         self.assertTrue(domain['all_failed'], domain)
         self.assertGreater(domain['projected_failed'], 0)
-        self.assertEqual('limited_traverse_current_clip_failed', decision['reason'])
+        for unused in range(12):
+            scene.fixture.now += .11
+            scene.observe()
+            decision = runtime.attack_policy.update(scene.now)
+            runtime.attack_policy.background(scene.now)
+            self.assertNotIn(decision['action'], ('reload_clip', 'switch_shell',
+                                                 'search_penetration'))
+            self.assertIsNone(runtime.attack_policy.reload_authority)
+            self.assertIsNone(runtime.attack_policy.search_authority)
+            runtime._apply_shell_intent()
+            self.assertEqual((0, 2, before),
+                             (gun.shot_index, gun.clip, tuple(gun.ammo)))
+        gun.shots[1].speed = speed
+        gun.shots[1].piercingPower = (1000., 1000.)
+        decision = self.review_until(scene, lambda row:
+            row['action'] == 'reload_clip' and row.get('early_reload'))
+        self.assertEqual('current_shell_all_armour_failed', decision['reason'])
         self.assertIsNotNone(runtime.attack_policy.reload_authority)
-        self.assertIsNone(decision['candidate'])
-        self.assertEqual(0, decision['shell_index'])
+        self.assertIsNotNone(decision['candidate'])
+        self.assertEqual((1, 'penetration'),
+            (decision['shell_index'], decision['candidate']['mode']))
+        self.assertTrue(runtime.attack_policy._plannable(decision['candidate']))
         self.assertEqual(siege_mechanics.ENABLED, scene.entity.siegeState)
         order = dict(combat_mode='engage', target_id=scene.target.id,
             target_kind='bot', move_position=(0., 0., 0.),
@@ -329,7 +348,7 @@ class NativeHydraulicMagazineRulesTests(unittest.TestCase):
         self.assertTrue(runtime.siege_desired(runtime.state, order, runtime._targets[0]))
         self.assertEqual((0, 2, before), (gun.shot_index, gun.clip, tuple(gun.ammo)))
         runtime._apply_shell_intent()
-        self.assertEqual((0, 0, before), (gun.shot_index, gun.clip, tuple(gun.ammo)))
+        self.assertEqual((1, 0, before), (gun.shot_index, gun.clip, tuple(gun.ammo)))
         self.assertGreater(gun.reload_time, 0.)
         self.assertIsNone(runtime.attack_policy.reload_authority)
         self.assertEqual(siege_mechanics.ENABLED, scene.entity.siegeState)

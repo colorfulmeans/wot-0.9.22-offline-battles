@@ -25,7 +25,7 @@ class AmmunitionValidationTests(unittest.TestCase):
             self.assertEqual(roles.FULL, roles.validation_mode(None, None, kind))
         self.assertEqual(roles.SINGLE_POINT, roles.shell_mode(dict(is_he=True)))
 
-    def test_failed_ordinary_he_keeps_one_trial_but_compares_fallback_damage(self):
+    def test_failed_ordinary_he_keeps_one_trial_per_enemy_but_compares_fallback_damage(self):
         scene = Observations(targets=3, points=3, he_validation=roles.SINGLE_POINT)
         scene.allow_atomic = False
         scene.frame.update(loaded=2, ammo=(0, 0, 10))
@@ -78,25 +78,30 @@ class AmmunitionValidationTests(unittest.TestCase):
         self.assertTrue(saw_pending)
         self.assertGreater(moving_aims, 0)
         probes = [call for call in scene.calls if call[2] == 2 and call[-1] == 'penetration']
-        self.assertEqual(1, len(probes))
-        self.assertEqual((('bot', 1), 0), probes[0][3:5])
+        self.assertEqual(3, len(probes))
+        self.assertEqual({(('bot', target), 0) for target in range(1, 4)},
+                         {probe[3:5] for probe in probes})
         self.assertEqual('aim', decision['action'])
         self.assertEqual('he_fallback', decision['candidate']['mode'])
         self.assertEqual(130., decision['candidate']['expected_damage'])
         self.assertEqual(('bot', 3), decision['candidate']['target_key'])
         self.assertIsNone(scene.policy.search_started)
 
-    def test_failed_ordinary_he_can_switch_to_a_verified_original_rank(self):
+    def test_failed_ordinary_he_executes_current_while_original_rank_plans_next(self):
         scene = Observations(targets=2, points=3, he_validation=roles.SINGLE_POINT)
         scene.frame['loaded'] = 2
         scene.passed(0, target=2, sample=2)
+        scene.he(40.)
         for tick in range(20):
             decision = scene.tick(tick * .1)
-            if decision['action'] == 'switch_shell':
+            self.assertNotEqual('switch_shell', decision['action'])
+            if decision['action'] == 'aim' and scene.policy.next_shell == 0:
                 break
-        self.assertEqual('switch_shell', decision['action'])
-        self.assertEqual(0, decision['shell_index'])
-        self.assertEqual(1, len([c for c in scene.calls if c[2] == 2 and c[-1] == 'penetration']))
+        self.assertEqual('aim', decision['action'])
+        self.assertEqual((2, 'he_fallback'),
+                         (decision['candidate']['shell_index'], decision['candidate']['mode']))
+        self.assertEqual(0, scene.policy.next_shell)
+        self.assertEqual(2, len([c for c in scene.calls if c[2] == 2 and c[-1] == 'penetration']))
         self.assertIsNone(scene.policy.search_started)
 
     def test_unknown_and_blocked_he_are_not_a_failed_trial(self):
@@ -116,24 +121,29 @@ class AmmunitionValidationTests(unittest.TestCase):
                 self.assertFalse((decision.get('candidate') or {}).get('mode') == 'he_fallback')
                 self.assertIsNone(scene.policy.search_started)
 
-    def test_single_he_waits_for_late_alternative_while_source_keeps_settling(self):
+    def test_single_he_executes_while_late_alternative_is_reviewed_during_source_settling(self):
         scene = Observations(targets=1, points=7, he_validation=roles.SINGLE_POINT)
         scene.frame.update(loaded=2, ammo=(30, 0, 10))
         scene.allow_atomic = False
         scene.policy.background_budget = 1
         scene.passed(0, sample=6)
         scene.he(90.)
-        switched = False
+        current_aimed, next_verified = False, False
         for tick in range(15):
             scene.frame['pose'] = ('settling_source', tick)
             decision = scene.tick(tick * .1)
-            if decision['action'] == 'switch_shell':
-                switched = True
-                self.assertEqual(0, decision['shell_index'])
-                break
-            self.assertFalse(scene.policy.fallback)
-            self.assertNotEqual('aim', decision['action'])
-        self.assertTrue(switched)
+            self.assertNotEqual('switch_shell', decision['action'])
+            if decision['action'] == 'aim':
+                current_aimed = True
+                self.assertEqual((2, 'he_fallback'),
+                    (decision['candidate']['shell_index'], decision['candidate']['mode']))
+            if scene.policy.next_shell == 0:
+                next_verified = True
+                self.assertEqual(6, scene.policy.next_plan['sample'])
+                self.assertEqual('verified', scene.policy.next_at_edge()[1])
+            self.assertIsNone(scene.policy.search_started)
+        self.assertTrue(current_aimed)
+        self.assertTrue(next_verified)
 
     def test_same_frame_failed_trial_is_not_a_next_launch_proof(self):
         scene = Observations(targets=1, points=1, he_validation=roles.SINGLE_POINT)

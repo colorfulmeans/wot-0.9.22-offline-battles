@@ -1,3 +1,67 @@
+# November 10: loaded-HE execution and continuous physical combat recovery
+
+The follow-up report `wot-error-report-20261110-042532-d29cb4308aa1`
+ran `909ac352` / `colorfulmeans-42687176698-1`; it is not evidence of an
+older installation. The authored route initially survives. Later native
+observations show repeated stationary laying / gun-angle recovery, a front
+vehicle refusal, and an automatic capture/hold taking translation from an
+ongoing combat task with ammunition left. A green presentation marker is not
+a replacement for the final current native launch proof, but neither a
+temporary missing proof nor an unfinished review ends the aim intention.
+
+The user explicitly extends the existing HE-magazine rule to every loaded HE
+round. CURRENT executes its own penetration or legal HE contact fallback;
+NEXT only selects a subsequent load. Single-shot guns may load the independently
+verified NEXT shell after the HE shot, and magazines retain the actual current
+clip and committed burst-tail lifecycle. Ordinary HE tests one penetration
+sample per eligible enemy; the existing reviewed penetration-HE identities
+retain their full sample domain. This change does not expand that identity
+list. Legal fallback contacts keep expected-health-damage ranking, including
+zero damage, and exclude barrel/track-only contacts.
+
+A non-HE current round/clip can yield to a verified alternative after its
+own penetration domain fails. The eight-second penetration search instead
+requires the complete current all-enemy, stocked-ammunition negative domain,
+for limited-traverse vehicles and magazines as well as ordinary single shots.
+The existing movement receipt starts the elapsed search clock. Roster or
+proof refreshes within the same physical task do not renew that clock, and
+none of those refreshes preserves a stale firing permission. Incomplete
+queries, missing geometry, physical line blockage and mechanical limits are
+not negative armour certificates. Current HE does not start this search before
+using an available legal fallback contact.
+
+Physical line/mechanical recovery remains a separate, finite phase of the
+same shared combat task. It is not a second proactive pursuit policy. The
+shared movement owner coordinates stationary laying and an admitted physical
+recovery; intermediate evaluation does not restart both writers. Automatic
+capture processing must not replace that owner merely because combat motion
+passes into a base circle. Explicit user travel, capture, hold and cancellation
+keep their original priority, and normal route completion still works after
+combat releases its receipt.
+
+An actual first-contact vehicle refusal keeps the native entity identity and
+team separate from the network actor identity. Enemy obstruction is reviewed
+through the existing candidate domain, not a new target selector or permission
+to fire through that vehicle. Friendly blocking remains a no-fire condition.
+Movement neighbours, final braking and planning rotation include living enemy
+hulls. Cooperative traffic yielding remains ally-only; no enemy yield lease
+is created. Python and shipping native traffic roster behavior must agree.
+
+The regression boundary includes real CURRENT/NEXT gun loading and ammunition
+debits, final player/worker motion commands, route/capture ownership,
+current-proof revocation, enemy-hull avoidance and native traffic parity.
+Changed assertions are limited to the explicitly superseded HE and
+current-only/limited-traverse search rules and the former enemy-ignore
+contract. Native gun/turret geometry, fire tolerance, penetration threshold,
+normal driving constants, authored routes and projectile physics are not
+retuned. No third client or foreground-performance migration is included.
+
+Source tests and package identity checks do not establish exact Chinese HD
+#1513 gameplay acceptance. The replacement still requires the user's native
+AT7/STB1, obstacle, HE load and stationary-target play test. Exact final commit,
+test results, CI and package identities belong in PR119 and its updated
+handoff; the earlier completion statements below are historical.
+
 # November 10: separate route observation from committed combat movement
 
 The earlier statement that ordinary initial hints could not replace movement

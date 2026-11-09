@@ -28,7 +28,7 @@ for case in range(500):
   for push in (False,True):
    eligible=[peer for peer in runtime._neighbours_for(source,supplied)
              if (not peer.get('alive',True) and not push) or
-             (peer.get('alive',True) and peer.get('team')==source.get('team'))]
+             peer.get('alive',True)]
    expected=tank_collision.rotation_fraction(position,yaw,target,source['collision_shape'],eligible)
    actual=runtime._planning_rotation_fraction_for(source,position,yaw,target,supplied,push)
    assert abs(actual-expected)<=1.e-10,(case,push,actual,expected)
@@ -51,8 +51,7 @@ native=(time.clock()-start)*1000/1000
 print('Current rotation parity:',checks,'fresh rosters; reference/native ms per call:',legacy,native)
 start=time.clock()
 for unused in range(3000):
- eligible=[peer for peer in runtime._neighbours_for(source,supplied)
-           if not peer.get('alive',True) or peer.get('team')==source.get('team')]
+ eligible=runtime._neighbours_for(source,supplied)
  tank_collision.rotation_fraction(position,yaw,target,source['collision_shape'],eligible)
 legacy=(time.clock()-start)*1000/3000
 start=time.clock()

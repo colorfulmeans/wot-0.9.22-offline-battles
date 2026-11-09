@@ -210,6 +210,11 @@ class TriggerAdmission(object):
                 return None
             rows.append(dict(target=other, record=record, body=body, chassis=chassis,
                              velocity=speed, bounds=bounds,
+                             actor_key=(raw.get('kind') or
+                                 ('bot' if record.get('kind') == 'bot' else 'human'),
+                                 raw.get('network_id', record.get('network_id'))),
+                             team=int((record.get('state') or {}).get(
+                                 'team', record.get('team', 0))),
                              signature=(other.id, signature, speed)))
         rows.sort(key=lambda row: row['target'].id)
         return rows
@@ -340,8 +345,17 @@ class TriggerAdmission(object):
                     proof['centre_path'] = tuple(path[:index + 1]) + (target['point'],)
                     proof['refusal'] = self._centre_verdict(proof, target)
                     if proof['refusal'] == 'auto_front_vehicle':
+                        row = target['row']
+                        # Native entity ids and tactical actor ids are not
+                        # interchangeable. Keep the actual first collision so
+                        # the same admitted enemy domain can review it; this
+                        # receipt neither selects it nor permits a shot.
                         proof['blocker'] = dict(kind='vehicle', point=target['point'],
-                            vehicle_id=target['row']['target'].id)
+                            vehicle_id=row['target'].id, actor_key=row['actor_key'],
+                            team=row['team'], hostile=(
+                                row['team'] != self.physical.actor_team
+                                if row['team'] in (1, 2) else None),
+                            target_pose=row['signature'][1])
                     proof['stage'], proof['cursor'] = 1, 0
                     continue
                 proof['path'] = tuple(path[:index + 1]) + (target['point'],)
@@ -372,6 +386,9 @@ class TriggerAdmission(object):
         verdict = runtime.geometry._bot_friendly_path_verdict(runtime.current_source(), path, splash)
         if isinstance(verdict, dict) and verdict.get('clear') is True:
             return None, None
+        if (isinstance(verdict, dict) and verdict.get('blocked') is True and
+                verdict.get('blocker_kind') in ('wreck', 'debris')):
+            return 'auto_world_blocked', verdict
         if isinstance(verdict, dict) and verdict.get('blocker_team') is not None:
             return 'auto_friendly_lane' if splash <= 0. else 'auto_friendly_splash', verdict
         return 'auto_lane_geometry_unknown', verdict

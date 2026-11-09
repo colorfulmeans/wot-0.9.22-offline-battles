@@ -238,7 +238,8 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
             # Native line obstruction is now a shared point-review input,
             # not an old strategic exclusion or a penetration failure.
             self.assertGreater(evaluate.call_count, 0)
-        self.assertEqual('firing_position', scene.runtime.attack_policy.decision['action'])
+        self.assertEqual('wait', scene.runtime.attack_policy.decision['action'])
+        self.assertTrue(scene.runtime.attack_policy.stationary_review_wait())
         self.assertIsNone(scene.runtime.attack_policy.search_started)
 
     def test_enabling_fire_refines_blocked_aim_without_changing_stb1_drive_commands(self):
@@ -587,7 +588,10 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
         engine = scene.runtime.engine
         with mock.patch.object(engine, '_friendly_reposition_order',
                 wraps=engine._friendly_reposition_order) as copied_recovery:
-            scene.tick()
+            for unused in range(12):
+                scene.tick()
+                if scene.runtime.actor_id in engine._friendly_repositions:
+                    break
             self.assertTrue(copied_recovery.called)
         self.assertEqual('firing_position', scene.runtime.attack_policy.decision['action'])
         self.assertIsNone(scene.runtime.attack_policy.search_started,

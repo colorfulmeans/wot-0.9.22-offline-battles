@@ -76,14 +76,21 @@ class SharedTargetExecutionOwnershipTests(unittest.TestCase):
     def test_macro_initial_target_motion_cannot_retire_other_targets_friendly_recovery(self):
         scene, initial, unused_executable = self.scene()
         scene.vehicle(3, (15., 0., 50.), team=1)
-        scene.tick(.1)
+        # The native frontier first completes stationary alternatives. Only
+        # its real physical blocker receipt may create the existing escape.
+        for unused in range(20):
+            scene.tick(.1)
+            if scene.runtime.actor_id in scene.runtime.engine._friendly_repositions:
+                break
         policy = scene.runtime.attack_policy
         self.assertEqual('firing_position', policy.decision['action'])
         self.assertEqual(('bot', 14), policy.decision['candidate']['target_key'])
         self.assertEqual('friendly_blocked', policy.decision['candidate']['line'])
         self.assertEqual('passed', policy.decision['candidate']['armor'])
         marker = copy.deepcopy(scene.runtime.engine._friendly_repositions[scene.runtime.actor_id])
-        episode = policy.decision['move_request']['episode_id']
+        owner = scene.runtime.combat_stop
+        episode = owner.receipt['episode']
+        physical = owner._physical_recovery
         scene.pose(initial, (0., 0., 360.))
         scene.runtime._strategic_due = 0.
         scene.tick(.1)
@@ -92,9 +99,15 @@ class SharedTargetExecutionOwnershipTests(unittest.TestCase):
         current = scene.runtime.engine._friendly_repositions[scene.runtime.actor_id]
         for field in ('identity', 'target_id', 'started_at', 'deadline', 'destination'):
             self.assertEqual(marker[field], current[field], field)
-        self.assertEqual(episode, policy.decision['move_request']['episode_id'])
-        self.assertEqual('firing_position', policy.decision['action'])
-        self.assertEqual(('bot', 14), policy.decision['candidate']['target_key'])
+        # The unrelated enemy's new pose can invalidate a policy query and
+        # temporarily remove move_request. The accepted physical task, not
+        # that provisional query result, owns the target and escape goal.
+        self.assertEqual(episode, owner.receipt['episode'])
+        self.assertIs(physical, owner._physical_recovery)
+        self.assertEqual(('bot', 14), physical['target'])
+        self.assertEqual('friendly_lane_reposition', scene.runtime._last_order['combat_mode'])
+        self.assertEqual(14, scene.runtime._last_order['target_id'])
+        self.assertEqual(marker['destination'], scene.runtime._last_order['move_position'])
         self.assertFalse(scene.applied_order()['fire_allowed'])
         self.assertFalse(scene.launches())
         self.assertIsNone(policy.search_started)

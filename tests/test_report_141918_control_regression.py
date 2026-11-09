@@ -154,6 +154,7 @@ class Report141918Scene(OwnershipScene):
         original, applied = copy.deepcopy(self.original_order()), copy.deepcopy(self.applied_order())
         sender = self.battle._sender
         row = dict(at=self.now, original=original, applied=applied,
+                   executed=copy.deepcopy(self.control.last_order),
                    native_before=native_before, clip=gun.clip, reload=gun.reload_time,
                    ammo=tuple(gun.ammo), shots=len(self.launches()),
                    forward=sender.forward, turn=sender.turn,
@@ -169,7 +170,8 @@ class Report141918ControlRegressionTests(unittest.TestCase):
         self.addCleanup(scene.doCleanups)
         return scene.configure_report(extra_contacts)
 
-    def assert_task_and_domain(self, scene, row, combat_admitted=True):
+    def assert_task_and_domain(self, scene, row, combat_admitted=True,
+                               physical_released=False):
         self.assertEqual(dict(target_kind='bot', target_id=14),
                          row['original']['initial_target_hint'])
         self.assertIsNone(row['original']['target_id'])
@@ -179,18 +181,34 @@ class Report141918ControlRegressionTests(unittest.TestCase):
             self.assertEqual(14, row['applied']['target_id'])
             self.assertNotEqual('route', row['applied']['combat_mode'])
         else:
-            # Cold HE comparison is evaluation, not an accepted stop. This
-            # branch is used only before the first real admission below.
             self.assertFalse(scene.runtime.combat_stop.combat_owned)
             self.assertFalse(scene.runtime.combat_stop.stop_allowed)
-            self.assertEqual(('wait', 'he_damage_comparison_pending'),
-                             (row['policy']['action'], row['policy']['reason']))
-            self.assertEqual('route', row['applied']['combat_mode'])
-            self.assertIsNone(row['applied']['target_id'])
-            self.assertEqual(point(row['original']['move_position']),
-                             point(row['applied']['move_position']))
-            self.assertFalse(row['applied']['fire_allowed'])
-            self.assertEqual(0, row['shots'])
+            if physical_released:
+                # A real, exhausted physical recovery returns to the paused
+                # task until fresh native evidence permits another action.
+                self.assertIsNotNone(scene.runtime.combat_stop._failed_recovery)
+            else:
+                # Cold HE comparison is evaluation, not an accepted stop.
+                self.assertEqual(('wait', 'he_damage_comparison_pending'),
+                                 (row['policy']['action'], row['policy']['reason']))
+                self.assertEqual(0, row['shots'])
+            consumed = row['executed'] if physical_released else row['applied']
+            self.assertEqual('route', consumed['combat_mode'])
+            self.assertIsNone(consumed['target_id'])
+            if row['applied']['combat_mode'] == 'route':
+                # The macro task keeps its authored waypoint. The physical
+                # driver can still choose a local avoidance goal, so its
+                # consumed position need not equal that macro waypoint.
+                self.assertIsNone(row['applied']['target_id'])
+                self.assertEqual(point(row['original']['move_position']),
+                                 point(row['applied']['move_position']))
+            else:
+                # A finite physical terminal returns the route in this same
+                # driver callback, after the intermediate order was sampled.
+                self.assertTrue(physical_released)
+                terminal = scene.runtime.state.get('_gun_angle_last_terminal') or {}
+                self.assertEqual('relocation_stalled', terminal.get('reason'))
+            self.assertFalse(consumed['fire_allowed'])
         for order in (row['original'], row['applied']):
             self.assertEqual(ROUTE_ID, order.get('route_id'))
             self.assertNotIn('hull_angle_degrees', order)
@@ -248,27 +266,52 @@ class Report141918ControlRegressionTests(unittest.TestCase):
             # seconds: no invented negative armor proof or corpse target.
             scene.wreck_queries[:] = []
             scene.block_lane(True)
+            known_wreck = physical_started = physical_terminal = False
             for unused in range(95):
                 row = scene.step_control()
-                self.assert_task_and_domain(scene, row)
+                owner = scene.runtime.combat_stop
+                known_wreck = known_wreck or any(
+                    evidence.get('line') == 'world_blocked' and
+                    evidence.get('reason') == 'wreck_blocked' and
+                    (evidence.get('blocker') or {}).get('blocked') is True and
+                    (evidence.get('blocker') or {}).get('actor_key') == ('bot', 10)
+                    for evidence in scene.runtime.attack_policy.rows.values())
+                physical_started = physical_started or owner.physical_recovery_active()
+                physical_terminal = physical_terminal or (
+                    (scene.runtime.state.get('_gun_angle_last_terminal') or {}).get('reason') ==
+                    'relocation_stalled' and owner._failed_recovery is not None)
+                self.assert_task_and_domain(scene, row,
+                    combat_admitted=owner.combat_owned,
+                    physical_released=not owner.combat_owned)
+                destination = point(row['executed']['move_position'])
+                self.assertGreater(math.hypot(destination[0] - TARGET_POSITION[0],
+                                              destination[2] - TARGET_POSITION[2]), .1,
+                    'a known wreck may not turn finite recovery into pursuit of enemy centre')
                 self.assertEqual(1, len(scene.launches()))
             self.assertTrue(scene.wreck_queries, 'actual component collision fixture was not queried')
+            self.assertTrue(known_wreck, 'a real wreck collision was erased into unknown geometry')
+            self.assertTrue(physical_started, 'known obstruction never reached physical recovery')
+            self.assertTrue(physical_terminal, 'a stationary failed recovery never terminated')
+            self.assertFalse(scene.runtime.combat_stop.combat_owned)
+            self.assertEqual('route', row['executed']['combat_mode'])
             self.assertEqual(1, scene.battle._gun_state.clip)
             self.assertEqual(0., scene.battle._gun_state.reload_time)
             self.assertEqual('firing_position', row['policy']['action'])
-            self.assertEqual('he_contact_evidence_incomplete', row['policy']['reason'])
-            self.assertIn(row['policy']['line'], ('unknown', 'world_blocked', 'friendly_blocked'))
+            self.assertEqual('he_fallback_obstructed', row['policy']['reason'])
+            self.assertEqual('world_blocked', row['policy']['line'])
             # Ordinary HE may retain its already proved one-point plate
-            # failure. The new wreck is unresolved line geometry, and must
+            # failure. The new wreck is known physical geometry, and must
             # not turn that local fact into a global all-enemy failure.
 
             self.assertEqual({14: True}, scene.block_lane(False))
             for unused in range(400):
                 row = scene.step_control()
-                self.assert_task_and_domain(scene, row)
+                owned = scene.runtime.combat_stop.combat_owned
+                self.assert_task_and_domain(scene, row, combat_admitted=owned,
+                    physical_released=not owned)
                 # Allow the ordinary movement handoff its first two callbacks;
                 # thereafter both ready and reloading states must face target14.
-                if unused >= 2:
+                if unused >= 2 and owned:
                     self.assert_clear_hull_owner(scene, row)
                 if len(scene.launches()) >= 4:
                     break

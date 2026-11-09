@@ -2795,7 +2795,7 @@ class SharedBattleGeometry(object):
 
     def _bot_friendly_path_verdict(
             self, source, path, splash_radius=0.0):
-        """Reject shell obstructions, with escape metadata only for allies."""
+        """Distinguish proved physical obstructions from unknown lane geometry."""
         try:
             source_id = int(source.get('id'))
             source_team = int(source.get('team'))
@@ -2825,9 +2825,10 @@ class SharedBattleGeometry(object):
             # Recheck the frozen dispersed path for both direct guns and
             # SPGs. Dead hulls need no splash clearance or ally escape order.
             source_record = self._records.get('bot:%d' % source_id)
+            blocker = {}
             if self._wreck_blocks_bot_path(
-                    self._bot_lane_wreck_rows(), points, (source_record,)):
-                return {'clear': False}
+                    self._bot_lane_wreck_rows(), points, (source_record,), blocker):
+                return dict(blocker, clear=False, blocked=True)
             contact = self._bot_lane_row_contact(
                 self._bot_lane_rows(source_id, is_live, prefilter=is_ally),
                 points, splash_radius=splash_radius)
@@ -2875,10 +2876,23 @@ class SharedBattleGeometry(object):
         self._bot_lane_wreck_rows_cache = (key, rows)
         return rows
 
-    def _wreck_blocks_bot_path(self, rows, points, lane_ends=()):
+    @staticmethod
+    def _wreck_blocker_receipt(record, vehicle, position):
+        """Describe an already confirmed contact without choosing a gun target."""
+        return dict(blocker_kind='wreck', reason='wreck_blocked',
+            actor_key=('bot' if record.get('kind') == 'bot' else 'human',
+                       record.get('network_id')),
+            vehicle_id=record.get('engine_id'),
+            blocker_team=(record.get('state') or {}).get('team', record.get('team')),
+            blocker_position=tuple(position))
+
+    def _wreck_blocks_bot_path(self, rows, points, lane_ends=(), receipt=None):
         """Test dead hulls and landed turrets on supplied shell segments."""
-        if rows and self._bot_lane_row_contact(
-                rows, points, exclude=lane_ends) is not None:
+        contact = (self._bot_lane_row_contact(rows, points, exclude=lane_ends)
+                   if rows else None)
+        if contact is not None:
+            if receipt is not None:
+                receipt.update(self._wreck_blocker_receipt(*contact))
             return True
         obstacles = self._detached_turret_obstacles
         if obstacles is None:
@@ -2886,9 +2900,15 @@ class SharedBattleGeometry(object):
         # Reuse the resolver's accepted rest poses on the current server
         # clock. A future landing cannot obstruct a present lane proof.
         server_time_ms = self._turret_server_time_ms()
-        return any(obstacles.block_distance(
-            self._vector(first), self._vector(second), server_time_ms)
-            is not None for first, second in zip(points, points[1:]))
+        for first, second in zip(points, points[1:]):
+            distance = obstacles.block_distance(
+                self._vector(first), self._vector(second), server_time_ms)
+            if distance is not None:
+                if receipt is not None:
+                    receipt.update(blocker_kind='debris', reason='debris_blocked',
+                        blocker_distance=distance, blocker_segment=(first, second))
+                return True
+        return False
 
     def _bot_friendly_firing_lane(
             self, source, unused_target, descriptor, shell_index, launch):

@@ -6,6 +6,7 @@ import math
 
 from .planning import SharedOrderPlanning
 from .evaluation_budget import EvaluationBudget
+from .actor_observation import observation
 
 
 def _angle(value):
@@ -13,6 +14,62 @@ def _angle(value):
 
 
 class SharedEngineControl(SharedOrderPlanning):
+    def _shared_gun_aim_input(self, state, command, target, now):
+        """Keep one selected gun sample while its firing evidence is renewed.
+
+        Called only after the movement command has been solved/integrated.
+        This never chooses a target, changes navigation or reuses an expired
+        shot proof. The current native pose supplies a new direction for the
+        same sample; armour, line and first-trigger admission remain pending.
+        """
+        runtime = self._control_for(state)
+        if runtime is None or (state.get('profile') or {}).get('class_tag') == 'SPG':
+            return command, target
+        owner, policy = runtime.combat_stop, runtime.attack_policy
+        if (not owner.active or owner.explicit_travel or runtime._mission_brakes() or
+                not runtime._live() or policy.decision.get('action') == 'unchanged'):
+            runtime._shared_aim_intention = None
+            return command, target
+        candidate = runtime.current_attack_candidate(state, target, for_aim=True)
+        if candidate is not None and isinstance(command.get('_ballistic_solution'), dict):
+            runtime._shared_aim_intention = dict(
+                candidate=dict((name, candidate[name]) for name in
+                    ('key', 'shell_index', 'sample', 'mode', 'target')),
+                generation=runtime.generation, episode=owner._episode,
+                weapon_identity=tuple(observation(runtime).weapon_identity()),
+                entity=runtime.target_entity(candidate['target']))
+            return command, target
+        retained = getattr(runtime, '_shared_aim_intention', None)
+        if retained is None:
+            return command, target
+        intention = retained['candidate']
+        previous = intention['target']
+        key = (previous.get('kind'), previous.get('network_id'))
+        selected = policy.decision.get('candidate')
+        selected = selected.get('target') if selected is not None else None
+        observed = next((row for row in runtime.combat_targets()
+            if (row.get('kind'), row.get('network_id')) == key and
+               row.get('alive', True) and row.get('visible', True)), None)
+        replaced = any(value is not None and
+            (value.get('kind'), value.get('network_id')) != key
+            for value in (selected, target))
+        if (retained['generation'] != runtime.generation or
+                retained['episode'] != owner._episode or observed is None or replaced or
+                retained['weapon_identity'] != tuple(observation(runtime).weapon_identity()) or
+                runtime.target_entity(observed) is not retained['entity'] or
+                int(runtime.gun.shot_index) != int(intention['shell_index'])):
+            runtime._shared_aim_intention = None
+            return command, target
+        if policy.decision.get('action') not in ('wait', 'preaim', 'firing_position'):
+            return command, target
+        solution = policy.evaluator.refresh_trigger_solution(intention, now)
+        if solution is None:
+            return command, target
+        solution = dict(solution, _origin=tuple(solution['origin']), arc='low',
+                        _player_motion_only=True, _shared_aim_pending=True)
+        return dict(command, aim_position=solution['point'], fire_allowed=False,
+                    _ballistic_solution=solution, _shared_aim_pending=True), observed
+
     def _begin_evaluation_frame(self, now):
         """One optional-work budget per physical owner/control callback."""
         budget = getattr(self, '_evaluation_budget', None)

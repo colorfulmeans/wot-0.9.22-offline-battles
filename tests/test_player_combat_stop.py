@@ -81,12 +81,11 @@ class Scene:
             _route=mock.Mock(side_effect=AssertionError('combat stop cannot choose a route')))
         self.owner = CombatStop(self.runtime)
         self.runtime.combat_stop = self.owner
+        engine._actor_controls = {1: self.runtime}
         self.runtime.siege_capable = lambda: has_siege
         self.runtime._stationary_review_wait = self.policy.stationary_review_wait
         self.runtime.siege_aim_candidate = lambda target=None: (
             FullPlayerRuntime.siege_aim_candidate(self.runtime, target))
-        self.runtime._resume_firing_approach = lambda order, target: (
-            FullPlayerRuntime._resume_firing_approach(self.runtime, order, target))
         self.raw_order = dict(id=1, target_id=2, target_kind='bot',
             combat_mode='engage', move_position=(0., 0., 0.),
             face_position=self.target['position'], aim_position=self.target['position'],
@@ -520,25 +519,33 @@ class NativePlanningInputTests(unittest.TestCase):
         scene.apply(11.)
         self.assertIn('handoff', pivot)
 
-    def test_failed_pivot_cannot_restart_until_original_recovery_actually_translates(self):
+    def test_failed_pivot_restarts_only_for_current_lay_proof_at_a_reached_new_pose(self):
         scene = Scene()
         scene.candidate.update(mechanical='hull_laying', line='clear')
         scene.candidate['solution']['yaw'] = .7
-        scene.apply(0.)
-        scene.apply(MECHANICAL_STALL_SECONDS)
+        engine = scene.runtime.engine
+        def consume(now):
+            return engine._gun_angle_order(scene.state, scene.apply(now),
+                {2: scene.target}, now, lambda *args: True)
+        consume(0.)
+        consume(MECHANICAL_STALL_SECONDS)
         handoff = scene.owner.pivot['handoff']
-        for moment in (7., 9., 15.):
+        for moment in (7., 8.1, 8.2):
             scene.candidate['solution']['yaw'] *= -1
-            scene.apply(moment)
+            consume(moment)
             self.assertIs(handoff, scene.owner.pivot['handoff'])
             self.assertEqual('copied_gun_angle_recovery', scene.runtime._last_navigation['owner'])
+        marker = scene.state['_gun_angle_adjustment']
         scene.position((WAYPOINT_ARRIVAL_RADIUS - .01, 0., 0.))
-        scene.apply(20.)
+        consume(8.3)
         self.assertIs(handoff, scene.owner.pivot['handoff'])
         scene.position((WAYPOINT_ARRIVAL_RADIUS, 0., 0.))
-        scene.apply(21.)
+        consume(8.4)
+        self.assertNotIn('_gun_angle_adjustment', scene.state)
+        self.assertEqual('native_lay_proved_at_new_position',
+                         scene.state['_gun_angle_last_terminal']['reason'])
         self.assertNotIn('handoff', scene.owner.pivot)
-        self.assertEqual(21., scene.owner.pivot['progress_at'])
+        self.assertEqual(8.4, scene.owner.pivot['progress_at'])
 
 
 class UnchangedRecoveryConsumerTests(unittest.TestCase):
@@ -548,9 +555,12 @@ class UnchangedRecoveryConsumerTests(unittest.TestCase):
                 self.assertIs(getattr(bot_runtime.BotRuntime, name),
                               getattr(_PlayerBehaviorEngine, name))
 
-    def test_mechanical_failure_uses_original_bounded_approach_not_a_route_controller(self):
+    def test_mechanical_failure_ends_the_bounded_move_without_starting_a_pursuit(self):
         scene = Scene()
         scene.candidate.update(mechanical='mechanical_limited', line='clear')
+        scene.raw_order.update(combat_mode='route', target_id=None, target_kind=None,
+            move_position=(20., 0., -30.), throttle_override=None,
+            aim_position=None, fire_allowed=False)
         order = scene.apply(0.)
         engine = scene.runtime.engine
         rejected = mock.Mock(return_value=False)
@@ -560,9 +570,10 @@ class UnchangedRecoveryConsumerTests(unittest.TestCase):
         result = engine._gun_angle_order(scene.state, first, {2: scene.target}, 2., rejected)
         self.assertEqual(2, rejected.call_count)
         self.assertEqual('bounded_attempt_complete', scene.state['_gun_angle_last_terminal']['reason'])
-        self.assertEqual('advance_contact', result['combat_mode'])
-        self.assertEqual(scene.candidate['solution']['point'], result['move_position'])
-        self.assertEqual(2, result['target_id'])
+        self.assertEqual('route', result['combat_mode'])
+        self.assertEqual((20., 0., -30.), result['move_position'])
+        self.assertIsNone(result['target_id'])
+        self.assertFalse(scene.owner.stop_allowed)
         self.assertEqual(3, scene.runtime.gun.clip)
         self.assertIsNone(scene.policy.search_started)
         scene.runtime.planner._route.assert_not_called()
@@ -580,7 +591,9 @@ class UnchangedRecoveryConsumerTests(unittest.TestCase):
         self.assertIs(order, result)
         self.assertIs(marker, scene.state['_gun_angle_adjustment'])
         result = engine._gun_angle_order(scene.state, result, {2: scene.target}, 2., lambda *a: False)
-        self.assertEqual('advance_contact', result['combat_mode'])
+        self.assertEqual(scene.raw_order['combat_mode'], result['combat_mode'])
+        self.assertEqual(scene.raw_order['move_position'], result['move_position'])
+        self.assertFalse(scene.owner.stop_allowed)
         self.assertNotIn('_gun_angle_adjustment', scene.state)
         self.assertEqual('bounded_attempt_complete', scene.state['_gun_angle_last_terminal']['reason'])
 
@@ -661,21 +674,22 @@ class UnchangedRecoveryConsumerTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertNotIn(1, engine._friendly_repositions)
 
-    def test_original_rear_lease_resumes_its_admitted_goal_without_new_route(self):
+    def test_shared_combat_retires_the_old_rear_pursuit_without_choosing_a_route(self):
         scene = Scene()
         original_goal = (13., 0., 37.)
         scene.state['_rear_motion_lease'] = dict(start=0., origin=scene.state['position'],
             goal=original_goal, fire_seq=0, target_id=2)
         scene.decide('wait', candidate=False, reason='stationary_domain_review_pending')
-        order = dict(scene.raw_order)
-        self.assertIs(order, scene.owner.apply_order(order, 7.9))
+        order = scene.apply(7.9)
         result = scene.runtime.engine._rear_laying_order(
             scene.state, order, {2: scene.target}, 8.)
-        self.assertEqual('advance_contact', result['combat_mode'])
-        self.assertEqual(original_goal, result['move_position'])
+        self.assertIs(order, result)
+        self.assertEqual('engage', result['combat_mode'])
+        self.assertNotEqual(original_goal, result['move_position'])
+        self.assertEqual(0., result['throttle_override'])
         self.assertEqual(2, result['target_id'])
-        self.assertEqual('movement_budget_exhausted', scene.state['_rear_motion_observation']['reason'])
-        self.assertTrue(scene.state['_rear_motion_blocked'])
+        self.assertNotIn('_rear_motion_lease', scene.state)
+        self.assertFalse(scene.state['_rear_motion_blocked'])
         scene.runtime.planner._route.assert_not_called()
 
     def test_explicit_mission_handoff_retires_only_combat_stop_leases(self):
@@ -719,7 +733,10 @@ class UnchangedRecoveryConsumerTests(unittest.TestCase):
         self.assertIs(hold, scene.state['_magazine_followup'])
         self.assertEqual('engage', result['combat_mode'])
         self.assertEqual(0., result['throttle_override'])
-        self.assertEqual('committed_magazine_followup', scene.state['_magazine_followup_receipt']['reason'])
+        # The shot/load transaction is retained; the retired rear planner is
+        # not allowed to become a second movement owner for that transaction.
+        self.assertIs(order, result)
+        self.assertNotIn('_magazine_followup_receipt', scene.state)
         self.assertEqual(2.5, hold['deadline'])
 
 
