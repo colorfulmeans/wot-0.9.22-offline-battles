@@ -37,11 +37,22 @@ def live_contact(target):
     return True
 
 
+def nominal_armor(target):
+    """Preserve an observed armour value; missing data is not zero armour."""
+    profile = target.get('profile')
+    profile = profile if isinstance(profile, dict) else {}
+    value = target.get('armor')
+    if value is None:
+        value = profile.get('armor')
+    value = _number(value, float('inf'))
+    return value if 0.0 <= value < float('inf') else None
+
+
 def ordinary_initial_key(source_position, target):
     source, point = _position(source_position), _position(target)
     distance = math.hypot(point[0] - source[0], point[2] - source[2])
-    profile = target.get('profile') or {}
-    armor = _number(target.get('armor', profile.get('armor')), float('inf'))
+    armor = nominal_armor(target)
+    armor = float('inf') if armor is None else armor
     kind = str(target.get('target_kind', target.get('kind', '')) or '')
     identity = target.get('network_id', target.get('id', 0))
     return distance, armor, kind, _number(identity)

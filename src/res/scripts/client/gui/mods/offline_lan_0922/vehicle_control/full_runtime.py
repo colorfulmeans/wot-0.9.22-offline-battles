@@ -38,6 +38,7 @@ from .combat_stop import CombatStop, MECHANICAL_STALL_SECONDS
 from .siege_planning import ActualSiegeAim
 from .combat_control import CombatControl, _point, _angle, _distance, _field
 from .actor_observation import PlayerObservation
+from .target_selection import nominal_armor
 
 
 # The original LAN authority builds full-roster strategic orders every 30
@@ -47,7 +48,7 @@ STRATEGY_SECONDS = 1.0
 PLAYER_PROFILE_SECONDS = 30.0
 PLAYER_PROFILE_STAGES = (
     'player_observe', 'player_attack', 'player_strategy', 'player_traffic',
-    'player_copied', 'player_refresh', 'player_post')
+    'player_shared_control', 'player_refresh', 'player_post')
 _PROFILE_CLOCK = getattr(time, 'perf_counter', None)
 if _PROFILE_CLOCK is None:
     _PROFILE_CLOCK = time.clock
@@ -1636,6 +1637,7 @@ class FullPlayerRuntime(MissionControl, CombatControl):
                 time_left=1., x=target['x'], y=target['y'], z=target['z'],
                 health=target['health'], max_health=target['max_health'],
                 class_tag=target.get('class_tag'),
+                armor=nominal_armor(target),
                 shootable_by_bot_ids=sorted(set(peers + ([self.actor_id] if clear else []))),
                 threatened_bot_ids=threatened,
                 # A current negative receipt is a known blocked lane, not an
@@ -1893,7 +1895,7 @@ class FullPlayerRuntime(MissionControl, CombatControl):
         token = self.generation
         # These are inclusive subsets of BattleRuntime's existing `local`
         # phase. Their only purpose is to make the next user error report
-        # identify which copied-player operation dominates the render frame.
+        # identify which foreground/shared operation dominates the render frame.
         stages = getattr(self.owner, '_local_frame_stages', None)
         marker = _PROFILE_CLOCK() if stages is not None else None
         self._observe(now)
@@ -1903,22 +1905,26 @@ class FullPlayerRuntime(MissionControl, CombatControl):
             return self.status()
         if not self._advance_mission_retry(now):
             return self.status()
+        # The foreground owns an independent one-actor quota. Its following
+        # engine.update uses the same callback id and cannot refill it.
+        self.engine._begin_evaluation_frame(now)
         marker = self._profile_stage(stages, marker, 'player_attack')
         self._planner_order(now)
         marker = self._profile_stage(stages, marker, 'player_strategy')
         self._observe_traffic(now)
         self.geometry._artillery.advance(now, 4, self.geometry._artillery_arc_probe)
         marker = self._profile_stage(stages, marker, 'player_traffic')
-        # The independent copy owns navigation, physical recovery, traffic,
-        # hull aiming, firing gates and route handoffs.
+        # The common engine owns navigation, physical recovery, traffic,
+        # hull aiming, firing gates and route handoffs. This binding advances
+        # only its foreground actor and never asks a BOT worker to decide.
         self.engine.update(float(dt), float(now), list(self._players))
         if (self.combat_stop.stop_allowed and
                 self.attack_policy.decision.get('action') == 'search_penetration'):
-            # Tell the unchanged original planner this is an active bounded
+            # Tell the shared planner this is an active bounded
             # local manoeuvre, not eight seconds of an idle ready-gun hold.
             self.state['local_combat_manoeuvre'] = True
-        marker = self._profile_stage(stages, marker, 'player_copied')
-        # Only the foreground actor may have changed in this copied control
+        marker = self._profile_stage(stages, marker, 'player_shared_control')
+        # Only the foreground actor may have changed in this shared control
         # slice. Preserve the native-source correction without re-reading,
         # re-registering and re-serializing every unrelated public peer.
         self._observe_local(now)

@@ -33,7 +33,7 @@ class TargetEvidenceTests(unittest.TestCase):
             self.aim(error)
             self.assertEqual(2, self.orders(now)['target_id'])
         self.assertEqual(2, self.orders(15.1)['target_id'])
-        self.assertNotIn('until', self.planner._target_assignments[11])
+        self.assertFalse(hasattr(self.planner, '_target_assignments'))
 
     def test_first_shot_does_not_restore_a_low_health_target_bonus(self):
         self.orders(1)
@@ -64,11 +64,13 @@ class TargetEvidenceTests(unittest.TestCase):
         self.assertFalse(hasattr(self.planner, '_release_unproductive_firing_hold'))
         self.assertFalse(hasattr(self.planner, '_firing_holds'))
 
-    def test_a_new_closer_contact_does_not_preempt_valid_tracking(self):
+    def test_a_new_closer_contact_changes_only_the_stateless_initial_hint(self):
         self.orders(1)
         self.aim(2.6)
         self.contacts[1].update(x=0, z=20)
-        self.assertEqual(2, self.orders(1.1)['target_id'])
+        self.assertEqual(3, self.orders(1.1)['target_id'])
+        self.assertEqual('initial_hint', self.planner._target_decisions[11]['owner'])
+        self.assertFalse(hasattr(self.planner, '_target_assignments'))
 
     def test_lane_loss_retains_tracking_but_releases_fire_and_stationary_hold(self):
         self.orders(1)
@@ -89,7 +91,7 @@ class TargetEvidenceTests(unittest.TestCase):
         self.contacts = self.contacts[1:]
         self.assertEqual(3, self.orders(1.2)['target_id'])
 
-    def test_capturer_preempts_ordinary_target_and_diagnostic_matches(self):
+    def test_capturer_changes_task_hint_without_creating_a_gun_target_owner(self):
         self.orders(1)
         bot = self.planner._alive_bots(self.manifest, self.states, self.planner.tactics)[0]
         contacts = self.planner._prune_contacts(
@@ -101,12 +103,12 @@ class TargetEvidenceTests(unittest.TestCase):
         decision = self.planner._target_decisions[11]
         self.assertEqual(('human', 3), decision['selected'])
         self.assertEqual('base_capturer', decision['outcome'])
-        self.assertEqual(1.1, self.planner._target_assignments[11]['acquired_at'])
-        self.assertNotIn('until', self.planner._target_assignments[11])
-        lease = copy.deepcopy(self.planner._target_assignments[11])
+        self.assertEqual('initial_hint', decision['owner'])
+        self.assertFalse(hasattr(self.planner, '_target_assignments'))
+        priority = copy.deepcopy(decision['base_priority'])
         self.planner._prioritize_base_invaders(1, [bot], contacts, result,
             {11: dict(point=dict(x=0,y=0,z=0),radius=50)}, defense, 1.2)
-        self.assertEqual(lease, self.planner._target_assignments[11])
+        self.assertEqual(priority, self.planner._target_decisions[11]['base_priority'])
 
     def test_capturer_does_not_bypass_wall_or_radio_expiry(self):
         self.orders(1)

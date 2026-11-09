@@ -44,7 +44,8 @@ class AvoidanceHandoffTests(unittest.TestCase):
         self.assertTrue(self.mark())
         marker = self.runtime._friendly_repositions[3]
         self.assertEqual(17.,marker['deadline'])
-        order,expired = self.runtime._friendly_reposition_order(self.state,{21:self.target},17.)
+        order,expired = self.runtime._friendly_reposition_order(
+            self.state,{21:self.target},17.,self.runtime._server_orders.get(3,{}))
         self.assertIsNone(order)
         self.assertTrue(expired)
         self.assertEqual('timeout',self.state['_friendly_reposition_last_terminal']['outcome'])
@@ -53,7 +54,8 @@ class AvoidanceHandoffTests(unittest.TestCase):
         self.assertTrue(self.mark(26.))
         marker = self.runtime._friendly_repositions[3]
         self.state.update(zip(('x','y','z'),marker['destination']))
-        self.assertEqual((None,False),self.runtime._friendly_reposition_order(self.state,{21:self.target},27.))
+        self.assertEqual((None,False),self.runtime._friendly_reposition_order(
+            self.state,{21:self.target},27.,self.runtime._server_orders.get(3,{})))
         self.assertEqual('arrived',self.state['_friendly_reposition_last_terminal']['outcome'])
 
     def test_produced_bot_and_human_order_keep_adapter_progress_episode(self):
@@ -66,7 +68,8 @@ class AvoidanceHandoffTests(unittest.TestCase):
                 self.runtime._server_orders[3] = dict(self.command,
                     target_id=2 if kind=='human' else identity)
                 self.assertTrue(self.mark())
-                move,expired = self.runtime._friendly_reposition_order(self.state,{identity:self.target},1.1)
+                move,expired = self.runtime._friendly_reposition_order(
+                    self.state,{identity:self.target},1.1,self.runtime._server_orders.get(3,{}))
                 self.assertFalse(expired)
                 self.assertEqual((kind,identity),(move['target_kind'],move['target_id']))
                 adapter = BotAdapter('01_karelia',7)
@@ -94,7 +97,8 @@ class AvoidanceHandoffTests(unittest.TestCase):
                     self.runtime._server_orders[3]['target_id'] = 22
                 else:
                     targets = {}
-                self.assertEqual((None,False),self.runtime._friendly_reposition_order(self.state,targets,2.))
+                self.assertEqual((None,False),self.runtime._friendly_reposition_order(
+                    self.state,targets,2.,self.runtime._server_orders.get(3,{})))
                 event = self.state['_friendly_reposition_last_terminal']
                 self.assertEqual(dict(parking='parking_handoff',priority='priority_handoff').get(cause,cause),event['outcome'])
                 self.assertEqual(marker,event['marker'])

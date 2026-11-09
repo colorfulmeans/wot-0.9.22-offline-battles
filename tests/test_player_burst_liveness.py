@@ -9,6 +9,8 @@ import unittest
 from unittest import mock
 
 import test_player_fire_admission_complete as boundary
+from gui.mods.offline_lan_0922.vehicle_control.attack_policy import native_target_pose
+from gui.mods.offline_lan_0922.vehicle_control.trigger_admission import barrel_path
 
 
 class PlayerBurstLivenessTests(unittest.TestCase):
@@ -68,6 +70,20 @@ class PlayerBurstLivenessTests(unittest.TestCase):
         if reason is not None:
             self.assertEqual(reason, self.control.last_fire_failure)
 
+    def _next_denied_without_current_target(self):
+        # The final-pose refresh refuses an absent current intention before
+        # constructing admission context; the physical tail above already
+        # completed and this next edge still cannot launch or debit.
+        with mock.patch.object(self.admission, 'prepare',
+                               wraps=self.admission.prepare) as prepare:
+            self._next_denied()
+        prepare.assert_not_called()
+        self.assertNotIn(42, [row['network_id'] for row in self.runtime.combat_targets()])
+        receipt = self.runtime.attack_policy.evaluator.trigger_refresh_receipt
+        self.assertEqual(('pending', 'intent_unavailable'),
+                         (receipt['status'], receipt['reason']))
+        self.assertEqual(0, receipt['work']['predictions'])
+
     def test_world_appears_after_head_tails_continue_next_trigger_rejects(self):
         self._head()
         self.fixture.world = [((-2., 0., 19.), (2., 3., 21.))]
@@ -85,19 +101,38 @@ class PlayerBurstLivenessTests(unittest.TestCase):
         self.fixture.target.health = 0
         self.owner._records['bot:42']['state'].update(health=0, alive=False)
         self._tail()
-        self._next_denied('auto_target_lost')
+        self._next_denied_without_current_target()
+        self.assertFalse(self.fixture.target.isAlive())
 
     def test_target_unspotted_after_head_tails_continue_next_trigger_rejects(self):
         self._head()
         self.owner._records['bot:42']['spot_visible'] = False
         self._tail()
-        self._next_denied('auto_target_lost')
+        self._next_denied_without_current_target()
+        self.assertFalse(self.owner._records['bot:42']['spot_visible'])
 
     def test_target_pose_changes_after_head_tails_continue_next_trigger_rejects(self):
         self._head()
+        previous_pose = self.fixture.candidate['solution']['target_pose']
         self.fixture.pose(self.fixture.target, (10., 0., 100.))
         self._tail()
-        self._next_denied('auto_target_pose_changed')
+        with mock.patch.object(self.admission, 'prepare',
+                               wraps=self.admission.prepare) as prepare:
+            self._next_denied('auto_gun_laying')
+        prepare.assert_called_once()
+        context, unused_entity, unused_gun, ray, unused_dispersion, shot, unused_now = prepare.call_args[0]
+        solution = context['solution']
+        actual_pose = native_target_pose(self.owner, self.fixture.target)[0]
+        self.assertNotEqual(previous_pose, actual_pose)
+        self.assertEqual(actual_pose, solution['target_pose'])
+        receipt = self.runtime.attack_policy.evaluator.trigger_refresh_receipt
+        self.assertEqual(('refreshed', 'same_intention'),
+                         (receipt['status'], receipt['reason']))
+        # The same point was truly recomputed at the new native pose. The
+        # actual barrel still follows its old ray and misses that new point.
+        path, unused_times, unused_flight = barrel_path(ray[0], ray[1], shot, solution['point'])
+        self.assertTrue(path)
+        self.assertGreater(sum((path[-1][i] - solution['point'][i]) ** 2 for i in range(3)), .30 ** 2)
 
     def test_armor_changes_after_head_tails_continue_next_trigger_rechecks(self):
         self._head()

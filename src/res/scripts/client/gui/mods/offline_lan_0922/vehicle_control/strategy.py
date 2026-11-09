@@ -131,7 +131,6 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
         self._task_init()
         self._empty_ammo_bots = set()
         self._engage_anchors = {}
-        self._target_assignments = {}
         self._target_decisions = {}
         self._base_defense = {1: {}, 2: {}}
         self._capture_arrivals = {}
@@ -159,7 +158,6 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
         self._task_init()
         self._empty_ammo_bots = set()
         self._engage_anchors = {}
-        self._target_assignments = {}
         self._target_decisions = {}
         self._base_defense = {1: {}, 2: {}}
         self._capture_arrivals = {}
@@ -229,7 +227,7 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
                     "health": max(0, _integer(raw.get("health"), 1)),
                     "max_health": max(1, _integer(raw.get("max_health"), 1)),
                     "class_tag": str(raw.get("class_tag") or "unknown")[:24],
-                    "armor": max(0.0, _number(raw.get("armor"), 0.0)),
+                    "armor": target_selection.nominal_armor(raw),
                     "shootable_by_bot_ids": self._bot_id_list(
                         raw.get("shootable_by_bot_ids")),
                     "pending_lane_by_bot_ids": self._bot_id_list(
@@ -520,7 +518,7 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
                     protected_ids.add(bot['id'])
             self._rebalance_routes(
                 team, team_bots, contacts[team], now, protected_ids)
-            assignments = self._assign_targets(team_bots, contacts[team], now)
+            assignments = self._initial_target_hints(team_bots, contacts[team], now)
             assignments = self._prioritize_base_invaders(
                 team, team_bots, contacts[team], assignments,
                 defenders.get(team, {}), defense, now)
@@ -702,9 +700,6 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
         for bot_id in list(self._route_assignments):
             if bot_id not in live_bots:
                 del self._route_assignments[bot_id]
-        for bot_id in list(self._target_assignments):
-            if bot_id not in live_bots:
-                del self._target_assignments[bot_id]
         for bot_id in list(self._engage_anchors):
             if bot_id not in live_bots:
                 del self._engage_anchors[bot_id]
@@ -1305,7 +1300,7 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
 
     def _prioritize_base_invaders(self, team, bots, contacts, assignments,
                                   defenders, defense, now=None):
-        """Apply the base-defense objective without a second target score."""
+        """Supply a base-defense hint without owning a current gun target."""
         if not defenders or not isinstance(defense, dict):
             return assignments
         contributor_keys = self._defense_contributor_keys(defense, team)
@@ -1336,10 +1331,8 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
             contact = (retained or min(choices, key=lambda row: row[0]))[1]
             key = (contact.get('target_kind'), contact['id'])
             result[bot_id] = contact
-            if (self._target_assignments.get(bot_id) or {}).get('target') != key:
-                self._target_assignments[bot_id] = self._new_target_record(key, now)
             self._target_decisions.setdefault(bot_id, {}).update(selected=key,
-                outcome='base_capturer', lease_after=dict(self._target_assignments[bot_id]),
+                outcome='base_capturer', owner='initial_hint',
                 base_priority=dict(reason='base_defense_objective',
                     contributors=sorted(contributor_keys), selected=key))
         return result
@@ -1351,7 +1344,7 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
 
     @staticmethod
     def _engagement_range(bot, contact):
-        """Keep nearby combat primary without pulling an entire team off-route."""
+        """Estimate a defender's task response; never authorize ordinary fire."""
         profile = bot.get("profile") if isinstance(bot.get("profile"), dict) else {}
         roles = profile.get("roles") if isinstance(profile.get("roles"), dict) else {}
         desired = max(40.0, _number(profile.get("desired_range"), 180.0))
@@ -1466,26 +1459,20 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
         order["fire_allowed"] = False
         return True
 
-    @staticmethod
-    def _new_target_record(key, now):
-        return dict(target=key, acquired_at=_number(now))
-
-
-    def _assign_targets(self, bots, contacts, now):
-        """Acquire nearest/lower-armor once; no rating, attacker or human bias.
+    def _initial_target_hints(self, bots, contacts, now):
+        """Suggest nearest/lower armour without a second current-target state.
 
         Every known live candidate remains in the evidence domain. This
-        strategic tracking choice does not authorize a shot or replace the
-        local armor/HE policy. Temporary reload or lane loss keeps identity
-        but never preserves launch permission. Artillery's final rank belongs
-        to the local reachable-arc HE evaluator, not this server tracker.
+        hint does not authorize a shot, retain a gun target, or replace the
+        local armour/HE policy. That actor-local owner retains a current point
+        and revalidates its own recovery. Artillery's final rank belongs to
+        the local reachable-arc HE evaluator.
         """
         assigned = {}
         for bot in bots:
             bot_id = bot['id']
-            previous = self._target_assignments.get(bot_id) or {}
             observation = dict(at=now, candidates=[], selected=None,
-                previous=dict(previous), outcome='no_live_contact',
+                outcome='no_live_contact', owner='initial_hint',
                 selection_law='initial_distance_armor',
                 weapon=dict((key, bot['state'].get(key)) for key in (
                     'shell_index', 'ammo_remaining', 'ammo_reload_pending',
@@ -1511,34 +1498,23 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
                     row['reason'] = 'not_visible'
                     continue
                 rank = target_selection.ordinary_initial_key(bot['state'], contact)
-                row.update(distance=rank[0], armor=rank[1],
-                    range=self._engagement_range(bot, contact))
-                if rank[0] > row['range']:
-                    row['reason'] = 'outside_engagement_range'
-                    continue
+                row.update(distance=rank[0], armor=target_selection.nominal_armor(contact))
                 row.update(reason='eligible', ready=bool(local_lane and self._weapon_ready(bot)))
                 eligible.append((rank, contact, local_lane))
             if not eligible or not self._weapon_can_recover(bot):
-                self._target_assignments.pop(bot_id, None)
                 if eligible:
                     observation['outcome'] = 'ammunition_unavailable'
-                observation['lease_after'] = {}
                 continue
-            retained = next((row for row in eligible if
-                (row[1].get('target_kind'), row[1]['id']) == previous.get('target')), None)
-            selected = retained if retained is not None else min(eligible, key=lambda row: row[0])
+            selected = min(eligible, key=lambda row: row[0])
             contact = selected[1]
             key = (contact.get('target_kind'), contact['id'])
-            if retained is None:
-                self._target_assignments[bot_id] = self._new_target_record(key, now)
             ready = selected[2] and self._weapon_ready(bot)
             if not ready:
                 contact = dict(contact, movement_lease=True)
             assigned[bot_id] = contact
             observation.update(selected=key,
                 outcome='assigned' if ready else 'movement_lease',
-                tracking_reason='current_live_contact' if retained is not None else 'initial_distance_armor',
-                lease_after=dict(self._target_assignments[bot_id]))
+                tracking_reason='initial_distance_armor')
         return assigned
 
     @staticmethod
@@ -2776,9 +2752,8 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
         order['throttle_override'] = 0.0 if holding else None
 
     @staticmethod
-    def _shell_index(profile, contact, personality, state=None,
-                     plans_shell=True):
-        """Use the round-owned result policy, independently of difficulty."""
+    def _shell_index(profile, state=None):
+        """Read published ammunition selection without target/ability inputs."""
         from gui.mods.offline_lan_0922.ammo_policy import ordered
         state = state or {}
         shells = ordered(profile, state.get('ammo_remaining'))
@@ -2804,19 +2779,16 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
         if order.get("target_id") is None:
             order["face_position"] = dict(anchor["face"])
 
-    def _set_target(self, order, bot, contact, profile, personality,
-                    fire_allowed):
+    def _set_target(self, order, bot, contact, fire_allowed):
         order["target_id"] = contact["id"]
         order["target_kind"] = contact.get("target_kind")
         order["aim_position"] = dict(contact["position"])
         order["face_position"] = dict(contact["position"])
         order["fire_allowed"] = bool(
             fire_allowed and BotPlanner._weapon_ready(bot))
-        # One engagement is one shell decision. Re-rolling per tick would
-        # leave a Bot swapping rounds in front of the same tank.
+        # This is an ammunition observation, not another shell-choice policy.
         order["shell_index"] = BotPlanner._shell_index(
-            profile, contact, personality, bot.get("state"),
-            plans_shell=True)
+            bot['profile'], bot.get("state"))
 
 
 
@@ -2869,7 +2841,7 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
             if focus is not None:
                 observers = focus.get("shootable_by_bot_ids")
                 self._set_target(
-                    order, bot, focus, profile, personality,
+                    order, bot, focus,
                     bool(focus.get("visible") and
                          (bot["id"] in (observers or ()) or
                           str(profile.get('class_tag') or '') == 'SPG' and
@@ -2893,7 +2865,7 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
                 # ammunition, exact native arc proof and friendly clearance.
                 # An expired advisory must not cancel that pending proof.
                 self._set_target(
-                    order, bot, focus, profile, personality,
+                    order, bot, focus,
                     bool(focus.get("visible")))
             self._apply_artillery_order(order, bot, team_axis)
             return order
@@ -2906,13 +2878,7 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
         locally_shootable = bool(focus.get("visible") and
                                  bot["id"] in (observers or ()))
         self._set_target(
-            order, bot, focus, profile, personality, locally_shootable)
-        bx = _number(state.get("x"))
-        bz = _number(state.get("z"))
-        distance = math.hypot(focus["position"]["x"] - bx,
-                              focus["position"]["z"] - bz)
-        if distance > fire_range:
-            order["fire_allowed"] = False
+            order, bot, focus, locally_shootable)
 
         if not locally_shootable:
             if focus.get("movement_lease") and self._apply_leased_movement_order(
@@ -2925,16 +2891,9 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
             self._combat_approach(order, focus['position'], 'local_lane_lost')
             return order
 
-        if distance > fire_range:
-            # Close a genuinely out-of-range contact along the authored lane.
-            # A preferred personality range must not move an otherwise valid
-            # shooter or interrupt its current aim/reload.
-            self._engage_anchors.pop(bot["id"], None)
-            order["combat_mode"] = "advance" if route_id else "advance_contact"
-            order["move_position"] = dict(move if route_id else focus["position"])
-            order["throttle_override"] = 1.0
-            return order
-
+        # This is only the initial contact hint. The shared native evaluator
+        # owns the mounted shell's actual reach and any resulting approach;
+        # profile role ranges cannot prevent its first proof or valid shot.
         order["combat_mode"] = "engage"
         target_key = (focus.get("target_kind"), focus["id"])
         anchor_state = self._engage_anchors.get(bot["id"])
@@ -2955,8 +2914,6 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
         return {
             "aggression": round(0.35 + (value % 41) / 100.0, 3),
             "caution": round(0.25 + ((value >> 8) % 41) / 100.0, 3),
-            "teamwork": round(0.30 + ((value >> 12) % 51) / 100.0, 3),
-            "patience": round(0.25 + ((value >> 16) % 56) / 100.0, 3),
             "initiative": round(0.25 + ((value >> 20) % 61) / 100.0, 3),
             "adaptability": round(0.30 + ((value >> 4) % 51) / 100.0, 3),
         }

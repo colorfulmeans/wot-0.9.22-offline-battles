@@ -10,6 +10,7 @@ import unittest
 from test_player_rebuilt_attack_policy import (
     Observations, ATOMIC_ARMOUR_BATCHES, ATOMIC_CANDIDATES)
 import test_player_fire_admission_complete as native_fire
+from gui.mods.offline_lan_0922.vehicle_control.evaluation_budget import EvaluationBudget
 
 
 class SharedHEDamageRankingTests(unittest.TestCase):
@@ -220,12 +221,104 @@ class SharedHEDamageRankingTests(unittest.TestCase):
         scene.he(80., index=3)
         scene.prime()
         scene.prime('he_fallback', 3)
+        # A frame with no optional-work allowance cannot rebuild NEXT from
+        # cached facts. CURRENT still uses the loaded cassette immediately;
+        # the completed NEXT comparison belongs to a later serviced frame.
         scene.policy.background_budget = 0
-        scene.tick(0.)
+        before = len(scene.calls)
+        decision = scene.tick(0.)
+        self.assertEqual(('aim', 2),
+                         (decision['action'], decision['candidate']['shell_index']))
+        self.assertEqual((None, 'not_observed'), scene.policy.next_at_edge())
+        self.assertEqual(before, len(scene.calls))
+        self.assertEqual(0, scene.atomic_calls)
+        self.assertIsNone(scene.policy.search_started)
+        scene.policy.background_budget = 2
+        scene.tick(.1)
+        self.assertTrue(any(call[1] == 'background' for call in scene.calls[before:]))
         plan, reason = scene.policy.next_at_edge()
         self.assertEqual('verified', reason)
         self.assertEqual((3, 80.), (plan['shell_index'], plan['expected_damage']))
         self.assertTrue(all(row['shell_index'] != 2 for row in scene.policy.next_proofs))
+        expected = set(job[0] for mode in ('penetration', 'he_fallback')
+                       for job in scene.policy._jobs(mode) if job[0][0] != 2)
+        self.assertEqual(expected, set(row['key'] for row in scene.policy.next_proofs))
+
+    def test_next_he_cassette_comparison_finishes_after_shared_budget_deferral(self):
+        scene = Observations(clips=6, targets=2, points=2)
+        alternate = dict(scene.frame['shells'][2], index=3, signature=('he', 2))
+        scene.frame.update(shells=scene.frame['shells'] + (alternate,),
+                           loaded=2, ammo=(0, 0, 6, 30))
+        scene.passed(2)
+        scene.prime('penetration', 2)
+        # No NEXT facts are primed. The real policy must visit both the
+        # alternate shell's penetration and full HE damage domains.
+        for target in (1, 2):
+            for sample in (0, 1):
+                scene.he(20. * target + sample, index=3, target=target, sample=sample)
+        scene.he(200., index=3, target=2, sample=1)
+        budget = EvaluationBudget()
+
+        def frame_budget(now):
+            budget.begin((7, now), range(1, 7))
+            return budget
+
+        class Engine(object):
+            _begin_evaluation_frame = staticmethod(frame_budget)
+
+        scene.policy.runtime.actor_id = 5
+        scene.policy.runtime.engine = Engine()
+        frame_budget(0.)
+        for actor in (1, 2, 3, 4):
+            self.assertEqual(2, budget.background(actor, 2))
+        before = len(scene.calls)
+        decision = scene.tick(0.)
+        self.assertEqual(('aim', 2),
+                         (decision['action'], decision['candidate']['shell_index']))
+        self.assertEqual(before, len(scene.calls))
+        self.assertEqual((None, 'not_observed'), scene.policy.next_at_edge())
+        self.assertIn(5, budget.receipt()['background_waiting'])
+        # Re-entering in the same frame must neither refill the budget nor
+        # construct a NEXT plan from an incomplete comparison.
+        scene.policy.background(0.)
+        self.assertEqual(before, len(scene.calls))
+        self.assertEqual(0, scene.atomic_calls)
+
+        plan = None
+        serviced = []
+        for step in range(1, 17):
+            now = step * .1
+            frame_budget(now)
+            # Low-id peers continue requesting first. The queued actor must
+            # still get its fair reservation and eventually close all facts.
+            for actor in (1, 2, 3, 4):
+                budget.background(actor, 2)
+            start = len(scene.calls)
+            decision = scene.tick(now)
+            calls = scene.calls[start:]
+            if any(call[1] == 'background' for call in calls):
+                serviced.append(step)
+            self.assertLessEqual(sum(call[1] == 'background' for call in calls), 2)
+            self.assertLessEqual(budget.receipt()['background_used'], 8)
+            self.assertEqual(('aim', 2),
+                             (decision['action'], decision['candidate']['shell_index']))
+            self.assertEqual((6, (0, 0, 6, 30)), (scene.frame['clip'], scene.frame['ammo']))
+            self.assertIsNone(scene.policy.search_started)
+            plan, reason = scene.policy.next_at_edge()
+            if plan is not None:
+                break
+        self.assertEqual(1, serviced[0], 'the previous frame\'s waiter was starved by new requests')
+        self.assertIsNotNone(plan, scene.policy.status())
+        self.assertEqual('verified', reason)
+        self.assertEqual((3, ('bot', 2), 1, 200.),
+            (plan['shell_index'], plan['target_key'], plan['sample'], plan['expected_damage']))
+        expected = set(job[0] for mode in ('penetration', 'he_fallback')
+                       for job in scene.policy._jobs(mode) if job[0][0] != 2)
+        self.assertEqual(8, len(expected))
+        self.assertEqual(expected, set(row['key'] for row in scene.policy.next_proofs))
+        self.assertTrue(all(row['shell_index'] == 3 for row in scene.policy.next_proofs))
+        self.assertEqual(0, scene.atomic_calls,
+                         'ordinary fair background work must suffice without reopening atomic caps')
 
 
 class SharedCurrentHEObservationTests(unittest.TestCase):

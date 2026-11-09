@@ -66,13 +66,15 @@ class SharedOrderPlanningTests(unittest.TestCase):
 
     def test_round_change_retires_shared_recovery_state(self):
         old = self.runtime.control_planner
-        old._target_assignments[11] = dict(target=('bot', 999))
+        old._contacts[1][('bot', 999)] = dict(id=999, alive=True)
+        old._route_states[11] = dict(route_id='previous-round', index=2)
         self.runtime._control_observers[11] = (1., ())
         self.runtime._control_plan = dict(orders=[dict(id=11)])
         with contextlib.redirect_stdout(io.StringIO()):
             self.runtime.battle_start(dict(self.fixture.start, round_id=6))
         self.assertIsNot(old, self.runtime.control_planner)
-        self.assertEqual({}, self.runtime.control_planner._target_assignments)
+        self.assertEqual({1: {}, 2: {}}, self.runtime.control_planner._contacts)
+        self.assertEqual({}, self.runtime.control_planner._route_states)
         self.assertEqual({}, self.runtime._control_observers)
         self.assertIsNone(self.runtime._control_plan)
         self.assertEqual([11], [row['id'] for row in self.runtime.control_manifest])
@@ -90,6 +92,21 @@ class SharedOrderPlanningTests(unittest.TestCase):
         self.assertEqual(25., result['states']['1']['points'])
         result['capture_bases']['1'][0]['radius'] = 0.
         self.assertEqual(35., self.runtime.control_defense_context()['capture_bases']['1'][0]['radius'])
+
+    def test_observed_profile_armor_is_a_fact_and_missing_is_not_zero(self):
+        source = self.runtime.states[11]
+        rows = [dict(kind='bot', id=14, team=2, alive=True, visible=True,
+                     position=(0., 0., 100.), armor=None, profile=dict(armor=72.)),
+                dict(kind='bot', id=15, team=2, alive=True, visible=True,
+                     position=(30., 0., 100.), profile={})]
+        for row in rows:
+            self.runtime.states[row['id']] = dict(source, id=row['id'], team=2,
+                x=row['position'][0], y=0., z=row['position'][2])
+        planner = self.runtime.control_planner
+        with mock.patch.object(planner, 'report_contacts', wraps=planner.report_contacts) as report:
+            self.runtime._shared_control_order(source, rows, [], 1.)
+        facts = dict((row['target_id'], row['armor']) for row in report.call_args.args[0])
+        self.assertEqual({14: 72., 15: None}, facts)
 
     def test_missing_driver_fails_explicitly_instead_of_using_old_engine(self):
         self.runtime.adapter.decide_with_order = None
@@ -123,6 +140,16 @@ class RetiredDirectorTests(unittest.TestCase):
         source = (client / 'bot_runtime.py').read_text()
         self.assertIn('self._shared_control_order(state, contacts, players, now)', source)
         self.assertIn('worker_control.guard_mission_controls(', source)
+
+    def test_diagnostics_identify_the_shared_source_not_a_deleted_copy(self):
+        root = Path(__file__).resolve().parents[1]
+        control = root / 'src/res/scripts/client/gui/mods/offline_lan_0922/vehicle_control'
+        binding = (control / 'player_binding.py').read_text()
+        self.assertEqual(3, binding.count("implementation='shared_single_source'"))
+        self.assertNotIn('full_independent_behavior_copy', binding)
+        runtime = (control / 'full_runtime.py').read_text()
+        self.assertIn("'player_shared_control'", runtime)
+        self.assertNotIn("'player_copied'", runtime)
 
 
 if __name__ == '__main__':

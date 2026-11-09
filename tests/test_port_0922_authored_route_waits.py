@@ -53,7 +53,7 @@ class AuthoredRouteWaitTests(unittest.TestCase):
         contact['shootable_by_bot_ids'] = []
         self.assertFalse(order(3)['fire_allowed'])
 
-    def test_td_sniper_reach_is_the_same_during_travel_and_parking(self):
+    def test_td_defense_response_estimate_is_the_same_during_travel_and_parking(self):
         planner, manifest = self.setup_route('AT-SPG', 60)
         bot = manifest[0]
         bot['profile'] = build_vehicle_profile(dict(
@@ -62,6 +62,8 @@ class AuthoredRouteWaitTests(unittest.TestCase):
             gun=dict(shots=())))
         for phase in (None, 'approach', 'waiting', 'queue'):
             planner._route_states[11] = dict(parking_phase=phase)
+            # This remaining estimate belongs to defense task allocation;
+            # it is not a mounted-shell limit or an ordinary target filter.
             self.assertEqual(534., planner._engagement_range(bot, dict(visible=True)))
             self.assertAlmostEqual(399.3, planner._engagement_range(bot, dict(visible=False)))
 
@@ -137,8 +139,8 @@ class AuthoredRouteWaitTests(unittest.TestCase):
 
     def test_armoured_td_wait_can_fire_at_reported_el_halluf_distance(self):
         # Tortoise's relative target position in report 20261005-200028.
-        # Build the production profile rather than hiding its range reduction
-        # behind the server fixture's generic 520 m profile.
+        # Keep the real production role profile distinct from mounted-shell
+        # range, which the shared native evaluator proves downstream.
         planner, manifest = self.setup_route('AT-SPG', 60)
         manifest[0]['profile'] = build_vehicle_profile(dict(
             type=dict(name='Tortoise', tags=('AT-SPG',)),
@@ -161,8 +163,8 @@ class AuthoredRouteWaitTests(unittest.TestCase):
         self.assertTrue(waiting['fire_allowed'])
         self.assertEqual(450., manifest[0]['profile']['fire_range'])
         self.assertEqual(450., waiting['fire_range'])
-        # This profile correction neither bypasses lane/readiness gates nor
-        # turns the existing TD envelope into unlimited firing reach.
+        # A macro attempt still requires a lane and loaded weapon. It is not
+        # a native launch certificate and role range cannot veto the proof.
         contact['shootable_by_bot_ids']=[]
         self.assertFalse(order(2)['fire_allowed'])
         contact['shootable_by_bot_ids']=[11]
@@ -171,7 +173,15 @@ class AuthoredRouteWaitTests(unittest.TestCase):
         state['reload_time']=0.
         contact.update(x=490., z=0.)
         enemy.update(x=490., z=0.)
-        self.assertFalse(order(4)['fire_allowed'])
+        farther=order(4)
+        self.assertTrue(farther['fire_allowed'])
+        self.assertEqual(7,farther['target_id'])
+        self.assertEqual(490.,farther['aim_position']['x'])
+        self.assertEqual('hold',farther['combat_mode'])
+        self.assertEqual('waiting',farther['parking_phase'])
+        self.assertEqual(waiting['route_index'],farther['route_index'])
+        self.assertEqual(waiting['move_position'],farther['move_position'])
+        self.assertEqual(0.,farther['throttle_override'])
 
     def test_el_halluf_tortoise_reinforcement_joins_without_returning_to_base(self):
         planner=BotPlanner()
@@ -223,11 +233,26 @@ class AuthoredRouteWaitTests(unittest.TestCase):
         self.assertFalse(hasattr(planner, '_apply_retreat_order'))
         for now in (0., 15., 16., 17., 60.):
             order = planner._order_for(bot, 0, 1, focus, [focus], now)
-            self.assertEqual('advance', order['combat_mode'])
+            self.assertEqual('engage', order['combat_mode'])
             self.assertEqual('lane', order['route_id'])
             self.assertEqual(1, order['route_index'])
-            self.assertEqual(dict(x=100., y=0., z=0.), order['move_position'])
-            self.assertFalse(order['fire_allowed'])
+            self.assertEqual(dict(x=100., y=0., z=0.), order['_route_position'])
+            self.assertEqual(dict(x=0., y=0., z=0.), order['move_position'])
+            self.assertEqual(0., order['throttle_override'])
+            self.assertEqual(15, order['target_id'])
+            self.assertTrue(order['fire_allowed'])
+            self.assertNotIn('withdraw_after_hit', order['tactical_evidence'])
+            self.assertFalse(hasattr(planner, '_retreat_states'))
+        # Stopping for the current native attempt keeps the authored route
+        # intact. Low health cannot expire it or replace it with a retreat.
+        resumed = planner._order_for(bot, 0, 1, None, [], 61.)
+        self.assertEqual('route', resumed['combat_mode'])
+        self.assertEqual('lane', resumed['route_id'])
+        self.assertEqual(1, resumed['route_index'])
+        self.assertEqual(dict(x=100., y=0., z=0.), resumed['move_position'])
+        self.assertIsNone(resumed['target_id'])
+        self.assertIsNone(resumed['throttle_override'])
+        self.assertFalse(resumed['fire_allowed'])
 
     def test_unfinished_wait_does_not_count_time_spent_on_another_assignment(self):
         planner,manifest=self.setup_route('AT-SPG',30)

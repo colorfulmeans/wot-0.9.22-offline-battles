@@ -106,6 +106,75 @@ Python physical owner with native world-query frontiers passes its own ten-case
 comparison. This unrelated old-owner failure is recorded, not hidden, repaired
 by changing current physics, or counted as a passing acceptance gate.
 
+## Phase 2: one execution owner and retained physical gates
+
+The common `AttackPolicy` now owns the current target and recovery intention.
+`CombatStop` resolves that intention before accepting a macro order, and its
+consumer uses the returned order. Changing only a macro hint or its mode cannot
+discard another still-valid native target. A changed/dead/blocked target, a real
+new policy intention, and an explicit task still receive normal revalidation or
+handoff; target stability is not a substitute for a current firing proof.
+
+The competing `_target_assignments`, `_assign_targets`, and target-record
+maintenance are deleted. `_initial_target_hints` is stateless: all currently
+observed eligible living contacts, nearest first, exact-distance tie broken by
+lower known nominal armor. Missing armor remains unknown, not manufactured zero.
+No role-based engagement radius or `no_local_lane` exclusion shrinks this domain.
+The remaining role radius participates only in task ETA/progress estimates.
+
+Two real ballistic counterexamples prevent a renamed heuristic from returning:
+an ordinary gun can actually launch at 400 m with mounted maximum 500 m despite
+its profile value 340 m, and a native SPG HE arc can launch at 1500 m with mounted
+maximum 3000 m despite a role value 1250 m. The same scenarios with actual maximum
+350 m and 1400 m respectively cannot launch or debit ammunition. Ordinary true
+range obstruction requests firing-position recovery, not an armor-negative
+certificate or an eight-second timer.
+
+The downstream friendly-reposition consumer also used to reread the raw macro
+order after `BotControlBinding.refine_order`. In the real six-actor fixture,
+actor 11 selected enemy 14, actor 12 obstructed its lane, and another living
+heavily armored enemy 15 moved closer. The old consumer canceled recovery 14 on
+every frame because the initial hint became 15. It now requires the resolved
+order explicitly. Four regressions cover stable marker/start/deadline/destination
+across hint changes, actual native target replacement, explicit hold takeover,
+and actual target death. No timer or steering compensation was added.
+
+Before the first trigger edge, the selected target/shell/sample is refreshed at
+the final physical pose with at most one ballistic prediction. This does not
+rerank targets, spend another world/armor search, or weaken precise source,
+target, weapon, ammo, clip and scene fences. The unchanged current-center and
+scattered-ray admission still reject an unlaid gun or a pose change after prepare.
+Already committed physical trigger tails retain their original accounting.
+
+Common `EvaluationBudget` limits optional all-actor work to eight background
+candidates per outer physical callback, at most two per actor, and one newly
+opened atomic actor. Persistent fair queues, dead-actor pruning and callback
+identity prevent starvation and quota renewal across late physical substeps.
+Current foreground work and actual firing proof retain their existing gates.
+Deferred work creates neither false negative evidence nor a fake eight-second
+clock. `shared-combat-concurrency-20261109.md` records actual measurements and
+their limits; eight candidates does not mean eight primitive HE surface queries.
+
+## Migrated verification contracts
+
+The full suite is rerun against the new source, not made green by retaining old
+entrances. Obsolete macro target locks and role-range cutoffs are replaced by
+initial-hint assertions plus real native execution/invalidity tests. The prior
+HE handoff case incorrectly called 340 m a real weapon range and required the
+better HE target to remain unconsumable; its replacement proves that the better
+current HE target is selected, actually launched, and charged once while NEXT
+retains its separate AP plan. Real driver-margin refusal remains a separate
+positive-evidence/no-launch regression.
+
+Native capability fixtures now override `decide_with_order`, not deleted
+`decide`. Head-on and GC fixtures publish an actual canonical `alive` value;
+strict production wire validation, physical shove assertions and zero-cycle GC
+checks remain unchanged. Burst tests assert the new exact rejection stage and
+receipts rather than requiring a later stale-pose reason, while preserving all
+committed tails and no-next-trigger/no-extra-debit assertions. Budget tests
+explicitly separate a deferred NEXT comparison from actual zero-damage evidence
+and exercise fair service on the following callback.
+
 ## Completion record
 
 Phase-2 changes, exact final tests, CI, package identity and remaining real-game

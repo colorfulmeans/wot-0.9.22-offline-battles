@@ -1,9 +1,8 @@
-"""A combat-only stop intent at the existing BOT order boundary.
+"""Separate shared attack intent from strategic route/task instructions.
 
-The original planner admits targets and owns routes, task priority and recovery.
-This adapter cannot acquire a contact, choose a route, drive a vehicle or expire
-an original manoeuvre.  It moves only the *combat* stop decision ahead of the
-unchanged driver, alongside the new point/penetration policy.
+The planner supplies an initial combat hint and retains task/navigation duties.
+AttackPolicy owns a current point and its recovery; ordinary macro hints cannot
+revoke them. Native geometry and the existing driver still own proof and motion.
 """
 from __future__ import division
 
@@ -24,7 +23,8 @@ _COMBAT_MODES = ('engage', 'advance_contact', 'advance',
                  'team_return_base', 'team_defend_base', 'team_hold_position',
                  'team_back_to_base', 'team_attention_cell',
                  'team_follow')
-_STOP_MODES = ('engage', 'advance_contact')
+_STOP_MODES = ('engage', 'advance_contact', 'advance')
+_ORDINARY_MODES = ('route', 'advance', 'advance_contact', 'engage')
 _TRAVEL_MODES = ('base_defense', 'team_back_to_base', 'team_attention_cell',
                  'team_follow', 'team_attack', 'team_return_base',
                  'team_defend_base', 'team_hold_position')
@@ -68,18 +68,23 @@ class CombatStop(object):
         self.receipt = {}
 
     def accept(self, order):
-        """Consume the original order, before any new attack-policy overlay."""
+        """Accept task authority without giving ordinary hints a second gun."""
         runtime = self.runtime
         self.task_order = dict(order)
         visible = dict((_key(row), row) for row in runtime.visible_targets()
                        if live_contact(row) and row.get('visible', True))
-        selected = _key(dict(kind=order.get('target_kind'),
-                             id=order.get('target_id')))
+        hint = _key(dict(kind=order.get('target_kind'), id=order.get('target_id')))
         mode = order.get('combat_mode')
         state = runtime.state or {}
+        current_target = getattr(runtime.attack_policy, 'current_target_key', None)
+        current = current_target() if callable(current_target) else None
+        retained = bool(self.combat_owned and mode in _ORDINARY_MODES and current in visible)
+        selected = current if retained else (min(visible,
+            key=lambda key: ordinary_initial_key(state['position'], visible[key]))
+            if hint in visible else hint)
         self.active = bool('fire' in runtime.features and
             (state.get('profile') or {}).get('class_tag') != 'SPG' and
-            mode in _COMBAT_MODES and selected in visible and
+            (mode in _COMBAT_MODES or retained) and selected in visible and
             not order.get('empty_ammo') and not runtime._mission_brakes())
         mission = getattr(runtime, '_mission', None) or {}
         destination = mission.get('destination')
@@ -96,20 +101,19 @@ class CombatStop(object):
         # A capture/parking hold may legitimately fire without donating its
         # translation to combat. Likewise fire-only control cannot move the
         # vehicle, but may operate the gun/mode after original admission.
-        self.combat_owned = bool(self.active and mode != 'advance')
+        self.combat_owned = bool(self.active)
         self.stop_allowed = bool(self.combat_owned and 'drive' in runtime.features and
-            mode in _STOP_MODES and not order.get('parking_phase') and
+            (mode in _STOP_MODES or retained) and not order.get('parking_phase') and
             not order.get('capture_area') and not mission.get('capture_started') and
             not explicit_travel)
-        admitted = [selected] if self.active else []
         # All observed living enemies belong to the armour-validation domain.
         # Old score/focus/retaliation filters may not hide a penetrable target
         # or manufacture an all-enemy failure. Blocked geometry stays unknown,
         # separate from a proved plate failure inside AttackPolicy.
-        if self.active:
-            admitted.extend(key for key in sorted(visible,
-                key=lambda key: ordinary_initial_key(state['position'], visible[key]))
-                if key not in admitted)
+        # Domain order is initial-distance order. AttackPolicy prioritizes its
+        # own current point without rewriting this shared observation domain.
+        admitted = (sorted(visible, key=lambda key: ordinary_initial_key(
+            state['position'], visible[key])) if self.active else [])
         self.targets = tuple(visible[key] for key in admitted)
         # Priority is not a geometry/admission change. Reordering the same
         # original eligible enemies must not restart the all-enemy eight-
@@ -121,9 +125,21 @@ class CombatStop(object):
         self.receipt = dict(owner='shared_combat', mode=mode, active=self.active,
             stop_allowed=self.stop_allowed, combat_owned=self.combat_owned,
             selected=selected if self.active else None,
+            initial_hint=hint, retained_attack_intent=bool(retained and self.active),
             admitted=tuple(admitted), excluded=(),
             status='admitted' if self.active else 'navigation',
             reason='observed_living_enemies' if self.active else 'navigation_owned')
+        if retained and self.stop_allowed:
+            # Reconstruct only this existing combat hold. The current point
+            # is freshly evaluated below; neither an old aim coordinate nor
+            # old launch permission is carried across the boundary. Route
+            # metadata and genuine travel/mission commands remain untouched.
+            target = visible[selected]
+            return dict(order, target_kind=selected[0], target_id=selected[1],
+                combat_mode='engage', move_position=tuple(state['position']),
+                face_position=target['position'], aim_position=None,
+                throttle_override=0., fire_allowed=False)
+        return order
 
     def mission_handoff(self, now):
         """A new explicit travel task retires the previous combat-only hold.

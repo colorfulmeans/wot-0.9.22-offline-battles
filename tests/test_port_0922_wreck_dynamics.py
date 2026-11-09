@@ -893,6 +893,7 @@ class HeadOnOwnerTests(unittest.TestCase):
                 if bank+1.e-9>=.1:
                     raw=dict(id=battle.client.player_id,team=1,x=0.,y=0.,z=position[2],
                              yaw=human_yaw,speed=battle._local_speed,forward=sign*human_throttle,
+                             alive=bool(local.isAlive()),
                              tank_pushes=copy.deepcopy(list(battle._local_contact_pushes.values())))
                     human_queue.append((clock[0]+input_delay,raw))
                     while human_queue and human_queue[0][0]<=clock[0]+1.e-9:

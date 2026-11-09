@@ -1,10 +1,55 @@
 # Shared automatic control handoff — 2026-11-09
 
+## Audit correction: read before the historical migration record
+
+The `be5bf798` delivery passed its recorded CI/package checks but did **not**
+complete the requested controller migration. The surviving director/fallback,
+private mission state machine, macro current-target ownership and physical
+recovery's raw-order lookup are completed/removed by this continuation. The full
+audit and the phase-one/phase-two distinction are documented in
+`shared-control-audit-completion-20261109.md`; that record supersedes earlier
+completion language below. Historic green test counts are not final-tree proof.
+
+The current bindings both inherit `MissionControl` and `CombatControl`.
+`BattleRoster` only initializes vehicles/routes; it cannot issue runtime orders.
+`SharedOrderPlanning` handles absent orders with the one shared planner or
+explicit non-firing pending. `BattleDirector`, adapter `plan_order/decide`,
+`_target_assignments` and `_assign_targets` no longer exist.
+
+Ordinary acquisition includes all currently observed valid living contacts;
+role-based `_engagement_range` and `no_local_lane` do not filter that domain.
+Closest first and exact-distance lower-armor tie-breaking are initial hints,
+not another current-target owner. Real mounted maximum distance is carried from
+the native ballistic solution to the final distance guard for ordinary guns and
+SPGs. Actual unreachable targets still request normal firing-position recovery.
+Macro hints cannot cancel its marker or restart its deadline.
+
+Before first-edge admission, the same selected target/shell/sample is refreshed
+at the final physical pose with at most one ballistic prediction. No new native
+world/armor queries, re-ranking or weakened pose fence are introduced by that
+refresh. Actual center/scattered-path/armor/HE proof and native ammo debit remain
+inside the original common transaction.
+
+The common `EvaluationBudget` holds only scheduling tokens, not actor state:
+per outer physical-control callback, background work has eight candidate slots
+in total (at most two per actor) and a maximum of one actor starts an atomic
+speculative slice. Late physical substeps cannot refill it. Current foreground
+review and actual firing proof retain their existing limits and validation.
+Deferred work remains pending, never a negative armor certificate or fake zero
+HE damage. HE surface rays are counted separately from armor batches; candidate
+limits do not imply the same number of primitive collision calls.
+
+Player diagnostics now report `shared_single_source` and profile the
+`player_shared_control` stage. The final external handoff and PR identify the
+exact pushed commit, CI run, downloaded artifact and audit results; those cannot
+be known or asserted merely by committing this source document.
+
 ## Delivery and controlling requirement
 
 - Repository: `colorfulmeans/wot-0.9.22-offline-battles`.
-- Implementation base: `ddf411763e677cc99cf5938aa281d29d579ef9e6`.
-- Local work branch: `fix/shared-vehicle-control`.
+- Earlier partial migration base: `ddf411763e677cc99cf5938aa281d29d579ef9e6`.
+- This continuation's audit base: `be5bf7981d9685ed7c5e211ccbd8f4d18756ee10`.
+- Local integration branch: `fix/shared-control-phase1` (both phases integrated).
 - Review/delivery branch: `fix/elite-premium-ammo-reviewed-guns`, PR #119.
 - The delivered implementation is the commit containing this handoff. The final
   response and PR record its exact pushed SHA and CI/artifact identity.

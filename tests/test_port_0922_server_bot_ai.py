@@ -495,7 +495,7 @@ class ServerBotTacticsTests(unittest.TestCase):
         self.assertTrue(orders[11]['empty_ammo'])
         self.assertFalse(orders[11]['fire_allowed'])
         self.assertIsNone(orders[11]['throttle_override'])
-        self.assertNotIn(11, planner._target_assignments)
+        self.assertFalse(hasattr(planner, '_target_assignments'))
         self.assertEqual(2, orders[12]['target_id'])
         self.assertTrue(orders[12]['fire_allowed'])
 
@@ -687,7 +687,7 @@ class ServerBotTacticsTests(unittest.TestCase):
         players[0]['alive'] = False
         order = planner.build_orders(self.manifest, self.states, players, 1.2)['orders'][0]
         self.assertIsNone(order['target_id'])
-        self.assertNotIn(11, planner._target_assignments)
+        self.assertFalse(hasattr(planner, '_target_assignments'))
         self.assertEqual('route', order['combat_mode'])
 
     def test_magazine_and_reload_never_move_a_proved_shooting_position(self):
@@ -952,7 +952,7 @@ class ServerBotTacticsTests(unittest.TestCase):
 
 
 
-    def test_known_enemy_keeps_the_route_instead_of_starting_base_capture(self):
+    def test_known_enemy_admits_contact_review_instead_of_starting_base_capture(self):
         planner = BotPlanner()
         contact = _contact(2, 0, 400, [])
         players = self._report(planner, [contact])
@@ -961,7 +961,9 @@ class ServerBotTacticsTests(unittest.TestCase):
         order = planner.build_orders(
             self.manifest, self.states, players, 1.0, defense)['orders'][0]
 
-        self.assertEqual('route', order['combat_mode'])
+        self.assertEqual('advance_contact', order['combat_mode'])
+        self.assertEqual(2, order['target_id'])
+        self.assertFalse(order['fire_allowed'])
         self.assertNotIn('capture_base_id', order)
 
     def test_two_wide_enemy_lanes_do_not_trigger_crossfire_withdrawal(self):
@@ -1486,18 +1488,18 @@ class ServerBotTacticsTests(unittest.TestCase):
         self.assertTrue(orders[12]['fire_allowed'])
         self.assertFalse(hasattr(supported, '_ally_support_score'))
 
-    def test_support_vehicle_advances_until_inside_its_fire_range(self):
+    def test_role_ranges_do_not_exclude_a_visible_initial_contact(self):
         planner = BotPlanner()
         cautious = _bot(
             12, 1, 0, self.route, 'mediumTank', {'support': 1.0})
         cautious['profile'].update({
             'armor': 120.0,
             'dominant_role': 'support',
-            'desired_range': 200.0,
+            'desired_range': 150.0,
             'fire_range': 340.0,
         })
         state = _state(12, 1, 0, 0)
-        contact = _contact(2, 0, 395, [12], 'heavyTank')
+        contact = _contact(2, 0, 400, [12], 'heavyTank')
         player = {'id': 2, 'team': 2, 'alive': True}
         self.assertEqual(1, planner.report_contacts(
             [contact], planner.known_targets([state], [player]), 1.0))
@@ -1505,10 +1507,12 @@ class ServerBotTacticsTests(unittest.TestCase):
         order = planner.build_orders(
             [cautious], [state], [player], 1.0)['orders'][0]
 
-        self.assertEqual('advance', order['combat_mode'])
-        self.assertEqual(100.0, order['move_position']['z'])
-        self.assertGreater(order['throttle_override'], 0.0)
-        self.assertFalse(order['fire_allowed'])
+        self.assertEqual('engage', order['combat_mode'])
+        self.assertEqual(2, order['target_id'])
+        self.assertEqual(0.0, order['move_position']['z'])
+        self.assertEqual(0.0, order['throttle_override'])
+        self.assertEqual('eligible', order['tactical_evidence']['selection']['candidates'][0]['reason'])
+        self.assertTrue(order['fire_allowed'])
 
     def test_preferred_range_boundaries_cannot_interrupt_stationary_aim(self):
         planner = BotPlanner()
@@ -1767,7 +1771,7 @@ class ServerBotFittingRatingTests(unittest.TestCase):
             order = planner.build_orders(self.manifest, self.states, players, 1.0)['orders'][0]
             self.assertEqual(0, order['shell_index'])
 
-    def test_current_target_does_not_expire_on_a_timer(self):
+    def test_initial_hints_have_no_timer_or_independent_current_target_state(self):
         planner = BotPlanner()
         self._rate(0.5)
         contacts = [_contact(2, 0, 260, [11]), _contact(3, 0, 200, [11])]
@@ -1776,8 +1780,8 @@ class ServerBotFittingRatingTests(unittest.TestCase):
             planner.report_contacts(contacts, planner.known_targets(self.states, players), now)
             order = planner.build_orders(self.manifest, self.states, players, now)['orders'][0]
             self.assertEqual(3, order['target_id'])
-        self.assertNotIn('until', planner._target_assignments[11])
-        self.assertEqual(1.0, planner._target_assignments[11]['acquired_at'])
+        self.assertFalse(hasattr(planner, '_target_assignments'))
+        self.assertEqual('initial_hint', planner._target_decisions[11]['owner'])
 
     def test_round_or_reconstruction_does_not_roll_combat_capabilities(self):
         targets = []
@@ -1862,6 +1866,24 @@ class ServerBotInitialSelectionTests(unittest.TestCase):
         players = self._report(planner, contacts)
         self.assertEqual(('human', 2), self._target(planner, players))
 
+    def test_missing_or_invalid_armor_is_not_invented_as_zero_at_an_exact_tie(self):
+        for armor in (None, float('nan'), float('inf'), -5.):
+            with self.subTest(armor=armor):
+                planner = BotPlanner()
+                contacts = [dict(_contact(2, 0, 150, [11]), armor=armor),
+                            dict(_contact(3, 90, 120, [11]), armor=80.)]
+                players = self._report(planner, contacts)
+                self.assertEqual(('human', 3), self._target(planner, players))
+                self.assertIsNone(planner._contacts[1][('human', 2)]['armor'])
+
+    def test_initial_armor_fact_can_come_from_the_observed_vehicle_profile(self):
+        planner = BotPlanner()
+        contacts = [dict(_contact(2, 0, 150, [11]), armor=240.),
+                    dict(_contact(3, 90, 120, [11]), armor=None, profile=dict(armor=60.))]
+        players = self._report(planner, contacts)
+        self.assertEqual(('human', 3), self._target(planner, players))
+        self.assertEqual(60., planner._contacts[1][('human', 3)]['armor'])
+
     def test_exact_equal_distance_and_armor_are_deterministic(self):
         for reverse in (False, True):
             planner = BotPlanner()
@@ -1870,7 +1892,7 @@ class ServerBotInitialSelectionTests(unittest.TestCase):
             players = self._report(planner, list(reversed(contacts)) if reverse else contacts)
             self.assertEqual(('human', 2), self._target(planner, players))
 
-    def test_current_target_is_not_displaced_by_a_new_nearer_one(self):
+    def test_macro_hint_updates_without_owning_the_current_attack(self):
         planner = BotPlanner()
         contacts = [_contact(2, 0, 150, [11]), _contact(3, 0, 250, [11])]
         players = self._report(planner, contacts)
@@ -1878,7 +1900,8 @@ class ServerBotInitialSelectionTests(unittest.TestCase):
         contacts[1]['z'] = 30.0
         for now in (2.0, 8.0, 120.0):
             planner.report_contacts(contacts, planner.known_targets(self.states, players), now)
-            self.assertEqual(('human', 2), self._target(planner, players, now))
+            self.assertEqual(('human', 3), self._target(planner, players, now))
+        self.assertFalse(hasattr(planner, '_target_assignments'))
 
     def test_dead_current_target_is_replaced_and_never_selected_as_a_wreck(self):
         planner = BotPlanner()
@@ -1898,7 +1921,8 @@ class ServerBotInitialSelectionTests(unittest.TestCase):
         planner = BotPlanner()
         for name in ('report_damage', '_recent_hit', '_recent_threat_contact',
                      '_desired_focus', '_focus_limit', '_reserve_focus',
-                     '_focus_saturated', '_capable', '_apply_stationary_angling'):
+                     '_focus_saturated', '_capable', '_apply_stationary_angling',
+                     '_target_assignments', '_assign_targets', '_new_target_record'):
             self.assertFalse(hasattr(planner, name), name)
 
     def test_all_known_candidates_remain_available_to_local_armor_selection(self):

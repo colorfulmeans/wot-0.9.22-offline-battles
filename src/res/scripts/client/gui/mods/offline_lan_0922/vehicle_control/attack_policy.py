@@ -10,6 +10,7 @@ from __future__ import division
 import math
 
 from .actor_observation import observation
+from .evaluation_budget import EvaluationBudget
 import time
 
 from .. import ballistics, combat_rules, gun_pitch_limits, shot_geometry
@@ -865,6 +866,8 @@ class AttackPolicy(object):
         if self._atomic_frame is not self.frame:
             if now < self._atomic_at + ATOMIC_CLOSE_INTERVAL or len(jobs) > ATOMIC_MAX_JOBS:
                 return
+            if not self._optional_work_budget(now).atomic(self._work_actor()):
+                return
             self._atomic_at = now
             self._used['atomic'] = 0
             self._atomic_started = self.atomic_clock()
@@ -1061,6 +1064,8 @@ class AttackPolicy(object):
                 self.frame is None or self._frame_invalid or self._atomic_at == now or
                 now < self._next_edge_at + ATOMIC_CLOSE_INTERVAL):
             return plan, reason
+        if not self._optional_work_budget(now).atomic(self._work_actor()):
+            return plan, reason
         self._next_edge_at = now
         started = self.atomic_clock()
         self.evaluator.atomic_deadline = started + NEXT_EDGE_WALL_SECONDS
@@ -1121,6 +1126,16 @@ class AttackPolicy(object):
                 self._plannable(row, row['mode'])):
             return self._planned_evidence(row)['solution']
         return (candidate or {}).get('solution') or {}
+
+    @staticmethod
+    def _apply_native_range(command, solution):
+        # The final engine distance guard must use the same mounted shell as
+        # the native solution. A role profile's preferred range is not a
+        # physical limit; this field does not replace any launch proof.
+        maximum = solution.get('fire_range')
+        if (isinstance(maximum, (int, float)) and maximum > 0. and
+                not math.isinf(maximum) and not math.isnan(maximum)):
+            command['fire_range'] = maximum
 
     def _recover_incomplete(self, now, reason, rows=()):
         if self._evidence_wait_since is None:
@@ -1192,6 +1207,22 @@ class AttackPolicy(object):
             reload_qualified_at=authority['qualified_at'],
             replacement_status=status if alternative is None else 'verified')
 
+    def current_target_key(self):
+        """Return this actor's current intention, never a reusable shot proof.
+
+        Ordinary strategic hints cannot replace an acquired point or its
+        recovery. Visibility, weapon identity and the next native snapshot
+        still invalidate targets/rows normally; this adds no target timer.
+        """
+        if self.decision.get('action') in ('unchanged', 'navigate'):
+            return None
+        if self.selected is not None:
+            return self.selected[1]
+        target = (self.decision.get('move_request') or {}).get('target')
+        if target is None:
+            target = (self.decision.get('candidate') or {}).get('target')
+        return _target_key(target) if isinstance(target, dict) else None
+
     def _choose(self, action, reason, candidate=None, **fields):
         if (action == 'aim' and candidate is not None and
                 not self._executable_current(candidate, candidate.get('mode', 'penetration'))):
@@ -1252,6 +1283,8 @@ class AttackPolicy(object):
         jobs = self._jobs(shell_index=(self.frame['loaded']
             if int(self.frame.get('clip_size', 1)) > 1 else None))
         if not jobs:
+            return None
+        if not self._optional_work_budget(now).atomic(self._work_actor()):
             return None
         self._atomic_at = now
         self._atomic_frame = None
@@ -1779,11 +1812,33 @@ class AttackPolicy(object):
             return self._choose('firing_position', 'he_fallback_obstructed', blocked)
         return self._recover_incomplete(now, 'he_contact_evidence_incomplete', rows)
 
+    def _work_actor(self):
+        return int(getattr(self.runtime, 'actor_id', 0))
+
+    def _optional_work_budget(self, now):
+        engine = getattr(self.runtime, 'engine', None)
+        begin = getattr(engine, '_begin_evaluation_frame', None)
+        if callable(begin):
+            return begin(now)
+        # Law-only consumers without a physical engine use this same class
+        # as a single actor. No worker or foreground evidence is shared.
+        budget = getattr(self, '_standalone_work_budget', None)
+        if budget is None:
+            budget = self._standalone_work_budget = EvaluationBudget()
+        budget.begin(float(now), (self._work_actor(),))
+        return budget
+
     def background(self, now):
         """One independent, fair all-shell/all-target frontier after control."""
         now = float(now)
         if (self.frame is None or self.frame.get('artillery') or self._frame_invalid or
                 self._background_at == now):
+            return self.next_shell
+        allowance = self._optional_work_budget(now).background(
+            self._work_actor(), self.background_budget)
+        if not allowance:
+            # Queue deferral is not a candidate observation. Preserve rows,
+            # the fair point cursor, NEXT and the already-confirmed 8s clock.
             return self.next_shell
         self._background_at = now
         self._used['background'] = 0
@@ -1798,7 +1853,7 @@ class AttackPolicy(object):
                          if not self._reviewed(current[job[0]], job[4]))
         exclude = self._next_excluded()
         recheck = None
-        if self.background_budget > 1 and pending and self._penetration_hints:
+        if allowance > 1 and pending and self._penetration_hints:
             # Spend at most one existing slot on a previously proved point
             # of the first unresolved rank. A pose change retires its proof,
             # not its place in that rank's queue. Leave a slot for the fair
@@ -1812,7 +1867,7 @@ class AttackPolicy(object):
                           if key > self.background_cursor), len(pending))
             pending = pending[split:] + pending[:split]
         for key, job in pending:
-            if self._used['background'] >= self.background_budget:
+            if self._used['background'] >= allowance:
                 break
             if job is recheck:
                 continue
@@ -1921,6 +1976,7 @@ class AttackPolicy(object):
         candidate = decision.get('candidate')
         if candidate is not None:
             target = candidate['target']
+            solution = self.intent_solution(candidate)
             owner = getattr(getattr(self, 'runtime', None), 'combat_stop', None)
             if owner is not None and not owner.stop_allowed:
                 # The complete admitted domain still informs ammo/armour
@@ -1930,12 +1986,13 @@ class AttackPolicy(object):
                 selected = (result.get('target_kind'), result.get('target_id'))
                 if _target_key(target) != selected:
                     return dict(result, fire_allowed=False)
-                result['aim_position'] = self.intent_solution(candidate).get('point')
+                result['aim_position'] = solution.get('point')
             else:
                 result.update(target_id=target.get('network_id', target.get('id')),
                               target_kind=target.get('kind'),
-                              aim_position=self.intent_solution(candidate).get('point'),
+                              aim_position=solution.get('point'),
                               face_position=target.get('position'))
+            AttackPolicy._apply_native_range(result, solution)
         result['shell_index'] = (decision.get('shell_index', self.frame['loaded'])
                                  if self.frame is not None else result.get('shell_index'))
         if decision['action'] == 'aim':
@@ -1983,6 +2040,7 @@ class AttackPolicy(object):
             solution = self.intent_solution(candidate)
             result.update(aim_position=solution.get('point'),
                           _player_attack_solution=solution)
+            AttackPolicy._apply_native_range(result, solution)
         if decision['action'] != 'aim':
             result['fire_allowed'] = False
         elif self._executable(candidate, candidate.get('mode', 'penetration')):
@@ -2030,6 +2088,7 @@ class AttackPolicy(object):
             background_queries=self._used['background'],
             atomic=dict(self._atomic_receipt),
             native_cache=dict(getattr(self.evaluator, 'cache_observations', {})),
+            trigger_refresh=dict(getattr(self.evaluator, 'trigger_refresh_receipt', {})),
             ammunition_validation=tuple(dict(shell=shell['index'],
                 mode=ammunition_validation.shell_mode(shell),
                 gun=shell.get('gun_identity'), identity=shell.get('shell_identity'))
@@ -2073,6 +2132,113 @@ class NativeAttackEvaluator(object):
         self.atomic_clock = _WALL_CLOCK
         self.atomic_deadline = float('inf')
         self.stationary_planner = stationary_plan.StationaryPlanner(runtime)
+        self.trigger_refresh_receipt = {}
+
+    def _target_observation(self, raw, now, same_slice=False):
+        """Read one native target without advancing a policy frontier."""
+        target = self.runtime.target_entity(raw)
+        row = dict(key=_target_key(raw), value=raw, entity=target,
+                   samples=(), pose=None)
+        observed = None
+        try:
+            signature, matrix, chassis = native_target_pose(self.owner, target)
+            row.update(pose=signature, matrix=matrix, chassis=chassis,
+                       sample_identity=(signature[:2], signature[6:]),
+                       samples=tuple(range(len(shot_geometry.ordered_vehicle_aim_samples(
+                           target.typeDescriptor)))))
+            previous = self.observations.get(row['key'])
+            position = _point(matrix.translation)
+            velocity = tuple(raw.get('velocity', ()))
+            if len(velocity) != 3:
+                if previous is not None and .001 <= now - previous[0] <= 1.:
+                    dt = now - previous[0]
+                    velocity = tuple((position[index] - previous[1][index]) / dt
+                                     for index in range(3))
+                elif same_slice and previous is not None and now == previous[0]:
+                    # A final-edge reread is not another time measurement.
+                    # Keep the velocity actually observed this slice. A
+                    # changed pose without elapsed time remains unknown.
+                    if position != previous[1]:
+                        raise ValueError('target moved without an observation interval')
+                    velocity = previous[2]
+                else:
+                    velocity = (0., 0., 0.)
+            row['velocity'] = _point(velocity)
+            observed = (now, position, row['velocity'])
+        except (AttributeError, TypeError, ValueError, RuntimeError, KeyError, IndexError):
+            row['velocity'] = None
+        return row, observed
+
+    def refresh_trigger_solution(self, candidate, now):
+        """Recompute one selected intention, leaving exact fire proof to admission.
+
+        This performs at most one ballistic prediction and two reads of the
+        selected target pose. It does no world/armour work, ranking, sample
+        search, or policy-clock mutation. TriggerAdmission proves the actual
+        centre ray, armour/HE contact and scattered path from the result.
+        """
+        receipt = dict(status='pending', reason='intent_unavailable',
+                       work=dict(predictions=0, world_chords=0, armour_batches=0))
+        self.trigger_refresh_receipt = receipt
+        try:
+            runtime, physical = self.runtime, observation(self.runtime)
+            gun = runtime.gun
+            index, sample, mode = (int(candidate['shell_index']),
+                                   candidate['sample'], candidate['mode'])
+            target_key = _target_key(candidate['target'])
+            key = (index, target_key, sample, mode)
+            if (candidate['key'] != key or gun.shot_index != index or
+                    gun.ammo[index] <= 0):
+                return None
+            raw = next((row for row in _combat_targets(runtime)
+                        if row.get('alive', True) and _target_key(row) == target_key), None)
+            if raw is None:
+                return None
+            entity = physical.source_entity()
+            descriptor = entity.typeDescriptor
+            pose = native_source_pose(runtime)
+            identity = tuple(physical.weapon_identity()) + (id(descriptor.gun),)
+            ammo, clip = tuple(gun.ammo), gun.clip
+            combat_signature, scene = _combat_signature(runtime), self._scene_stamp()
+            target, unused_observed = self._target_observation(raw, float(now), same_slice=True)
+            if (sample not in target['samples'] or target.get('pose') is None or
+                    target.get('velocity') is None):
+                receipt['reason'] = 'target_geometry_unavailable'
+                return None
+            shot = gun.shots[index]
+            shell = dict(index=index, shot=shot, signature=_shell_signature(index, shot))
+            frame = dict(identity=identity, pose=pose, planning_pose=_planning_pose(pose),
+                         origin=pose[2], body=pose[1], descriptor=descriptor)
+            receipt['work']['predictions'] = 1
+            predicted = self._prediction(frame, shell, target, sample)
+            if predicted is None or predicted.get('unreachable'):
+                receipt['reason'] = 'intercept_unavailable'
+                return None
+            # Target/model observations may enter native callbacks. Fence
+            # the exact frame after computing the new intention as well as
+            # during the unchanged prepare/validate launch transaction.
+            current = next((row for row in _combat_targets(runtime)
+                            if row.get('alive', True) and _target_key(row) == target_key), None)
+            if (current is None or runtime.target_entity(current) is not target['entity'] or
+                    native_target_pose(self.owner, target['entity'])[0] != target['pose'] or
+                    native_source_pose(runtime) != pose or runtime.gun is not gun or
+                    tuple(physical.weapon_identity()) + (id(physical.source_entity().typeDescriptor.gun),) != identity or
+                    gun.shot_index != index or tuple(gun.ammo) != ammo or gun.clip != clip or
+                    _shell_signature(index, gun.shots[index]) != shell['signature'] or
+                    _combat_signature(runtime) != combat_signature or self._scene_stamp() != scene):
+                receipt['reason'] = 'observation_changed'
+                return None
+            velocity = tuple(current.get('velocity', ()))
+            if len(velocity) == 3 and _point(velocity) != target['velocity']:
+                receipt['reason'] = 'observation_changed'
+                return None
+            receipt.update(status='refreshed', reason='same_intention', key=key,
+                           source_pose=pose, target_pose=target['pose'])
+            return dict(predicted['solution'], source_pose=pose, mode=mode)
+        except (AttributeError, TypeError, ValueError, KeyError, IndexError,
+                RuntimeError, OverflowError, ZeroDivisionError):
+            receipt['reason'] = 'native_geometry_unavailable'
+            return None
 
     def snapshot(self, now):
         runtime, owner = self.runtime, self.owner
@@ -2100,29 +2266,9 @@ class NativeAttackEvaluator(object):
         for raw in _combat_targets(runtime):
             if not raw.get('alive', True):
                 continue
-            target = runtime.target_entity(raw)
-            row = dict(key=_target_key(raw), value=raw, entity=target,
-                       samples=(), pose=None)
-            try:
-                signature, matrix, chassis = native_target_pose(owner, target)
-                row.update(pose=signature, matrix=matrix, chassis=chassis,
-                           sample_identity=(signature[:2], signature[6:]),
-                           samples=tuple(range(len(shot_geometry.ordered_vehicle_aim_samples(
-                               target.typeDescriptor)))))
-                previous = self.observations.get(row['key'])
-                position = _point(matrix.translation)
-                velocity = tuple(raw.get('velocity', ()))
-                if len(velocity) != 3:
-                    if previous is not None and .001 <= now - previous[0] <= 1.:
-                        dt = now - previous[0]
-                        velocity = tuple((position[index] - previous[1][index]) / dt
-                                         for index in range(3))
-                    else:
-                        velocity = (0., 0., 0.)
-                row['velocity'] = _point(velocity)
-                observations[row['key']] = (now, position, row['velocity'])
-            except (AttributeError, TypeError, ValueError, RuntimeError, KeyError, IndexError):
-                row['velocity'] = None
+            row, observed = self._target_observation(raw, now)
+            if observed is not None:
+                observations[row['key']] = observed
             targets.append(row)
         self.observations = observations
         shells = []
@@ -2432,7 +2578,7 @@ class NativeAttackEvaluator(object):
             path = ballistics.ballistic_path(frame['origin'], yaw, pitch, speed, gravity, flight)
             solution = dict(target=entity.id, sample=sample, sample_value=samples[sample],
                 point=tuple(aim), aim_position=tuple(aim), source_point=tuple(aim),
-                yaw=yaw, pitch=pitch, flight_time=flight,
+                yaw=yaw, pitch=pitch, flight_time=flight, fire_range=maximum,
                 direction=direction, velocity=target['velocity'], origin=frame['origin'],
                 path=path, reachable=reach['status'] == 'reachable',
                 needs_hull=reach['status'] == 'hull_laying',

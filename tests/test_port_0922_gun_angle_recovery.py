@@ -121,11 +121,13 @@ class GunAngleRecoveryTests(unittest.TestCase):
         self.runtime._friendly_repositions[11] = dict(
             target_id=28, target_kind='bot', destination=(0., 0., 10.), deadline=5.,
             fire_range=400., shell_index=0)
-        order, expired = self.runtime._friendly_reposition_order(self.state, self.targets, 2.)
+        order, expired = self.runtime._friendly_reposition_order(
+            self.state, self.targets, 2., self.runtime._server_orders.get(11, {}))
         self.assertFalse(expired)
         self.assertEqual(1.0, order['throttle_override'])
         self.assertFalse(order['fire_allowed'])
-        self.assertEqual((None, True), self.runtime._friendly_reposition_order(self.state, self.targets, 5.))
+        self.assertEqual((None, True), self.runtime._friendly_reposition_order(
+            self.state, self.targets, 5., self.runtime._server_orders.get(11, {})))
 
     def test_real_reachable_pose_ends_adjustment_without_relaxing_limits(self):
         self.refuse()

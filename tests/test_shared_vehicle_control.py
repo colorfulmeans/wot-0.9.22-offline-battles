@@ -314,11 +314,12 @@ class SharedIndependentActorStateTests(unittest.TestCase):
                       for planner in planners]
             self.assertEqual(orders[0], orders[1])
             for attribute in ("_route_states", "_route_history", "_route_recoveries", "_travel_tasks",
-                              "_route_assignments", "_target_assignments"):
+                              "_route_assignments", "_target_decisions"):
                 self.assertEqual(getattr(planners[0], attribute), getattr(planners[1], attribute), attribute)
                 self.assertIsNot(getattr(planners[0], attribute), getattr(planners[1], attribute), attribute)
         for planner in planners:
-            for attribute in ("_cover_states", "_combat_states", "_retreat_states", "_firing_holds"):
+            for attribute in ("_cover_states", "_combat_states", "_retreat_states", "_firing_holds",
+                              "_target_assignments", "_assign_targets"):
                 self.assertFalse(hasattr(planner, attribute), attribute)
         self.assertIs(server_class, foreground_class)
         self.assertTrue(foreground_class.__module__ == SHARED + ".strategy")

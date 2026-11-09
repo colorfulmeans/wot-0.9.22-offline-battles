@@ -76,81 +76,57 @@ class HandoffAmmunitionTests(unittest.TestCase):
         self.assertEqual(3, scene.control.shot_commits)
         self.assertIsNone(scene.battle._local_player_burst)
 
-    def test_unconsumable_higher_he_damage_keeps_evidence_and_fires_original_target(self):
+    def test_role_range_cannot_filter_higher_he_damage_from_current_execution(self):
         scene = self.scene(player_id=2)
-        # Start just beyond the real 340 m fire range: the authored route,
-        # not the removed preferred-distance policy, must own this advance.
+        # The old test called the profile's 340 m heuristic a real gun range
+        # and required that macro A reject the better HE target B. Both are
+        # within the mounted shell's 500 m reach: that is precisely the old
+        # selector/new aiming conflict this migration removes.
         self.enemy(scene, 5, (0., 0., 341.), 40.)
         self.enemy(scene, 2, (40., 0., 361.), 10.)
         scene.set_he(piercing=1.)
         self.assertEqual({5: True, 2: True}, scene.sample_original_lanes())
         gun, policy = scene.battle._gun_state, scene.runtime.attack_policy
         initial_ammo = tuple(gun.ammo)
-        saw_execution_filter = False
-        saw_post_move_filter = False
-        entered_range = False
-        range_plan_deadline = None
-        # Drive the actual controller at 50 Hz. Its 18-point CURRENT ranking
-        # pass is bounded and its selected rows must be fresh after motion.
-        # The fixture must not rely on an 8 ms atomic slice finishing all
-        # work before the independent 1 Hz strategy refresh.
-        for unused in range(500):
+        saw_ranked_current = False
+        # Drive the real bounded CURRENT comparison and actual trigger. No
+        # planner output, navigation receipt or firing gate is replaced.
+        for unused in range(100):
             scene.tick(.02)
-            if entered_range:
-                self.assertLess(scene.now, range_plan_deadline)
-            self.assertEqual(('advance', 5),
+            self.assertEqual(('engage', 5),
                 (scene.original_order()['combat_mode'], scene.original_order()['target_id']))
             self.assertTrue(scene.runtime.combat_stop.active)
-            self.assertFalse(scene.runtime.combat_stop.stop_allowed)
+            self.assertTrue(scene.runtime.combat_stop.stop_allowed)
             self.assertIsNone(policy.search_started)
             self.assertIsNone(policy.reload_authority)
             self.assertEqual(0, gun.shot_index)
             candidate = policy.decision.get('candidate')
-            # CURRENT ranking hints are not the strict all-fresh NEXT HE
-            # comparison. Both returned CURRENT choices still need live
-            # native rows and the unchanged navigation consumption gate.
-            best = policy._best_current_he(0)
             if (candidate is not None and candidate['mode'] == 'he_fallback' and
-                    candidate['target']['network_id'] == 5 and best is not None and
-                    best['target']['network_id'] == 2):
-                saw_execution_filter = True
-                saw_post_move_filter = saw_post_move_filter or entered_range
-                self.assertIsNotNone(policy.current_row(best))
+                    not scene.launches()):
+                saw_ranked_current = True
+                self.assertEqual(2, candidate['target']['network_id'])
                 self.assertIsNotNone(policy.current_row(candidate))
                 self.assertEqual(candidate['key'],
                     policy._best_current_he(0, consumable=True)['key'])
-                self.assertGreater(best['expected_damage'], candidate['expected_damage'])
-                self.assertTrue(policy._executable(best, 'he_fallback'))
-                self.assertFalse(scene.runtime.attack_candidate_consumable(best))
+                other_rows = [row for row in
+                    policy._rows_for('he_fallback', 0, fresh_line=True)
+                    if row['target']['network_id'] == 5 and
+                    row.get('expected_damage') is not None]
+                self.assertTrue(other_rows)
+                self.assertGreater(candidate['expected_damage'],
+                    max(row['expected_damage'] for row in other_rows))
                 self.assertTrue(scene.runtime.attack_candidate_consumable(candidate))
                 self.assertEqual((True, 'reachable', 'clear'),
-                                 (best['contact'], best['mechanical'], best['line']))
+                                 (candidate['contact'], candidate['mechanical'], candidate['line']))
+                self.assertEqual((2, 500.),
+                    (scene.applied_order()['target_id'], scene.applied_order()['fire_range']))
                 self.assertEqual((1, 'penetration'),
                                  (policy.next_shell, policy.next_plan['mode']))
             if scene.launches():
                 break
-            if (saw_execution_filter and not entered_range and
-                    scene.runtime._strategic_due - scene.now >= .9):
-                self.assertGreater(341., scene.original_order()['fire_range'])
-                # Observe progress along the existing (30, 20) route segment
-                # after a real strategic refresh, not a forged planner order.
-                # The native pose now admits a shot before the next 1 Hz
-                # plan. Observe its converged native circle; native aiming,
-                # sampled scatter, physical ray and trigger admission remain
-                # the production gates, not always-true test replacements.
-                range_plan_deadline = scene.runtime._strategic_due
-                scene.native_position((3., 0., 2.))
-                scene.battle._avatar.gunRotator.setShotPosition(scene.entity.id,
-                    scene.battle._vector(scene.origin),
-                    scene.battle._vector(scene.direction), gun.base_dispersion,
-                    forceValueRefresh=True)
-                entered_range = True
-        self.assertTrue(saw_execution_filter, policy.status())
-        self.assertTrue(entered_range)
-        self.assertTrue(saw_post_move_filter, policy.status())
-        self.assertLess(scene.now, range_plan_deadline)
+        self.assertTrue(saw_ranked_current, policy.status())
         self.assertEqual(1, len(scene.launches()), scene.runtime.status())
-        self.assertEqual(5, scene.runtime.weapon.target['network_id'])
+        self.assertEqual(2, scene.runtime.weapon.target['network_id'])
         self.assertEqual([0], [row['shell_index'] for row in scene.launches()])
         self.assertEqual((initial_ammo[0] - 1, initial_ammo[1]), tuple(gun.ammo))
         self.assertEqual(2, gun.clip)

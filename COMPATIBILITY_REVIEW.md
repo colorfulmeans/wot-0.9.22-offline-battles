@@ -1,4 +1,34 @@
-# November 9: one shared automatic controller, then legacy-policy removal
+# November 9: audit correction and completed shared-control call graph
+
+The earlier shared-control completion claim below was too broad at `be5bf798`.
+The audit found a surviving `BattleDirector`/missing-order runtime fallback,
+private foreground mission behavior, a second macro target tracker, and macro
+hints still able to cancel the native controller's current shot or recovery.
+The report and full user history take precedence over that earlier claim.
+
+This change first moves the actual foreground mission implementation into
+`MissionControl`, retains setup-only `BattleRoster`, and removes the director
+and its runtime APIs. Both bindings use the same mission/combat implementations;
+missing orders invoke the same `BotPlanner`, never a retired decision engine.
+The second phase removes macro target ownership and obsolete parameters. Initial
+distance/armor hints cannot preempt current native attack/recovery ownership.
+The physical recovery boundary consumes the resolved common order, not a second
+lookup of the raw macro target. Mounted ballistic reach, not a role-range hint,
+governs actual ordinary and SPG firing. The final native pose refreshes the same
+selected point before the unchanged exact first-edge proof and ammunition commit.
+
+Speculative background/atomic work has a fair engine-owned callback quota;
+actor evidence and clocks remain private. Foreground review and real trigger
+proof are not replaced or weakened to meet that quota. Analytic multi-actor
+workload measurements are not Windows BigWorld FPS acceptance.
+
+The proposed restoration of `no_local_lane` exclusion and a two-second yield
+was wrong and fully withdrawn before commit. Do not restore those filters.
+See `docs/testing/shared-control-audit-completion-20261109.md` and the current
+handoff for the evidence, exact scope, current native checks and remaining
+gameplay boundaries. Earlier test/package counts below are historical only.
+
+# November 9: earlier shared-control migration record (completion superseded)
 
 The current implementation starts at `ddf411763e677cc99cf5938aa281d29d579ef9e6`.
 The user's revised requirement supersedes the historical independent-player-copy

@@ -764,7 +764,10 @@ class AutomaticFireAdmissionTests(AutomaticFireScene):
     def test_real_target_pose_change_invalidates_old_first_trigger_evidence(self):
         self.pose(self.target, (10., 0., 100.))
         self.assertFalse(self.fire())
-        self.assertEqual('auto_target_pose_changed', self.admission.receipt['reason'])
+        # No time or velocity observation explains this pose change. The
+        # common final-pose refresh rejects before preparing a launch proof.
+        self.assertEqual('target_geometry_unavailable',
+            self.runtime.attack_policy.evaluator.trigger_refresh_receipt['reason'])
         self.assert_unspent()
 
     def test_missing_native_plate_tester_cannot_become_a_passing_candidate(self):

@@ -23,7 +23,7 @@ class EmptyAmmoMixin:
                 for mapping in (self._route_states, self._route_history, self._route_recoveries,
                                 self._wreck_route_progress, self._wreck_route_avoid,
                                 self._recovery_route_visits, self._previous_player,
-                                self._target_assignments, self._engage_anchors,
+                                self._engage_anchors,
                                 self._artillery_anchors,
                                 self._capture_arrivals):
                     mapping.pop(actor, None)
@@ -40,7 +40,7 @@ class EmptyAmmoMixin:
         if contacts:
             contact = next((row for row in contacts if row.get('visible')), None)
             if contact is not None:
-                self._set_target(order, bot, contact, bot['profile'], order['personality'], True)
+                self._set_target(order, bot, contact, True)
         order.update(combat_mode='route', throttle_override=None,
                      face_position=dict(order['move_position']))
         route = self._task_route(bot)

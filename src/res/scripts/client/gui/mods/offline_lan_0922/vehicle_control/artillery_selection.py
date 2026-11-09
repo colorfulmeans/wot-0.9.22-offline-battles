@@ -148,6 +148,15 @@ class ArtillerySelection(object):
         else:
             result.update(target_kind=target.get('kind'), target_id=_key(target)[1],
                           aim_position=target.get('position'))
+            row = self.rows.get(_key(target)) or {}
+            maximum = (row.get('solution') or {}).get('max_distance')
+            if (permit and row.get('status') == 'ready' and
+                    isinstance(maximum, (int, float)) and maximum > 0. and
+                    not math.isnan(maximum) and not math.isinf(maximum)):
+                # Preserve the physical range already proved by this HE arc.
+                # The battery role's advisory range cannot veto it later;
+                # exact launch, pitch and friendly-path guards still apply.
+                result['fire_range'] = maximum
             if order.get('fire_allowed'):
                 result['face_position'] = target.get('position')
             result['fire_allowed'] = bool(permit and order.get('fire_allowed') and

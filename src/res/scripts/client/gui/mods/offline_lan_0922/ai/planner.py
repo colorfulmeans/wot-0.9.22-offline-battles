@@ -11,11 +11,6 @@ import hashlib
 import math
 import random
 
-from gui.mods.offline_lan_0922.ai import maps as bot_ai_maps
-from gui.mods.offline_lan_0922.bot_tactics import (
-	DEFAULT_ROUTE_PRIORITY, ROUTE_ARRIVAL_RADIUS, route_disk_reached)
-
-
 BATTLE_TIER_RADIUS = 2
 MATCH_CLASSES = ('heavyTank', 'mediumTank', 'AT-SPG', 'lightTank', 'SPG')
 CLASS_ROUTE_AFFINITY_WEIGHT = 42.0
@@ -496,19 +491,18 @@ def stable_seed(*parts):
 
 
 def make_personality(seed):
-	"""Create coherent per-battle preferences; this is not a skill rating."""
+	"""Create only the retained route/setup preferences, not gunner skill."""
 	rng = random.Random(int(seed))
-	traits = {}
-	for name in ('aggression', 'caution', 'teamwork', 'patience',
-	             'initiative', 'adaptability'):
-		# Keep extreme personalities rare while preserving visible variation.
-		traits[name] = 0.18 + rng.random() * 0.64
+	# Initial allocation has a stable seven-draw contract. Removing combat
+	# fields must not reshuffle unrelated route choices or fitting distributions.
+	draws = tuple(rng.random() for unused in range(7))
+	traits = dict((name, 0.18 + draws[index] * 0.64)
+		for name, index in (('aggression', 0), ('caution', 1),
+		                    ('initiative', 4), ('adaptability', 5)))
 	traits['aggression'] = max(0.05, min(0.95,
 		traits['aggression'] + (0.5 - traits['caution']) * 0.22))
 	traits['caution'] = max(0.05, min(0.95,
 		traits['caution'] + (0.5 - traits['aggression']) * 0.12))
-	# Preserve route-assignment draws when a combat-only trait is retired.
-	rng.random()
 	traits['route_jitter'] = rng.uniform(-4.0, 4.0)
 	return traits
 
@@ -659,26 +653,10 @@ def build_vehicle_profile(descriptor):
 	}
 
 
-def select_shell_index(profile, target, personality):
-	"""Initial logical round only; admitted shot outcomes own later choices."""
-	from gui.mods.offline_lan_0922.ammo_policy import ordered
-	shells = ordered(profile)
-	return int(shells[0]['index']) if shells else 0
-
-
 def _distance_2d(first, second):
 	dx = _number(first[0]) - _number(second[0])
 	dz = _number(first[2]) - _number(second[2])
 	return math.sqrt(dx * dx + dz * dz)
-
-
-def _angle_delta(target, current):
-	delta = target - current
-	while delta > math.pi:
-		delta -= math.pi * 2.0
-	while delta < -math.pi:
-		delta += math.pi * 2.0
-	return delta
 
 
 def _map_data_with_baked_routes(map_data, baked_routes):

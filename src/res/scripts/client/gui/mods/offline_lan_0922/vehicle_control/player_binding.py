@@ -255,7 +255,7 @@ class PlayerControl(object):
             shot_results=self.shot_receipts.snapshot(),
             physical_trigger=trigger,
             control_failure=self.last_control_failure,
-            implementation='full_independent_behavior_copy',
+            implementation='shared_single_source',
             release_pending=[stage for stage, unused in self.release_pending],
             navigation=self.runtime_status.get('navigation') if self.active else None)
         import json
@@ -397,7 +397,7 @@ class PlayerControl(object):
                 raise RuntimeError('full_player_runtime_start_retired')
             self.navigation = runtime.navigation
             self.record('enabled', features=sorted(features),
-                        implementation='full_independent_behavior_copy')
+                        implementation='shared_single_source')
             if not current():
                 raise RuntimeError('full_player_runtime_start_retired')
             self.notify(u'玩家自动控制已开启。')
@@ -1212,6 +1212,6 @@ def attach(owner):
     if path and os.path.isfile(path):
         _current.command_offset = os.path.getsize(path)
     _current.record('attached', features=sorted(_current.features), command_file=path,
-                    implementation='full_independent_behavior_copy')
+                    implementation='shared_single_source')
     _current.publish_status(owner._clock(), force=True, reason='attached')
     return _current

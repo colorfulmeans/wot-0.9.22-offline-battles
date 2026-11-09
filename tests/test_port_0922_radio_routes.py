@@ -61,8 +61,15 @@ class RadioRouteTests(unittest.TestCase):
         self.assertEqual({11},set(p._travel_tasks))
         self.assertEqual('right',p._travel_tasks[11]['target_route']['id'])
         self.assertEqual('left',orders[11]['route_id'])
-        self.assertEqual('route_transfer',orders[11]['combat_mode'])
+        # Initial review includes the received enemy beyond a role-derived
+        # range. The pressure task pauses before completing its source gate.
+        self.assertEqual('advance_contact',orders[11]['combat_mode'])
+        self.assertEqual(2,orders[11]['target_id'])
+        self.assertFalse(orders[11]['fire_allowed'])
+        self.assertEqual(0,p._travel_tasks[11]['index'])
+        self.assertEqual(1.,p._travel_tasks[11]['paused_at'])
         self.assertEqual('left',orders[12]['route_id'])
+        self.assertIsNone(orders[12]['target_id'])
         s[0].update(x=300,z=0)
         pending=self._orders(p,m,s,players,2.)[11]
         # The shared selector admits a known live enemy even before its lane
@@ -73,10 +80,25 @@ class RadioRouteTests(unittest.TestCase):
         self.assertFalse(pending['fire_allowed'])
         self.assertEqual('left',pending['route_id'])
         self.assertEqual('right',p._travel_tasks[11]['target_route']['id'])
-        self.assertEqual(2.,p._travel_tasks[11]['paused_at'])
+        self.assertEqual(1.,p._travel_tasks[11]['paused_at'])
         for contact in contacts:contact['visible']=False
         p.report_contacts(contacts,p.known_targets(s,players),2.1)
-        committed=self._orders(p,m,s,players,2.1)[11]
+        resumed=self._orders(p,m,s,players,2.1)[11]
+        self.assertEqual('route_transfer',resumed['combat_mode'])
+        self.assertEqual('left',resumed['route_id'])
+        self.assertIsNone(resumed['target_id'])
+        self.assertEqual(-300.,resumed['move_position']['x'])
+        self.assertEqual(0,p._travel_tasks[11]['index'])
+        self.assertNotIn('paused_at',p._travel_tasks[11])
+        # Arriving at the destination during combat does not skip the
+        # unfinished ordered source leg. Complete both gates in order.
+        s[0].update(x=-300,z=0)
+        transfer=self._orders(p,m,s,players,2.2)[11]
+        self.assertEqual('left',transfer['route_id'])
+        self.assertEqual(300.,transfer['move_position']['x'])
+        self.assertEqual(1,p._travel_tasks[11]['index'])
+        s[0].update(x=300,z=0)
+        committed=self._orders(p,m,s,players,2.3)[11]
         self.assertEqual('right',committed['route_id']);self.assertNotIn(11,p._travel_tasks)
 
     def test_disconnected_donor_finishes_old_leg_until_task_expiry(self):
@@ -101,9 +123,21 @@ class RadioRouteTests(unittest.TestCase):
         self.assertEqual('left',pending['route_id'])
         self.assertEqual('right',p._travel_tasks[11]['target_route']['id'])
         self.assertFalse(pending['fire_allowed'])
+        self.assertEqual(0,p._travel_tasks[11]['index'])
+        self.assertEqual(1.,p._travel_tasks[11]['paused_at'])
         for contact in contacts:contact['visible']=False
         p.report_contacts(contacts,p.known_targets(s,players),3.1)
-        self.assertEqual('right',self._orders(p,m,s,players,3.1)[11]['route_id'])
+        resumed=self._orders(p,m,s,players,3.1)[11]
+        self.assertEqual('left',resumed['route_id'])
+        self.assertEqual('route_transfer',resumed['combat_mode'])
+        self.assertEqual(-300.,resumed['move_position']['x'])
+        self.assertEqual('right',p._travel_tasks[11]['target_route']['id'])
+        s[0].update(x=-300,z=0)
+        self.assertEqual('left',self._orders(p,m,s,players,3.2)[11]['route_id'])
+        self.assertEqual(1,p._travel_tasks[11]['index'])
+        s[0].update(x=300,z=0)
+        self.assertEqual('right',self._orders(p,m,s,players,3.3)[11]['route_id'])
+        self.assertNotIn(11,p._travel_tasks)
         self.assertTrue(p._route_assignments[11]['ordered_task'])
         self.assertEqual('right',self._orders(p,m,s,players,183.)[11]['route_id'])
 

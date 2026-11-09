@@ -565,7 +565,7 @@ class NativeAimLoopBoundaryTests(unittest.TestCase):
         scene.battle._local_frame_stages = timings
         self.native_tick(scene)
         expected = ('player_observe', 'player_attack', 'player_strategy',
-                    'player_traffic', 'player_copied', 'player_refresh',
+                    'player_traffic', 'player_shared_control', 'player_refresh',
                     'player_post')
         self.assertEqual(set(expected), set(timings))
         self.assertTrue(all(timings[name] >= 0. for name in expected))
@@ -583,7 +583,7 @@ class NativeAimLoopBoundaryTests(unittest.TestCase):
         self.assertTrue(message.startswith('[Offline LAN 0.9.22] PLAYER LOOP PERF '))
         data = json.loads(message.split('PLAYER LOOP PERF ', 1)[1])
         self.assertEqual(2, data['frames'])
-        self.assertEqual(2., data['avg_ms']['player_copied'])
+        self.assertEqual(2., data['avg_ms']['player_shared_control'])
         self.assertEqual(2., data['max_ms']['player_traffic'])
 
     def test_new_direct_curved_path_reaches_real_trigger_despite_old_straight_lane_wall(self):

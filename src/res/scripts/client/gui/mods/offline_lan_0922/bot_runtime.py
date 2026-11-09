@@ -15999,10 +15999,14 @@ class BotRuntime(SharedEngineControl):
         state.pop('_gun_angle_pivot_refusal', None)
         return self._gun_angle_combat_order(state, order)
 
-    def _friendly_reposition_order(self, state, targets, now):
-        """Return an ordinary lane escape plus whether its lease expired."""
+    def _friendly_reposition_order(self, state, targets, now, order):
+        """Consume the resolved shared intention for this physical escape.
+
+        The server's initial target hint can differ from AttackPolicy's
+        retained target. Only the refined order may hand off its recovery;
+        re-reading the hint would cancel and recreate the same native lease.
+        """
         bot_id = int(state['id'])
-        order = self._server_orders.get(bot_id) or {}
         if order.get('parking_phase') in ('waiting', 'queue'):
             marker = self._friendly_repositions.get(bot_id)
             if marker is not None:
@@ -16589,6 +16593,7 @@ class BotRuntime(SharedEngineControl):
         native_diagnostic_owner = None
         receipt_frame_open = False
         visibility_frame_open = False
+        previous_evaluation_callback = getattr(self, '_evaluation_callback_at', None)
         native_control = (self._native_simulation.control
                           if self._native_simulation is not None and
                           self._fixed_control else None)
@@ -16602,6 +16607,10 @@ class BotRuntime(SharedEngineControl):
                     return []
             elif self._bank_control_step(self._accumulator) <= 0.0:
                 return []
+            # Late callbacks may consume several physical slices. Optional
+            # shared-policy work gets one callback quota across all of them.
+            self._evaluation_callback_at = now
+            self._begin_evaluation_frame(now)
             if self._combat_diagnostics is not None:
                 self._combat_diagnostics.begin_control()
                 native_diagnostic_owner = self._native_simulation
@@ -16686,6 +16695,7 @@ class BotRuntime(SharedEngineControl):
                 if receipt_frame_open:
                     self._finish_world_receipt_frame()
         finally:
+            self._evaluation_callback_at = previous_evaluation_callback
             try:
                 if callable(navigator_end):
                     navigator_end()
@@ -16731,6 +16741,10 @@ class BotRuntime(SharedEngineControl):
             self._refresh_control_this_step,
             self._publish_control_this_step,
             self._control_evaluation_time)
+        previous_evaluation_callback = getattr(self, '_evaluation_callback_at', None)
+        if previous_evaluation_callback is None:
+            self._evaluation_callback_at = now if control_now is None else control_now
+        self._begin_evaluation_frame(now)
         self._refresh_control_this_step = bool(refresh_control)
         self._publish_control_this_step = bool(publish_step)
         # Only decision deadline eligibility uses callback time. Physics,
@@ -16740,6 +16754,7 @@ class BotRuntime(SharedEngineControl):
             return self._update_once(
                 frame_step, now, players, neighbours)
         finally:
+            self._evaluation_callback_at = previous_evaluation_callback
             (self._refresh_control_this_step,
              self._publish_control_this_step,
              self._control_evaluation_time) = previous
@@ -17339,7 +17354,7 @@ class BotRuntime(SharedEngineControl):
                 if worker_control is not None:
                     server_order = worker_control.refine_order(server_order, contacts, now)
                 reposition_order, reposition_expired = \
-                    self._friendly_reposition_order(state, targets, now)
+                    self._friendly_reposition_order(state, targets, now, server_order)
                 if (server_order or {}).get('empty_ammo'):
                     empty_ammo.handoff(self,state,server_order)
                     reposition_order=None

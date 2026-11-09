@@ -377,22 +377,23 @@ class LeaseAndEntryReceiptTests(unittest.TestCase):
         cases=((dict(contact,radio_bot_until={}), 'not_known_to_bot'),
                (dict(contact,visible=False), 'not_visible'),
                (dict(contact,shootable_by_bot_ids=[]), 'eligible'),
-               (dict(contact,position=dict(x=0.,y=0.,z=5000.)), 'outside_engagement_range'),
+               (dict(contact,position=dict(x=0.,y=0.,z=5000.)), 'eligible'),
                (contact, 'eligible'))
         for candidate,reason in cases:
-            p._assign_targets([bot],[candidate],1.)
+            p._initial_target_hints([bot],[candidate],1.)
             receipt=p._target_decisions[11]
             self.assertEqual(reason,receipt['candidates'][0]['reason'])
             self.assertIn('radio_until',receipt['candidates'][0])
             self.assertEqual(bot['state']['clip'],receipt['weapon']['clip'])
             self.assertNotEqual('evaluating',receipt['outcome'])
-            self.assertIn('lease_after',receipt)
+            self.assertEqual('initial_hint',receipt['owner'])
+            self.assertNotIn('lease_after',receipt)
             if reason == 'eligible' and not candidate['shootable_by_bot_ids']:
                 self.assertFalse(receipt['candidates'][0]['local_lane'])
                 self.assertFalse(receipt['candidates'][0]['ready'])
                 self.assertEqual('movement_lease',receipt['outcome'])
                 self.assertEqual(('human',2),receipt['selected'])
-        p._assign_targets([bot],[],2.)
+        p._initial_target_hints([bot],[],2.)
         self.assertEqual('no_live_contact',p._target_decisions[11]['outcome'])
         order=p.build_orders(f.manifest,f.states,[],3.)['orders'][0]
         evidence=order['tactical_evidence']

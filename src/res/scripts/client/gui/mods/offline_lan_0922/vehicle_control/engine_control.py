@@ -5,6 +5,7 @@ from __future__ import print_function
 import math
 
 from .planning import SharedOrderPlanning
+from .evaluation_budget import EvaluationBudget
 
 
 def _angle(value):
@@ -12,6 +13,18 @@ def _angle(value):
 
 
 class SharedEngineControl(SharedOrderPlanning):
+    def _begin_evaluation_frame(self, now):
+        """One optional-work budget per physical owner/control callback."""
+        budget = getattr(self, '_evaluation_budget', None)
+        if budget is None:
+            budget = self._evaluation_budget = EvaluationBudget()
+        callback = getattr(self, '_evaluation_callback_at', None)
+        frame = (self.round_id, float(now if callback is None else callback))
+        if budget.frame != frame:
+            budget.begin(frame, (state['id'] for state in self.controlled_states()
+                                if state.get('alive', True)))
+        return budget
+
     def _clear_actor_controls(self):
         """Retire per-actor decisions, never the native physical trigger tail."""
         for control in tuple(getattr(self, '_actor_controls', {}).values()):
@@ -23,6 +36,7 @@ class SharedEngineControl(SharedOrderPlanning):
             for actor_id, control in getattr(self, '_actor_controls', {}).items()
             if getattr(control, 'actor_kind', None) != 'bot')
         self._control_launch_proofs = {}
+        self._evaluation_budget = EvaluationBudget()
 
     def _control_for(self, state):
         actor_id = int(state['id'])

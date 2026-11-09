@@ -136,8 +136,8 @@ class OriginalOwnershipBoundaryTests(unittest.TestCase):
         self.assertIsNone(scene.owner.engagement_target(result, scene.target))
         scene.runtime.planner._route.assert_not_called()
 
-    def test_original_advance_and_protected_navigation_keep_destinations(self):
-        cases = ('route', 'advance', 'base_defense',
+    def test_protected_navigation_keeps_destinations(self):
+        cases = ('route', 'base_defense',
                  'team_attack', 'team_return_base', 'team_defend_base', 'team_follow',
                  'team_attention_cell', 'team_hold_position')
         for mode in cases:
@@ -223,7 +223,7 @@ class OriginalOwnershipBoundaryTests(unittest.TestCase):
         self.assertIs(soft, selected)
         scene.runtime._targets = (armored, scene.target, soft)
         scene.owner.accept(scene.raw_order)
-        self.assertEqual((2, 4, 3), tuple(row['id'] for row in scene.owner.targets))
+        self.assertEqual((4, 3, 2), tuple(row['id'] for row in scene.owner.targets))
 
     def test_distances_are_not_binned_to_invent_an_armor_tie(self):
         scene = Scene()
@@ -234,7 +234,7 @@ class OriginalOwnershipBoundaryTests(unittest.TestCase):
         self.assertLess(ordinary_initial_key(scene.state['position'], near),
                         ordinary_initial_key(scene.state['position'], soft))
 
-    def test_current_selected_target_is_retained_before_nearer_domain_candidates(self):
+    def test_macro_target_is_only_a_hint_before_policy_acquires_an_intention(self):
         scene = Scene()
         near = dict(scene.target, id=3, network_id=3,
                     position=(0., 0., 20.), armor=300.)
@@ -242,9 +242,10 @@ class OriginalOwnershipBoundaryTests(unittest.TestCase):
                        position=(0., 0., 30.), armor=10.)
         scene.runtime._targets = (farther, near, scene.target)
         scene.owner.accept(scene.raw_order)
-        self.assertEqual((2, 3, 4), tuple(row['id'] for row in scene.owner.targets))
+        self.assertEqual((3, 4, 2), tuple(row['id'] for row in scene.owner.targets))
         self.assertIs(scene.target, scene.owner.engagement_target(scene.raw_order))
-        self.assertEqual(('bot', 2), scene.owner.receipt['selected'])
+        self.assertEqual(('bot', 3), scene.owner.receipt['selected'])
+        self.assertEqual(('bot', 2), scene.owner.receipt['initial_hint'])
 
     def test_dead_and_zero_health_contacts_are_not_armour_review_candidates(self):
         scene = Scene()
@@ -279,7 +280,7 @@ class OriginalOwnershipBoundaryTests(unittest.TestCase):
         self.assertEqual(('bot', 2), scene.owner.receipt['selected'])
         self.assertEqual((), scene.owner.receipt['excluded'])
 
-    def test_advance_keeps_all_original_eligible_enemies_as_negative_proof_obligations(self):
+    def test_ordinary_advance_admits_full_native_review_and_current_shot_stop(self):
         scene = Scene()
         other = dict(scene.target, id=3, network_id=3)
         scene.runtime._targets += (other,)
@@ -289,8 +290,14 @@ class OriginalOwnershipBoundaryTests(unittest.TestCase):
             dict(target=('bot', 3), reason='eligible', score=10.))
         scene.owner.accept(scene.raw_order)
         self.assertTrue(scene.owner.active)
-        self.assertFalse(scene.owner.stop_allowed)
+        self.assertTrue(scene.owner.stop_allowed)
         self.assertEqual((2, 3), tuple(row['id'] for row in scene.owner.targets))
+        scene.candidate.update(line='clear')
+        scene.decide('aim')
+        result = scene.apply(0.)
+        self.assertEqual('engage', result['combat_mode'])
+        self.assertEqual(scene.state['position'], result['move_position'])
+        self.assertEqual(0., result['throttle_override'])
 
     def test_target_gone_or_fire_disabled_cannot_reuse_a_previous_stop(self):
         for condition in ('hidden', 'dead', 'no_fire', 'empty', 'brake'):
@@ -573,11 +580,13 @@ class UnchangedRecoveryConsumerTests(unittest.TestCase):
         for moment in (1., 2., deadline - .01):
             scene.apply(moment)
             self.assertIs(marker, engine._friendly_repositions[1])
-            order, expired = engine._friendly_reposition_order(scene.state, {2: scene.target}, moment)
+            order, expired = engine._friendly_reposition_order(
+                scene.state, {2: scene.target}, moment, engine._server_orders.get(1, {}))
             self.assertFalse(expired)
             self.assertEqual(marker['destination'], order['move_position'])
             self.assertEqual(deadline, marker['deadline'])
-        order, expired = engine._friendly_reposition_order(scene.state, {2: scene.target}, deadline)
+        order, expired = engine._friendly_reposition_order(
+            scene.state, {2: scene.target}, deadline, engine._server_orders.get(1, {}))
         self.assertIsNone(order)
         self.assertTrue(expired)
         self.assertNotIn(1, engine._friendly_repositions)
@@ -611,11 +620,12 @@ class UnchangedRecoveryConsumerTests(unittest.TestCase):
         scene.decide('wait', candidate=False, reason='stationary_domain_review_pending')
         self.assertIs(order, scene.owner.apply_order(order, 1.))
         self.assertIs(marker, engine._friendly_repositions[1])
-        result, expired = engine._friendly_reposition_order(scene.state, {2: scene.target}, 1.)
+        result, expired = engine._friendly_reposition_order(
+            scene.state, {2: scene.target}, 1., engine._server_orders.get(1, {}))
         self.assertFalse(expired)
         self.assertEqual(marker['destination'], result['move_position'])
         result, expired = engine._friendly_reposition_order(
-            scene.state, {2: scene.target}, marker['deadline'])
+            scene.state, {2: scene.target}, marker['deadline'], engine._server_orders.get(1, {}))
         self.assertTrue(expired)
         self.assertIsNone(result)
         self.assertNotIn(1, engine._friendly_repositions)
@@ -695,7 +705,7 @@ class EarlyStopNotLateControlRewriteTests(unittest.TestCase):
             self.assertEqual(order[name], result[name])
 
     def test_travel_refines_only_original_target_point_and_retains_its_hull_facing(self):
-        for mode in ('advance', 'team_attack', 'base_defense'):
+        for mode in ('team_attack', 'base_defense'):
             with self.subTest(mode=mode):
                 scene = Scene()
                 scene.candidate.update(line='clear')
@@ -712,7 +722,7 @@ class EarlyStopNotLateControlRewriteTests(unittest.TestCase):
                 self.assertTrue(result['fire_allowed'])
 
     def test_other_eligible_policy_target_cannot_replace_original_travel_target_or_face(self):
-        for mode in ('advance', 'team_attack', 'base_defense'):
+        for mode in ('team_attack', 'base_defense'):
             with self.subTest(mode=mode):
                 scene = Scene()
                 other = dict(scene.target, id=3, network_id=3, position=(25., 0., 70.))
@@ -729,8 +739,6 @@ class EarlyStopNotLateControlRewriteTests(unittest.TestCase):
                 result = AttackPolicy.apply_order(scene.policy, order, 0.)
                 expected = dict(order, fire_allowed=False)
                 self.assertEqual(expected, result)
-                if mode == 'advance':
-                    self.assertEqual((2, 3), tuple(row['id'] for row in scene.owner.targets))
 
     def test_combat_owned_stop_still_accepts_a_different_eligible_policy_target(self):
         scene = Scene()
@@ -842,7 +850,7 @@ class SiegeOriginalOwnershipTests(unittest.TestCase):
                 self.assertTrue(self.desired(scene, command, scene.target))
 
     def test_protected_raw_navigation_cannot_be_overridden_by_a_stale_engage_label(self):
-        for mode in ('advance', 'base_defense', 'team_attack', 'team_back_to_base'):
+        for mode in ('base_defense', 'team_attack', 'team_back_to_base'):
             with self.subTest(mode=mode):
                 scene = Scene(siege=siege_mechanics.ENABLED)
                 scene.raw_order.update(combat_mode=mode, move_position=(40., 0., 40.),

@@ -472,7 +472,7 @@ class EmbeddedSharedRuntimeTests(unittest.TestCase):
         self.assertEqual(('connected', point), links.inspect((0., 0., 0.), point))
         self.assertEqual(count, len(calls))
 
-    def test_nearest_armor_acquisition_and_stable_tracking_execute_on_python27(self):
+    def test_nearest_armor_hints_without_a_second_tracker_execute_on_python27(self):
         planner = self.modules['strategy'].BotPlanner()
         actor = dict(id=1, team=1, rating=10000,
             profile=dict(class_tag='heavyTank', desired_range=300., armor=120.),
@@ -481,16 +481,17 @@ class EmbeddedSharedRuntimeTests(unittest.TestCase):
         rows = [dict(id=identity, target_kind='bot', position=dict(x=0., y=0., z=z),
             alive=True, visible=True, health=1000, max_health=1000,
             last_seen=0., shootable_by_bot_ids=(1,)) for identity, z in ((8, 200.), (9, 25.))]
-        self.assertEqual(9, planner._assign_targets([actor], rows, 0.)[1]['id'])
+        self.assertEqual(9, planner._initial_target_hints([actor], rows, 0.)[1]['id'])
         rows[0]['position']['z'] = 10.
-        self.assertEqual(9, planner._assign_targets([actor], rows, .5)[1]['id'])
+        self.assertEqual(8, planner._initial_target_hints([actor], rows, .5)[1]['id'])
         rows[1]['visible'] = False
-        self.assertEqual(8, planner._assign_targets([actor], rows, 1.)[1]['id'])
+        self.assertEqual(8, planner._initial_target_hints([actor], rows, 1.)[1]['id'])
         planner.reset(2)
         rows[0].update(armor=120.)
         rows[1].update(visible=True, armor=20.)
         rows[1]['position']['z'] = 10.
-        self.assertEqual(9, planner._assign_targets([actor], rows, 2.)[1]['id'])
+        self.assertEqual(9, planner._initial_target_hints([actor], rows, 2.)[1]['id'])
+        self.assertFalse(hasattr(planner, '_target_assignments'))
         self.assertFalse(hasattr(planner, '_angled_face_point'))
         self.assertFalse(hasattr(planner, '_apply_stationary_angling'))
 

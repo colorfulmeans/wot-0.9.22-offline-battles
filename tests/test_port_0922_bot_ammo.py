@@ -267,17 +267,13 @@ class BotAmmunitionTests(unittest.TestCase):
             _descriptor(60), _profile(), snapshot)
         self.assertFalse(ammo.can_fire())
 
-    def test_server_uses_result_policy_instead_of_paper_armor(self):
-        for armor in (0, 40, 150, 210, 900):
-            for enabled in (False, True):
-                self.assertEqual(0, BotPlanner._shell_index(
-                    _profile(), {'armor': armor}, {'aggression': .5},
-                    {'ammo_remaining': [30, 20, 10]}, enabled))
-                self.assertEqual(2, BotPlanner._shell_index(
-                    _profile(), {'armor': armor}, {'aggression': .5},
-                    {'ammo_remaining': [30, 20, 10], 'ammo_policy_shell_index': 2}, enabled))
+    def test_server_shell_hint_reads_only_native_inventory_and_result(self):
+        self.assertEqual(0, BotPlanner._shell_index(
+            _profile(), {'ammo_remaining': [30, 20, 10]}))
+        self.assertEqual(2, BotPlanner._shell_index(_profile(),
+            {'ammo_remaining': [30, 20, 10], 'ammo_policy_shell_index': 2}))
         self.assertEqual(2, BotPlanner._shell_index(
-            _profile(), {}, {}, {'ammo_remaining': [0, 0, 10]}))
+            _profile(), {'ammo_remaining': [0, 0, 10]}))
 
     def test_server_accepts_only_conserved_shot_decrement(self):
         identity = {

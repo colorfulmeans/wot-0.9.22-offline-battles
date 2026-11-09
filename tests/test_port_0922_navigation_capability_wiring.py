@@ -211,7 +211,8 @@ class NavigationCapabilityDirectionABITests(unittest.TestCase):
         calls, verdicts = [], []
 
         class CandidateAdapter(bot_fixture._FixedAdapter):
-            def decide(self, state, clear):
+            def decide_with_order(self, state, strategic, clear):
+                self.server_orders.append(dict(strategic))
                 # The route is behind the hull: pivot then drive forwards.
                 # The same world heading can separately be a backing escape.
                 verdicts.append((clear(0.0, 5.6),

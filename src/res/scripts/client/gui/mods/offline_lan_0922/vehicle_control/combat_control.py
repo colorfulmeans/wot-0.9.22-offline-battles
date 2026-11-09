@@ -42,7 +42,6 @@ class CombatControl(object):
                 'fire' not in self.features or not state.get('gun_aligned') or
                 not self._siege_fire_ready()):
             return None
-        from .attack_policy import native_source_pose, _planning_pose
         candidate = self.attack_policy.decision.get('candidate')
         artillery = (state.get('profile') or {}).get('class_tag') == 'SPG'
         load_plan = None
@@ -55,10 +54,15 @@ class CombatControl(object):
             load_plan = self._apply_next_shell(at_trigger=True)
             if not self._live(token):
                 return None
-            pose = native_source_pose(self)
-            solution = candidate['solution']
-            if _planning_pose(pose) == _planning_pose(solution['source_pose']):
-                solution = dict(solution, source_pose=pose)
+            # Motion integration and native gun laying happen after the
+            # policy selected this intention. Refresh that same sample at
+            # the final physical pose; the old row is not a launch proof.
+            solution = policy.evaluator.refresh_trigger_solution(candidate, self.now)
+            if (solution is None or not self._live(token) or
+                    policy.decision.get('candidate') is not candidate or
+                    policy.decision.get('action') != 'aim' or
+                    not self.combat_stop.contains(candidate.get('target'))):
+                return None
         elif launch_receipt is not None:
             intent = self.engine._artillery_intents.get(state['id']) or {}
             planned = intent.get('solution')
@@ -797,7 +801,7 @@ class CombatControl(object):
             if getattr(self, 'artillery_selection', None) is None:
                 self.artillery_selection = ArtillerySelection()
             order = self.artillery_selection.select(self, order, now)
-        self.combat_stop.accept(order)
+        order = self.combat_stop.accept(order)
         self._gun_handoff = None
         if 'fire' in self.features:
             if self.combat_stop.active or artillery:

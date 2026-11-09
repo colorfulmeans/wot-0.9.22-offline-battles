@@ -276,48 +276,43 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
         self.assertTrue(any(row['target']['network_id'] == 5 and row['armor'] == 'failed'
                             for row in scene.runtime.attack_policy.rows.values()))
 
-    def test_authored_advance_keeps_original_target_when_other_admitted_plate_is_better(self):
-        scene = self.scene(player_id=2)
+    def test_role_range_cannot_prevent_native_selection_and_launch_of_another_contact(self):
+        scene = self.scene()
         harder = scene.eligible_enemy(5, armor=10000.)
-        # A real out-of-range contact retains the authored advance. An
-        # in-range contact no longer moves to a personality preferred range.
+        # Both enemies exceed the old 340m role value but are within the
+        # mounted projectile's actual 500m reach. The macro hint stays nearest;
+        # only native armour/path proof can choose the executed gun target.
         scene.pose(harder, (0., 0., 360.))
         softer = scene.eligible_enemy(2, armor=10.)
         scene.pose(softer, (40., 0., 380.))
         self.assertEqual({5: True, 2: True}, scene.sample_original_lanes())
         alternative_reviewed = False
-        for unused in range(12):
+        for unused in range(60):
             scene.tick()
             raw = scene.original_order()
-            self.assertEqual(('advance', 5), (raw['combat_mode'], raw['target_id']))
+            self.assertEqual(('engage', 5), (raw['combat_mode'], raw['target_id']))
             self.assertGreater(360., raw['fire_range'])
-            self.assertEqual(1., raw['throttle_override'])
             self.assertEqual({2, 5}, set(row['target'][1] for row in
                 raw['tactical_evidence']['selection']['candidates']
                 if row['reason'] == 'eligible'))
             self.assertTrue(scene.runtime.combat_stop.active)
-            self.assertFalse(scene.runtime.combat_stop.stop_allowed)
-            original = navigation_view(raw)
-            applied = navigation_view(scene.applied_order())
-            for field in NAVIGATION_FIELDS:
-                if field not in ('aim_position', 'fire_allowed'):
-                    self.assertEqual(original[field], applied[field], field)
+            self.assertTrue(scene.runtime.combat_stop.stop_allowed)
+            self.assertEqual(raw['route_id'], scene.applied_order()['route_id'])
+            self.assertEqual(raw['route_index'], scene.applied_order()['route_index'])
             policy = scene.runtime.attack_policy
             candidates = [row for row in policy.rows.values()
                 if row['target']['network_id'] == 2 and row.get('armor') == 'passed'
                 and row.get('line') == 'clear']
             if candidates:
                 alternative_reviewed = True
-                self.assertEqual(('passed', 'clear'),
-                    (candidates[0]['armor'], candidates[0]['line']))
-                self.assertFalse(scene.applied_order()['fire_allowed'])
-                self.assertFalse(scene.control.last_order['fire_allowed'])
-                self.assertNotEqual('aim', policy.decision['action'],
-                    'a positive global observation is not a consumable travel target')
-                self.assertIsNone(policy.selected)
-            self.assertFalse(scene.launches())
-        self.assertTrue(alternative_reviewed,
-            'both admitted enemies must be evaluated without retargeting navigation')
+                self.assertTrue(policy._executable_current(candidates[0]))
+                self.assertEqual(2, scene.applied_order()['target_id'])
+                self.assertEqual(500., scene.applied_order()['fire_range'])
+            if scene.launches():
+                break
+        self.assertTrue(alternative_reviewed)
+        self.assertTrue(scene.launches())
+        self.assertEqual(1, len(scene.launches()))
 
     def test_original_clear_lane_can_still_enter_combat_and_launch_a_projectile(self):
         scene = self.scene()
@@ -508,7 +503,10 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
         self.assertEqual({42, 7}, set(target['network_id']
                                     for target in scene.runtime.combat_targets()))
         runtime, engine = scene.runtime, scene.runtime.engine
-        raw = runtime.combat_stop.task_order
+        # The late mechanical consumer receives the post-policy execution
+        # order, not the independent initial macro hint.
+        raw = engine._server_orders[runtime.actor_id]
+        self.assertEqual(42, raw['target_id'])
 
         # Exercise the late consumer's incoming driver-contact contract.
         # Both enemies were admitted by the real planner; a motion point

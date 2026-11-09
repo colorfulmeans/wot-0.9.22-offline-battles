@@ -9,6 +9,8 @@ from __future__ import division
 
 import copy
 
+from .target_selection import nominal_armor
+
 STRATEGY_SECONDS = 1.0
 
 
@@ -128,7 +130,8 @@ class SharedOrderPlanning(object):
                     target_id=identity, target_team=contact['team'], visible=True,
                     fresh=bool(contact.get('fresh_visible', True)), time_left=STRATEGY_SECONDS,
                     x=point[0], y=point[1], z=point[2], health=contact.get('health', 1),
-                    max_health=contact.get('max_health', 1), armor=contact.get('armor', 0.),
+                    max_health=contact.get('max_health', 1),
+                    armor=nominal_armor(contact),
                     class_tag=contact.get('class_tag', 'unknown'), shootable_by_bot_ids=[],
                     pending_lane_by_bot_ids=[], radio_recipients=[]))
                 row['radio_recipients'].append(dict(kind='bot', id=observer_id,

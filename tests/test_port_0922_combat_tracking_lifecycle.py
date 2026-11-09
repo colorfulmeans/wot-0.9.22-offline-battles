@@ -1,4 +1,4 @@
-"""Tracking and launch admission outlive loading without tactical retreat."""
+"""Initial hints and native combat ownership without tactical retreat."""
 import unittest
 import test_port_0922_server_bot_ai as fixtures
 
@@ -58,8 +58,8 @@ class CombatTrackingLifecycleTests(unittest.TestCase):
         self.assertFalse(order['fire_allowed'])
         self.assertFalse(hasattr(self.planner, '_firing_holds'))
 
-    def test_dead_hidden_expired_and_out_of_range_contacts_release_tracking(self):
-        for reason in ('dead', 'hidden', 'expired', 'range'):
+    def test_dead_hidden_and_expired_contacts_release_initial_hint(self):
+        for reason in ('dead', 'hidden', 'expired'):
             with self.subTest(reason=reason):
                 self.setUp()
                 self.order()
@@ -72,23 +72,102 @@ class CombatTrackingLifecycleTests(unittest.TestCase):
                 elif reason == 'expired':
                     now = 20.
                     contact = None
-                else:
-                    contact = _contact(2, 0, 2000, [])
                 released = self.order(now, contact)
                 self.assertIsNone(released['target_id'])
                 self.assertFalse(released['fire_allowed'])
 
-    def test_health_loss_cannot_replace_current_target_with_new_blocked_contact(self):
+    def test_role_distance_cannot_remove_a_visible_contact_from_native_review(self):
+        self.order()
+        distant = self.order(2., _contact(2, 0, 2000, []))
+        self.assertEqual(2, distant['target_id'])
+        self.assertEqual('advance_contact', distant['combat_mode'])
+        self.assertFalse(distant['fire_allowed'])
+        candidates = distant['tactical_evidence']['selection']['candidates']
+        self.assertEqual(1, len(candidates))
+        self.assertEqual(('human', 2), candidates[0]['target'])
+        self.assertEqual('eligible', candidates[0]['reason'])
+        self.assertEqual(2000., candidates[0]['distance'])
+        self.assertFalse(candidates[0]['local_lane'])
+
+    def test_health_loss_does_not_change_nearest_initial_hint_or_create_retreat(self):
         self.assertEqual(2, self.order()['target_id'])
-        blocked_attacker = _contact(3, 0, 80, [])
-        self.players = self.fx._report(self.planner, [self.contact, blocked_attacker])
+        blocked_contact = _contact(3, 0, 80, [])
+        self.players = self.fx._report(self.planner, [self.contact, blocked_contact])
+        before = self.order(1.1)
+        # The macro planner supplies a stateless nearest hint. It does not
+        # own a second current target, and damage cannot add retaliation.
+        self.assertEqual(3, before['target_id'])
+        self.assertEqual('advance_contact', before['combat_mode'])
         self.fx.states[0]['health'] -= 240
         self.assertFalse(hasattr(self.planner, 'report_damage'))
+        self.assertFalse(hasattr(self.planner, '_target_assignments'))
         order = self.order(1.2)
-        self.assertEqual(2, order['target_id'])
-        self.assertTrue(order['fire_allowed'])
+        for field in ('target_id', 'combat_mode', 'aim_position', 'move_position'):
+            self.assertEqual(before[field], order[field])
+        self.assertFalse(order['fire_allowed'])
+        candidates = order['tactical_evidence']['selection']['candidates']
+        self.assertEqual({2, 3}, set(row['target'][1] for row in candidates))
+        self.assertTrue(all(row['reason'] == 'eligible' for row in candidates))
         self.assertNotIn(order['combat_mode'], ('under_fire_withdraw', 'crossfire_withdraw', 'withdraw'))
         self.assertNotIn('withdraw_after_hit', order['tactical_evidence'])
+
+    def test_health_loss_and_nearer_blocked_hint_preserve_native_current_target(self):
+        from test_player_combat_ownership import OwnershipScene
+        scene = OwnershipScene()
+        scene.setUp()
+        self.addCleanup(scene.doCleanups)
+        scene.configure(clip=1, burst=1)
+        scene.eligible_enemy(14, armor=10.)
+        self.assertEqual({14: True}, scene.sample_original_lanes())
+        for unused in range(20):
+            scene.tick(.1)
+            if scene.runtime.attack_policy.decision['action'] == 'aim':
+                break
+        policy = scene.runtime.attack_policy
+        candidate = policy.decision['candidate']
+        self.assertEqual(('bot', 14), candidate['target_key'])
+        self.assertTrue(policy._executable_current(candidate))
+        original_key = candidate['key']
+        scene.obstructed_enemy(2)
+        scene.entity.health = max(1, scene.entity.health - 240)
+        scene.battle._records['player:1']['state']['health'] = scene.entity.health
+        self.assertEqual({2: False, 14: True}, scene.sample_original_lanes())
+        scene.runtime._strategic_due = 0.
+        scene.tick(.1)
+        self.assertEqual(2, scene.original_order()['target_id'])
+        self.assertEqual('advance_contact', scene.original_order()['combat_mode'])
+        self.assertEqual('aim', policy.decision['action'])
+        self.assertEqual(original_key, policy.decision['candidate']['key'])
+        self.assertTrue(policy._executable_current(policy.decision['candidate']))
+        self.assertEqual(14, scene.applied_order()['target_id'])
+        self.assertEqual({2, 14}, set(row['network_id'] for row in scene.runtime.combat_targets()))
+
+    def test_actual_mounted_range_still_blocks_launch_without_discarding_contact(self):
+        from test_player_combat_ownership import OwnershipScene
+        scene = OwnershipScene()
+        scene.setUp()
+        self.addCleanup(scene.doCleanups)
+        scene.configure(clip=1, burst=1)
+        for shot in scene.runtime.gun.shots:
+            shot.maxDistance = 350.
+        for row in scene.battle.client.effective_params['gun']['shots']:
+            row['source_shot']['maxDistance'] = 350.
+        target = scene.eligible_enemy(14, armor=10.)
+        scene.pose(target, (0., 0., 400.))
+        original_ammo = list(scene.battle._gun_state.ammo)
+        for unused in range(30):
+            scene.tick(.1)
+            self.assertFalse(scene.launches())
+            self.assertFalse(scene.applied_order()['fire_allowed'])
+        policy = scene.runtime.attack_policy
+        self.assertEqual({14}, set(row['network_id'] for row in scene.runtime.combat_targets()))
+        self.assertTrue(policy.rows)
+        self.assertFalse(any(policy._executable_current(row) for row in policy.rows.values()))
+        self.assertEqual(original_ammo, scene.battle._gun_state.ammo)
+        self.assertEqual('firing_position', policy.decision['action'])
+        self.assertEqual('accepted', policy.navigation_receipt['status'])
+        self.assertGreater(policy.navigation_receipt['throttle'], 0.)
+        self.assertIsNone(policy.search_started)
 
     def test_magazine_finishes_then_loads_in_place_and_reengages(self):
         self.fx.states[0] = _weapon_state(self.fx.states[0], clip=2, clip_size=4,

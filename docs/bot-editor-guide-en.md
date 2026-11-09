@@ -113,7 +113,19 @@ class settings. Upgrading does not automatically overwrite saved profiles.
 
 Built-in route and position names follow the launcher language. Newly entered custom names retain their original text and are not automatically translated.
 
-Behavior rules can override global, team, vehicle-class and slot settings. Blank values inherit. Difficulty and crew level are separate. Reaction time, first-shot aiming patience, convergence factor, aiming bias and moving-target prediction error affect Bot decisions; they do not directly rewrite armor, penetration, reload speed or the physical dispersion rules.
+Behavior rules can override global, team, vehicle-class and slot settings.
+Blank values inherit. Difficulty selects the retained fitting distributions:
+vehicle development, actual crew training and skills, equipment/directives,
+consumables and outfit. These settings remain separate and can be overridden
+independently. The ammunition cap also remains configurable.
+
+Players and Bots now use one automatic controller. Artificial reaction delays,
+first-shot patience, convergence acceptance factors, aiming offsets and lead
+errors are removed, including their old configuration fields. Physical aiming
+time, dispersion, reload, armor, penetration and ballistics still follow the
+actual vehicle, crew and installed equipment; they are not removed or replaced
+with a difficulty-based success probability. Loading an older profile preserves
+its authored routes and fitting choices but drops the retired gunner fields.
 
 Configuration storage: `%LOCALAPPDATA%\WoTOfflineBattles\bot_tactics`. `active.json` materializes the applied named file for the battle reader; saving, renaming and deleting its owner keep it synchronized. `profiles` contains named profiles. Prefer Export for backups instead of editing these files manually.
 

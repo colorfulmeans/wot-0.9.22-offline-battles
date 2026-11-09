@@ -12811,7 +12811,7 @@ class BotRuntimeTests(unittest.TestCase):
             runtime._server_orders[11]={'parking_phase':phase}
             runtime._friendly_repositions[11]={'until':99.}
             self.assertEqual((None,False),runtime._friendly_reposition_order(
-                runtime.states[11],{},1.))
+                runtime.states[11],{},1.,runtime._server_orders.get(11,{})))
             self.assertNotIn(11,runtime._friendly_repositions)
 
     def test_blocked_friendly_lane_repositions_through_safe_driver(self):
@@ -20266,14 +20266,8 @@ class BotRuntimeTests(unittest.TestCase):
         weapon_profile = self.module.ai_planner.build_vehicle_profile(
             weapon_descriptor)
         weapon_profile = BattleState._sanitize_bot_profile(weapon_profile)
-        personality = {'aggression': 0.5}
         remaining = {'ammo_remaining': [30, 20, 10]}
-        self.assertEqual(0, planner._shell_index(
-            weapon_profile, planner._contacts[1][('human', 2)],
-            personality, remaining))
-        self.assertEqual(0, planner._shell_index(
-            weapon_profile, planner._contacts[1][('human', 3)],
-            personality, remaining))
+        self.assertEqual(0, planner._shell_index(weapon_profile, remaining))
 
     def test_cached_observation_uses_current_bot_pose_and_health(self):
         adapter = _FixedAdapter(self._stationary_command())

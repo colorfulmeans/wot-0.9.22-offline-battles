@@ -92,8 +92,8 @@ jobs:
         run: |
           set -euo pipefail
           patterns=(
-            'test_shared_artillery_selection.py'
-            'test_shared_he_damage_ranking.py'
+            'test_shared*.py'
+            'test_report_141918_control_regression.py'
             'test_native_motion_fixture_initial_state.py'
             'test_player*.py'
             'test_retired_tactical_cleanup.py'
@@ -259,6 +259,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           docker run --rm -v "$PWD:/work" -w /work python:2.7.18 python -c "import os; paths=[os.path.join(base,name) for base,dirs,files in os.walk('src/res/scripts/client') for name in files if name.endswith('.py')]; [compile(open(p,'rb').read(),p,'exec') for p in paths]; print('%d client modules compile under Python 2.7' % len(paths))"
+      - name: Exercise 29 shared actors with real worker scheduling and record work
+        if: ${{ !cancelled() }}
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: >-
+          python tools/check_shared_multi_bot_combat.py
+          --actors 29 --frames 60 --warmup 10 --schedule worker10
+          --output build/bot-test-results/shared-multi-bot-combat.json
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:

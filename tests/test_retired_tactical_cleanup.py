@@ -58,6 +58,10 @@ class RetiredTacticalEntryPointTests(unittest.TestCase):
             traits = make_personality(seed)
             self.assertNotIn('jiggle', traits)
             self.assertNotIn('hold_jitter', traits)
+            self.assertNotIn('teamwork', traits)
+            self.assertNotIn('patience', traits)
+            self.assertEqual({'aggression', 'caution', 'initiative',
+                              'adaptability', 'route_jitter'}, set(traits))
             # The existing allocation draw followed seven trait draws.
             # Deleting a combat trait must not change unrelated route choice.
             rng = random.Random(seed)
@@ -120,26 +124,27 @@ class CurrentShootingPositionTests(unittest.TestCase):
                     self.assertEqual(2, command['target_id'])
                     self.assertNotIn('force_balance', command)
 
-    def test_actual_range_limit_still_requires_approach(self):
+    def test_role_range_cannot_force_approach_before_native_validation(self):
         route = _route('authored', [(45, -240, False), (45, 300, False)])
         bot = _bot(11, 1, 0, route, 'mediumTank')
         bot['profile'].update(desired_range=180.0, fire_range=340.0)
         state = _state(11, 1, 45.0, -180.0)
-        # The actual 355-m distance exceeds this vehicle's 340-m fire range.
-        # Runtime planning now has one implementation; no deleted director
-        # contact envelope is part of the expected behavior.
+        # This 340-m field is only a role preference, not mounted maxDistance.
+        # The native range/launch and truly-unreachable recovery boundaries
+        # are exercised in test_shared_target_execution_ownership instead.
         adapter = BotAdapter('04_himmelsdorf', 45)
         actor = adapter.roster.register_profile(11, 1, bot['profile'], 'Bot')
         actor['route'] = route
         order, command = shared_plan_and_drive(adapter, BotPlanner(), actor,
             state, contacts=[_contact(2, 45., 175., [11])])
-        self.assertEqual('advance', order['combat_mode'])
-        self.assertEqual(dict(x=45., y=0., z=300.), order['move_position'])
-        self.assertFalse(order['fire_allowed'])
-        self.assertEqual(1., order['throttle_override'])
-        self.assertEqual('advance', command['combat_mode'])
-        self.assertGreater(command['throttle'], 0.)
-        self.assertFalse(command['fire_allowed'])
+        self.assertEqual('engage', order['combat_mode'])
+        self.assertEqual(dict(x=45., y=0., z=-180.), order['move_position'])
+        self.assertEqual('authored', order['route_id'])
+        self.assertEqual(0., order['throttle_override'])
+        self.assertEqual(2, order['target_id'])
+        self.assertEqual('engage', command['combat_mode'])
+        self.assertEqual(0., command['throttle'])
+        self.assertEqual(route, actor['route'])
 
     def test_current_blocked_lane_still_hands_off_to_position_recovery(self):
         route = _route('authored', [(0, -100, False), (0, 500, False)])
@@ -193,7 +198,7 @@ class NoSyntheticRouteFallbackTests(unittest.TestCase):
         self.assertEqual([base['point']], task['points'])
         self.assertEqual(base['point'], planner._route(bot, 1.0)[2])
 
-    def test_missing_route_keeps_real_out_of_range_contact_navigation(self):
+    def test_missing_route_keeps_visible_contact_for_native_range_validation(self):
         planner = BotPlanner()
         bot = _bot(11, 1, 0, {}, 'mediumTank')
         bot['profile'].update(desired_range=180.0, fire_range=340.0)
@@ -202,9 +207,11 @@ class NoSyntheticRouteFallbackTests(unittest.TestCase):
             position=dict(x=270.0, y=0.0, z=40.0), visible=True,
             shootable_by_bot_ids=[11], health=1000, max_health=1000)
         order = planner._order_for(bot, 0, 1, focus, [focus], 1.0)
-        self.assertEqual('advance_contact', order['combat_mode'])
-        self.assertEqual(focus['position'], order['move_position'])
-        self.assertFalse(order['fire_allowed'])
+        self.assertEqual('engage', order['combat_mode'])
+        self.assertEqual(dict(x=270., y=0., z=-350.), order['move_position'])
+        self.assertEqual(2, order['target_id'])
+        self.assertEqual('', order['route_id'])
+        self.assertNotIn(11, planner._route_states)
 
 
 if __name__ == '__main__':

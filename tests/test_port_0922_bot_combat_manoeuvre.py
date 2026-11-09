@@ -87,7 +87,7 @@ class FriendlyManoeuvreTests(unittest.TestCase):
         self.assertLessEqual(marker['deadline'], 26.)
         for now in (11., 14.1, 16.):
             command, expired = self.runtime._friendly_reposition_order(
-                self.state, {18: self.target}, now)
+                self.state, {18: self.target}, now, self.runtime._server_orders.get(8, {}))
             self.assertFalse(expired)
             self.assertEqual(marker['destination'], command['move_position'])
         self.assertTrue(self.state['local_combat_manoeuvre'])
@@ -110,7 +110,7 @@ class FriendlyManoeuvreTests(unittest.TestCase):
         self.mark(10.)
         self.runtime._server_orders[8] = dict(target_id=19, target_kind='bot')
         self.assertEqual((None, False), self.runtime._friendly_reposition_order(
-            self.state, {18:self.target}, 11.))
+            self.state, {18:self.target}, 11., self.runtime._server_orders.get(8, {})))
         self.assertFalse(self.state['local_combat_manoeuvre'])
         self.assertEqual('target_changed', self.state['_friendly_reposition_event']['outcome'])
 
@@ -124,7 +124,7 @@ class FriendlyManoeuvreTests(unittest.TestCase):
         marker = dict(self.runtime._friendly_repositions[8])
         end = marker['deadline'] + .01
         self.assertEqual((None, True), self.runtime._friendly_reposition_order(
-            self.state, {18: self.target}, end))
+            self.state, {18: self.target}, end, self.runtime._server_orders.get(8, {})))
         self.assertFalse(self.state['local_combat_manoeuvre'])
         self.assertFalse(self.mark(end + .2))
         self.assertEqual('timeout', self.state['_friendly_reposition_last_terminal']['outcome'])
@@ -138,7 +138,8 @@ class FriendlyManoeuvreTests(unittest.TestCase):
                 (dict(combat_mode='base_defense'), self.target, 'priority_handoff')):
             self.runtime._server_orders[8] = order
             self.mark(10.)
-            command, expired = self.runtime._friendly_reposition_order(self.state, {18:target}, 11.)
+            command, expired = self.runtime._friendly_reposition_order(
+                self.state, {18:target}, 11., self.runtime._server_orders.get(8, {}))
             self.assertIsNone(command)
             self.assertFalse(expired)
             self.assertFalse(self.state['local_combat_manoeuvre'])
@@ -149,7 +150,7 @@ class FriendlyManoeuvreTests(unittest.TestCase):
         point = self.runtime._friendly_repositions[8]['destination']
         self.state.update(x=point[0], y=point[1], z=point[2])
         self.assertEqual((None, False), self.runtime._friendly_reposition_order(
-            self.state, {18:self.target}, 11.))
+            self.state, {18:self.target}, 11., self.runtime._server_orders.get(8, {})))
         self.assertFalse(self.state['local_combat_manoeuvre'])
         self.assertEqual('arrived', self.state['_friendly_reposition_event']['outcome'])
 
