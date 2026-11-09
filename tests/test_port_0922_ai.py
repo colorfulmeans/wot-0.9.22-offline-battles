@@ -477,7 +477,7 @@ class BotAiPortTests(unittest.TestCase):
         self.assertEqual({'engage'}, modes)
         self.assertEqual({0.0}, throttle_values)
 
-    def test_discovered_artillery_has_priority_over_a_soft_regular_target(self):
+    def test_discovered_artillery_has_no_class_bonus_over_a_nearer_target(self):
         director = BattleDirector('04_himmelsdorf', 46)
         profile = self._strategy_profile('mediumTank', 18.0, 85.0)
         director.register_profile(401, 1, profile, 'Hunter')
@@ -491,7 +491,7 @@ class BotAiPortTests(unittest.TestCase):
         order = director.order_for(
             401, (0.0, 0.0, 0.0), 0.0, 0.0, 1000, 1000, 1.0)
 
-        self.assertEqual(403, order['target_id'])
+        self.assertEqual(402, order['target_id'])
 
     def test_unspotted_artillery_does_not_override_a_visible_target(self):
         director = BattleDirector('04_himmelsdorf', 47)

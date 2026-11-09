@@ -10,7 +10,7 @@ from unittest import mock
 
 import test_port_0922_bot_runtime as harness
 from test_port_0922_server_bot_ai import _bot, _contact, _route, _state
-from server_bot_ai import BotPlanner
+from gui.mods.offline_lan_0922.vehicle_control.strategy import BotPlanner
 
 
 class SPGTrackingTests(unittest.TestCase):
@@ -46,10 +46,12 @@ class SPGTrackingTests(unittest.TestCase):
             self.assertTrue(order['fire_allowed'])  # attempt; exact proof is local
             self.assertEqual({'x': 200., 'y': 0., 'z': 0.}, order['face_position'])
 
-    def test_non_spg_does_not_acquire_an_unproved_direct_lane(self):
+    def test_non_spg_tracks_blocked_contact_without_a_launch_permission(self):
         order = self._order(BotPlanner(), _contact(2, 200, 0, []), 1.0, 'mediumTank')
-        self.assertIsNone(order['target_id'])
+        self.assertEqual(2, order['target_id'])
         self.assertFalse(order['fire_allowed'])
+        self.assertEqual('advance_contact', order['combat_mode'])
+        self.assertIsNone(order['throttle_override'])
 
     def test_explicit_radio_disconnect_never_grants_artillery_target(self):
         contact = dict(_contact(2, 200, 0, []), radio_recipients=[])
@@ -57,12 +59,13 @@ class SPGTrackingTests(unittest.TestCase):
         self.assertIsNone(order['target_id'])
         self.assertFalse(order['fire_allowed'])
 
-    def test_failed_arc_does_not_reserve_a_ready_shooter_focus_slot(self):
+    def test_unproved_arc_remains_pending_without_any_focus_slot_policy(self):
         planner = BotPlanner()
-        with mock.patch.object(planner, '_reserve_focus', wraps=planner._reserve_focus) as reserve:
-            order = self._order(planner, _contact(2, 200, 0, []), 1.0)
+        order = self._order(planner, _contact(2, 200, 0, []), 1.0)
         self.assertEqual(2, order['target_id'])
-        self.assertEqual(0, reserve.call_count)
+        self.assertFalse(hasattr(planner, '_reserve_focus'))
+        self.assertFalse(hasattr(planner, '_focus_limit'))
+        self.assertFalse(planner._target_decisions[11]['candidates'][0]['ready'])
 
     def _exercise(self, blocked=False, seconds=40):
         # Real BotPlanner -> real BotAdapter/LocalDriver -> BotRuntime -> both
@@ -253,12 +256,15 @@ class SPGTrackingTests(unittest.TestCase):
             'launch': {'state': 'missing'}}
         gun = mock.Mock(); gun.ready.return_value = True
         ammo = mock.Mock(); ammo.can_fire.return_value = True
-        output = io.StringIO()
-        with contextlib.redirect_stdout(output):
+        from gui.mods.offline_lan_0922 import native_input_diagnostics
+        with mock.patch.object(native_input_diagnostics, 'detail_record_ready', return_value=True), \
+                mock.patch.object(native_input_diagnostics, 'write_json_record') as record:
             for now in (1., 1.1, 1.2):
                 runtime._record_artillery_gate(
                     state, order, targets[1000002], None, gun, ammo, 1., False, True, True, now, None)
         self.assertEqual([], native_calls)
-        self.assertEqual(1, output.getvalue().count('SPG FIRE GATE '))
-        self.assertIn('planning_pending', output.getvalue())
+        self.assertEqual(1, record.call_count)
+        self.assertEqual('SPG FIRE GATE', record.call_args[0][0])
+        self.assertEqual('planning_pending', record.call_args[0][1]['reason'])
+        self.assertEqual(2, record.call_args[0][1]['planning']['chord'])
         self.assertNotIn('_spg_position', state)

@@ -157,7 +157,7 @@ class BaseCircleArrivalTests(unittest.TestCase):
         order = next(o for o in planner.build_orders(bots, states, players, 1., defense)['orders'] if o.get('defense_base_id'))
         bot = next(b for b in planner._alive_bots(bots, states) if b['id'] == order['id'])
         previous = dict(order)
-        with mock.patch('server_bot_ai.bot_tactics.route_config') as config:
+        with mock.patch('gui.mods.offline_lan_0922.vehicle_control.strategy.bot_tactics.route_config') as config:
             planner._apply_authored_route_order(order, bot, dict(x=999., y=0., z=999.), 2.)
             config.assert_not_called()
         self.assertEqual(previous, order)

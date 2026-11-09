@@ -14,8 +14,8 @@ from unittest import mock
 from test_player_stationary_plan import NativePlanScene, install_plan_observations
 from test_player_siege_engagement import SiegeScene
 from gui.mods.offline_lan_0922 import shot_geometry, siege_mechanics
-from gui.mods.offline_lan_0922.player_control import stationary_plan
-from gui.mods.offline_lan_0922.player_control.copied.battle_geometry import CopiedBattleGeometry
+from gui.mods.offline_lan_0922.vehicle_control import stationary_plan
+from gui.mods.offline_lan_0922.vehicle_control.geometry import SharedBattleGeometry
 
 
 class NativeStationaryCombatTests(unittest.TestCase):
@@ -48,7 +48,7 @@ class NativeStationaryCombatTests(unittest.TestCase):
         # so reconnect the actual original preview to both real consumers.
         geometry = scene.runtime.geometry
         geometry._probe_bot_local_motion = types.MethodType(
-            CopiedBattleGeometry._probe_bot_local_motion, geometry)
+            SharedBattleGeometry._probe_bot_local_motion, geometry)
         scene.runtime.engine.local_sweep_probe = geometry._probe_bot_local_motion
 
     @staticmethod

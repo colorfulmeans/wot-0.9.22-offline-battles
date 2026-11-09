@@ -16,7 +16,7 @@ from unittest import mock
 import test_player_fire_admission_complete as fire_tests
 from gui.mods.offline_lan_0922 import (
     ballistics, gun_mechanics, gun_pitch_limits, shot_geometry, siege_mechanics)
-from gui.mods.offline_lan_0922.player_control import PlayerControl
+from gui.mods.offline_lan_0922.vehicle_control.player_binding import PlayerControl
 
 
 def pitch_limits(low, high):

@@ -7,7 +7,7 @@ import unittest
 from unittest import mock
 
 from test_port_0922_server_bot_ai import BotPlanner, _bot, _route, _state
-from server_bot_ai import TEAM_ORDER_COMMANDS, TEAM_ORDER_NAVIGATION_COMMANDS
+from gui.mods.offline_lan_0922.vehicle_control.strategy import TEAM_ORDER_COMMANDS, TEAM_ORDER_NAVIGATION_COMMANDS
 import test_port_0922_team_commands as command_fixture
 TICK_HZ=command_fixture.TICK_HZ
 from gui.mods.offline_lan_0922 import bot_tactics as contract, route_network

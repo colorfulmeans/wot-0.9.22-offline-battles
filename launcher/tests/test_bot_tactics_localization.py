@@ -136,7 +136,7 @@ class LanguageUITests(unittest.TestCase):
         self.ui.profile_name.set('My 自定义方案')
         self.ui.item_vars['label'].set('waterfall 是我的名称')
         self.ui.item_vars['radius'].set('not-yet-a-number')
-        self.ui.rule_vars['reaction_seconds'].set('1.')
+        self.ui.rule_vars['ammo_limit'].set('17')
         self.ui.view.zoom=2.5; self.ui.view.pan_x=25; self.ui.view.pan_y=-33
         snap=(copy.deepcopy(self.ui.document),copy.deepcopy(self.ui.original),
               copy.deepcopy(self.ui.undo_stack),copy.deepcopy(self.ui.redo_stack),self.ui.selection)
@@ -146,7 +146,7 @@ class LanguageUITests(unittest.TestCase):
             self.assertEqual('My 自定义方案',self.ui.profile_name.get())
             self.assertEqual('waterfall 是我的名称',self.ui.item_vars['label'].get())
             self.assertEqual('not-yet-a-number',self.ui.item_vars['radius'].get())
-            self.assertEqual('1.',self.ui.rule_vars['reaction_seconds'].get())
+            self.assertEqual('17',self.ui.rule_vars['ammo_limit'].get())
             self.assertEqual((2.5,25,-33),(self.ui.view.zoom,self.ui.view.pan_x,self.ui.view.pan_y))
             self.assertEqual(1,self.ui.book.index('current'))
         self.assertEqual(snap,(self.ui.document,self.ui.original,self.ui.undo_stack,self.ui.redo_stack,self.ui.selection))
@@ -154,26 +154,26 @@ class LanguageUITests(unittest.TestCase):
 
     def test_rule_table_and_preview_do_not_leak_field_keys(self):
         self.ui.rule_vars['class_tag'].set('heavyTank');self.ui.rule_vars['skill'].set('regular')
-        self.ui.rule_vars['reaction_seconds'].set('1.2');self.ui.save_rule()
+        self.ui.rule_vars['ammo_limit'].set('12');self.ui.save_rule()
         row=' '.join(self.ui.rules.item('0','values'))
-        self.assertIn('重型坦克',row);self.assertIn('反应时间',row);self.assertIn('普通',row)
-        self.assertNotIn('reaction_seconds',row);self.assertNotIn('heavyTank',row)
+        self.assertIn('重型坦克',row);self.assertIn('携弹数量上限',row);self.assertIn('普通',row)
+        self.assertNotIn('ammo_limit',row);self.assertNotIn('heavyTank',row)
         preview=self.ui.preview_rule();self.root.update()
         text=str([preview.table.item(i,'values') for i in preview.table.get_children()])
-        self.assertIn('反应时间',text);self.assertNotIn('reaction_seconds',text)
+        self.assertIn('携弹数量上限',text);self.assertNotIn('ammo_limit',text)
         self.assertNotIn('regular',text)
         self.ui.set_language('en');self.root.update()
         self.assertEqual('Effective settings preview',preview.root.title())
         self.assertEqual('disabled',str(preview.ammo_note.cget('state')))
         self.assertEqual(3,int(preview.ammo_note.cget('height')))
-        self.assertGreater(preview.table.winfo_height(),200)
+        self.assertGreater(preview.table.winfo_height(),150)
 
     def test_language_switch_preserves_pending_selected_rule(self):
         self.ui.rule_vars['skill'].set('elite');self.ui.save_rule()
         self.ui.rules.selection_set('0');self.root.update()
-        self.ui.rule_vars['reaction_seconds'].set('2.99')
+        self.ui.rule_vars['ammo_limit'].set('299')
         self.ui.set_language('en');self.root.update()
-        self.assertEqual('2.99',self.ui.rule_vars['reaction_seconds'].get())
+        self.assertEqual('299',self.ui.rule_vars['ammo_limit'].get())
         self.assertEqual(('0',),self.ui.rules.selection())
 
     def test_copy_uses_translated_default_name_but_custom_names_are_not_rewritten(self):

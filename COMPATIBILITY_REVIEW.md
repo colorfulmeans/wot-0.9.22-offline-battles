@@ -1,3 +1,34 @@
+# November 9: one shared automatic controller, then legacy-policy removal
+
+The current implementation starts at `ddf411763e677cc99cf5938aa281d29d579ef9e6`.
+The user's revised requirement supersedes the historical independent-player-copy
+and "do not change Bot" boundaries below. The existing player automatic behavior
+is now the single `vehicle_control` implementation used by both actor bindings;
+the old `player_control/copied` tree, standalone server strategy copies and
+copy-generation/parity tools are physically removed. Per-actor state remains
+independent. Foreground native input and worker native simulation remain their
+respective physical owners, not two alternative combat strategies.
+
+Only after that consolidation, this change removes the old rating-dependent
+gunner delays, aim/prediction perturbations and target-priority strategies.
+Rating continues to select native fitting tiers; researched modules, actual
+crew training and skills, equipment, directives, consumables and outfit retain
+their independent settings and true mechanical effects. The ordinary acquisition
+order is nearest living observed target, then lower armor for equal distance.
+SPG HE acquisition compares proved reachable arcs and native HE contact estimates.
+Current valid penetration intent and committed physical trigger tails are not
+replaced by a future-load ranking or a new attacker/human-priority score.
+
+The new tests assert single method ownership, actor isolation, current native
+inputs, complete HE comparison, exact NEXT comparison domains, real ammunition
+debit and publication/ACK idempotence. Old fixtures are migrated to the shared
+module rather than restoring deleted implementations for their convenience.
+Historical build scripts that could reconstruct old sources are removed too.
+The owner-reviewed October Default and current physical navigation data remain
+unchanged. See `docs/testing/shared-control-handoff-20261109.md` for scope,
+verification commands and remaining Windows acceptance boundaries. Prior counts
+and copy-parity claims below belong to their recorded earlier trees.
+
 # November 9: retire legacy tactics and make reviewed Default authoritative
 
 This change starts from rollback `669fa46ecb9daa3374a515de24c785d7ee11475b`,

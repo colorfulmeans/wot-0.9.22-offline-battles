@@ -12,9 +12,9 @@ import unittest
 from test_player_limited_traverse import TraverseScene
 from test_player_fire_admission_complete import SpatialPose
 from gui.mods.offline_lan_0922 import destructibles_sensor, shot_geometry, vehicle_physics
-from gui.mods.offline_lan_0922.player_control.stationary_plan import (
+from gui.mods.offline_lan_0922.vehicle_control.stationary_plan import (
     StationaryPlanner, SLICES_PER_TICK, DESTRUCTIBLE_POSE_MAX_ANGLE_STEP)
-from gui.mods.offline_lan_0922.player_control.copied.battle_geometry import CopiedBattleGeometry
+from gui.mods.offline_lan_0922.vehicle_control.geometry import SharedBattleGeometry
 
 
 def install_plan_observations(scene, around_center=True, track_center=1.5, slope=(0., 0.)):
@@ -48,7 +48,7 @@ def install_plan_observations(scene, around_center=True, track_center=1.5, slope
     # The broader runtime fixture has no debris. Restore the production
     # landed-turret consumer here so an observed obstacle is really tested.
     runtime.geometry._turret_motion_is_clear = types.MethodType(
-        CopiedBattleGeometry._turret_motion_is_clear, runtime.geometry)
+        SharedBattleGeometry._turret_motion_is_clear, runtime.geometry)
     runtime.engine._turret_motion_probe = runtime.geometry._turret_motion_is_clear
     plane = runtime.geometry._sample_ground_plane(scene.position, scene.body.yaw, descriptor)
     if slope != (0., 0.):

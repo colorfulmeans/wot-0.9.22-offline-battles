@@ -17,10 +17,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] /
 
 class AdapterTacticalCleanupTests(unittest.TestCase):
     def implementations(self):
-        for prefix in ('gui.mods.offline_lan_0922',
-                       'gui.mods.offline_lan_0922.player_control.copied'):
-            yield (importlib.import_module(prefix + '.ai.adapter'),
-                   importlib.import_module(prefix + '.ai.driver'))
+        # Both actor bindings use this single driver; no copied engine exists.
+        prefix = 'gui.mods.offline_lan_0922'
+        yield (importlib.import_module(prefix + '.ai.adapter'),
+               importlib.import_module(prefix + '.ai.driver'))
 
     def fixture(self, module):
         adapter = module.BotAdapter('01_karelia', 7)

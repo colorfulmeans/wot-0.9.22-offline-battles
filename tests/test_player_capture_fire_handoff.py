@@ -222,7 +222,7 @@ class CaptureFireHandoffTests(unittest.TestCase):
                 self.assertFalse(scene.launches())
                 scene.doCleanups()
 
-    def test_unadmitted_alternative_cannot_be_promoted_by_a_capture_hold(self):
+    def test_obstructed_alternative_remains_reviewable_but_cannot_fire_through_wall(self):
         scene = self.scene()
         scene.world[:] = [((54., -10., 64.), (57., 20., 68.))]
         lanes = scene.sample_original_lanes()
@@ -230,9 +230,12 @@ class CaptureFireHandoffTests(unittest.TestCase):
         scene.runtime.set_mission('capture_base', {})
         for unused in range(40):
             scene.tick()
-            self.assertNotIn(2, [row['network_id'] for row in scene.runtime.combat_stop.targets])
+            self.assertIn(2, [row['network_id'] for row in scene.runtime.combat_stop.targets])
             self.assertFalse(scene.launches())
             self.assertIsNone(scene.runtime._gun_handoff)
+            self.assertEqual((45., 0., 45.), scene.applied_order()['move_position'])
+            self.assertEqual((0., 0.), (scene.battle._sender.forward, scene.battle._sender.turn))
+            self.assertIsNone(scene.runtime.attack_policy.search_started)
 
 
 if __name__ == '__main__':

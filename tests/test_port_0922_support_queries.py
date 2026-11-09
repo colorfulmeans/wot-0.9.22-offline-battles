@@ -5,6 +5,7 @@ from unittest import mock
 import test_port_0922_battle_runtime as engine
 from gui.mods.offline_lan_0922.support_queries import SupportQueries
 from gui.mods.offline_lan_0922.entities import remote_vehicle
+from gui.mods.offline_lan_0922.vehicle_control import geometry as shared_geometry
 
 class SupportReuseTests(unittest.TestCase):
     def test_exact_cache_keeps_none_and_does_not_merge_different_rays(self):
@@ -160,7 +161,7 @@ class SupportReuseTests(unittest.TestCase):
         battle._stack_candidates=lambda unused:iter([(('bot',12),state,entity)])
         previous=battle._stack_support_context(actor)
         evidence=types.SimpleNamespace(collision=types.SimpleNamespace(dist=.1,compName='vehicleHull'),worldNormal=engine._Vector(0.,1.,0.))
-        with mock.patch.object(engine.battle_runtime_module,'_collide_vehicle_evidence_at_matrix',return_value=[evidence]) as query, mock.patch.object(battle,'_prepare_stack_target',wraps=battle._prepare_stack_target) as prepare:
+        with mock.patch.object(shared_geometry,'_collide_vehicle_evidence_at_matrix',return_value=[evidence]) as query, mock.patch.object(battle,'_prepare_stack_target',wraps=battle._prepare_stack_target) as prepare:
             for unused in range(10):
                 actor.pop('_stack_carrier',None)
                 hit=battle._stack_ground_hit(engine._Vector(0.,2.1,0.),engine._Vector(0.,1.9,0.),None)

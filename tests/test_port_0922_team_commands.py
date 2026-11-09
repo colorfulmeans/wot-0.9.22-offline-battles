@@ -5,6 +5,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'server'))
+sys.path.insert(0, str(ROOT / 'src/res/scripts/client'))
 
 from lan_battle_server import (
     BattleState, CLIENT_BUILD_0922, Player, PREBATTLE_SECONDS, TICK_HZ,
@@ -16,7 +17,7 @@ class _Socket(object):
         pass
 
 
-from server_bot_ai import BotPlanner
+from gui.mods.offline_lan_0922.vehicle_control.strategy import BotPlanner
 
 
 class _Planner(BotPlanner):
@@ -81,7 +82,7 @@ class TeamCommandTests(unittest.TestCase):
         self.assertEqual('unknown_command', ack['code'])
 
     def test_same_tick_new_sequence_cannot_bypass_command_cooldown(self):
-        from server_bot_ai import BotPlanner
+        from gui.mods.offline_lan_0922.vehicle_control.strategy import BotPlanner
         first = self.state.submit_team_command(1, self._message('HELPME', sequence=9))
         second = self.state.submit_team_command(1, self._message('ATTACK', sequence=10))
         self.assertTrue(first['accepted']);self.assertFalse(second['accepted'])

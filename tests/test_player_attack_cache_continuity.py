@@ -13,9 +13,9 @@ from unittest import mock
 import test_player_fire_admission_complete as native_fire
 from test_player_rebuilt_attack_policy import Observations
 from gui.mods.offline_lan_0922 import combat_rules
-from gui.mods.offline_lan_0922.player_control.attack_policy import (
+from gui.mods.offline_lan_0922.vehicle_control.attack_policy import (
     AttackPolicy, NativeAttackEvaluator)
-from gui.mods.offline_lan_0922.player_control import ammunition_validation
+from gui.mods.offline_lan_0922.vehicle_control import ammunition_validation
 
 
 class NativeFloatVector(native_fire.f._Vector):

@@ -43,7 +43,7 @@ _CLIENT_SCRIPT_ROOT = os.path.join(
 if _CLIENT_SCRIPT_ROOT not in sys.path:
     sys.path.insert(0, _CLIENT_SCRIPT_ROOT)
 
-from server_bot_ai import BotPlanner
+from gui.mods.offline_lan_0922.vehicle_control.strategy import BotPlanner
 from offline_rewards import compute_offline_rewards, tier_weight
 from vehicle_overlay_store import (
     MAX_OVERLAY_MEMBER_BYTES,
@@ -14674,10 +14674,6 @@ class BattleState:
         target = (str(target[0]), int(target[1]))
         self.enemy_damage_received[target] = int(
             self.enemy_damage_received.get(target, 0)) + damage
-        if target[0] == "bot":
-            self.bot_planner.report_damage(
-                target[1], attacker[0], attacker[1], damage,
-                self._monotonic())
         attacker_row = self._statistics_row(*attacker)
         if not attacker_row["team"] and attacker_team in (1, 2):
             attacker_row["team"] = attacker_team

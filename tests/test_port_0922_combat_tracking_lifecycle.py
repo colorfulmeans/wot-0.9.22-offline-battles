@@ -78,11 +78,12 @@ class CombatTrackingLifecycleTests(unittest.TestCase):
                 self.assertIsNone(released['target_id'])
                 self.assertFalse(released['fire_allowed'])
 
-    def test_hit_branch_cannot_replace_eligible_target_with_blocked_attacker(self):
+    def test_health_loss_cannot_replace_current_target_with_new_blocked_contact(self):
+        self.assertEqual(2, self.order()['target_id'])
         blocked_attacker = _contact(3, 0, 80, [])
         self.players = self.fx._report(self.planner, [self.contact, blocked_attacker])
-        self.order()
-        self.planner.report_damage(11, 'human', 3, 240, 1.1)
+        self.fx.states[0]['health'] -= 240
+        self.assertFalse(hasattr(self.planner, 'report_damage'))
         order = self.order(1.2)
         self.assertEqual(2, order['target_id'])
         self.assertTrue(order['fire_allowed'])

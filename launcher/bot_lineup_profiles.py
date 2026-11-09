@@ -47,7 +47,7 @@ CLONE_BOT_VEHICLE_SUFFIXES_0922 = ("_bootcamp",)
 NON_BATTLE_ENTITY_BOT_SUFFIXES_0922 = ("_bot", "_training")
 NON_BATTLE_ENTITY_BOT_VEHICLES_0922 = frozenset(("germany:Env_Artillery",))
 CATALOGUE_VISIBILITY_TAG_0922 = "secret"
-# The Bot gunnery tiers bot_gunnery.SKILL_TIERS defines, weakest first, bound
+# The native fitting tiers bot_gunnery.SKILL_TIERS defines, weakest first, bound
 # by a parity test so a new tier cannot appear on only one side.  ``None``
 # leaves a pinned slot on the room's own skill preset.
 BOT_SKILL_TIERS_0922 = ("rookie", "regular", "veteran", "elite")
@@ -93,7 +93,7 @@ def vehicle_type_name(choice):
 
 
 def _skill(value):
-    """Return one supported gunnery tier, or None to follow the room preset."""
+    """Return one native fitting tier, or None to follow the room preset."""
     if value is None:
         return None
     if value not in BOT_SKILL_TIERS_0922:

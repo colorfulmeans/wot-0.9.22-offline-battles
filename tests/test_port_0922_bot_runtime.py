@@ -15,6 +15,7 @@ import bot_state_rows
 ROOT = Path(__file__).resolve().parents[1]
 PORT_ROOT = ROOT
 sys.path.insert(0, str(PORT_ROOT / 'server'))
+sys.path.insert(0, str(PORT_ROOT / 'src/res/scripts/client'))
 
 from lan_battle_server import (
     BattleState, CLIENT_BUILD_0922, ClientHandler,
@@ -26,7 +27,7 @@ from lan_battle_server import (
     RICOCHET_CONTINUATION_CAPABILITY,
     SIMULATION_WORKER_AUTHORITY_ID, SIMULATION_WORKER_CAPABILITY,
     SimulationWorker)
-from server_bot_ai import BotPlanner
+from gui.mods.offline_lan_0922.vehicle_control.strategy import BotPlanner
 
 PACKAGE_ROOT = PORT_ROOT / 'src' / 'res' / 'scripts' / 'client' / 'gui' / 'mods' / 'offline_lan_0922'
 
@@ -7118,8 +7119,8 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual('bot_state', result[0]['type'])
         self.assertGreater(bot['z'], 0.0)
         self.assertEqual(0, bot['shell_index'])
-        # The opening shot also waits for this Bot's gunner tier, which the
-        # banked-pose contract above is not about.
+        # Physical alignment and reload may still outlast the banked-pose
+        # samples; there is no additional difficulty reaction clock.
         now = 1.46
         while now < 8.0 and not self.runtime.states[11]['fire_seq']:
             now += .04
@@ -10067,8 +10068,7 @@ class BotRuntimeTests(unittest.TestCase):
         stale = bot_state_rows.bots(runtime.update(0.2, 1.0, players=[player])[0])[0]
         self.assertEqual(0, stale['fire_seq'])
 
-        # A fresh solution admits exactly one shot, once the gunner has also
-        # spent its own tier opening delay.
+        # A fresh solution admits one shot once the physical gun is ready.
         freshness[0] = True
         now, fired = 1.0, 0
         while now < 8.0 and not fired:
@@ -10077,40 +10077,11 @@ class BotRuntimeTests(unittest.TestCase):
             fired = runtime.states[11]['fire_seq']
         self.assertEqual(1, fired)
 
-        # Going stale again holds the next shot even with the gun reloaded
-        # and the gunner long past every delay it has.
+        # Going stale again holds the next shot even with the gun reloaded.
         freshness[0] = False
         runtime._gun_states[11].elapsed = 100.0
         runtime.update(0.2, now + 0.2, players=[player])
         self.assertEqual(1, runtime.states[11]['fire_seq'])
-
-    def _spend_gunner_delay(self, runtime, players, now=1.0, step=0.04,
-                            bot_id=11, hold_fire=True):
-        """Run the clock through this Bot's opening-shot delay, trigger held.
-
-        The tier's reaction and aiming patience are deliberate behaviour with
-        their own tests.  These callers measure fire bookkeeping instead, so
-        spend both with ``fire_allowed`` off - the gunner still tracks its
-        target through the ordinary solve - and let the caller's own next
-        tick take the shot.
-        """
-        params = self.module.bot_gunnery.skill_parameters(
-            runtime.bot_skill(bot_id))
-        deadline = (now + params['reaction_seconds'] +
-                    params['patience_seconds'])
-        command = (getattr(runtime.adapter, 'command', None)
-                   if hold_fire else None)
-        allowed = None if command is None else command.get('fire_allowed')
-        if command is not None:
-            command['fire_allowed'] = False
-        try:
-            while now + step < deadline:
-                now += step
-                runtime.update(step, now, players=players)
-        finally:
-            if command is not None:
-                command['fire_allowed'] = allowed
-        return now
 
     def _gunnery_command(self):
         return {
@@ -10225,7 +10196,7 @@ class BotRuntimeTests(unittest.TestCase):
         projected = server._sanitize_bot_state(changed,server.bot_manifest[0],server.bot_states[raw['id']])
         self.assertEqual(projected['fitting'],raw['fitting'])
 
-    def test_the_manifest_publishes_each_bot_gunnery_tier(self):
+    def test_the_manifest_publishes_each_bot_fitting_tier(self):
         messages = self.runtime.battle_start(
             dict(self.start, bot_skill_mode='brutal'))
 
@@ -10286,12 +10257,11 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertLessEqual(self.runtime.bot_rating(11), ceiling)
 
     def test_a_takeover_reinstalls_the_exact_rating_not_its_label(self):
-        """Snapping a rating to its nearest tier would move the gunner.
+        """Authority transfer preserves the frozen roster configuration.
 
-        The crew level a rating trains is baked into the published reload
-        duration, so a successor that re-labelled a Bot would also fail the
-        installed-gun guard. Reinstalling the exact number is what keeps a
-        mid-spectrum gunner identical across a failover.
+        The label selects a physical fitting tier, not an artificial gunner.
+        The exact saved rating remains protocol data and must not be rerolled
+        or silently replaced by an anchor during authority transfer.
         """
         manifest = self.runtime.battle_start(
             dict(self.start, bot_skill_mode='mixed'))[0]
@@ -10312,180 +10282,130 @@ class BotRuntimeTests(unittest.TestCase):
 
         self.assertEqual(expected, successor.bot_rating(11))
 
-    def test_the_aim_selection_gate_holds_for_one_aiming_epoch(self):
-        """A per-frame flip would re-solve the ballistics every tick."""
-        self.runtime.battle_start(dict(self.start, bot_skill_mode='mixed'))
-        state = {'id': 11}
-        target = {'kind': 'human', 'network_id': 2, 'id': 2}
+    def test_runtime_has_no_artificial_gunnery_policy_or_hold_clock(self):
+        self.runtime.battle_start(self.start)
+        for name in ('bot_aim_selection_allowed', '_track_gunnery_hold',
+                     '_gunnery_error', '_aimed_target', '_gunner_ready',
+                     '_gunnery_holds'):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(self.runtime, name))
 
-        first = self.runtime.bot_aim_selection_allowed(state, target)
-        for unused_repeat in range(5):
-            self.assertEqual(
-                first,
-                self.runtime.bot_aim_selection_allowed(state, target))
-        # The accessor may not create or advance the hold that owns the epoch.
-        self.assertEqual({}, self.runtime._gunnery_holds)
+    def test_identical_physical_fittings_aim_at_the_same_part_at_every_rating(self):
+        selected = {'aim_position': (2.0, 2.5, 100.0),
+                    'aim_token': ('turret', 'current-pose')}
+        target = {'kind': 'human', 'network_id': 2, 'id': 2,
+                  'alive': True, 'position': (0.0, 0.0, 100.0),
+                  'velocity': (0.0, 0.0, 0.0)}
+        original = copy.deepcopy(target)
+        descriptor = _combat_descriptor()
+        solutions = []
+        for rating in (0.0, 0.17, 0.34, 0.505, 0.67, 0.835, 1.0):
+            runtime = self.module.BotRuntime(
+                1, direct_launch_origin_probe=lambda *unused: (0.0, 1.0, 0.0),
+                direct_aim_point_probe=lambda *unused: dict(selected))
+            runtime._bot_ratings[11] = rating
+            state = {'id': 11, 'x': 0.0, 'y': 0.0, 'z': 0.0,
+                     'profile': {'class_tag': 'mediumTank'}}
+            # Crossing the removed 1.5-second bias epoch cannot move a
+            # stationary, already selected armour point.
+            for now in (0.0, 1.49, 1.51, 3.01):
+                solution = runtime._ballistic_solution(
+                    state, target, descriptor, 0, now)
+                self.assertIsNotNone(solution)
+                self.assertEqual(selected['aim_position'],
+                                 solution['aim_position'])
+                self.assertEqual(selected['aim_token'], solution['_aim_token'])
+                solutions.append(solution)
+        self.assertTrue(all(solution == solutions[0] for solution in solutions))
+        self.assertEqual(original, target)
 
-    def test_the_top_of_the_spectrum_always_looks_for_the_weak_spot(self):
-        self.runtime.battle_start(dict(self.start, bot_skill_mode='brutal'))
+    def test_identical_physics_gives_exact_moving_target_lead_at_every_rating(self):
+        target = {'kind': 'human', 'network_id': 2, 'id': 2,
+                  'alive': True, 'position': (0.0, 0.0, 300.0),
+                  'velocity': (20.0, 0.0, 0.0)}
+        original = copy.deepcopy(target)
+        solutions = []
+        for rating in (0.0, 0.34, 0.67, 1.0):
+            runtime = self.module.BotRuntime(
+                1, direct_launch_origin_probe=lambda *unused: (0.0, 1.0, 0.0))
+            runtime._bot_ratings[11] = rating
+            state = {'id': 11, 'x': 0.0, 'y': 0.0, 'z': 0.0,
+                     'profile': {'class_tag': 'mediumTank'}}
+            solution = runtime._ballistic_solution(
+                state, target, _combat_descriptor(), 0, 1.0)
+            self.assertIsNotNone(solution)
+            self.assertAlmostEqual(20.0 * solution['flight_time'],
+                                   solution['aim_position'][0])
+            self.assertAlmostEqual(1.0, solution['aim_position'][1])
+            self.assertAlmostEqual(300.0, solution['aim_position'][2])
+            solutions.append(solution)
+        self.assertTrue(all(solution == solutions[0] for solution in solutions))
+        self.assertEqual(original, target)
 
-        self.assertTrue(self.runtime.bot_aim_selection_allowed(
-            {'id': 11}, {'kind': 'human', 'network_id': 2, 'id': 2}))
-
-    def test_a_bot_with_no_competence_never_looks_for_the_weak_spot(self):
-        self.runtime.battle_start(dict(
-            self.start, bot_skill_mode='brutal',
-            bot_lineup=[{'team': 2, 'slot': 0, 'skill': 'rookie'}]))
-
-        self.assertEqual(0.0, self.runtime.bot_rating(11))
-        self.assertFalse(self.runtime.bot_aim_selection_allowed(
-            {'id': 11}, {'kind': 'human', 'network_id': 2, 'id': 2}))
-
-    def test_a_weak_gunner_lays_the_gun_off_the_target_centre(self):
-        command = self._gunnery_command()
+    def test_same_physical_clip_gun_has_the_same_cadence_at_every_rating(self):
         player = _admit_player(
             {'id': 2, 'team': 1, 'alive': True,
              'x': 0.0, 'y': 10.5, 'z': 100.0})
-        offsets = {'rookie': [], 'elite': []}
-        # One seeded engagement is one draw from a half-normal, so average a
-        # spread of rounds instead of asserting on a single lucky gunner.
-        for round_id in range(1, 21):
-            for skill in offsets:
-                runtime = self._gunnery_runtime(
-                    command, round_id=round_id,
-                    bot_lineup=[{'team': 2, 'slot': 0, 'skill': skill}])
-                runtime.update(0.20, 1.0, players=[player])
-                aim = runtime._ballistic_solution_cache[11][2]['aim_position']
-                offsets[skill].append(math.sqrt(
-                    (aim[0] - 0.0) ** 2 + (aim[2] - 100.0) ** 2))
+        schedules = []
+        for rating in (0.0, 0.34, 0.67, 1.0):
+            # Keep the installed modules, crew, devices and gun state fixed.
+            # Rating labels alone may not inject firing delays or aim error.
+            runtime = self._gunnery_runtime(self._gunnery_command())
+            runtime._bot_ratings[11] = rating
+            runtime._bot_behavior.setdefault(11, {})['crew_preset'] = 'all'
+            schedule = []
+            for tick in range(1, 161):
+                runtime.update(0.05, 1.0 + tick * 0.05, players=[player])
+                schedule.append(runtime.states[11]['fire_seq'])
+            schedules.append(schedule)
+        self.assertGreater(schedules[0][-1], 1)
+        self.assertTrue(all(schedule == schedules[0] for schedule in schedules))
 
-        rookie = sum(offsets['rookie']) / len(offsets['rookie'])
-        elite = sum(offsets['elite']) / len(offsets['elite'])
-        self.assertGreater(rookie, 0.20)
-        self.assertGreater(rookie, elite * 5.0)
-
-    def test_a_better_tier_never_fires_a_clip_gun_less_often(self):
-        """The tier ladder must not invert on a gun that reloads fast."""
-        command = self._gunnery_command()
+    def test_ready_physical_gun_does_not_wait_for_a_rating_reaction_delay(self):
         player = _admit_player(
             {'id': 2, 'team': 1, 'alive': True,
              'x': 0.0, 'y': 10.5, 'z': 100.0})
-        shots = {}
-        for skill in ('rookie', 'elite'):
-            runtime = self._gunnery_runtime(
-                command, bot_lineup=[{'team': 2, 'slot': 0, 'skill': skill}])
-            now = 1.0
-            for unused_step in range(200):
-                now += 0.05
-                published = runtime.update(0.05, now, players=[player])
-                shots[skill] = bot_state_rows.bots(published[0])[0]['fire_seq']
+        target = {'kind': 'human', 'network_id': 2, 'id': 2,
+                  'alive': True, 'visible': True,
+                  'position': (0.0, 10.5, 100.0), 'velocity': (0.0, 0.0, 0.0)}
+        for rating in (0.0, 0.34, 0.67, 1.0):
+            with self.subTest(rating=rating):
+                runtime = self._gunnery_runtime(self._gunnery_command())
+                runtime._bot_ratings[11] = rating
+                runtime._bot_behavior.setdefault(11, {})['crew_preset'] = 'all'
+                state = runtime.states[11]
+                descriptor = runtime._descriptors[11]
+                solution = runtime._local_ballistic_solution(
+                    state, target, descriptor, 0)
+                self.assertIsNotNone(solution)
+                state.update(aim_yaw=solution['yaw'],
+                             turret_yaw=solution['yaw'],
+                             gun_pitch=solution['pitch'],
+                             desired_gun_pitch=solution['pitch'],
+                             gun_aligned=True)
+                runtime._gun_states[11].elapsed = 100.0
+                runtime.update(0.04, 1.0, players=[player])
+                self.assertEqual(1, runtime.states[11]['fire_seq'])
 
-        self.assertGreater(shots['rookie'], 0)
-        self.assertGreaterEqual(shots['elite'], shots['rookie'])
-
-    def test_a_weak_gunner_mis_leads_a_moving_target(self):
-        command = self._gunnery_command()
-        player = _admit_player(
-            {'id': 2, 'team': 1, 'alive': True, 'yaw': 1.5707963,
-             'speed': 12.0, 'x': 0.0, 'y': 10.5, 'z': 100.0})
-        leads = {}
-        for skill in ('rookie', 'elite'):
-            runtime = self._gunnery_runtime(
-                command,
-                bot_lineup=[{'team': 2, 'slot': 0, 'skill': skill}])
-            state = runtime.states[11]
-            target = {
-                'kind': 'human', 'network_id': 2, 'id': 2,
-                'alive': True, 'visible': True,
-                'position': (0.0, 10.5, 100.0),
-                'yaw': 1.5707963, 'speed': 12.0}
-            aimed = runtime._aimed_target(state, target, 1.0)
-            lead = runtime._target_velocity(aimed)[0] / 12.0
-            leads[skill] = abs(1.0 - lead)
-
-        self.assertGreater(
-            self.module.bot_gunnery.skill_parameters('rookie')['lead_error'],
-            self.module.bot_gunnery.skill_parameters('elite')['lead_error'])
-        self.assertLessEqual(
-            leads['elite'],
-            self.module.bot_gunnery.skill_parameters('elite')['lead_error'])
-        self.assertLessEqual(
-            leads['rookie'],
-            self.module.bot_gunnery.skill_parameters('rookie')['lead_error'])
-
-    def test_a_bot_holds_fire_until_its_reaction_delay_expires(self):
-        command = self._gunnery_command()
-        player = _admit_player(
-            {'id': 2, 'team': 1, 'alive': True,
-             'x': 0.0, 'y': 10.5, 'z': 100.0})
-        runtime = self._gunnery_runtime(
-            command, bot_lineup=[{'team': 2, 'slot': 0, 'skill': 'rookie'}])
-        reaction = self.module.bot_gunnery.skill_parameters(
-            'rookie')['reaction_seconds']
-
-        now = 1.0
-        while now < 1.0 + reaction - 1.0e-6:
-            now += 0.05
-            published = runtime.update(0.05, now, players=[player])
-            self.assertEqual(
-                0, bot_state_rows.bots(published[0])[0]['fire_seq'],
-                'a Bot fired %.2fs into a %.2fs reaction delay' % (
-                    now - 1.0, reaction))
-
-        fired = 0
-        while now < 1.0 + reaction + 4.0 and not fired:
-            now += 0.05
-            fired = bot_state_rows.bots(runtime.update(
-                0.05, now, players=[player])[0])[0]['fire_seq']
-        self.assertEqual(1, fired)
-
-    def test_the_hold_survives_one_missing_target_frame(self):
-        """A gunner does not react to the same tank twice."""
-        command = self._gunnery_command()
-        state = self.runtime.states.get(11)
-        self.runtime.battle_start(self.start)
-        state = self.runtime.states[11]
-        target = {'kind': 'human', 'network_id': 2, 'id': 2, 'alive': True,
-                  'position': (0.0, 10.5, 100.0)}
-
-        self.assertEqual(
-            (0.0, 0.0, True),
-            self.runtime._track_gunnery_hold(state, target, 1.0))
-        self.assertIsNone(
-            self.runtime._track_gunnery_hold(state, None, 1.5))
-        self.assertEqual(
-            (2.0, 2.0, True),
-            self.runtime._track_gunnery_hold(state, target, 3.0))
-
-    def test_a_new_target_restarts_the_reaction_clock(self):
-        self.runtime.battle_start(self.start)
-        state = self.runtime.states[11]
-        first = {'kind': 'human', 'network_id': 2, 'id': 2, 'alive': True,
-                 'position': (0.0, 10.5, 100.0)}
-        second = dict(first, network_id=3, id=3)
-
-        self.runtime._track_gunnery_hold(state, first, 1.0)
-        self.assertEqual(
-            (2.0, 2.0, True),
-            self.runtime._track_gunnery_hold(state, first, 3.0))
-        self.assertEqual(
-            (0.0, 0.0, True),
-            self.runtime._track_gunnery_hold(state, second, 3.0))
-
-    def test_the_bots_own_shot_ends_the_opening_shot_of_an_engagement(self):
-        self.runtime.battle_start(self.start)
-        state = self.runtime.states[11]
-        target = {'kind': 'human', 'network_id': 2, 'id': 2, 'alive': True,
-                  'position': (0.0, 10.5, 100.0)}
-
-        self.runtime._track_gunnery_hold(state, target, 1.0)
-        state['fire_seq'] = 1
-        self.assertEqual(
-            (3.0, 0.0, False),
-            self.runtime._track_gunnery_hold(state, target, 4.0))
-        self.assertEqual(
-            (4.0, 1.0, False),
-            self.runtime._track_gunnery_hold(state, target, 5.0))
+    def test_new_target_uses_its_own_physical_solution_without_a_hold_epoch(self):
+        runtime = self.module.BotRuntime(
+            1, direct_launch_origin_probe=lambda *unused: (0.0, 1.0, 0.0))
+        runtime._bot_ratings[11] = 0.0
+        state = {'id': 11, 'x': 0.0, 'y': 0.0, 'z': 0.0,
+                 'profile': {'class_tag': 'mediumTank'}}
+        first = {'kind': 'human', 'network_id': 2, 'id': 2,
+                 'alive': True, 'position': (0.0, 0.0, 100.0),
+                 'velocity': (0.0, 0.0, 0.0)}
+        second = dict(first, network_id=3, id=3, position=(10.0, 0.0, 100.0))
+        before = runtime._ballistic_solution(
+            state, first, _combat_descriptor(), 0, 1.0)
+        self.assertIsNone(runtime._ballistic_solution(
+            state, None, _combat_descriptor(), 0, 1.04))
+        after = runtime._ballistic_solution(
+            state, second, _combat_descriptor(), 0, 1.08)
+        self.assertEqual((0.0, 1.0, 100.0), before['aim_position'])
+        self.assertEqual((10.0, 1.0, 100.0), after['aim_position'])
+        self.assertGreater(after['yaw'], before['yaw'])
 
     def test_bot_fire_uses_turret_pitch_los_reload_clip_and_barrel_scatter(self):
         lane_probes = []
@@ -10557,13 +10477,9 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual(1, fired['fire_seq'])
         self.assertIn('shot_yaw', fired)
         self.assertIn('shot_pitch', fired)
-        # The barrel points at this gunner's own aim point, which its tier
-        # lays a little off the target centre; the dispersed ray below is
-        # measured against that, not against a perfect solution.
-        self.assertLess(
-            abs(fired['aim_yaw']),
-            self.module.bot_gunnery.skill_parameters(
-                runtime.bot_skill(11))['aim_bias_factor'] * 0.1)
+        # Nominal aim stays on the selected point. Only the physical gun's
+        # dispersion may separate the actual emitted ray from that point.
+        self.assertAlmostEqual(0.0, fired['aim_yaw'])
         self.assertGreater(fired['shot_pitch'], 0.0)
         self.assertEqual(1, runtime.states[11]['clip'])
         self.assertAlmostEqual(0.2, runtime.states[11]['reload_duration'])
@@ -10670,7 +10586,7 @@ class BotRuntimeTests(unittest.TestCase):
         player = _admit_player({'id': 2, 'team': 1, 'alive': True,
                                 'x': 0.0, 'y': 0.0, 'z': 100.0})
         runtime.states[11].update(x=0.0, y=0.0, z=0.0, yaw=0.0)
-        now = self._spend_gunner_delay(runtime, [player])
+        now = 1.0
         blocked = bot_state_rows.bots(runtime.update(
             0.15, now + 0.15, players=[player])[0])[0]
         self.assertEqual(0, blocked['fire_seq'])
@@ -10825,12 +10741,10 @@ class BotRuntimeTests(unittest.TestCase):
         }
         player = _admit_player(player)
 
-        # The first callback acquires the target; the second is long enough
-        # for the gunner to spend its tier reaction.  The SPG is stationary,
-        # so its aiming circle is already converged.
-        runtime.update(0.04, 1.0, players=[player])
+        # The stationary gun is ready. The final native arc proof, not an
+        # artificial reaction clock, owns whether this shot can launch.
         pending = bot_state_rows.bots(runtime.update(
-            0.40, 1.40, players=[player])[0])[0]
+            0.04, 1.0, players=[player])[0])[0]
         self.assertEqual(0, pending['fire_seq'])
         self.assertEqual((1, 1), (
             pending['shell_index'], pending['next_shell_index']))
@@ -10838,7 +10752,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual(1, calls[0][3])
         self.assertEqual(1, calls[0][2])
 
-        fired_message = runtime.update(0.04, 1.44, players=[player])[0]
+        fired_message = runtime.update(0.04, 1.04, players=[player])[0]
         fired = bot_state_rows.bots(fired_message)[0]
         launch = fired_message['launches'][0]
         self.assertEqual(1, fired['fire_seq'])
@@ -12879,7 +12793,7 @@ class BotRuntimeTests(unittest.TestCase):
         }
         player = _admit_player(player)
 
-        now = self._spend_gunner_delay(runtime, [player])
+        now = 1.0
         self.assertEqual([], probes)
         blocked = bot_state_rows.bots(runtime.update(
             .15, now + .15, players=[player])[0])[0]
@@ -12953,7 +12867,7 @@ class BotRuntimeTests(unittest.TestCase):
         }
         player = _admit_player(player)
 
-        now = self._spend_gunner_delay(runtime, [player]) + .04
+        now = 1.04
         runtime.update(.04, now, players=[player])
         self.assertIn(11, runtime._friendly_repositions)
         self.assertEqual(1, state['fire_seq'])
@@ -13022,7 +12936,7 @@ class BotRuntimeTests(unittest.TestCase):
         }
         player = _admit_player(player)
 
-        now = self._spend_gunner_delay(runtime, [player]) + .04
+        now = 1.04
         runtime.update(.04, now, players=[player])
         self.assertIn(11, runtime._friendly_repositions)
         initial_position = self.module._position(state)
@@ -13235,17 +13149,15 @@ class BotRuntimeTests(unittest.TestCase):
         }
         player = _admit_player(player)
 
-        # The first callback acquires the target; the second is long enough
-        # for the gunner to spend its tier reaction.  The SPG is stationary,
-        # so its aiming circle is already converged.
-        runtime.update(.04, 1.0, players=[player])
-        blocked = bot_state_rows.bots(runtime.update(.40, 1.40, players=[player])[0])[0]
+        # The stationary gun is ready. Final native friendly-lane proof
+        # owns launch admission; difficulty introduces no extra delay.
+        blocked = bot_state_rows.bots(runtime.update(.04, 1.0, players=[player])[0])[0]
         self.assertEqual(0, blocked['fire_seq'])
         self.assertNotIn(11, runtime._artillery_intents)
         self.assertNotIn(11, runtime._artillery_reproofs)
         destination = runtime._friendly_repositions[11]['destination']
         state['x'], state['y'], state['z'] = destination
-        fired = bot_state_rows.bots(runtime.update(.15, 1.55, players=[player])[0])[0]
+        fired = bot_state_rows.bots(runtime.update(.15, 1.15, players=[player])[0])[0]
         self.assertEqual(1, fired['fire_seq'])
         self.assertEqual(2, len(probes))
 
@@ -18439,7 +18351,7 @@ class BotRuntimeTests(unittest.TestCase):
         start = server.current_battle_message()
         start['bot_authority_id'] = 1
         # The room preset travels with the round, so the successor installs
-        # the same gunner tier and therefore the same reload contract.
+        # the same physical fitting tier and therefore the same reload contract.
         start['bot_skill_mode'] = self.start['bot_skill_mode']
         takeover = self.module.BotRuntime(
             1, descriptor_resolver=lambda unused: _combat_descriptor(),
@@ -20126,7 +20038,7 @@ class BotRuntimeTests(unittest.TestCase):
             order['id'] for order in replaced['orders']
             if order['combat_mode'] == 'base_defense'))
 
-    def test_base_defenders_spread_visible_capture_contributors(self):
+    def test_base_defenders_choose_equal_near_capturers_without_focus_quotas(self):
         planner = BotPlanner()
         manifest = []
         states = []
@@ -20185,8 +20097,14 @@ class BotRuntimeTests(unittest.TestCase):
 
         self.assertEqual([11, 12], sorted(
             order['id'] for order in defenders))
-        self.assertEqual({2, 3}, set(
+        self.assertEqual({2}, set(
             order['target_id'] for order in defenders))
+        for order in defenders:
+            selection = order['tactical_evidence']['selection']
+            self.assertEqual({('human', 2), ('human', 3)},
+                             set(row['target'] for row in selection['candidates']))
+            self.assertEqual('initial_distance_armor', selection['selection_law'])
+        self.assertFalse(hasattr(planner, '_focus_limit'))
         self.assertTrue(all(order['fire_allowed'] for order in defenders))
         self.assertTrue(all(order['combat_mode'] == 'engage' for order in defenders))
         self.assertTrue(all(order['throttle_override'] == 0.0 for order in defenders))
@@ -20424,7 +20342,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertIs(cached_target, runtime._decision_cache[11][5][12])
         self.assertEqual(cached_snapshot, cached_target)
 
-    def test_team_spot_does_not_pull_blocked_bot_off_route(self):
+    def test_team_spot_keeps_blocked_candidate_without_fire_or_route_replacement(self):
         lane_calls = []
 
         def firing_lane(source, target):
@@ -20448,8 +20366,8 @@ class BotRuntimeTests(unittest.TestCase):
             physics_ground_probe=lambda *unused: 0.0,
             spawn_resolver=_spawn_resolver, baked_graph=_graph())
         roster = [
-            {'id': 11, 'team': 1, 'slot': 0, 'name': 'Clear'},
-            {'id': 12, 'team': 1, 'slot': 1, 'name': 'Blocked'},
+            {'id': 11, 'team': 1, 'slot': 0, 'name': 'Blocked'},
+            {'id': 12, 'team': 1, 'slot': 1, 'name': 'Clear'},
         ]
         manifest = bot_state_rows.bots(runtime.battle_start(
             dict(self.start, bots=roster))[0])
@@ -20476,15 +20394,25 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual([(11, 2), (12, 2)], lane_calls)
 
         planner = BotPlanner()
+        manifest_before = copy.deepcopy(manifest)
+        route_orders = dict((order['id'], order) for order in
+            planner.build_orders(manifest, bot_states, [enemy], .9)['orders'])
         known = planner.known_targets(bot_states, [enemy])
         self.assertEqual(1, planner.report_contacts(
             observation['contacts'], known, 1.0))
         orders = dict((order['id'], order) for order in
                       planner.build_orders(
                           manifest, bot_states, [enemy], 1.0)['orders'])
-        self.assertIsNone(orders[11]['target_id'])
-        self.assertEqual('route', orders[11]['combat_mode'])
+        self.assertEqual(2, orders[11]['target_id'])
+        self.assertEqual('advance_contact', orders[11]['combat_mode'])
         self.assertFalse(orders[11]['fire_allowed'])
+        self.assertIsNone(orders[11]['throttle_override'])
+        for key in ('route_id', 'route_index', 'route_anchor'):
+            self.assertEqual(route_orders[11][key], orders[11][key], key)
+        self.assertEqual(manifest_before, manifest)
+        candidate = orders[11]['tactical_evidence']['selection']['candidates'][0]
+        self.assertEqual('eligible', candidate['reason'])
+        self.assertFalse(candidate['local_lane'])
         self.assertEqual(2, orders[12]['target_id'])
         self.assertEqual('human', orders[12]['target_kind'])
         self.assertFalse(orders[12]['fire_allowed'])
@@ -20495,8 +20423,9 @@ class BotRuntimeTests(unittest.TestCase):
             'bot_order_revision': payload['revision'],
             'bot_orders': payload['orders'],
         }))
-        # Team spotting does not pull bot 11 off its route. Bot 12 owns the
-        # current firing lane and becomes the sole shooter after reloading.
+        # Both actors retain the live contact for shared combat recovery.
+        # Only bot 12 owns a proved barrel lane; tracking cannot grant bot 11
+        # a shot or replace the stored route geometry.
         for index in range(4):
             now = 1.21 + index * .21
             runtime.update(.06, now, players=[enemy])
@@ -20508,6 +20437,7 @@ class BotRuntimeTests(unittest.TestCase):
             })
         self.assertEqual(0, runtime.states[11]['fire_seq'])
         self.assertGreater(runtime.states[12]['fire_seq'], 0)
+        self.assertEqual(manifest_before, manifest)
 
     def test_low_health_support_keeps_facing_and_firing_without_retreat(self):
         runtime = self.module.BotRuntime(
@@ -20680,10 +20610,18 @@ class BotRuntimeTests(unittest.TestCase):
             [contact], planner.known_targets(bot_states, [enemy]), 1.0))
         orders = planner.build_orders(
             manifest, bot_states, [enemy], 1.0)['orders']
-        self.assertTrue(all(order['target_id'] is None for order in orders))
-        self.assertTrue(all(order['combat_mode'] == 'route'
+        self.assertTrue(all(order['target_id'] == 2 for order in orders))
+        self.assertTrue(all(order['combat_mode'] == 'advance_contact'
                             for order in orders))
         self.assertTrue(all(not order['fire_allowed'] for order in orders))
+        for order in orders:
+            candidate = order['tactical_evidence']['selection']['candidates'][0]
+            self.assertEqual('eligible', candidate['reason'])
+            self.assertFalse(candidate['local_lane'])
+            self.assertFalse(candidate['ready'])
+            self.assertIsNone(order['throttle_override'])
+            self.assertEqual('', order['route_id'])
+        self.assertTrue(all(not row['route']['waypoints'] for row in manifest))
 
     def test_full_roster_firing_lane_refresh_is_staggered_and_complete(self):
         roster = [
@@ -21615,6 +21553,8 @@ class BotRuntimeTests(unittest.TestCase):
         observation_times = []
         per_frame_lane_probes = []
         ready_order_batches = 0
+        maximum_targeted = 0
+        manifest_before = copy.deepcopy(manifest)
 
         # Drive the runtime at 50 FPS for 120 seconds. Periodic firing-lane
         # refreshes and current-fire safety checks share one frame budget.
@@ -21655,6 +21595,11 @@ class BotRuntimeTests(unittest.TestCase):
             targeted = 0
             firing = 0
             for order in orders:
+                expected_contacts = set((row['target_kind'], row['target_id'])
+                    for row in contacts if row['observing_team'] == order['team'])
+                selection = order['tactical_evidence']['selection']
+                self.assertEqual(expected_contacts,
+                    set(row['target'] for row in selection['candidates']))
                 if order['target_id'] is None:
                     self.assertFalse(order['fire_allowed'])
                     self.assertEqual('route', order['combat_mode'])
@@ -21668,15 +21613,19 @@ class BotRuntimeTests(unittest.TestCase):
                                   contact['shootable_by_bot_ids'])
             if len(runtime._shot_los_cache) == 420:
                 # Reload and empty ammunition now affect permission even when
-                # a lane exists. Only the two clear observers may be targeted.
+                # a lane exists. Every live contact remains trackable, but
+                # only the two clear observers can acquire launch permission.
                 self.assertTrue(all(order['id'] in (11, 25)
                                     for order in orders
-                                    if order['target_id'] is not None))
-            self.assertLessEqual(targeted, 2)
+                                    if order['fire_allowed']))
+            maximum_targeted = max(maximum_targeted, targeted)
+            self.assertLessEqual(firing, 2)
             self.assertLessEqual(firing, targeted)
             ready_order_batches += int(firing > 0)
 
         self.assertTrue(observation_times)
+        self.assertGreater(maximum_targeted, 2)
+        self.assertEqual(manifest_before, manifest)
         self.assertGreater(ready_order_batches, 0)
         self.assertLessEqual(
             observation_times[0],

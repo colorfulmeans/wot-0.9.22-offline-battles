@@ -18,8 +18,8 @@ import unittest
 from unittest import mock
 
 import test_player_control_completion as completion
-from gui.mods.offline_lan_0922.player_control import PlayerControl
-from gui.mods.offline_lan_0922.player_control.commands import MISSIONS
+from gui.mods.offline_lan_0922.vehicle_control.player_binding import PlayerControl
+from gui.mods.offline_lan_0922.vehicle_control.commands import MISSIONS
 
 
 class NavigationObservation(object):
@@ -95,9 +95,6 @@ class RuntimeBoundary(object):
 
     def drive_contact(self, *args):
         self.calls.append(('contact',) + args)
-
-    def attacked(self, *args):
-        self.calls.append(('attacked',) + args)
 
     def shot_committed(self, *args):
         self.calls.append(('shot_committed',) + args)
@@ -221,13 +218,14 @@ class FullControllerBoundaryTests(unittest.TestCase):
         self.assertFalse(self.control.release_pending)
         self.assertTrue(self.control.toggle())
 
-    def test_native_contacts_and_damage_feedback_reach_full_runtime(self):
+    def test_native_contacts_reach_shared_runtime_without_retaliation_hook(self):
         self.assertTrue(self.control.toggle())
         contact = dict(collision=True, actor='ally')
         self.control.drive_contact((1., 2., 3.), .7, .1, True, contact)
-        self.control.attacked(47, dict(damage=10))
         self.assertIn(('contact', (1., 2., 3.), .7, .1, True, contact), self.runtime.calls)
-        self.assertIn(('attacked', 47, dict(damage=10)), self.runtime.calls)
+        self.assertFalse(hasattr(self.control, 'attacked'))
+        self.assertEqual([('contact', (1., 2., 3.), .7, .1, True, contact)],
+                         [row for row in self.runtime.calls if row[0] == 'contact'])
 
     def test_team_observation_requires_existing_current_runtime_and_never_activates_it(self):
         callback = self.runtime.observe_team_observation = mock.Mock(return_value=True)
@@ -339,7 +337,7 @@ class FullControllerBoundaryTests(unittest.TestCase):
             [row['status'] for row in rows if row.get('id') == 'journal-stop'])
 
     def test_keyboard_and_mouse_takeover_claim_only_live_enabled_input_channels(self):
-        import gui.mods.offline_lan_0922.player_control as module
+        import gui.mods.offline_lan_0922.vehicle_control.player_binding as module
         class Handler(object):
             def handleKeyEvent(self, event):
                 return 'manual'
@@ -371,7 +369,7 @@ class FullControllerBoundaryTests(unittest.TestCase):
         self.assertEqual('manual', handler.handleKeyEvent(None))
 
     def test_launcher_start_waits_for_live_input_then_hotkey_can_stop_and_restart(self):
-        import gui.mods.offline_lan_0922.player_control as module
+        import gui.mods.offline_lan_0922.vehicle_control.player_binding as module
 
         control = self.control
         control._auto_start_pending = True
@@ -417,14 +415,14 @@ class FullControllerBoundaryTests(unittest.TestCase):
                 self.assertTrue(sender.send_avatar_input(1, 'shoot', {}))
 
     def test_worker_and_replay_cannot_attach_foreground_decisions(self):
-        import gui.mods.offline_lan_0922.player_control as module
+        import gui.mods.offline_lan_0922.vehicle_control.player_binding as module
         with mock.patch.dict(os.environ, {'WOT_OFFLINE_PLAYER_AUTOCONTROL': 'drive,fire'}):
             for worker, replay in ((True, False), (False, True), (True, True)):
                 self.assertIsNone(module.attach(types.SimpleNamespace(
                     _worker_mode=worker, _replay_mode=replay)))
 
     def test_conflicting_retry_keeps_original_terminal_in_real_producer_journal(self):
-        from gui.mods.offline_lan_0922.player_control.commands import append_result
+        from gui.mods.offline_lan_0922.vehicle_control.commands import append_result
         with tempfile.TemporaryDirectory() as directory:
             commands, results = Path(directory) / 'commands.jsonl', Path(directory) / 'results.jsonl'
             commands.write_bytes(b'')
@@ -445,7 +443,7 @@ class FullControllerBoundaryTests(unittest.TestCase):
             self.assertEqual('completed', transport.results[command_id]['status'])
 
     def test_stale_round_rejection_is_visible_to_real_request_producer(self):
-        from gui.mods.offline_lan_0922.player_control.commands import append_result
+        from gui.mods.offline_lan_0922.vehicle_control.commands import append_result
         with tempfile.TemporaryDirectory() as directory:
             commands, results = Path(directory) / 'commands.jsonl', Path(directory) / 'results.jsonl'
             commands.write_bytes(b'')
@@ -1257,7 +1255,7 @@ class FullRuntimeMissionOwnershipTests(unittest.TestCase):
                 self.assertIsNone(scene.battle._local_siege_braking)
 
     def test_empty_clip_current_stock_and_total_inventory_remain_distinct(self):
-        from gui.mods.offline_lan_0922.player_control.capabilities import ammunition_state
+        from gui.mods.offline_lan_0922.vehicle_control.capabilities import ammunition_state
         scene = self.scene()
         gun = scene.battle._gun_state
         gun.clip, gun.reload_time = 0, 40.

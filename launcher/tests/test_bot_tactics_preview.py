@@ -3,7 +3,6 @@ import copy
 import unittest
 import bot_tactics_preview as preview
 import bot_tactics_store as storage
-from gui.mods.offline_lan_0922 import bot_gunnery
 
 class PreviewTests(unittest.TestCase):
     def test_lineup_difficulty_is_visible_but_explicit_tactics_still_win(self):
@@ -21,7 +20,7 @@ class PreviewTests(unittest.TestCase):
     def test_all_scopes_are_covered_and_slot_exceptions_stay_visible(self):
         document=storage.contract.empty()
         document['behavior']=[dict(team=0,class_tag='all',slot=-1,values=dict(skill='regular')),
-                              dict(team=2,class_tag='heavyTank',slot=7,values=dict(crew_preset='all',reaction_seconds=0))]
+                              dict(team=2,class_tag='heavyTank',slot=7,values=dict(crew_preset='all',ammo_limit=0))]
         before=copy.deepcopy(document)
         groups=preview.grouped(document)
         scopes=[s for g in groups for s in g['scopes']]
@@ -31,7 +30,7 @@ class PreviewTests(unittest.TestCase):
         self.assertEqual([(2,'heavyTank',7)],special['scopes'])
         text=str(preview.rows(special,'zh'))
         self.assertIn('100% 全部满技能',text);self.assertNotIn('75%',text)
-        self.assertEqual(13,len(preview.rows(special,'zh')))
+        self.assertEqual(8,len(preview.rows(special,'zh')))
         self.assertIn('槽位 8',text)
 
     def test_inherited_room_difficulty_is_never_fabricated_as_regular(self):
@@ -49,7 +48,22 @@ class PreviewTests(unittest.TestCase):
         rows=preview.rows(group,'zh')
         self.assertEqual('0 : 0 : 0（不携带炮弹）',rows[3][1])
         self.assertIn('3 紫色',rows[2][1]);self.assertIn('全部满技能',rows[7][1])
-        self.assertEqual('%g'%bot_gunnery.skill_parameters('regular')['reaction_seconds'],rows[8][1])
+        self.assertEqual(8,len(rows))
+        self.assertFalse(set(preview.FIELDS) & storage.contract.RETIRED_GUNNERY_PARAMETERS)
+
+    def test_retired_controls_are_not_offered_or_previewed(self):
+        retired=storage.contract.RETIRED_GUNNERY_PARAMETERS
+        self.assertFalse(set(preview.FIELDS) & retired)
+        self.assertFalse(set(preview.labels.PARAM_NAMES) & retired)
+        self.assertFalse(set(storage.contract.PARAMETERS) & retired)
+        for tier in storage.contract.SKILLS:
+            document=storage.contract.empty()
+            document['behavior']=[dict(team=0,class_tag='all',slot=-1,values=dict(skill=tier))]
+            group=preview.grouped(document,1,'heavyTank','1')[0]
+            for language in ('zh','en'):
+                rows=preview.rows(group,language)
+                self.assertEqual(8,len(rows))
+                self.assertFalse(any(key in str(rows) for key in retired))
 
     def test_zero_and_one_limits_have_their_own_saved_source_in_both_languages(self):
         for limit in (0,1):

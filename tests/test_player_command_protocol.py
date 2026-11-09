@@ -8,7 +8,7 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src/res/scripts/client'))
-from gui.mods.offline_lan_0922.player_control.commands import (
+from gui.mods.offline_lan_0922.vehicle_control.commands import (
     CommandGateway, JournalReader, append_result, validate_action,
     EQUIPMENT_TARGETS, MISSION_PHASE_VALUES, MISSION_STATUS_VALUES, STATE_CONDITIONS)
 from gui.mods.offline_lan_0922.equipment_mechanics import (

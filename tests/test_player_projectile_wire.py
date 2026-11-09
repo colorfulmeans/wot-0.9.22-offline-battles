@@ -1,4 +1,4 @@
-"""Foreground shot admission uses its copy, never the original Bot owner."""
+"""Shared shot admission preserves the native projectile wire contract."""
 import decimal
 import math
 import os
@@ -16,33 +16,39 @@ sys.path.insert(0, str(CLIENT))
 
 
 class PlayerProjectileWireTests(unittest.TestCase):
-    def test_admission_import_does_not_load_bot_policy_or_lan_client(self):
+    def test_admission_uses_one_shared_owner_without_retired_or_network_imports(self):
         # A fresh process matters: existing integration fixtures can already
-        # have imported BotRuntime, hiding an accidental transitive import.
+        # have imported network owners, hiding accidental transitive imports.
         script = textwrap.dedent('''
             import importlib
             import sys
 
-            class NoBotPolicy(object):
+            class NoRetiredOrNetworkOwner(object):
                 def find_spec(self, fullname, path=None, target=None):
                     prefix = 'gui.mods.offline_lan_0922.'
                     if not fullname.startswith(prefix):
                         return None
                     root = fullname[len(prefix):].split('.', 1)[0]
-                    if (root in ('ai', 'bots', 'lan_client') or
-                            root.startswith('bot_') and root not in (
-                                'bot_state_codec', 'bot_editor_maps',
-                                'bot_tactics_default_data', 'bot_fitting_data')):
-                        raise ImportError('foreground loaded original Bot owner: ' + fullname)
+                    if root in ('player_control', 'bots', 'lan_client') or '.copied.' in fullname:
+                        raise ImportError('shared control loaded retired/network owner: ' + fullname)
                     return None
 
-            sys.meta_path.insert(0, NoBotPolicy())
+            sys.meta_path.insert(0, NoRetiredOrNetworkOwner())
             prefix = 'gui.mods.offline_lan_0922.'
-            for name in ('native_aim', 'attack_policy', 'trigger_admission', 'full_runtime'):
-                importlib.import_module(prefix + 'player_control.' + name)
+            modules = dict((name, importlib.import_module(prefix + 'vehicle_control.' + name))
+                for name in ('native_aim', 'attack_policy', 'trigger_admission',
+                             'combat_control', 'full_runtime', 'bot_binding'))
+            wire = importlib.import_module(prefix + 'projectile_wire')
+            control = modules['combat_control'].CombatControl
+            assert issubclass(modules['full_runtime'].FullPlayerRuntime, control)
+            assert issubclass(modules['bot_binding'].BotControlBinding, control)
+            assert modules['full_runtime'].AttackPolicy is modules['attack_policy'].AttackPolicy
+            assert modules['bot_binding'].AttackPolicy is modules['attack_policy'].AttackPolicy
+            assert modules['trigger_admission'].round_scalar is wire.round_scalar
+            assert prefix + 'bot_runtime' in sys.modules
             assert prefix + 'lan_client' not in sys.modules
-            assert prefix + 'bot_runtime' not in sys.modules
-            assert prefix + 'player_control.copied.bot_runtime' in sys.modules
+            assert not any(name.startswith(prefix + 'player_control') or
+                name.startswith(prefix) and '.copied.' in name for name in sys.modules)
         ''')
         env = dict(os.environ, PYTHONPATH=str(CLIENT), PYTHONDONTWRITEBYTECODE='1')
         result = subprocess.run([sys.executable, '-c', script], env=env,

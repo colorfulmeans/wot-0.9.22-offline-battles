@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src/res/scripts/client'))
 from gui.mods.offline_lan_0922 import ballistics, shot_geometry
-from gui.mods.offline_lan_0922.player_control import stationary_scope
+from gui.mods.offline_lan_0922.vehicle_control import stationary_scope
 from player_native_fixtures import descriptor
 
 

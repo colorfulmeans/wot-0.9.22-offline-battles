@@ -33,11 +33,14 @@ PRESETS = {
     'crew_preset': ('50', '75', 'repair', 'all'),
 }
 PARAMETERS = {
-    'reaction_seconds': (0.0, 5.0), 'patience_seconds': (0.0, 10.0),
-    'converged_factor': (1.0, 5.0), 'aim_bias_factor': (0.0, 4.0),
-    'lead_error': (0.0, 1.0),
     'ammo_limit': (0, 1800),
 }
+# Read-only retirement list. Old user profiles keep their authored maps and
+# native fitting settings, but these obsolete AI effects never survive the
+# canonical input boundary or reappear in saved/wire configuration.
+RETIRED_GUNNERY_PARAMETERS = frozenset((
+    'reaction_seconds', 'patience_seconds', 'converged_factor',
+    'aim_bias_factor', 'lead_error'))
 TEXT = (str, type(u''))
 ID = re.compile(r'^[A-Za-z][A-Za-z0-9_-]{0,47}$')
 
@@ -126,9 +129,12 @@ def shared_route_points(settings):
 
 
 def normalize_values(raw):
-    _keys(raw, tuple(PARAMETERS) + tuple(PRESETS) + ('skill', 'crew_level', 'ammo_ratios'))
+    _keys(raw, tuple(PARAMETERS) + tuple(PRESETS) +
+          tuple(RETIRED_GUNNERY_PARAMETERS) + ('skill', 'crew_level', 'ammo_ratios'))
     out = {}
     for key, value in raw.items():
+        if key in RETIRED_GUNNERY_PARAMETERS:
+            continue
         if key in PRESETS:
             if value not in PRESETS[key]:
                 raise TacticsError('Unsupported %s preset' % key)

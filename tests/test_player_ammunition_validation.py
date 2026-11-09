@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_player_rebuilt_attack_policy import Observations
-from gui.mods.offline_lan_0922.player_control import ammunition_validation as roles
+from gui.mods.offline_lan_0922.vehicle_control import ammunition_validation as roles
 
 
 class AmmunitionValidationTests(unittest.TestCase):
@@ -25,18 +25,65 @@ class AmmunitionValidationTests(unittest.TestCase):
             self.assertEqual(roles.FULL, roles.validation_mode(None, None, kind))
         self.assertEqual(roles.SINGLE_POINT, roles.shell_mode(dict(is_he=True)))
 
-    def test_failed_ordinary_he_tries_one_point_then_uses_current_he_contact(self):
+    def test_failed_ordinary_he_keeps_one_trial_but_compares_fallback_damage(self):
         scene = Observations(targets=3, points=3, he_validation=roles.SINGLE_POINT)
+        scene.allow_atomic = False
         scene.frame.update(loaded=2, ammo=(0, 0, 10))
         scene.he(90.)
+        scene.he(130., target=3, sample=2)
+        expected_points = set((('bot', target), sample)
+            for target in range(1, 4) for sample in range(3))
+        observed_points = set()
+        saw_pending = False
+        moving_aims = 0
         for tick in range(12):
             scene.frame['pose'] = ('settling_source', tick)
-            decision = scene.tick(tick * .1)
+            now = tick * .1
+            before = len(scene.calls)
+            decision = scene.tick(now, background=False)
+            # CURRENT may retain the bounded ranking pass across motion,
+            # but cannot aim before all nine points were actually visited.
+            # Background observations made later in this control frame must
+            # not retroactively justify an earlier foreground decision.
+            observed_points.update((call[3], call[4]) for call in scene.calls
+                if call[2] == 2 and call[-1] == 'he_fallback')
+            if observed_points != expected_points:
+                saw_pending = True
+                self.assertNotEqual('aim', decision['action'])
+            if decision['action'] == 'aim':
+                moving_aims += 1
+                self.assertEqual(expected_points, observed_points)
+                candidate = decision['candidate']
+                current = scene.policy.current_row(candidate)
+                self.assertIsNotNone(current)
+                self.assertEqual(candidate['pose_stamp'], current['pose_stamp'])
+                self.assertEqual(scene.frame['pose'], current['solution']['source_pose'])
+                self.assertEqual(now, current['observed_at'])
+                self.assertTrue(scene.policy._executable_current(current, 'he_fallback'))
+                self.assertEqual(('he_fallback', ('bot', 3), 2, 130.),
+                    (candidate['mode'], candidate['target_key'], candidate['sample'],
+                     candidate['expected_damage']))
+                self.assertEqual(dict(total=9, observed=9, pending=0),
+                                 scene.policy.he_comparison)
+            scene.policy.background(now)
+            calls = scene.calls[before:]
+            self.assertLessEqual(sum(call[1] == 'foreground' for call in calls),
+                                 scene.policy.foreground_budget)
+            self.assertLessEqual(sum(call[1] == 'background' for call in calls),
+                                 scene.policy.background_budget)
+            self.assertFalse(any(call[1] == 'atomic' for call in calls))
+            self.assertIsNone(scene.policy.search_started)
+            if decision['action'] == 'aim':
+                break
+        self.assertTrue(saw_pending)
+        self.assertGreater(moving_aims, 0)
         probes = [call for call in scene.calls if call[2] == 2 and call[-1] == 'penetration']
         self.assertEqual(1, len(probes))
         self.assertEqual((('bot', 1), 0), probes[0][3:5])
         self.assertEqual('aim', decision['action'])
         self.assertEqual('he_fallback', decision['candidate']['mode'])
+        self.assertEqual(130., decision['candidate']['expected_damage'])
+        self.assertEqual(('bot', 3), decision['candidate']['target_key'])
         self.assertIsNone(scene.policy.search_started)
 
     def test_failed_ordinary_he_can_switch_to_a_verified_original_rank(self):

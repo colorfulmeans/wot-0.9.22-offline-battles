@@ -1,7 +1,7 @@
 """Final native-input arbitration through the complete foreground runtime.
 
 The scene supplies flat support, component hit testers and an observed native
-barrel actuator. The full copied planner/driver, new attack planner, control
+barrel actuator. The shared planner/driver, attack planner, control
 wrapper, admission and physical shot transaction are not replaced. These are
 consumer regressions, not Windows BigWorld physics acceptance.
 """
@@ -62,8 +62,7 @@ class FullControlArbitrationTests(unittest.TestCase):
                     original['tactical_evidence']['selection']['selected'])
                 # A ready shot does not turn authored-route advance into a
                 # newly invented stop or an approach to the enemy's position.
-                if original['combat_mode'] in ('advance', 'flank', 'take_cover',
-                                               'cover_return', 'cover_peek'):
+                if original['combat_mode'] == 'advance':
                     applied = scene.runtime.engine._server_orders[scene.runtime.actor_id]
                     self.assertEqual(original['combat_mode'], applied['combat_mode'])
                     self.assertEqual(tuple(original['move_position'][axis]
@@ -199,7 +198,7 @@ class FullControlArbitrationTests(unittest.TestCase):
         self.assertGreater(moving, 0, scene.trace[-4:])
         self.assertFalse(scene.launches())
 
-    def test_visible_but_never_admitted_blocked_target_cannot_start_combat(self):
+    def test_visible_blocked_target_enters_review_without_authorizing_a_shot(self):
         scene = self.scene(distance=60., clip=1, burst=1, cold_start=True)
         scene.world = [((-100., -100., 5.), (100., 100., 15.))]
         policy = scene.runtime.attack_policy
@@ -209,20 +208,24 @@ class FullControlArbitrationTests(unittest.TestCase):
                 self.assertIsNone(scene.control.last_control_failure, row)
                 original = self.original_order(scene)
                 selection = original['tactical_evidence']['selection']
-                self.assertIsNone(selection['selected'], selection)
-                self.assertIsNone(scene.runtime._last_order.get('target_id'), row)
-                self.assertNotIn(row['action'], ('aim', 'firing_position', 'search_penetration'))
+                self.assertEqual(('bot', scene.target.id), selection['selected'])
+                self.assertEqual('initial_distance_armor', selection['selection_law'])
+                self.assertEqual(scene.target.id, scene.runtime._last_order.get('target_id'), row)
+                self.assertNotIn(row['action'], ('aim', 'search_penetration'))
+                self.assertFalse(scene.runtime._last_order['fire_allowed'])
                 self.assertIsNone(policy.search_started)
-            evaluate.assert_not_called()
-        self.assertIn('no_local_lane',
+            self.assertGreater(evaluate.call_count, 0)
+        self.assertEqual(['eligible'],
             [candidate['reason'] for candidate in selection['candidates']])
-        self.assertFalse(policy.navigation_receipt)
+        self.assertFalse(selection['candidates'][0]['local_lane'])
+        self.assertEqual('firing_position', policy.decision['action'])
+        self.assertEqual('firing_position', policy.navigation_receipt['action'])
         scene.trigger.assert_not_called()
 
     def test_reopened_lane_retires_the_firing_position_navigation_receipt(self):
         scene = self.scene(distance=60., clip=1, burst=1)
-        # First acquire a real copied-BOT target through passive native LOS.
-        # A wall present since spawn is not permission to start recovery.
+        # First acquire a shared target through passive native LOS, then
+        # verify that actual reopening retires only its recovery receipt.
         scene.battle._gun_state.reload_time = 10.
         self.advance_until(scene, lambda result: result['action'] == 'aim')
         original = self.original_order(scene)

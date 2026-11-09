@@ -1,8 +1,8 @@
-"""Combat may consume an original task, never invent a navigation task.
+"""Shared combat admission preserves physical and navigation boundaries.
 
 Regressions for the 2026-11-08 AMX AC mle. 48 / STB-1 reports.  The worlds
 below deliberately separate a visible enemy from a locally shootable enemy.
-They execute PlayerControl, FullPlayerRuntime, the copied BotPlanner/driver,
+They execute PlayerControl, FullPlayerRuntime, the shared BotPlanner/driver,
 NativeAttackEvaluator and native trigger admission.  Only native terrain,
 poses, component armour and collision observations are fixtures.  In
 particular, neither the planner order nor an AttackPolicy decision is mocked.
@@ -166,7 +166,7 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
         self.assertEqual(original, actual)
         self.assertEqual('class_mt_rim_east', actual['route_id'])
 
-    def test_visible_but_originally_ineligible_contact_never_starts_combat(self):
+    def test_visible_blocked_contact_enters_shared_review_without_fire_authority(self):
         for limited in (False, True):
             with self.subTest(limited=limited):
                 scene = self.scene(limited=limited)
@@ -178,11 +178,16 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
                         scene.tick()
                         raw = scene.original_order()
                         selection = raw['tactical_evidence']['selection']
-                        self.assertEqual('no_eligible_lane', selection['outcome'])
-                        self.assertEqual('no_local_lane', selection['candidates'][0]['reason'])
-                        self.assertEqual(('route', None),
+                        self.assertEqual('movement_lease', selection['outcome'])
+                        self.assertEqual('initial_distance_armor', selection['selection_law'])
+                        self.assertEqual('eligible', selection['candidates'][0]['reason'])
+                        self.assertFalse(selection['candidates'][0]['local_lane'])
+                        self.assertEqual(('advance_contact', 2),
                             (raw['combat_mode'], raw.get('target_id')))
-                        self.assert_original_navigation(scene)
+                        self.assertEqual((2,), tuple(row['network_id'] for row in
+                            scene.runtime.combat_targets()))
+                        self.assertEqual('class_mt_rim_east', scene.applied_order()['route_id'])
+                        self.assertFalse(scene.applied_order()['fire_allowed'])
                         self.assertIsNone(scene.runtime.attack_policy.search_started)
                         self.assertFalse(scene.launches())
                 finally:
@@ -199,7 +204,7 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
             self.assertIsNone(scene.runtime.attack_policy.search_started)
             self.assertFalse(scene.launches())
 
-    def test_rejected_visible_contact_does_not_start_new_point_validation(self):
+    def test_visible_blocked_contact_reaches_point_validation_not_armour_failure_search(self):
         scene = self.scene()
         scene.obstructed_enemy()
         self.assertEqual({2: False}, scene.sample_original_lanes())
@@ -208,13 +213,16 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
             for step in range(15):
                 scene.native_position((.4 * step, 0., .25 * step))
                 scene.tick()
-                self.assertEqual('route', scene.original_order()['combat_mode'])
-            # Visibility can run original target/lane admission, but it must
-            # not silently grant the new armour/point policy an invocation.
-            evaluate.assert_not_called()
+                self.assertEqual('advance_contact', scene.original_order()['combat_mode'])
+                self.assertFalse(scene.applied_order()['fire_allowed'])
+                self.assertFalse(scene.launches())
+            # Native line obstruction is now a shared point-review input,
+            # not an old strategic exclusion or a penetration failure.
+            self.assertGreater(evaluate.call_count, 0)
+        self.assertEqual('firing_position', scene.runtime.attack_policy.decision['action'])
         self.assertIsNone(scene.runtime.attack_policy.search_started)
 
-    def test_enabling_fire_does_not_change_stb1_noncombat_drive_commands(self):
+    def test_enabling_fire_refines_blocked_aim_without_changing_stb1_drive_commands(self):
         traces = []
         for features in (('drive',), ('drive', 'fire')):
             scene = self.scene(features=features)
@@ -228,15 +236,18 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
                     scene.native_position((.4 * step, 0., .25 * step), .35)
                     scene.tick()
                     sender = scene.battle._sender
-                    trace.append((navigation_view(scene.applied_order()),
+                    movement = navigation_view(scene.applied_order())
+                    movement.pop('aim_position')
+                    trace.append((movement,
                         sender.forward, sender.turn, sender.handbrake))
                 traces.append(trace)
             finally:
                 scene.doCleanups()
         self.assertEqual(traces[0], traces[1])
-        self.assertTrue(any(row[1] for row in traces[0]), 'baseline must actually drive')
+        self.assertTrue(any(row[1] or row[2] for row in traces[0]),
+                        'baseline must actually operate the drive actuator')
 
-    def test_eligible_target5_is_not_replaced_by_rejected_target2_recovery(self):
+    def test_nearest_blocked_contact_and_armored_alternative_share_one_review_domain(self):
         scene = self.scene()
         scene.obstructed_enemy(2)
         scene.eligible_enemy(5, armor=10000.)
@@ -244,18 +255,26 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
         for unused in range(12):
             scene.tick()
             raw = scene.original_order()
-            self.assertEqual(('engage', 5), (raw['combat_mode'], raw['target_id']))
+            self.assertEqual(('advance_contact', 2), (raw['combat_mode'], raw['target_id']))
             candidates = dict((row['target'][1], row) for row in
                               raw['tactical_evidence']['selection']['candidates'])
             self.assertEqual('eligible', candidates[5]['reason'])
-            self.assertEqual('no_local_lane', candidates[2]['reason'])
-            self.assertEqual(5, scene.applied_order().get('target_id'))
+            self.assertEqual('eligible', candidates[2]['reason'])
+            self.assertTrue(candidates[5]['local_lane'])
+            self.assertFalse(candidates[2]['local_lane'])
+            self.assertEqual({2, 5}, set(row['network_id'] for row in
+                scene.runtime.combat_targets()))
+            self.assertEqual(2, scene.applied_order().get('target_id'))
             candidate = scene.runtime.attack_policy.decision.get('candidate')
             if candidate is not None:
-                self.assertEqual(5, candidate['target']['network_id'])
-            self.assertNotEqual((-30., 0., -30.),
-                                scene.applied_order().get('move_position'))
+                self.assertEqual(2, candidate['target']['network_id'])
+                self.assertNotEqual('passed', candidate['armor'])
+            self.assertIsNone(scene.runtime.attack_policy.search_started,
+                'a blocked unknown contact prevents an all-enemies armour failure')
+            self.assertFalse(scene.applied_order()['fire_allowed'])
             self.assertFalse(scene.launches())
+        self.assertTrue(any(row['target']['network_id'] == 5 and row['armor'] == 'failed'
+                            for row in scene.runtime.attack_policy.rows.values()))
 
     def test_authored_advance_keeps_original_target_when_other_admitted_plate_is_better(self):
         scene = self.scene(player_id=2)
@@ -400,7 +419,7 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
         self.assertTrue(scene.launches(), scene.runtime.status())
         self.assertEqual([1], [row['shell_index'] for row in scene.launches()])
 
-    def test_same_combat_domain_rank_changes_do_not_restart_global_failure_timer(self):
+    def test_observed_health_changes_do_not_reorder_domain_or_restart_failure_timer(self):
         scene = self.scene(clip=1, burst=1)
         primary = scene.eligible_enemy(5, armor=30.)
         primary.health = 50
@@ -422,13 +441,10 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
         self.assertEqual({5: True, 2: True, 6: True}, scene.sample_original_lanes())
         search_started = fallback_at = None
         ranks = set()
-        rank_changes = 0
-        previous_rank = None
         for step in range(180):
             if step and step % 11 == 0:
-                # Ordinary observed damage changes the original BOT's target
-                # scores, not geometry, visibility or admission membership.
-                # Keep5 selected while the other two exchange priority.
+                # Observed health must not recreate the removed low-health
+                # priority, change membership, or restart the global timer.
                 if second.health > third.health:
                     second.health = third.health - 20
                 else:
@@ -443,15 +459,12 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
             rank = tuple(target['network_id'] for target in scene.runtime.combat_targets())
             self.assertEqual(5, rank[0])
             ranks.add(rank)
-            if previous_rank is not None and rank != previous_rank:
-                rank_changes += 1
-            previous_rank = rank
             policy = scene.runtime.attack_policy
             if policy.search_started is not None:
                 if search_started is None:
                     search_started = policy.search_started
                 self.assertEqual(search_started, policy.search_started,
-                    'a different ranking of the same admitted enemies is not a new encounter')
+                    'health changes in the same admitted enemies are not a new encounter')
             candidate = policy.decision.get('candidate')
             if candidate and candidate.get('mode') == 'he_fallback' and fallback_at is None:
                 fallback_at = scene.now
@@ -463,8 +476,7 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
                 self.assertFalse(scene.launches())
             if scene.launches():
                 break
-        self.assertEqual({(5, 2, 6), (5, 6, 2)}, ranks)
-        self.assertGreaterEqual(rank_changes, 4)
+        self.assertEqual({(5, 6, 2)}, ranks)
         self.assertIsNotNone(fallback_at, scene.runtime.attack_policy.status())
         self.assertTrue(scene.launches(), scene.runtime.status())
         self.assertEqual([1], [row['shell_index'] for row in scene.launches()])
@@ -582,10 +594,10 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
         self.assertEqual(0., scene.applied_order()['throttle_override'])
         self.assertEqual(5, scene.applied_order()['target_id'])
 
-    def test_noncombat_hold_and_capture_stops_remain_navigation_owned(self):
-        for mission, point, mode in (
-                ('hold_position', (0., 0., 0.), 'hold'),
-                ('capture_base', (45., 0., 45.), 'base_capture')):
+    def test_hold_and_capture_stops_keep_navigation_control_with_blocked_enemy(self):
+        for mission, point in (
+                ('hold_position', (0., 0., 0.)),
+                ('capture_base', (45., 0., 45.))):
             with self.subTest(mission=mission):
                 traces = []
                 for features in (('drive',), ('drive', 'fire')):
@@ -599,14 +611,18 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
                         for unused in range(10):
                             scene.tick()
                             order = scene.applied_order()
-                            self.assertEqual(mode, order['combat_mode'])
-                            self.assertIsNone(order.get('target_id'))
+                            self.assertEqual('engage', order['combat_mode'])
+                            self.assertEqual(2, order.get('target_id'))
                             self.assertEqual(point, order['move_position'])
                             self.assertEqual(0., order['throttle_override'])
                             self.assertIsNone(scene.runtime.attack_policy.search_started)
+                            self.assertFalse(scene.runtime.combat_stop.stop_allowed)
+                            self.assertFalse(order['fire_allowed'])
                             self.assertFalse(scene.launches())
                             sender = scene.battle._sender
-                            trace.append((navigation_view(order), sender.forward,
+                            movement = navigation_view(order)
+                            movement.pop('aim_position')
+                            trace.append((movement, sender.forward,
                                           sender.turn, sender.handbrake))
                         traces.append(trace)
                     finally:

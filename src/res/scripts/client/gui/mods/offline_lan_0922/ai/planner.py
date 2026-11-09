@@ -18,8 +18,6 @@ from gui.mods.offline_lan_0922.bot_tactics import (
 
 
 CONTACT_MEMORY_SECONDS = 7.0
-TARGET_HYSTERESIS_BONUS = 18.0
-DISCOVERED_ARTILLERY_PRIORITY_BONUS = 48.0
 BATTLE_TIER_RADIUS = 2
 MATCH_CLASSES = ('heavyTank', 'mediumTank', 'AT-SPG', 'lightTank', 'SPG')
 CLASS_ROUTE_AFFINITY_WEIGHT = 42.0
@@ -931,77 +929,31 @@ class BattleDirector(object):
 				pass
 		return known
 
-	def _focus_count(self, team, target_id):
-		count = 0
-		for agent in self.agents.values():
-			if agent.get('team') == team and agent.get('target_id') == target_id:
-				count += 1
-		return count
 
-	def _desired_focus(self, contact):
-		"""Reserve extra guns for durable threats without dog-piling wrecks."""
-		remaining = max(0.0, _number(contact.get('health', 0.0), 0.0))
-		count = 1
-		if remaining >= 900.0 or contact.get('class_tag') in ('heavyTank', 'AT-SPG'):
-			count = 2
-		if remaining >= 1800.0:
-			count = 3
-		return count
 
 	def _choose_contact(self, agent, position, hull_yaw, now):
-		contacts = self._known_contacts(agent['team'], now)
-		if not contacts:
-			agent['target_id'] = None
-			return None
+		"""Use the shared initial ordering and retain valid active identity."""
+		from gui.mods.offline_lan_0922.vehicle_control import target_selection
 		profile = agent['profile']
-		personality = agent['personality']
-		best = None
-		best_score = -1e18
-		for contact in contacts:
-			distance = _distance_2d(position, contact['position'])
-			age = max(0.0, _number(now) - _number(contact.get('last_seen')))
-			visible = bool(contact.get('visible'))
-			shootable_by_ids = contact.get('shootable_by_ids')
-			if (visible and shootable_by_ids is not None and
-					int(agent['id']) not in shootable_by_ids):
+		eligible = []
+		for contact in self._known_contacts(agent['team'], now):
+			if not contact.get('visible') or not target_selection.live_contact(contact):
 				continue
-			focus = self._focus_count(agent['team'], contact['id'])
-			desired_focus = self._desired_focus(contact)
-			if (focus >= desired_focus and contact['id'] != agent.get('target_id')):
+			observers = contact.get('shootable_by_ids')
+			if observers is not None and int(agent['id']) not in observers:
 				continue
 			roles = profile.get('roles', {})
 			mobility = max(_number(roles.get('scout')), _number(roles.get('flanker')))
-			engagement_range = max(340.0, min(
-				560.0, profile['desired_range'] * 2.0 + mobility * 300.0))
-			if distance > engagement_range:
-				continue
-			health_fraction = contact['health'] / max(contact['max_health'], 1.0)
-			dx = contact['position'][0] - position[0]
-			dz = contact['position'][2] - position[2]
-			bearing = math.atan2(dx, dz)
-			turn_cost = abs(_angle_delta(bearing, hull_yaw)) / math.pi
-			range_error = abs(distance - profile['desired_range']) / max(profile['desired_range'], 50.0)
-			score = 90.0 if visible else max(4.0, 42.0 - age * 6.0)
-			score += (1.0 - health_fraction) * 38.0
-			score -= range_error * (14.0 - personality['aggression'] * 5.0)
-			score -= turn_cost * 12.0
-			if focus < desired_focus:
-				score += focus * personality['teamwork'] * 4.0
-			else:
-				score -= (focus - desired_focus + 1) * (
-					10.0 + (1.0 - personality['teamwork']) * 7.0)
-			if contact['id'] == agent.get('target_id'):
-				score += TARGET_HYSTERESIS_BONUS
-			if contact.get('class_tag') in ('lightTank', 'SPG'):
-				score += 4.0 * personality['initiative']
-			if visible and contact.get('class_tag') == 'SPG':
-				# A discovered battery is a high-value target, but the normal
-				# shootability and focus reservations above still prevent blind
-				# pursuit or the whole team dog-piling one artillery vehicle.
-				score += DISCOVERED_ARTILLERY_PRIORITY_BONUS
-			if score > best_score:
-				best_score = score
-				best = contact
+			engagement_range = max(340.0, min(560.0,
+				profile['desired_range'] * 2.0 + mobility * 300.0))
+			if profile.get('class_tag') == 'SPG':
+				engagement_range = max(profile.get('desired_range', 650.),
+					min(2500., profile.get('fire_range', 1250.)))
+			rank = target_selection.ordinary_initial_key(position, contact)
+			if rank[0] <= engagement_range:
+				eligible.append((rank, contact))
+		retained = next((row for row in eligible if row[1]['id'] == agent.get('target_id')), None)
+		best = (retained or min(eligible, key=lambda row: row[0]))[1] if eligible else None
 		agent['target_id'] = best.get('id') if best is not None else None
 		return best
 
@@ -1084,36 +1036,7 @@ class BattleDirector(object):
 		waypoint = waypoints[index]
 		return (float(waypoint[0]), float(position[1]), float(waypoint[1]))
 
-	def _angled_face_position(self, agent, position, target_position):
-		"""Give armoured turreted tanks a stable 12-30 degree hull angle."""
-		angle_degrees = self._hull_angle_degrees(agent)
-		if angle_degrees is None:
-			return target_position
-		dx = target_position[0] - position[0]
-		dz = target_position[2] - position[2]
-		length = math.sqrt(dx * dx + dz * dz)
-		if length < 0.1:
-			return target_position
-		angle = math.radians(angle_degrees)
-		cosine = math.cos(angle)
-		sine = math.sin(angle)
-		angled_x = dx * cosine - dz * sine
-		angled_z = dx * sine + dz * cosine
-		return (position[0] + angled_x, target_position[1],
-		        position[2] + angled_z)
 
-	def _hull_angle_degrees(self, agent):
-		profile = agent['profile']
-		roles = profile.get('roles', {}) or {}
-		if profile['class_tag'] in ('AT-SPG', 'SPG'):
-			return None
-		if profile['dominant_role'] not in ('brawler', 'support'):
-			return None
-		if (_number(profile.get('armor')) < 60.0 and
-				_number(roles.get('brawler')) < 0.55):
-			return None
-		angle = 12.0 + agent['personality']['caution'] * 18.0
-		return -angle if (agent['seed'] & 1) == 0 else angle
 
 	def order_for(self, bot_id, position, hull_yaw, speed, health, max_health,
 	              now):
@@ -1149,11 +1072,7 @@ class BattleDirector(object):
 			contact['distance'] = distance
 			order['target_id'] = contact['id']
 			order['aim_position'] = contact['position']
-			order['face_position'] = self._angled_face_position(
-				agent, position, contact['position'])
-			hull_angle = self._hull_angle_degrees(agent)
-			if hull_angle is not None:
-				order['hull_angle_degrees'] = hull_angle
+			order['face_position'] = contact['position']
 			order['fire_allowed'] = bool(contact.get('visible'))
 			order['shell_index'] = select_shell_index(profile, contact, personality)
 			if contact.get('visible'):

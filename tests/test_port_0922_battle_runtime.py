@@ -14346,39 +14346,27 @@ class BattleRuntimeContractTests(unittest.TestCase):
                   gravity * time_at_wall ** 2 * 0.5)
         self.assertGreater(height, 1.8)
 
-    def test_a_weak_gunner_keeps_the_part_the_cursor_offered(self):
-        """Not knowing where to aim is an unranked choice, not a bad one."""
-        runtime, battle, source, target, unused = self._bot_lane_scene()
-        scored = []
+    def test_every_rating_ranks_exposed_parts_by_the_same_armour_result(self):
+        """Identical geometry and shell evidence cannot vary with AI rating."""
+        selections = []
+        for rating in (0.0, 0.17, 0.34, 0.67, 1.0):
+            runtime, battle, source, target, unused = self._bot_lane_scene()
+            scored = []
+            runtime.bigworld.wg_collideSegment = lambda *unused_args: None
+            battle._bot_aim_damage_score = (
+                lambda unused_descriptor, unused_entry, unused_source,
+                unused_target, unused_origin, point: scored.append(point) or
+                (900.0 if point[1] > 1.0 else 100.0))
+            battle._bots = types.SimpleNamespace(bot_rating=lambda unused: rating)
+            self.assertTrue(battle._bot_firing_lane(source, target))
+            selected = battle._bot_aim_point(source, target)
+            self.assertEqual(2, len(scored))
+            self.assertAlmostEqual(1.2, selected['aim_position'][1])
+            selections.append(selected['aim_position'])
+        self.assertEqual([selections[0]] * len(selections), selections)
 
-        runtime.bigworld.wg_collideSegment = lambda *unused_args: None
-        battle._bot_aim_damage_score = (
-            lambda unused_descriptor, unused_entry, unused_source,
-            unused_target, unused_origin, point: scored.append(point) or
-            (900.0 if point[1] > 1.0 else 100.0))
-
-        battle._bots = types.SimpleNamespace(
-            bot_aim_selection_allowed=lambda unused_source, unused_target:
-            False)
-        self.assertTrue(battle._bot_firing_lane(source, target))
-        weak = battle._bot_aim_point(source, target)
-        # One tested part, taken as offered: no second ray, no comparison.
-        self.assertEqual(1, len(scored))
-
-        scored[:] = []
-        battle._records['bot:11'].pop('bot_aim_targets', None)
-        battle._bots = types.SimpleNamespace(
-            bot_aim_selection_allowed=lambda unused_source, unused_target:
-            True)
-        self.assertTrue(battle._bot_firing_lane(source, target))
-        strong = battle._bot_aim_point(source, target)
-
-        self.assertEqual(2, len(scored))
-        self.assertAlmostEqual(1.2, strong['aim_position'][1])
-        self.assertLess(weak['aim_position'][1], strong['aim_position'][1])
-
-    def test_no_gunner_deliberately_aims_at_a_part_it_cannot_hurt(self):
-        """Not knowing which plate is thinnest is ordinary; this is not."""
+    def test_armour_ranking_chooses_damage_over_a_zero_damage_part(self):
+        """The shared geometry selector has no stochastic ability gate."""
         runtime, battle, source, target, unused = self._bot_lane_scene()
         tested = []
 
@@ -14387,9 +14375,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
             lambda unused_descriptor, unused_entry, unused_source,
             unused_target, unused_origin, point: tested.append(point) or
             (0.0 if point[1] < 1.0 else 250.0))
-        battle._bots = types.SimpleNamespace(
-            bot_aim_selection_allowed=lambda unused_source, unused_target:
-            False)
+        battle._bots = types.SimpleNamespace(bot_rating=lambda unused: 0.0)
 
         self.assertTrue(battle._bot_firing_lane(source, target))
         selected = battle._bot_aim_point(source, target)
@@ -14397,16 +14383,18 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual(2, len(tested))
         self.assertAlmostEqual(1.2, selected['aim_position'][1])
 
-    def test_a_useless_part_is_still_fired_at_when_it_is_all_there_is(self):
-        """Holding fire would read as a broken Bot, not a weak one."""
+    def test_clear_geometry_does_not_claim_an_armour_penetration_result(self):
+        """A geometrically clear sample is not permission to fire at it.
+
+        AttackPolicy owns shell/penetration admission after this lane query;
+        the geometry owner must not hide visible zero-damage candidates.
+        """
         runtime, battle, source, target, unused = self._bot_lane_scene()
 
         runtime.bigworld.wg_collideSegment = lambda *unused_args: None
         battle._bot_aim_damage_score = (
             lambda *unused_args: 0.0)
-        battle._bots = types.SimpleNamespace(
-            bot_aim_selection_allowed=lambda unused_source, unused_target:
-            True)
+        battle._bots = types.SimpleNamespace(bot_rating=lambda unused: 1.0)
 
         self.assertTrue(battle._bot_firing_lane(source, target))
         self.assertIsNotNone(battle._bot_aim_point(source, target))

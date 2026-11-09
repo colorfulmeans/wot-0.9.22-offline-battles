@@ -779,8 +779,7 @@ class BotAdapter(object):
             pedal=dict(self.driver.states.get(bot_id, {}).get('pedal_observation') or
                 dict(reason='non_drive_terminal', mode=local['recovery_mode'],
                      throttle=local['throttle'], turn=local['turn'],
-                     brake=bool(local.get('brake', False)))),
-            hull_angle_degrees=strategic.get('hull_angle_degrees'))
+                     brake=bool(local.get('brake', False)))))
         if strategic.get('parking_phase') is not None:
             result['parking_phase'] = strategic['parking_phase']
         if strategic.get('spg_mode') is not None:
@@ -791,9 +790,6 @@ class BotAdapter(object):
         if strategic.get('empty_ammo'):
             result['empty_ammo'] = True
             result['movement_priority'] = 'empty_ammo_capture'
-        if strategic.get('hull_angle_degrees') is not None:
-            result['hull_angle_degrees'] = float(
-                strategic.get('hull_angle_degrees'))
         for name in ('forward_blocked_by', 'reverse_blocked_by', 'recovery_probe_distance',
                      'recovery_probe_origin', 'recovery_probe_yaw', 'recovery_probe_length',
                      'navigation_recovery', 'navigation_replan', 'partial_pivot_search'):

@@ -15,11 +15,11 @@ from unittest import mock
 import test_player_fire_admission_complete as fire_tests
 from player_native_fixtures import descriptor
 from gui.mods.offline_lan_0922 import gun_mechanics, shot_geometry
-from gui.mods.offline_lan_0922.player_control import PlayerControl
-from gui.mods.offline_lan_0922.player_control import attack_policy
-from gui.mods.offline_lan_0922.player_control.native_aim import (
+from gui.mods.offline_lan_0922.vehicle_control.player_binding import PlayerControl
+from gui.mods.offline_lan_0922.vehicle_control import attack_policy
+from gui.mods.offline_lan_0922.vehicle_control.native_aim import (
     NATIVE_ANGLE_TOLERANCE, _direction, mechanical_reach)
-from gui.mods.offline_lan_0922.player_control.copied.ai import driver
+from gui.mods.offline_lan_0922.ai import driver
 
 
 class TraverseScene(fire_tests.AutomaticFireScene):

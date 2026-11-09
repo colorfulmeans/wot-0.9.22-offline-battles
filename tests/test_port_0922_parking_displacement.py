@@ -7,7 +7,7 @@ import test_port_0922_spg_initial_positions as spgs
 import test_port_0922_withdrawal_runtime as withdrawal
 import test_port_0922_bot_runtime as harness
 from test_port_0922_server_bot_ai import _state, _bot, _route, _contact
-from server_bot_ai import BotPlanner
+from gui.mods.offline_lan_0922.vehicle_control.strategy import BotPlanner
 
 
 class WaitDisplacementTests(unittest.TestCase):

@@ -11,9 +11,10 @@ PORT_ROOT = ROOT
 PACKAGE_ROOT = (PORT_ROOT / 'src' / 'res' / 'scripts' / 'client' /
                 'gui' / 'mods' / 'offline_lan_0922')
 sys.path.insert(0, str(PORT_ROOT / 'server'))
+sys.path.insert(0, str(PORT_ROOT / 'src/res/scripts/client'))
 
 from lan_battle_server import BattleState  # noqa: E402
-from server_bot_ai import BotPlanner  # noqa: E402
+from gui.mods.offline_lan_0922.vehicle_control.strategy import BotPlanner  # noqa: E402
 from effective_params_fixture import bot_default_crew_factors  # noqa: E402
 
 

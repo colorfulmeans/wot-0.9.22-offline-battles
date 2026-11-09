@@ -4,7 +4,7 @@ import unittest
 
 import test_port_0922_bot_runtime  # Install the standalone client fixtures.
 import test_port_0922_server_bot_ai as fixture
-from server_bot_ai import BotPlanner
+from gui.mods.offline_lan_0922.vehicle_control.strategy import BotPlanner
 
 
 class RadioRouteTests(unittest.TestCase):
@@ -55,8 +55,8 @@ class RadioRouteTests(unittest.TestCase):
             self.assertEqual(-300.0, orders[identity]['move_position']['x'])
         self.assertTrue(all(row['target_id'] is None for row in orders.values()))
 
-    def test_only_receiving_donor_returns_to_old_start_before_transfer(self):
-        p,m,s,players,unused=self._fixture((11,))
+    def test_only_receiving_donor_preserves_transfer_through_blocked_contact(self):
+        p,m,s,players,contacts=self._fixture((11,))
         orders=self._orders(p,m,s,players,1.)
         self.assertEqual({11},set(p._travel_tasks))
         self.assertEqual('right',p._travel_tasks[11]['target_route']['id'])
@@ -64,7 +64,19 @@ class RadioRouteTests(unittest.TestCase):
         self.assertEqual('route_transfer',orders[11]['combat_mode'])
         self.assertEqual('left',orders[12]['route_id'])
         s[0].update(x=300,z=0)
-        committed=self._orders(p,m,s,players,2.)[11]
+        pending=self._orders(p,m,s,players,2.)[11]
+        # The shared selector admits a known live enemy even before its lane
+        # is clear. Combat pauses this task without granting fire permission
+        # or losing the already ordered destination.
+        self.assertEqual('advance_contact',pending['combat_mode'])
+        self.assertEqual(2,pending['target_id'])
+        self.assertFalse(pending['fire_allowed'])
+        self.assertEqual('left',pending['route_id'])
+        self.assertEqual('right',p._travel_tasks[11]['target_route']['id'])
+        self.assertEqual(2.,p._travel_tasks[11]['paused_at'])
+        for contact in contacts:contact['visible']=False
+        p.report_contacts(contacts,p.known_targets(s,players),2.1)
+        committed=self._orders(p,m,s,players,2.1)[11]
         self.assertEqual('right',committed['route_id']);self.assertNotIn(11,p._travel_tasks)
 
     def test_disconnected_donor_finishes_old_leg_until_task_expiry(self):
@@ -85,7 +97,13 @@ class RadioRouteTests(unittest.TestCase):
         self._orders(p,m,s,players,2.)
         self.assertEqual('right',p._travel_tasks[11]['target_route']['id'])
         s[0].update(x=300,z=0)
-        self.assertEqual('right',self._orders(p,m,s,players,3.)[11]['route_id'])
+        pending=self._orders(p,m,s,players,3.)[11]
+        self.assertEqual('left',pending['route_id'])
+        self.assertEqual('right',p._travel_tasks[11]['target_route']['id'])
+        self.assertFalse(pending['fire_allowed'])
+        for contact in contacts:contact['visible']=False
+        p.report_contacts(contacts,p.known_targets(s,players),3.1)
+        self.assertEqual('right',self._orders(p,m,s,players,3.1)[11]['route_id'])
         self.assertTrue(p._route_assignments[11]['ordered_task'])
         self.assertEqual('right',self._orders(p,m,s,players,183.)[11]['route_id'])
 

@@ -16,14 +16,14 @@ import test_port_0922_battle_runtime as f
 import test_port_0922_player_burst as burst_tests
 import test_player_full_runtime as full_tests
 from gui.mods.offline_lan_0922 import ballistics, gun_mechanics, shot_geometry
-from gui.mods.offline_lan_0922.player_control import PlayerControl
-from gui.mods.offline_lan_0922.player_control.native_aim import (
+from gui.mods.offline_lan_0922.vehicle_control.player_binding import PlayerControl
+from gui.mods.offline_lan_0922.vehicle_control.native_aim import (
     NativeAimGeometry, mechanical_reach)
-from gui.mods.offline_lan_0922.player_control.trigger_admission import (
+from gui.mods.offline_lan_0922.vehicle_control.trigger_admission import (
     WORLD_CHORDS_PER_ATTEMPT, MAX_PROOF_CHORDS)
 from gui.mods.offline_lan_0922.entities.remote_vehicle import collide_vehicle_at_matrix
 
-ADMISSION = 'gui.mods.offline_lan_0922.player_control.trigger_admission'
+ADMISSION = 'gui.mods.offline_lan_0922.vehicle_control.trigger_admission'
 
 
 class Pose(f._RigidMatrix):
@@ -371,9 +371,9 @@ class ArtilleryFireScene(AutomaticFireScene):
         # The generic flat-world fixture replaces this native query with an
         # open sky. SPG coverage explicitly restores the copied production
         # chord consumer, so this scenario actually observes the ridge.
-        from gui.mods.offline_lan_0922.player_control.copied.battle_geometry import CopiedBattleGeometry
+        from gui.mods.offline_lan_0922.vehicle_control.geometry import SharedBattleGeometry
         self.runtime.geometry._artillery_arc_probe = (
-            CopiedBattleGeometry._artillery_arc_probe.__get__(
+            SharedBattleGeometry._artillery_arc_probe.__get__(
                 self.runtime.geometry, type(self.runtime.geometry)))
         self.control.target_engine = None
         return self

@@ -5,7 +5,7 @@ import unittest
 import test_port_0922_bot_runtime as runtime_fixture
 import test_port_0922_server_bot_ai as planner_fixture
 from lan_battle_server import SIMULATION_WORKER_AUTHORITY_ID as WORKER
-from server_bot_ai import BotPlanner
+from gui.mods.offline_lan_0922.vehicle_control.strategy import BotPlanner
 
 
 class RadioRelayTests(unittest.TestCase):

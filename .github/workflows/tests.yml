@@ -81,16 +81,10 @@ jobs:
           python-version: "3.11"
       - name: Install pinned test dependencies
         run: python -m pip install Pillow==12.3.0 numpy==2.3.5 moderngl==5.12.0 glcontext==3.0.0
-      - name: Verify the complete independent player behavior copy
+      - name: Verify single shared vehicle-control ownership and actor contracts
         env:
           PYTHONDONTWRITEBYTECODE: "1"
-        run: python tools/sync_player_behavior_copy.py --check
-      - name: Run unchanged full behavior fixtures against source and player copy
-        env:
-          PYTHONDONTWRITEBYTECODE: "1"
-        run: >-
-          python tools/check_player_behavior_parity.py --jobs 2
-          --output-dir build/bot-test-results/player-behavior-parity
+        run: python tools/check_shared_vehicle_control.py --check
       - name: Check traffic, retired tactics and slope aiming independently
         env:
           PYTHONDONTWRITEBYTECODE: "1"
@@ -98,6 +92,9 @@ jobs:
         run: |
           set -euo pipefail
           patterns=(
+            'test_shared_artillery_selection.py'
+            'test_shared_he_damage_ranking.py'
+            'test_native_motion_fixture_initial_state.py'
             'test_player*.py'
             'test_retired_tactical_cleanup.py'
             'test_current_default_route_authority.py'

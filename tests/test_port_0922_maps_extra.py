@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src/res/scripts/client'))
 from gui.mods.offline_lan_0922 import bot_tactics as config, bot_tactics_runtime
 from gui.mods.offline_lan_0922.ai import maps
-from gui.mods.offline_lan_0922.player_control.copied import (
+from gui.mods.offline_lan_0922 import (
     bot_tactics as player_config, bot_tactics_runtime as player_routes)
 
 

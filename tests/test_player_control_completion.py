@@ -15,9 +15,9 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / 'src/res/scripts/client'), str(ROOT / 'launcher')]
-from gui.mods.offline_lan_0922.player_control import PlayerControl
-from gui.mods.offline_lan_0922.player_control.shot_receipts import ShotReceipts
-from gui.mods.offline_lan_0922.player_control.settling import HaltObservation
+from gui.mods.offline_lan_0922.vehicle_control.player_binding import PlayerControl
+from gui.mods.offline_lan_0922.vehicle_control.shot_receipts import ShotReceipts
+from gui.mods.offline_lan_0922.vehicle_control.settling import HaltObservation
 from player_control_transport import PlayerControlTransport
 
 

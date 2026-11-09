@@ -16,7 +16,7 @@ from unittest import mock
 import test_player_limited_traverse as fixtures
 from gui.mods.offline_lan_0922.battle_runtime import _LANInputSender
 from gui.mods.offline_lan_0922.gun_mechanics import GunState
-from gui.mods.offline_lan_0922.player_control import attack_policy
+from gui.mods.offline_lan_0922.vehicle_control import attack_policy
 
 
 class FullShellSettingsTests(unittest.TestCase):

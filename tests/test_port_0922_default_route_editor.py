@@ -8,7 +8,7 @@ from unittest import mock
 from gui.mods.offline_lan_0922 import bot_tactics as config
 from gui.mods.offline_lan_0922 import bot_tactics_runtime as planning
 from bot_tactics_store import graph_data, Store
-from server_bot_ai import BotPlanner
+from gui.mods.offline_lan_0922.vehicle_control.strategy import BotPlanner
 import test_port_0922_bot_runtime as native
 
 

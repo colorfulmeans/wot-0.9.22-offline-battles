@@ -150,11 +150,6 @@ PARAM_NAMES = {
     'consumables': ('给养','Consumables'), 'crew_preset': ('成员配置','Crew preset'),
     'ammo_ratios': ('弹药比例','Ammunition ratios'),
     'outfit': ('BOT 使用涂装','Bot outfit'),
-    'reaction_seconds': ('反应时间（秒）', 'Reaction delay (s)'),
-    'patience_seconds': ('首次开火缩圈等待上限（秒）', 'Opening aim patience (s)'),
-    'converged_factor': ('接受的缩圈倍数', 'Accepted dispersion factor'),
-    'aim_bias_factor': ('瞄准点偏差系数', 'Aim-point bias factor'),
-    'lead_error': ('移动目标提前量误差', 'Lead error fraction'),
     'ammo_limit': ('携弹数量上限', 'Ammunition count limit'),
 }
 VALIDATION_NAMES = {

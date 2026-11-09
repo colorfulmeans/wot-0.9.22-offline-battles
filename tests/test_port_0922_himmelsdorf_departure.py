@@ -13,11 +13,12 @@ ROOT = Path(__file__).resolve().parents[1]
 CLIENT_SCRIPTS = ROOT / 'src' / 'res' / 'scripts' / 'client'
 TESTS_ROOT = ROOT / 'tests'
 sys.path.insert(0, str(ROOT / 'server'))
+sys.path.insert(0, str(ROOT / 'src/res/scripts/client'))
 sys.path.insert(0, str(CLIENT_SCRIPTS))
 sys.path.insert(0, str(TESTS_ROOT))
 
 from gui.mods.offline_lan_0922.ai.planner import BattleDirector
-from server_bot_ai import BotPlanner
+from gui.mods.offline_lan_0922.vehicle_control.strategy import BotPlanner
 import test_port_0922_bot_runtime as runtime_fixtures
 from effective_params_fixture import bot_default_crew_factors
 from test_port_0922_fjord_departure import (

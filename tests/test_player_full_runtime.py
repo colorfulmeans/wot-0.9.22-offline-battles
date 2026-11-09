@@ -12,8 +12,8 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src/res/scripts/client'))
 from gui.mods.offline_lan_0922 import equipment_mechanics, gun_mechanics, loadout
-from gui.mods.offline_lan_0922.player_control import full_runtime
-from gui.mods.offline_lan_0922.player_control.copied.ai.planner import build_vehicle_profile
+from gui.mods.offline_lan_0922.vehicle_control import full_runtime
+from gui.mods.offline_lan_0922.ai.planner import build_vehicle_profile
 from test_port_0922_bot_runtime import (_combat_descriptor, _flat_open_graph,
                                        _plain_attribute_factors, _effective_params_snapshot)
 from test_port_0922_equipment_mechanics import _defaults
@@ -121,7 +121,7 @@ class FullRuntimeTests(unittest.TestCase):
         self.assertEqual(self.runtime.geometry._records['bot:1000001']['engine_id'],7)
         self.assertNotIn('player:1',self.runtime.geometry._records)
         self.assertIs(self.runtime.engine.__class__._update_once,
-                      full_runtime.copied_runtime.BotRuntime._update_once)
+                      full_runtime.shared_runtime.BotRuntime._update_once)
         self.assertIsInstance(self.runtime.planner,full_runtime.BotPlanner)
         self.assertIsNotNone(self.runtime.engine.adapter.driver)
         self.assertIsNotNone(self.runtime.engine.navigator)
@@ -243,7 +243,7 @@ class FullRuntimeTests(unittest.TestCase):
         row['equipment_intent_result'] = dict(intent_seq=0,
             accepted=False, reason='')
         original = copy.deepcopy(row)
-        original_restore = full_runtime.copied_runtime._BotAmmoState.restore
+        original_restore = full_runtime.shared_runtime._BotAmmoState.restore
         restored_rows = []
         def inspect_bootstrap(state, raw):
             restored_rows.append(dict(raw))
@@ -252,7 +252,7 @@ class FullRuntimeTests(unittest.TestCase):
                 'equipment_states', 'gun_checkpoint', 'gun_checkpoint_seq',
                 'shell_change_pending', 'input_seq')))
             return original_restore(state, raw)
-        with mock.patch.object(full_runtime.copied_runtime._BotAmmoState,
+        with mock.patch.object(full_runtime.shared_runtime._BotAmmoState,
                                'restore', inspect_bootstrap):
             self.assertTrue(self.runtime.start(('drive', 'fire', 'consumables')))
         self.assertTrue(self.runtime.active)
@@ -293,13 +293,13 @@ class FullRuntimeTests(unittest.TestCase):
                 native.update((name, pieces[name]) for name in fields)
                 original = copy.deepcopy(native)
                 runtime = full_runtime.FullPlayerRuntime(battle)
-                original_restore = full_runtime.copied_runtime._BotAmmoState.restore
+                original_restore = full_runtime.shared_runtime._BotAmmoState.restore
                 def inspect_bootstrap(state, raw):
                     self.assertFalse(set(raw) & set((
                         'ammo_remaining', 'next_shell_index',
                         'ammo_reload_pending')))
                     return original_restore(state, raw)
-                with mock.patch.object(full_runtime.copied_runtime._BotAmmoState,
+                with mock.patch.object(full_runtime.shared_runtime._BotAmmoState,
                                        'restore', inspect_bootstrap):
                     self.assertTrue(runtime.start(('drive', 'fire')))
                 self.assertEqual(native, original)

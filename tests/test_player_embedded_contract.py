@@ -13,7 +13,7 @@ import unittest
 
 BASE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                     'src', 'res', 'scripts', 'client', 'gui', 'mods',
-                    'offline_lan_0922', 'player_control')
+                    'offline_lan_0922', 'vehicle_control')
 
 
 def load_helper(name):
@@ -150,13 +150,13 @@ class EmbeddedForegroundContractTests(unittest.TestCase):
         self.assertTrue(rest.observe(owner, 1.9))
 
 
-class EmbeddedIndependentRuntimeTests(unittest.TestCase):
+class EmbeddedSharedRuntimeTests(unittest.TestCase):
     """Import the real package modules with only the stock GUI/native seam.
 
     CPython 2 does not provide the game's GUI namespace packages. Install that
-    namespace explicitly, but execute the complete player-owned behavior copy
-    and neutral primitives. The original Bot namespace, stand-in pathfinders,
-    and substituted height algorithms are forbidden. Native C++ is unavailable;
+    namespace explicitly, but execute the sole shared vehicle behavior
+    and neutral primitives. Retired copies and network owners, stand-in
+    pathfinders and substituted height algorithms are forbidden. Native C++ is unavailable;
     the shipped Python fallback and real import closure must still work.
     """
     def setUp(self):
@@ -165,18 +165,15 @@ class EmbeddedIndependentRuntimeTests(unittest.TestCase):
         for name in self.saved_gui:
             del sys.modules[name]
         self.addCleanup(self.restore_namespace)
-        class NoBotPolicy(object):
+        class NoRetiredPolicy(object):
             @staticmethod
             def reject(fullname):
                 prefix = 'gui.mods.offline_lan_0922.'
                 if not fullname.startswith(prefix):
                     return
                 root = fullname[len(prefix):].split('.', 1)[0]
-                if (root in ('ai', 'bots', 'lan_client') or
-                        root.startswith('bot_') and root not in (
-                            'bot_state_codec', 'bot_editor_maps',
-                            'bot_tactics_default_data', 'bot_fitting_data')):
-                    raise ImportError('foreground imported Bot/network owner: ' + fullname)
+                if root in ('player_control', 'bots', 'lan_client') or '.copied.' in fullname:
+                    raise ImportError('shared control imported retired/network owner: ' + fullname)
 
             def find_module(self, fullname, path=None):
                 self.reject(fullname)
@@ -185,7 +182,7 @@ class EmbeddedIndependentRuntimeTests(unittest.TestCase):
             def find_spec(self, fullname, path=None, target=None):
                 self.reject(fullname)
                 return None
-        guard = NoBotPolicy()
+        guard = NoRetiredPolicy()
         sys.meta_path.insert(0, guard)
         self.addCleanup(sys.meta_path.remove, guard)
         package_root = os.path.dirname(BASE)
@@ -193,7 +190,7 @@ class EmbeddedIndependentRuntimeTests(unittest.TestCase):
         for name, path in (('gui', os.path.dirname(mods_root)),
                            ('gui.mods', mods_root),
                            ('gui.mods.offline_lan_0922', package_root),
-                           ('gui.mods.offline_lan_0922.player_control', BASE)):
+                           ('gui.mods.offline_lan_0922.vehicle_control', BASE)):
             package = types.ModuleType(name)
             package.__path__ = [path]
             package.__package__ = name
@@ -206,13 +203,14 @@ class EmbeddedIndependentRuntimeTests(unittest.TestCase):
         diagnostics = importlib.import_module(
             'gui.mods.offline_lan_0922.native_input_diagnostics')
         diagnostics.write_json_record = lambda *args, **kwargs: None
-        names = ('copied.ai.navigation', 'copied.ai.local_height',
-                 'copied.ai.traffic', 'copied.bot_tactics',
-                 'copied.spg_route_recovery', 'copied.server_bot_ai',
-                 'copied.battle_geometry', 'copied._compat',
-                 'trigger_admission', 'full_runtime')
+        common = ('ai.navigation', 'ai.local_height', 'ai.traffic',
+                  'bot_tactics', 'spg_route_recovery')
+        shared = ('strategy', 'geometry', 'strategy_compat',
+                  'trigger_admission', 'full_runtime')
         self.modules = dict((name, importlib.import_module(
-            'gui.mods.offline_lan_0922.player_control.' + name)) for name in names)
+            'gui.mods.offline_lan_0922.' + name)) for name in common)
+        self.modules.update((name, importlib.import_module(
+            'gui.mods.offline_lan_0922.vehicle_control.' + name)) for name in shared)
 
     def restore_namespace(self):
         for name in list(sys.modules):
@@ -240,26 +238,28 @@ class EmbeddedIndependentRuntimeTests(unittest.TestCase):
             hazards=[0] * (size * size))
 
     def pathfinder(self):
-        result = self.modules['copied.ai.navigation'].TerrainNavigator(
+        result = self.modules['ai.navigation'].TerrainNavigator(
             lambda *args: 0., lambda *args: False, baked_graph=self.graph())
         self.addCleanup(result.close)
         return result
 
-    def test_all_new_modules_import_without_bot_or_game_runtime(self):
+    def test_shared_modules_import_without_retired_or_network_runtime(self):
         for name, module in self.modules.items():
-            self.assertEqual(os.path.join(BASE, *name.split('.')) + '.py',
+            root = BASE if name in ('strategy', 'geometry', 'strategy_compat',
+                'trigger_admission', 'full_runtime') else os.path.dirname(BASE)
+            self.assertEqual(os.path.join(root, *name.split('.')) + '.py',
                              module.__file__.rstrip('co'))
         forbidden = [name for name in sys.modules if
-            name == 'gui.mods.offline_lan_0922.ai' or
-            name.startswith('gui.mods.offline_lan_0922.ai.') or
-            name == 'gui.mods.offline_lan_0922.bot_runtime']
+            name.startswith('gui.mods.offline_lan_0922.player_control') or
+            '.copied.' in name or
+            name == 'gui.mods.offline_lan_0922.lan_client']
         self.assertEqual([], forbidden)
-        self.assertIn('gui.mods.offline_lan_0922.player_control.copied.bot_runtime',
+        self.assertIn('gui.mods.offline_lan_0922.bot_runtime',
                       sys.modules)
 
     def test_spent_traffic_lease_releases_and_only_real_reentry_rearms_on_python27(self):
         import math
-        module = self.modules['copied.ai.traffic']
+        module = self.modules['ai.traffic']
         player = module.TrafficCoordinator()
         own = dict(id=2, position=(0., 0., 0.), yaw=0.,
                    velocity=(0., 0., 0.), alive=True, team=1,
@@ -288,7 +288,7 @@ class EmbeddedIndependentRuntimeTests(unittest.TestCase):
 
     def test_default_map_is_readonly_and_each_player_gets_private_rows_on_python27(self):
         import copy
-        catalog = self.modules['copied.bot_tactics']
+        catalog = self.modules['bot_tactics']
         name = '02_malinovka'
         profile = dict(name='DEFAULT', maps={name: dict(
             routes=[], positions=[], default_routes=[])})
@@ -307,7 +307,7 @@ class EmbeddedIndependentRuntimeTests(unittest.TestCase):
 
     def test_stalled_sortie_attempts_expire_without_inventing_terminal_retry_limit(self):
         import copy
-        module = self.modules['copied.spg_route_recovery']
+        module = self.modules['spg_route_recovery']
         runtime = types.ModuleType('physical_route_inputs')
         runtime.baked_graph = dict(objective_bases=((-100., 0.), (100., 0.)),
                                   objective_base_radii=(10., 10.))
@@ -385,19 +385,19 @@ class EmbeddedIndependentRuntimeTests(unittest.TestCase):
             return dict(status='complete', generation=('scene', 1), surfaces=[
                 dict(point=(x, 0., z), normal=(0., 1., 0.)),
                 dict(point=(x, 8., z), normal=(0., 1., 0.))])
-        links = self.modules['copied.ai.local_height'].LocalHeightLinks(columns)
+        links = self.modules['ai.local_height'].LocalHeightLinks(columns)
         links.begin((0., 0., 0.), now=0.)
         status, point = links.inspect((0., 0., 0.), (0., 8., 4.), baked_start=8.)
         self.assertEqual('other_surface', status)
         self.assertEqual((0., 0., 4.), point)
         self.assertTrue(calls)
-        self.assertLessEqual(links.queries, self.modules['copied.ai.local_height'].MAX_COLUMNS)
+        self.assertLessEqual(links.queries, self.modules['ai.local_height'].MAX_COLUMNS)
         count = len(calls)
         self.assertEqual(('connected', point), links.inspect((0., 0., 0.), point))
         self.assertEqual(count, len(calls))
 
-    def test_visible_priority_and_stationary_angling_execute_on_python27(self):
-        planner = self.modules['copied.server_bot_ai'].BotPlanner()
+    def test_nearest_armor_acquisition_and_stable_tracking_execute_on_python27(self):
+        planner = self.modules['strategy'].BotPlanner()
         actor = dict(id=1, team=1, rating=10000,
             profile=dict(class_tag='heavyTank', desired_range=300., armor=120.),
             state=dict(x=0., y=0., z=0., ammo_remaining=[10], shell_index=0,
@@ -406,12 +406,17 @@ class EmbeddedIndependentRuntimeTests(unittest.TestCase):
             alive=True, visible=True, health=1000, max_health=1000,
             last_seen=0., shootable_by_bot_ids=(1,)) for identity, z in ((8, 200.), (9, 25.))]
         self.assertEqual(9, planner._assign_targets([actor], rows, 0.)[1]['id'])
+        rows[0]['position']['z'] = 10.
+        self.assertEqual(9, planner._assign_targets([actor], rows, .5)[1]['id'])
         rows[1]['visible'] = False
         self.assertEqual(8, planner._assign_targets([actor], rows, 1.)[1]['id'])
-        personality = dict(caution=.5)
-        angle = planner._angled_face_point(actor, rows[0]['position'], personality)
-        self.assertNotEqual(0., angle[1])
-        self.assertEqual(angle, planner._angled_face_point(actor, rows[0]['position'], personality))
+        planner.reset(2)
+        rows[0].update(armor=120.)
+        rows[1].update(visible=True, armor=20.)
+        rows[1]['position']['z'] = 10.
+        self.assertEqual(9, planner._assign_targets([actor], rows, 2.)[1]['id'])
+        self.assertFalse(hasattr(planner, '_angled_face_point'))
+        self.assertFalse(hasattr(planner, '_apply_stationary_angling'))
 
     def test_public_roster_retains_unobserved_allies_without_inventing_geometry(self):
         module = self.modules['full_runtime']
@@ -451,10 +456,10 @@ class EmbeddedIndependentRuntimeTests(unittest.TestCase):
         self.assertFalse(dead['alive'])
         self.assertTrue(all(key not in dead for key in ('position', 'x', 'y', 'z')))
 
-    def test_server_copy_preserves_unicode_and_python3_half_even_contract(self):
+    def test_shared_strategy_preserves_unicode_and_python3_half_even_contract(self):
         import math
-        compat = self.modules['copied._compat']
-        planner_module = self.modules['copied.server_bot_ai']
+        compat = self.modules['strategy_compat']
+        planner_module = self.modules['strategy']
         for value, expected in ((.5, 0), (1.5, 2), (2.5, 2), (-.5, 0)):
             self.assertEqual(expected, compat.round_py3(value))
             self.assertEqual(expected, compat.round_half_even(value))
@@ -480,15 +485,15 @@ class EmbeddedIndependentRuntimeTests(unittest.TestCase):
             (0., 0., 0.), (0., 0., 0.), 0., 25.))
 
     def test_retired_cover_modules_and_runtime_entrances_are_absent_on_python27(self):
-        geometry = self.modules['copied.battle_geometry'].CopiedBattleGeometry()
-        planner = self.modules['copied.server_bot_ai'].BotPlanner()
+        geometry = self.modules['geometry'].SharedBattleGeometry()
+        planner = self.modules['strategy'].BotPlanner()
         for name in ('_sample_bot_cover', '_cover_ground', '_cover_surface_pose',
                      '_cover_gun_lane', '_cover_slope'):
             self.assertFalse(hasattr(geometry, name), name)
         for name in ('_cover_candidate', '_cover_states', '_cover_reservations',
                      '_affordances', '_retreat_states'):
             self.assertFalse(hasattr(planner, name), name)
-        for root in (os.path.dirname(BASE), os.path.join(BASE, 'copied')):
+        for root in (os.path.dirname(BASE), BASE):
             for name in ('cover.py', 'tactical_geometry.py'):
                 self.assertFalse(os.path.exists(os.path.join(root, 'ai', name)))
 

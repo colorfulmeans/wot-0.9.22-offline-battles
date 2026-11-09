@@ -1,4 +1,5 @@
 from __future__ import print_function
+from .protocol_primitives import WORKER_AUTHORITY_ID, SNAPSHOT_STALL_SECONDS, _exact_int
 from gui.mods.offline_lan_0922 import bot_tactics
 
 import base64
@@ -73,7 +74,6 @@ CLIENT_CAPABILITIES = (
     PLAYER_ENVIRONMENT_CAPABILITY,
     EFFECTIVE_PARAMS_CAPABILITY,
 )
-WORKER_AUTHORITY_ID = -1
 POLL_INTERVAL = 1.0 / 60.0
 PING_INTERVAL = 1.0
 MAX_MESSAGE_BYTES = 256 * 1024
@@ -175,7 +175,6 @@ RUNTIME_DROP_LOG_INTERVAL = 5.0
 # is far outside ordinary jitter, and it is the exact condition that used to
 # be invisible: the replica keeps drawing its last accepted frame, so every Bot
 # stands still and nothing the player shoots reports back.
-SNAPSHOT_STALL_SECONDS = 2.0
 LEAVE_PAYLOAD = b'{"type":"leave"}\n'
 STATE_BARRIER_TYPES = frozenset((
     'welcome', 'roster', 'battle_start', 'battle_live',
@@ -393,18 +392,6 @@ def _safe_text(value, default='', limit=80):
     return value[:limit]
 
 
-def _exact_int(value, default=None):
-    if isinstance(value, bool):
-        return default
-    if isinstance(value, integer_types):
-        return value
-    try:
-        parsed = int(value)
-        if float(value) != parsed:
-            return default
-        return parsed
-    except (TypeError, ValueError, OverflowError):
-        return default
 
 
 def _team_choice(value, default=0):

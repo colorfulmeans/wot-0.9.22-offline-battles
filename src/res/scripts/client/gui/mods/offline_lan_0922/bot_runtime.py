@@ -9,6 +9,8 @@ from gui.mods.offline_lan_0922.worker_diagnostics import (
 import copy
 from gui.mods.offline_lan_0922 import tank_contact_ledger, physics_audit
 import math
+
+from .vehicle_control.engine_control import SharedEngineControl
 import json
 import random
 import sys
@@ -42,7 +44,7 @@ from gui.mods.offline_lan_0922 import siege_mechanics
 from gui.mods.offline_lan_0922 import spotting
 from gui.mods.offline_lan_0922 import radio
 from gui.mods.offline_lan_0922 import loadout
-from gui.mods.offline_lan_0922 import lan_client
+from gui.mods.offline_lan_0922 import protocol_primitives as lan_client
 from gui.mods.offline_lan_0922 import tank_collision
 from gui.mods.offline_lan_0922 import vehicle_physics
 from gui.mods.offline_lan_0922 import native_simulation
@@ -1929,37 +1931,8 @@ def _overlay_live_target_pose(command, target, source_position=None):
     stable_hull_face = result.get('stable_hull_face', False)
     if not isinstance(stable_hull_face, bool):
         raise ValueError('stable hull face flag is invalid')
-    angle_degrees = result.get('hull_angle_degrees')
-    if angle_degrees is not None:
-        try:
-            angle_degrees = float(angle_degrees)
-            if (math.isnan(angle_degrees) or math.isinf(angle_degrees) or
-                    abs(angle_degrees) > 45.0):
-                raise ValueError
-        except (TypeError, ValueError, OverflowError):
-            raise ValueError('hull angle origin is invalid')
-    if not stable_hull_face and angle_degrees is None:
+    if not stable_hull_face:
         result['face_position'] = position
-    elif not stable_hull_face:
-        origin = source_position
-        if isinstance(origin, dict):
-            origin = (origin.get('x'), origin.get('y'), origin.get('z'))
-        try:
-            origin = tuple(float(origin[index]) for index in range(3))
-            if any(math.isnan(value) or math.isinf(value)
-                   for value in origin):
-                raise ValueError
-            angle = math.radians(angle_degrees)
-            dx = position[0] - origin[0]
-            dz = position[2] - origin[2]
-            cosine = math.cos(angle)
-            sine = math.sin(angle)
-            result['face_position'] = (
-                origin[0] + dx * cosine - dz * sine,
-                origin[1],
-                origin[2] + dx * sine + dz * cosine)
-        except (TypeError, ValueError, OverflowError, IndexError):
-            raise ValueError('hull angle origin is invalid')
     if result.get('combat_mode') == 'advance_contact':
         result['move_position'] = position
     return result
@@ -1988,7 +1961,7 @@ def _server_order_signature(order):
     return result
 
 
-class BotRuntime(object):
+class BotRuntime(SharedEngineControl):
     """Produces v5 ``bot_manifest`` and ``bot_state`` payloads without entities."""
 
     @staticmethod
@@ -2102,7 +2075,10 @@ class BotRuntime(object):
                  wreck_ground_probe=None, rotation_resolver=None, visibility_async_probe=None,
                  impact_contacts_resolver=None, navigation_surface_probe=None,
                  navigation_height_columns=None, local_sweep_probe=None,
-                 bot_descriptor_resolver=None, artillery_aim_samples_probe=None):
+                 bot_descriptor_resolver=None, artillery_aim_samples_probe=None, control_factory=None):
+        self._control_factory = control_factory
+        self._actor_controls = {}
+        self._control_launch_proofs = {}
         self._navigation_height_columns = navigation_height_columns
         self._navigation_surface_probe = navigation_surface_probe
         self._navigation_surface_queue = []
@@ -2291,7 +2267,6 @@ class BotRuntime(object):
         self._bot_behavior = {}
         self._bot_skill_mode = bot_gunnery.DEFAULT_SKILL_MODE
         self._bot_skill_pins = {}
-        self._gunnery_holds = {}
         self._suspension_params = {}
         self._suspension_param_failures = 0
         self._suspension_trial_reports = set()
@@ -3584,7 +3559,7 @@ class BotRuntime(object):
         return True
 
     @staticmethod
-    def _siege_desired(state, command, target):
+    def _physical_siege_desired(state, command, target):
         legal_target = bool(
             isinstance(target, dict) and target.get('alive', True))
         destination = _point(
@@ -3681,7 +3656,7 @@ class BotRuntime(object):
         return pins
 
     def _resolve_bot_rating(self, raw):
-        """Return one Bot's competence rating for this round.
+        """Return one Bot's physical fitting rating for this round.
 
         A takeover manifest already carries the rating the previous authority
         installed, so it wins; an older manifest carrying only a tier name is
@@ -3707,7 +3682,7 @@ class BotRuntime(object):
             self._bot_skill_mode, self.round_id, team, slot)
 
     def bot_rating(self, bot_id):
-        """Return the competence rating installed for one Bot this round."""
+        """Return the physical fitting rating installed for this round."""
         return self._bot_ratings.get(
             int(bot_id), bot_gunnery.DEFAULT_RATING)
 
@@ -3732,30 +3707,6 @@ class BotRuntime(object):
         return {'none':'rookie', 'once':'regular', 'repeat':'veteran',
                 'large':'elite'}.get(value, self.bot_skill(bot_id))
 
-    def bot_aim_selection_allowed(self, state, target):
-        """Return whether this Bot's gunner picks the part it can hurt most.
-
-        The presentation client owns the armour ranking, but not this clock:
-        the answer has to change on the same aiming epoch the aim-point bias
-        already uses, or a per-frame flip would invalidate the solved shot
-        through ``_direct_aim_matches`` and re-solve the ballistics every
-        tick.  Reading the existing hold record keeps one owner for that
-        epoch; this accessor never creates or advances one.
-        """
-        try:
-            bot_id = int(state['id'])
-        except (KeyError, TypeError, ValueError, OverflowError):
-            return False
-        record = self._gunnery_holds.get(bot_id)
-        key = (self._observer_target_key(target)
-               if isinstance(target, dict) else None)
-        epoch = 0
-        if (record is not None and key is not None and
-                record.get('key') == key):
-            epoch = int(record.get('epoch') or 0)
-        return bot_gunnery.capability_allowed(
-            self.bot_rating(bot_id), bot_gunnery.CAPABILITY_WEAK_SPOT,
-            self.round_id, bot_id, key, epoch)
 
     def _retire_native_simulation(self):
         owner = self._native_simulation
@@ -3782,6 +3733,7 @@ class BotRuntime(object):
 
     def close(self):
         """Retire native state and background jobs before releasing the round."""
+        self._clear_actor_controls()
         self._reset_planning_observers()
         try:
             self._retire_native_simulation()
@@ -3809,6 +3761,7 @@ class BotRuntime(object):
         self._bot_skill_pins = self._lineup_skill_pins(message)
         round_id = message.get('round_id')
         if round_id != self.round_id:
+            self._clear_actor_controls()
             if self.navigator is not None:
                 self.navigator.invalidate_native_planning()
                 self.navigator.bot_states.clear()
@@ -3851,7 +3804,6 @@ class BotRuntime(object):
             self._physics_params = {}
             self._bot_ratings = {}
             self._bot_behavior = {}
-            self._gunnery_holds = {}
             self._suspension_params = {}
             self._suspension_param_failures = 0
             self._suspension_trial_reports = set()
@@ -3917,6 +3869,7 @@ class BotRuntime(object):
         self._apply_orders(message)
         if message.get('battle_result') is not None:
             self.finished = True
+            self._clear_actor_controls()
             self._retire_native_simulation()
             self._clear_artillery_intents()
             self._ballistic_solution_cache = {}
@@ -3929,6 +3882,7 @@ class BotRuntime(object):
             self.is_authority() and
             isinstance(message.get('bot_manifest'), (list, tuple)))
         if previous_authority != self.authority_id:
+            self._clear_actor_controls()
             # Detach native facades before canonical takeover restores clocks
             # and replaces the radio/driver state for the new owner.
             self._retire_native_simulation()
@@ -3978,7 +3932,6 @@ class BotRuntime(object):
             self._ram_cooldowns = {}
             self._human_ram_cooldowns = {}
             self._ram_contacts = frozenset()
-            self._gunnery_holds = {}
             self._next_observation = 0.0
             self._next_shot_lane_refresh = 0.0
             self._next_publication = 0.0
@@ -5128,6 +5081,7 @@ class BotRuntime(object):
         self._apply_orders(message)
         if message.get('battle_result') is not None:
             self.finished = True
+            self._clear_actor_controls()
             self._retire_native_simulation()
             self._clear_artillery_intents()
             self._friendly_repositions = {}
@@ -5243,7 +5197,7 @@ class BotRuntime(object):
                 if isinstance(point, (dict, list, tuple)):
                     order[name] = _boundary_point(point)
             for name in ('desired_range', 'fire_range',
-                         'throttle_override', 'hull_angle_degrees', 'arrival_radius'):
+                         'throttle_override', 'arrival_radius'):
                 if order.get(name) is not None:
                     order[name] = _number(order[name])
             for name in ('id', 'team', 'target_id', 'route_index',
@@ -13238,7 +13192,7 @@ class BotRuntime(object):
         return tank_collision.translation_fraction(bodies[0],
             (math.sin(yaw)*distance, math.cos(yaw)*distance), bodies[1:])
 
-    def _direct_aim_matches(self, state, target, solution):
+    def _physical_direct_aim_matches(self, state, target, solution):
         """A lane refresh may select a new part after this tick's gun slew."""
         if not callable(self.direct_aim_point_probe):
             return True
@@ -13566,111 +13520,18 @@ class BotRuntime(object):
             'yaw': yaw,
             'pitch': pitch, 'flight_time': flight_time, 'arc': arc,
             'aim_token': aim_token,
-            'target_motion_reference': dict(target.get('_canonical_motion') or
-                dict(position=_point(target.get('position'), _position(target)),
-                     velocity=self._target_velocity(target)),
+            'target_motion_reference': dict(
+                position=_point(target.get('position'), _position(target)),
+                velocity=self._target_velocity(target),
                 prediction_seconds=predicted_latency),
         }
 
-    def _track_gunnery_hold(self, state, target, now):
-        """Advance one Bot's continuous hold on its current target.
 
-        Returns ``(hold_seconds, laying_seconds, opening_shot)``, or ``None``
-        when the Bot holds no target.  ``laying_seconds`` restarts at the
-        Bot's own shot and ``opening_shot`` says whether this engagement has
-        produced one yet.  A momentary gap keeps the record: a gunner does
-        not react to the same tank twice.
-        """
-        bot_id = int(state['id'])
-        record = self._gunnery_holds.get(bot_id)
-        if not isinstance(target, dict):
-            return None
-        key = self._observer_target_key(target)
-        now = float(now)
-        if record is None or record['key'] != key:
-            record = {'key': key, 'since': now, 'laid_since': now,
-                      'fire_seq': int(_number(state.get('fire_seq'), 0)),
-                      'fired': False, 'epoch': None, 'error': None}
-            self._gunnery_holds[bot_id] = record
-        fire_seq = int(_number(state.get('fire_seq'), 0))
-        if record['fire_seq'] != fire_seq:
-            record['fire_seq'] = fire_seq
-            record['laid_since'] = now
-            record['fired'] = True
-        return (max(0.0, now - record['since']),
-                max(0.0, now - record['laid_since']),
-                not record['fired'])
 
-    def _gunnery_error(self, state, target, now):
-        """Return this Bot's frozen gunner error for the current aim epoch."""
-        held = self._track_gunnery_hold(state, target, now)
-        if held is None:
-            return None
-        bot_id = int(state['id'])
-        record = self._gunnery_holds[bot_id]
-        epoch = bot_gunnery.bias_epoch(held[0])
-        if record['epoch'] != epoch or record['error'] is None:
-            record['epoch'] = epoch
-            record['error'] = bot_gunnery.engagement_error(
-                self.bot_rating(bot_id), self.round_id, bot_id,
-                record['key'], epoch, overrides=getattr(self, '_bot_behavior', {}).get(bot_id))
-        return record['error']
 
-    def _aimed_target(self, state, target, now):
-        """Return the point this Bot's gunner actually lays the gun on.
-
-        Retail #1513 has no Bot gunner, so an unmodified Bot solved an exact
-        intercept on the target centre and only ever paid the shot dispersion
-        every gun pays.  The tier's persistent bias moves that aim point and
-        its lead error scales the velocity fed to the solve, so a weak gunner
-        misses the way a human does.  The original target row is never
-        mutated: identity, visibility and lease state stay canonical.
-        """
-        if not isinstance(target, dict):
-            return target
-        error = self._gunnery_error(state, target, now)
-        if error is None:
-            return target
-        bot_id = int(state['id'])
-        gun_state = self._gun_states.get(bot_id)
-        if gun_state is None:
-            return target
-        position = _point(target.get('position'), _position(target))
-        origin = _position(state)
-        dx = position[0] - origin[0]
-        dz = position[2] - origin[2]
-        horizontal = math.sqrt(dx * dx + dz * dz)
-        if horizontal <= 1.0:
-            return target
-        lateral, vertical = bot_gunnery.aim_offset_metres(
-            self.bot_rating(bot_id), error,
-            gun_state.fully_aimed_dispersion, _distance(origin, position),
-            overrides=getattr(self, '_bot_behavior', {}).get(bot_id))
-        velocity = self._target_velocity(target)
-        scale = float(error['lead_scale'])
-        aimed = dict(target)
-        aimed['position'] = (
-            position[0] + (dz / horizontal) * lateral,
-            position[1] + vertical,
-            position[2] - (dx / horizontal) * lateral)
-        aimed['velocity'] = (velocity[0] * scale, velocity[1] * scale,
-                             velocity[2] * scale)
-        aimed['_canonical_motion'] = dict(position=position, velocity=velocity)
-        return aimed
-
-    def _gunner_ready(self, state, gun_state, target, now):
-        """Return whether this Bot's gunner has reacted and finished laying."""
-        held = self._track_gunnery_hold(state, target, now)
-        if held is None:
-            return False
-        return bot_gunnery.may_fire(
-            self.bot_rating(int(state['id'])), held[0], held[1],
-            gun_state.current_dispersion_factor, held[2],
-            overrides=getattr(self, '_bot_behavior', {}).get(int(state['id'])))
 
     def _ballistic_solution(self, state, target, descriptor, shell_index,
                             now):
-        target = self._aimed_target(state, target, now)
         profile = state.get('profile')
         profile = profile if isinstance(profile, dict) else {}
         if str(profile.get('class_tag') or '') == 'SPG':
@@ -13736,7 +13597,7 @@ class BotRuntime(object):
         )
 
     @timed('bot.ballistic_aim')
-    def _cadenced_ballistic_solution(
+    def _physical_cadenced_ballistic_solution(
             self, state, target, descriptor, shell_index, now, force=False):
         """Refresh target geometry at 10 Hz while presentation stays 30 Hz."""
         bot_id = int(state['id'])
@@ -14345,7 +14206,7 @@ class BotRuntime(object):
                 if str(profile.get('class_tag') or '') == 'SPG'
                 else SHOT_LANE_QUERY_DISTANCE)
 
-    def _shot_clear(self, source, target, now, force=False,
+    def _physical_shot_clear(self, source, target, now, force=False,
                     probe_budget=None, lane_key=None, distance_cache=None):
         """Probe a current static firing lane independently from team spotting."""
         key = (lane_key if lane_key is not None else
@@ -14396,7 +14257,7 @@ class BotRuntime(object):
                 self._shot_los_deadlines.pop(old_key, None)
         return value
 
-    def _apply_blocked_direct_aim(self, source, command, target, now,
+    def _physical_apply_blocked_direct_aim(self, source, command, target, now,
                                   probe_budget=None):
         """A current native wall receipt excludes launch, not target tracking.
 
@@ -14780,8 +14641,9 @@ class BotRuntime(object):
             (1.0 if index == 1 else 0.0) +
             reference_velocity[index] * (flight_time + prediction_seconds)
             for index in range(3))
-        # Aim bias and imperfect lead are deliberate gunner behaviour. Only
-        # canonical target-motion changes may invalidate an immutable proof.
+        # A selected physical contact can differ from the chassis centre.
+        # Only observed target-motion changes invalidate this immutable proof;
+        # the selected part offset must not be mistaken for a lead error.
         error = tuple(target_at_impact[index] - reference_at_impact[index]
                       for index in range(3))
         frozen_offset = tuple(intended_impact[index] - reference_at_impact[index]
@@ -16233,6 +16095,9 @@ class BotRuntime(object):
         self._pending_launches.append(frozen)
         self._pending_launch_keys[key] = frozen
         self._pending_launch_by_bot.setdefault(key[0], []).append(key)
+        control = self._actor_controls.get(key[0])
+        if control is not None and getattr(control, 'actor_kind', None) == 'bot':
+            control.shot_committed(frozen)
         if diagnostic_state is not None:
             self._report_fire_alignment(diagnostic_state, frozen)
         return True
@@ -16491,10 +16356,33 @@ class BotRuntime(object):
             burst_state = burst_mechanics.TriggerClock()
             self._burst_states[int(state['id'])] = burst_state
         first_seq = int(state.get('fire_seq', 0)) + 1
+        control = self._actor_controls.get(int(state['id']))
+        control = control if getattr(control, 'actor_kind', None) == 'bot' else None
+        proof_key = None
+        if control is not None:
+            proposal = control.prepare_trigger(state, control.weapon.target,
+                control.weapon.solution, launch_receipt, control.now)
+            if proposal.get('status') != 'ready':
+                control.fire_rejected(proposal.get('reason', 'auto_proof_pending'))
+                return False
+            failure = control.validate_trigger(proposal, control.now)
+            if failure is not None or not control.trigger_started(proposal):
+                control.fire_rejected(failure or 'auto_candidate_changed')
+                return False
+            if launch_receipt is None:
+                launch_preview = proposal
+            proof_key = (self.round_id, int(state['id']), first_seq)
+            self._control_launch_proofs[proof_key] = dict((name, proposal[name])
+                for name in ('fire_seq', 'shell_index', 'origin', 'velocity',
+                    'shot_yaw', 'shot_pitch', 'gravity', 'max_distance',
+                    'penetration_factor', 'source_shot', 'range_origin'))
         if self._native_simulation is not None:
             edges = self._native_simulation.weapons.begin(
                 state['id'], count, interval, reload_factor)
             if not edges:
+                if control is not None:
+                    self._control_launch_proofs.pop(proof_key, None)
+                    control.fire_rejected('native_trigger_not_ready')
                 return False
             edge = edges[0]
         else:
@@ -16503,11 +16391,29 @@ class BotRuntime(object):
                 # A duplicate request does not own the already armed group.
                 # In particular it must not abort an uncommitted first edge
                 # while leaving the same gun's physical group armed.
+                if control is not None:
+                    self._control_launch_proofs.pop(proof_key, None)
+                    control.fire_rejected('native_trigger_not_ready')
                 return False
             if not gun_state.begin_burst(count, reload_factor):
                 burst_state.abort()
+                if control is not None:
+                    self._control_launch_proofs.pop(proof_key, None)
+                    control.fire_rejected('native_gun_not_ready')
                 return False
             edge = burst_state.advance(0.0)[0]
+        if control is not None:
+            # Native begin can re-enter callbacks. Arming is not a debit;
+            # the same proof must still own the real source before commit.
+            failure = control.validate_trigger(proposal, control.now)
+            if failure is not None:
+                if self._native_simulation is not None:
+                    self._native_simulation.weapons.abort(state['id'])
+                elif burst_state.abort():
+                    gun_state.abort_burst()
+                self._control_launch_proofs.pop(proof_key, None)
+                control.fire_rejected(failure)
+                return False
         if not self._commit_burst_edge(
                 state, gun_state, reload_factor, descriptor, edge,
                 ammo_state, launch_receipt, launch_preview,
@@ -16516,6 +16422,9 @@ class BotRuntime(object):
                 self._native_simulation.weapons.abort(state['id'])
             elif burst_state.abort():
                 gun_state.abort_burst()
+            if control is not None:
+                self._control_launch_proofs.pop(proof_key, None)
+                control.fire_rejected('native_commit_failed')
             return False
         burst_state.publish(state)
         return True
@@ -16984,7 +16893,7 @@ class BotRuntime(object):
         rotation_roster = tuple(self.states.items())
         if residual is not None:
             residual.residual_checkpoint('preparation')
-        for state in self.states.values():
+        for state in self.controlled_states():
             if diagnostic is not None:
                 diagnostic.actor(state['id'])
                 diagnostic.phase('bot.prepare')
@@ -17068,6 +16977,9 @@ class BotRuntime(object):
             if diagnostic is not None:
                 diagnostic.phase('bot.command')
             server_order = self._server_orders.get(state['id'])
+            actor_control = self._control_for(state)
+            worker_control = (actor_control if actor_control is not None and
+                              getattr(actor_control, 'actor_kind', None) == 'bot' else None)
             decide_with_order = getattr(self.adapter, 'decide_with_order', None)
             cache_key = (('server', self._server_order_tokens.get(
                               state['id'], 0))
@@ -17082,6 +16994,15 @@ class BotRuntime(object):
                  (self._control_evaluation_time
                   if self._control_evaluation_time is not None else now) >=
                  decision_cache[1]))
+            if (worker_control is not None and refresh_control and
+                    (worker_control.combat_stop.active or
+                     ('fire' in worker_control.features and
+                      (state.get('profile') or {}).get('class_tag') == 'SPG'))):
+                # Current armour/point evidence and bounded SPG acquisition
+                # are combat inputs, not a slow strategic-route cache. SPG
+                # deliberately does not activate the direct combat-stop
+                # owner; it still reviews on the existing control tick.
+                decision_due = True
             if diagnostic is not None:
                 diagnostic.count(
                     'decision_refresh' if decision_due else
@@ -17408,6 +17329,10 @@ class BotRuntime(object):
                     'turn_speed_limit': (physics_params.get('rotSpd')
                                          if physics_params is not None else None),
                 }
+                if worker_control is not None:
+                    if server_order is None:
+                        server_order = self.adapter.plan_order(decision_state)
+                    server_order = worker_control.refine_order(server_order, contacts, now)
                 reposition_order, reposition_expired = \
                     self._friendly_reposition_order(state, targets, now)
                 if (server_order or {}).get('empty_ammo'):
@@ -17638,18 +17563,18 @@ class BotRuntime(object):
                 self._burst_states[state['id']] = burst_state
             reload_factor = _critical_factor(
                 state, descriptor, 'reload')
-            _bot_intuition(state, descriptor, gun_state, ammo_state, burst_state,
-                           command.get('shell_index', 0))
+            physical_shell_request = (worker_control.physical_shell_request()
+                if worker_control is not None else command.get('shell_index', 0))
             if self._native_simulation is not None:
                 gun_state, ammo_state, burst_state = \
                     self._native_simulation.weapons.prepare(
                         state['id'], step, reload_factor,
-                        gun_state.shell_index(command.get('shell_index', 0)),
+                        gun_state.shell_index(physical_shell_request),
                         state)
             elif not burst_state.active:
                 gun_state.rescale_reload(reload_factor)
                 gun_state.tick(step)
-                selected = gun_state.shell_index(command.get('shell_index', 0))
+                selected = gun_state.shell_index(physical_shell_request)
                 ammo_state.stage(selected, False)
                 reload_kind = gun_state.complete_reload(
                     reload_factor, ammo_state.planned_rounds())
@@ -18669,6 +18594,9 @@ class BotRuntime(object):
             state['clip'] = gun_state.clip
             state['reload_time'] = gun_state.remaining(reload_factor)
             state['reload_duration'] = gun_state.duration(reload_factor)
+            if worker_control is not None:
+                worker_control.after_control(dict(command,
+                    throttle=throttle, turn=turn, path_clear=path_clear), target, now)
             self._advance_active_burst(
                 state, gun_state, ammo_state, reload_factor, descriptor,
                 target, ballistic_solution, step, destroyed_devices,
@@ -18691,17 +18619,11 @@ class BotRuntime(object):
                     not burst_state.active and
                     gun_state.ready(reload_factor) and
                     ammo_state.can_fire() and
-                    # The gunner tier is the last term on purpose.  It only
-                    # decides whether an already admitted shot leaves, so the
-                    # lane probe above keeps refreshing its receipt while the
-                    # gunner reacts and lays, exactly as it did before Bots
-                    # had tiers.
                     (pending_intent is not None or
                      pending_reproof is not None or
                      self._shot_clear(
                         state, target, now,
-                        probe_budget=final_shot_lane_budget)) and
-                    self._gunner_ready(state, gun_state, target, now)):
+                        probe_budget=final_shot_lane_budget))):
                 launch_receipt = None
                 launch_preview = None
                 lane_clear = False
@@ -18965,6 +18887,9 @@ class BotRuntime(object):
             self._finish_motion_stall(
                 state, support_blocked_by_id.get(bot_id, False),
                 pose_rollback, settled, now)
+            control = self._actor_controls.get(bot_id)
+            if control is not None and getattr(control, 'actor_kind', None) == 'bot':
+                control.record_support(support_blocked_by_id.get(bot_id, False))
         if diagnostic is not None:
             diagnostic.actor(None)
         self._alive_bot_ticks += len(slope_candidates)
@@ -18987,6 +18912,9 @@ class BotRuntime(object):
             self._slope_pose_cursor = (
                 start + max(1, visited)) % len(slope_candidates)
         for state in ordered_states:
+            control = self._actor_controls.get(int(state['id']))
+            if control is not None and getattr(control, 'actor_kind', None) == 'bot':
+                control.after_native_update(now)
             if publish:
                 self._mark_combat_publication(state)
         if not publish:
@@ -19110,3 +19038,8 @@ class BotRuntime(object):
             return ()
         return tuple(_copy_runtime_state(state)
                      for state in self._ordered_states())
+
+
+    def controlled_states(self):
+        """Select owned actors; the player adapter can retain read-only peers."""
+        return self.states.values()

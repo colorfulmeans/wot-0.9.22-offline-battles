@@ -56,7 +56,8 @@ class TacticalGeometryTests(unittest.TestCase):
         collisions = [types.SimpleNamespace(dist=100.0,
             hitAngleCos=1.0, matInfo={'armor': 20.0, 'vehicleDamageFactor': 1.0},
             compName='hull')]
-        with mock.patch.object(fixtures.battle_runtime_module, 'collide_vehicle_at_matrix', return_value=collisions) as collide:
+        from gui.mods.offline_lan_0922.vehicle_control import geometry
+        with mock.patch.object(geometry, 'collide_vehicle_at_matrix', return_value=collisions) as collide:
             with mock.patch('random.uniform', side_effect=AssertionError('uniform RNG')), \
                     mock.patch.object(
                         fixtures.battle_runtime_module.combat_rules.random,

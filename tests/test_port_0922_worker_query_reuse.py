@@ -6,6 +6,7 @@ from unittest import mock
 import test_port_0922_battle_runtime as fixtures
 from gui.mods.offline_lan_0922 import destructibles_sensor as sensor
 from gui.mods.offline_lan_0922 import native_destructibles as geometry
+from gui.mods.offline_lan_0922.vehicle_control import geometry as shared_geometry
 
 
 class WorkerQueryReuseTests(unittest.TestCase):
@@ -30,7 +31,7 @@ class WorkerQueryReuseTests(unittest.TestCase):
         import random
         import struct
         from gui.mods.offline_lan_0922 import world_collision as world
-        module = fixtures.battle_runtime_module
+        module = shared_geometry
         rng = random.Random(461)
         for unused in range(200):
             bbox = (tuple(rng.uniform(-8,0) for i in range(3)),
@@ -45,7 +46,7 @@ class WorkerQueryReuseTests(unittest.TestCase):
 
     def test_rotation_reuses_preparation_but_preserves_every_posed_query(self):
         import math
-        module = fixtures.battle_runtime_module
+        module = shared_geometry
         battle = fixtures.BattleRuntime(fixtures._runtime())
         bbox = ((-1.,-.2,-3.),(2.,2.,4.))
         battle._destructibles = types.SimpleNamespace(_vehicle_body_bbox=lambda d:bbox)

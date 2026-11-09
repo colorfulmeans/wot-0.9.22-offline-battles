@@ -13,7 +13,7 @@ import test_player_control_completion as completion
 from player_native_fixtures import aiming_scene, descriptor
 
 from gui.mods.offline_lan_0922 import shot_geometry
-from gui.mods.offline_lan_0922.player_control.manual_aim import (
+from gui.mods.offline_lan_0922.vehicle_control.manual_aim import (
     ManualAim, MAX_VISIBLE_TARGETS, RELEASE_STAGE, SOURCE_ATTRIBUTE)
 
 

@@ -155,8 +155,7 @@ class CandidateReachabilityTests(unittest.TestCase):
         def reachable(s,t,d,origin,point):
             checks.append(point)
             return point[1]>1.8
-        battle._bots=types.SimpleNamespace(bot_aim_selection_allowed=lambda *a:True,
-                                          bot_aim_point_reachable=reachable)
+        battle._bots=types.SimpleNamespace(bot_aim_point_reachable=reachable)
         for unused in range(12):
             before=len(checks)
             battle._bot_firing_lane(source,target)
@@ -171,8 +170,7 @@ class CandidateReachabilityTests(unittest.TestCase):
 
     def test_all_unreachable_keeps_exposed_point_for_bounded_relocation(self):
         runtime,battle,source,target,descriptor=self.scene()
-        battle._bots=types.SimpleNamespace(bot_aim_selection_allowed=lambda *a:True,
-                                          bot_aim_point_reachable=lambda *a:False)
+        battle._bots=types.SimpleNamespace(bot_aim_point_reachable=lambda *a:False)
         self.assertTrue(battle._bot_firing_lane(source,target))
         self.assertIsNotNone(battle._bot_aim_point(source,target))
         self.assertTrue(all(not c['reachable'] for c in source['_aim_candidate_receipt']['checks']))
@@ -180,7 +178,7 @@ class CandidateReachabilityTests(unittest.TestCase):
     def test_changed_pose_rechecks_retained_sample_and_keeps_search_cursor(self):
         runtime,battle,source,target,descriptor=self.scene()
         minimum=[0.]
-        battle._bots=types.SimpleNamespace(bot_aim_selection_allowed=lambda *a:True,
+        battle._bots=types.SimpleNamespace(
             bot_aim_point_reachable=lambda s,t,d,o,p:p[1]>=minimum[0])
         self.assertTrue(battle._bot_firing_lane(source,target))
         first=battle._bot_aim_point(source,target)
@@ -195,8 +193,7 @@ class CandidateReachabilityTests(unittest.TestCase):
 
     def test_wall_still_rejects_reachable_candidates(self):
         runtime,battle,source,target,descriptor=self.scene()
-        battle._bots=types.SimpleNamespace(bot_aim_selection_allowed=lambda *a:True,
-                                          bot_aim_point_reachable=lambda *a:True)
+        battle._bots=types.SimpleNamespace(bot_aim_point_reachable=lambda *a:True)
         runtime.bigworld.wg_collideSegment=lambda *a:(battle_fixtures._Vector(0.,1.,1.),)
         self.assertFalse(battle._bot_firing_lane(source,target))
         self.assertIsNone(battle._bot_aim_point(source,target))

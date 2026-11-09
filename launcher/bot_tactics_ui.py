@@ -270,8 +270,8 @@ class BotTacticsEditor(ConnectionEditorMixin):
             box.bind('<<ComboboxSelected>>',lambda e:self._behavior_help('ammo_ratios'),add='+')
         for row,key in enumerate(contract.PARAMETERS,len(fields)+1):
             ttk.Label(form,text=labels.parameter_label(key,self.language)).grid(row=row,column=0,sticky='w',pady=3)
-            lo,hi=contract.PARAMETERS[key];scale=1 if key=='ammo_limit' else 100 if key=='lead_error' else 10
-            values=('',)+tuple(format(i/scale,'.6g') for i in range(round(lo*scale),round(hi*scale)+1))
+            lo,hi=contract.PARAMETERS[key]
+            values=('',)+tuple(str(i) for i in range(lo,hi+1))
             var=tk.StringVar();self.rule_vars[key]=var
             box=LocalizedCombobox(form,variable=var,kind='number',values=values,language=self.language,width=35)
             box.grid(row=row,column=1,sticky='ew');self.rule_boxes[key]=box

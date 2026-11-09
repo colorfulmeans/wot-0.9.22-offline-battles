@@ -9,8 +9,7 @@ import bot_tactics_store as storage
 from gui.mods.offline_lan_0922 import bot_gunnery
 
 FIELDS = ('skill','development','equipment','ammo_ratios','ammo_limit','consumables','outfit',
-          'crew_preset','reaction_seconds','patience_seconds','converged_factor',
-          'aim_bias_factor','lead_error')
+          'crew_preset')
 DEFAULTS = {
     'development': ('stock','intermediate','full','full'),
     'equipment': ('none','single','standard','improved'),
@@ -66,7 +65,6 @@ def rows(group, language):
     tr=lambda a,b:a if zh else b
     values,sources=group['values'],group['sources']
     tier=values.get('skill')
-    params=bot_gunnery.skill_parameters(tier) if tier else {}
     def source(key):
         t,c,s=sources[key]
         if t == 'lineup':
@@ -94,9 +92,6 @@ def rows(group, language):
             value=tr('随每辆 BOT 的评分／档位确定','Depends on each Bot rating / tier')
         elif key in DEFAULTS:
             value=DEFAULTS[key][bot_gunnery.SKILL_TIERS.index(tier)]
-            origin=tr('难度默认：','Difficulty default: ')+labels.enum_label('skill',tier,language)
-        else:
-            value=params[key]
             origin=tr('难度默认：','Difficulty default: ')+labels.enum_label('skill',tier,language)
         if key=='ammo_ratios' and isinstance(value,(tuple,list)):
             display=' : '.join(str(v) for v in value)
@@ -127,7 +122,7 @@ class PreviewWindow:
         self.scope_note=ttk.Label(self.root,wraplength=990,justify='left',padding=(10,0))
         self.scope_note.pack(fill='x')
         frame=ttk.Frame(self.root,padding=10);frame.pack(fill='both',expand=True)
-        self.table=ttk.Treeview(frame,columns=('field','value','source'),show='headings',height=13)
+        self.table=ttk.Treeview(frame,columns=('field','value','source'),show='headings',height=8)
         for key,width in (('field',220),('value',430),('source',330)):
             self.table.column(key,width=width,minwidth=100)
         scrollbar=ttk.Scrollbar(frame,orient='horizontal',command=self.table.xview)

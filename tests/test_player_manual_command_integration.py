@@ -251,7 +251,7 @@ class NativeFireAuthorizationTests(unittest.TestCase):
         from test_player_manual_aim import ObservedRotator
         from gui.mods.offline_lan_0922 import ballistics
         from gui.mods.offline_lan_0922.gun_mechanics import _field
-        from gui.mods.offline_lan_0922.player_control import PlayerControl
+        from gui.mods.offline_lan_0922.vehicle_control.player_binding import PlayerControl
 
         self.native = runtime_fixture
         fixture = runtime_fixture.BattleRuntimeContractTests()

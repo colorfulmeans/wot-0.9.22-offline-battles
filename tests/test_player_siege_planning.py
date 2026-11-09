@@ -11,8 +11,8 @@ from unittest import mock
 from test_player_siege_engagement import SiegeScene
 from test_player_stationary_plan import install_plan_observations, NativePlanScene
 from gui.mods.offline_lan_0922 import shot_geometry, siege_mechanics
-from gui.mods.offline_lan_0922.player_control import siege_planning
-from gui.mods.offline_lan_0922.player_control.native_aim import (
+from gui.mods.offline_lan_0922.vehicle_control import siege_planning
+from gui.mods.offline_lan_0922.vehicle_control.native_aim import (
     active_hydraulic_pose, hydraulic_body, hydraulic_reach, mechanical_reach)
 
 

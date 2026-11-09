@@ -10,7 +10,7 @@ import unittest
 import test_player_full_shell_settings as shell_fixtures
 import test_player_siege_engagement as siege_fixtures
 from gui.mods.offline_lan_0922 import siege_mechanics
-from gui.mods.offline_lan_0922.player_control import attack_policy
+from gui.mods.offline_lan_0922.vehicle_control import attack_policy
 
 
 class ReloadAuthorityLifecycleTests(unittest.TestCase):

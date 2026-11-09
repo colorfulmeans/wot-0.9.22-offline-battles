@@ -1,9 +1,10 @@
-"""Combat-stop intent is subordinate to the unchanged copied BOT owner.
+"""Shared combat stops preserve task ownership and current native evidence.
 
-The small fixture supplies an already resolved original order and native
-observations. It does not establish admission itself: cold-start, lane checks,
-route selection and final native controls are covered by full-runtime tests.
-Mechanical/friendly/rear recovery consumers here are the real copied laws.
+The small fixture supplies an already resolved task order and observations.
+Cold-start, lane checks, routes and final native controls belong to separate
+full-runtime tests. Every living observed enemy participates in armour review;
+retired priority metadata cannot filter or reorder that domain. Recovery
+consumers here are the actual common engine laws, not a second player copy.
 """
 import copy
 import sys
@@ -14,12 +15,13 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src/res/scripts/client'))
 from gui.mods.offline_lan_0922 import siege_mechanics
-from gui.mods.offline_lan_0922.player_control.attack_policy import AttackPolicy
-from gui.mods.offline_lan_0922.player_control.combat_stop import (
+from gui.mods.offline_lan_0922.vehicle_control.attack_policy import AttackPolicy
+from gui.mods.offline_lan_0922.vehicle_control.combat_stop import (
     CombatStop, MECHANICAL_STALL_SECONDS)
-from gui.mods.offline_lan_0922.player_control.copied import bot_runtime
-from gui.mods.offline_lan_0922.player_control.copied.ai.driver import WAYPOINT_ARRIVAL_RADIUS
-from gui.mods.offline_lan_0922.player_control.full_runtime import (
+from gui.mods.offline_lan_0922.vehicle_control.target_selection import ordinary_initial_key
+from gui.mods.offline_lan_0922 import bot_runtime
+from gui.mods.offline_lan_0922.ai.driver import WAYPOINT_ARRIVAL_RADIUS
+from gui.mods.offline_lan_0922.vehicle_control.full_runtime import (
     FullPlayerRuntime, _PlayerBehaviorEngine)
 
 
@@ -177,7 +179,7 @@ class OriginalOwnershipBoundaryTests(unittest.TestCase):
                 self.assertFalse(scene.owner.stop_allowed)
                 self.assertFalse(scene.owner.combat_owned)
 
-    def test_original_selected_lease_first_then_score_order_with_rejections_excluded(self):
+    def test_selected_target_then_full_live_domain_ignores_old_scores_and_refusals(self):
         scene = Scene()
         extra = [dict(scene.target, id=i, network_id=i) for i in range(3, 8)]
         scene.runtime._targets = (scene.target,) + tuple(extra)
@@ -191,10 +193,91 @@ class OriginalOwnershipBoundaryTests(unittest.TestCase):
             dict(target=('bot', 7), reason='outside_engagement_range', score=-100.)],
             focus_refusals=[dict(target=('bot', 6))])
         scene.owner.accept(scene.raw_order)
-        self.assertEqual((2, 3, 4), tuple(row['id'] for row in scene.owner.targets))
+        self.assertEqual((2, 3, 4, 5, 6, 7), tuple(row['id'] for row in scene.owner.targets))
         self.assertTrue(scene.owner.contains(scene.target))
-        self.assertFalse(scene.owner.contains(extra[2]))
-        self.assertEqual('movement_lease', scene.owner.receipt['reason'])
+        self.assertTrue(all(scene.owner.contains(row) for row in extra))
+        self.assertEqual((), scene.owner.receipt['excluded'])
+        self.assertEqual('observed_living_enemies', scene.owner.receipt['reason'])
+
+    def test_initial_key_selects_nearest_before_lower_armor(self):
+        scene = Scene()
+        source = (10., 0., 20.)
+        near = dict(scene.target, id=3, network_id=3,
+                    position=(10., 0., 25.), armor=300.)
+        soft = dict(scene.target, id=4, network_id=4,
+                    position=(10., 0., 26.), armor=10.)
+        selected = min((soft, near),
+                       key=lambda target: ordinary_initial_key(source, target))
+        self.assertIs(near, selected)
+        self.assertEqual(5., ordinary_initial_key(source, near)[0])
+        self.assertEqual(6., ordinary_initial_key(source, soft)[0])
+
+    def test_equal_distance_initial_key_prefers_lower_armor_and_orders_domain(self):
+        scene = Scene()
+        armored = dict(scene.target, id=3, network_id=3,
+                       position=(3., 0., 4.), armor=180.)
+        soft = dict(scene.target, id=4, network_id=4,
+                    position=(-3., 0., -4.), profile=dict(armor=25.))
+        selected = min((armored, soft), key=lambda target:
+                       ordinary_initial_key(scene.state['position'], target))
+        self.assertIs(soft, selected)
+        scene.runtime._targets = (armored, scene.target, soft)
+        scene.owner.accept(scene.raw_order)
+        self.assertEqual((2, 4, 3), tuple(row['id'] for row in scene.owner.targets))
+
+    def test_distances_are_not_binned_to_invent_an_armor_tie(self):
+        scene = Scene()
+        near = dict(scene.target, id=3, network_id=3,
+                    position=(0., 0., 50.), armor=300.)
+        soft = dict(scene.target, id=4, network_id=4,
+                    position=(0., 0., 50.001), armor=10.)
+        self.assertLess(ordinary_initial_key(scene.state['position'], near),
+                        ordinary_initial_key(scene.state['position'], soft))
+
+    def test_current_selected_target_is_retained_before_nearer_domain_candidates(self):
+        scene = Scene()
+        near = dict(scene.target, id=3, network_id=3,
+                    position=(0., 0., 20.), armor=300.)
+        farther = dict(scene.target, id=4, network_id=4,
+                       position=(0., 0., 30.), armor=10.)
+        scene.runtime._targets = (farther, near, scene.target)
+        scene.owner.accept(scene.raw_order)
+        self.assertEqual((2, 3, 4), tuple(row['id'] for row in scene.owner.targets))
+        self.assertIs(scene.target, scene.owner.engagement_target(scene.raw_order))
+        self.assertEqual(('bot', 2), scene.owner.receipt['selected'])
+
+    def test_dead_and_zero_health_contacts_are_not_armour_review_candidates(self):
+        scene = Scene()
+        living = dict(scene.target, id=3, network_id=3, health=1.)
+        invalid = [dict(scene.target, id=4, network_id=4, alive=False),
+                   dict(scene.target, id=5, network_id=5, alive=True, health=0.),
+                   dict(scene.target, id=6, network_id=6, health=-1.),
+                   dict(scene.target, id=7, network_id=7, health=float('nan'))]
+        scene.runtime._targets = (scene.target, living) + tuple(invalid)
+        scene.owner.accept(scene.raw_order)
+        self.assertEqual((2, 3), tuple(row['id'] for row in scene.owner.targets))
+        self.assertTrue(scene.owner.contains(living))
+        self.assertTrue(all(not scene.owner.contains(row) for row in invalid))
+        self.assertEqual((True, (('bot', 2), ('bot', 3)), True), scene.owner.signature)
+
+    def test_retired_priority_metadata_cannot_change_target_or_domain_signature(self):
+        scene = Scene()
+        other = dict(scene.target, id=3, network_id=3, kind='human')
+        scene.runtime._targets += (other,)
+        scene.owner.accept(scene.raw_order)
+        signature = scene.owner.signature
+        targets = scene.owner.targets
+        scene.state['recent_hit'] = dict(attacker_kind='human', attacker_id=3, at=1.)
+        selection = scene.raw_order['tactical_evidence']['selection']
+        selection.update(selected=('human', 3), outcome='retaliation',
+            candidates=[dict(target=('human', 3), reason='eligible', score=-1000.),
+                        dict(target=('bot', 2), reason='no_local_lane', score=1000.)],
+            focus_refusals=[dict(target=('bot', 2))])
+        scene.owner.accept(scene.raw_order)
+        self.assertEqual(targets, scene.owner.targets)
+        self.assertEqual(signature, scene.owner.signature)
+        self.assertEqual(('bot', 2), scene.owner.receipt['selected'])
+        self.assertEqual((), scene.owner.receipt['excluded'])
 
     def test_advance_keeps_all_original_eligible_enemies_as_negative_proof_obligations(self):
         scene = Scene()
@@ -857,10 +940,11 @@ class SiegeOriginalOwnershipTests(unittest.TestCase):
         self.assertIsNone(scene.owner.pivot)
         self.assertIsNone(scene.runtime.siege_aim_candidate(scene.target))
 
-        # Execute the actual early copied lane callback and late player
-        # shooting callback; only native I/O is represented by this fixture.
+        # Execute the actual shared actor-bound lane callback; only native
+        # I/O is represented by this fixture.
         runtime = scene.runtime
-        runtime.engine.player_runtime = runtime
+        runtime.engine._actor_controls = {scene.state['id']: runtime}
+        runtime.engine._control_factory = None
         runtime.current_attack_candidate = lambda source, target, for_aim=False: (
             FullPlayerRuntime.current_attack_candidate(runtime, source, target, for_aim))
         runtime._siege_fire_ready = lambda: FullPlayerRuntime._siege_fire_ready(runtime)

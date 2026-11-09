@@ -95,7 +95,7 @@ class AcceptanceMatrixTests(unittest.TestCase):
 
     def test_all_equipment_scenes_publish_valid_room_modes_after_round_reset(self):
         from lan_battle_server import BattleState
-        from server_bot_ai import BotPlanner
+        from gui.mods.offline_lan_0922.vehicle_control.strategy import BotPlanner
         from test_port_0922_server_team_size import _attach_worker, _Connection, _hello
         from gui.mods.offline_lan_0922.lan_client import LANClient, BOT_TIER_MODES
         for mode in ('1', '2', '3', '4'):

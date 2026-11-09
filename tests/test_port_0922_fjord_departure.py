@@ -8,7 +8,7 @@ from unittest import mock
 
 import test_port_0922_bot_runtime as runtime_fixtures
 from effective_params_fixture import bot_default_crew_factors
-from server_bot_ai import BotPlanner
+from gui.mods.offline_lan_0922.vehicle_control.strategy import BotPlanner
 
 
 ROOT = Path(__file__).resolve().parents[1]

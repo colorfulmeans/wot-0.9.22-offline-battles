@@ -24,7 +24,7 @@ class RoofCrushEntryTests(unittest.TestCase):
 
     def test_normal_entry_preserves_actual_server_map_roster_and_planner(self):
         from lan_battle_server import BattleState
-        from server_bot_ai import BotPlanner
+        from gui.mods.offline_lan_0922.vehicle_control.strategy import BotPlanner
         initialize, start, orders = BattleState.__init__, BattleState.request_start, BotPlanner.build_orders
         with mock.patch.dict(os.environ):
             os.environ.pop(fixture.ENV,None)

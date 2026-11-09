@@ -9,7 +9,7 @@ sys.path[:0] = [str(ROOT/'src/res/scripts/client'), str(ROOT/'server'), str(ROOT
 from gui.mods.offline_lan_0922 import default_loadouts as policy
 from gui.mods.offline_lan_0922 import default_crew
 from gui.mods.offline_lan_0922.ai.planner import build_vehicle_profile, select_shell_index
-from server_bot_ai import BotPlanner
+from gui.mods.offline_lan_0922.vehicle_control.strategy import BotPlanner
 from lan_battle_server import BattleState
 
 

@@ -13,10 +13,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src/res/scripts/client'))
-from gui.mods.offline_lan_0922.player_control.attack_policy import (
+from gui.mods.offline_lan_0922.vehicle_control.attack_policy import (
     AttackPolicy, NativeAttackEvaluator, ATOMIC_CLOSE_INTERVAL, ATOMIC_MAX_JOBS, ATOMIC_WORLD_QUERIES,
     ATOMIC_ARMOUR_BATCHES, ATOMIC_CANDIDATES, native_source_pose, limited_traverse)
-from gui.mods.offline_lan_0922.player_control.trigger_admission import TriggerAdmission
+from gui.mods.offline_lan_0922.vehicle_control.trigger_admission import TriggerAdmission
 
 
 class Observations(object):
@@ -380,7 +380,7 @@ class RebuiltForegroundTests(unittest.TestCase):
             for key, value in identity.items():
                 self.assertEqual(value, command[key])
 
-    def test_current_selection_stays_stable_until_next_trigger(self):
+    def test_current_selection_stays_stable_across_committed_triggers(self):
         scene = Observations()
         scene.passed(0, target=2, sample=1)
         scene.prime(index=0)
@@ -390,7 +390,14 @@ class RebuiltForegroundTests(unittest.TestCase):
         second = scene.tick(.1)['candidate']
         self.assertEqual(first['key'], second['key'])
         scene.policy.shot_committed(dict(burst_index=0, burst_count=1), {})
-        self.assertIsNone(scene.policy.selected)
+        self.assertEqual(first['key'], scene.policy.selected)
+        self.assertIsNone(scene.policy.trigger)
+        self.assertEqual(first['key'], scene.tick(.2)['candidate']['key'])
+        # The intention is not a stale firing certificate. Changed armour
+        # retires its evidence and lets the next legal point take over.
+        scene.move_target(2, 1)
+        scene.value(0, target=2, sample=1, armor='failed')
+        self.assertEqual(('bot', 1), scene.tick(.3)['candidate']['target_key'])
 
     def test_hull_laying_intent_stays_stable_while_its_evidence_expires(self):
         scene = Observations(targets=1, points=9)
@@ -444,6 +451,46 @@ class RebuiltForegroundTests(unittest.TestCase):
         scene.prime()
         self.assertEqual(0, scene.tick(0.)['candidate']['shell_index'])
         self.assertEqual(1, scene.policy.next_shell)
+
+    def test_background_next_target_cannot_steal_valid_current_point(self):
+        scene = Observations(targets=2, points=1)
+        scene.frame['shells'][1]['piercing'] = 150.
+        scene.passed(0, target=1)
+        scene.passed(0, target=2)
+        scene.passed(1, target=2)
+        scene.prime()
+        first = scene.tick(0.)['candidate']
+        self.assertEqual(('bot', 1), first['target_key'])
+        self.assertEqual(('bot', 2), scene.policy.next_plan['target_key'])
+        for now in (.1, .5, 1., 3., 9.):
+            result = scene.tick(now)
+            self.assertEqual('aim', result['action'])
+            self.assertEqual(first['key'], result['candidate']['key'])
+            self.assertEqual(first['pose_stamp'], result['candidate']['pose_stamp'])
+            self.assertEqual(('bot', 2), scene.policy.next_plan['target_key'])
+        self.assertIsNone(scene.policy.search_started)
+
+    def test_current_retention_releases_on_dead_target_or_real_line_change(self):
+        for reason in ('dead', 'blocked', 'armour_changed'):
+            with self.subTest(reason=reason):
+                scene = Observations(targets=2, points=1)
+                scene.passed(0, target=1)
+                scene.passed(0, target=2)
+                scene.prime()
+                first = scene.tick(0.)['candidate']
+                self.assertEqual(('bot', 1), first['target_key'])
+                if reason == 'dead':
+                    scene.frame['targets'] = scene.frame['targets'][1:]
+                elif reason == 'blocked':
+                    scene.frame['line_revision'] += 1
+                    scene.value(0, target=1, armor='passed', line='world_blocked')
+                else:
+                    scene.move_target(1, 1)
+                    scene.value(0, target=1, armor='failed')
+                result = scene.tick(.1)
+                self.assertEqual('aim', result['action'])
+                self.assertEqual(('bot', 2), result['candidate']['target_key'])
+                self.assertIsNone(scene.policy.search_started)
 
     def test_final_trigger_revalidates_expired_point_in_its_ammunition_rank(self):
         scene = Observations(targets=2, points=5)
@@ -1008,6 +1055,24 @@ class RebuiltFallbackTests(unittest.TestCase):
         self.assertEqual(0., result['candidate']['expected_damage'])
         self.assertTrue(scene.policy.fallback)
 
+    def test_loaded_he_penetration_is_not_stolen_by_background_damage_rank(self):
+        for clip in (1, 6):
+            with self.subTest(clip=clip):
+                scene = Observations(clips=clip, targets=2, points=1)
+                scene.frame['loaded'] = 2
+                scene.frame['ammo'] = (0, 0, 30)
+                scene.passed(2, target=1)
+                scene.prime()
+                first = scene.tick(0.)['candidate']
+                self.assertEqual(('bot', 1), first['target_key'])
+                scene.he(150., target=2)
+                scene.prime('he_fallback')
+                for now in (.1, .5, 1.):
+                    result = scene.tick(now)
+                    self.assertEqual('aim', result['action'])
+                    self.assertEqual(first['key'], result['candidate']['key'])
+                    self.assertIsNone(scene.policy.search_started)
+
     def test_unknown_contact_cannot_be_promoted_to_zero_damage(self):
         scene = Observations(targets=1, points=1)
         scene.frame['loaded'] = 2
@@ -1015,6 +1080,43 @@ class RebuiltFallbackTests(unittest.TestCase):
         result = self.fallback(scene)
         self.assertEqual('wait', result['action'])
         self.assertIsNone(scene.policy._best_he())
+
+    def test_current_he_compares_later_targets_before_spending_a_zero_contact(self):
+        scene = Observations(clips=6, targets=3, points=3, he_validation='single_point')
+        scene.allow_atomic = False
+        scene.frame.update(loaded=2, ammo=(0, 0, 30))
+        scene.he(0.)
+        scene.he(140., target=3, sample=2)
+        decision = scene.tick(0., background=False)
+        self.assertNotEqual('aim', decision['action'])
+        self.assertGreater(scene.policy.status()['he_comparison']['pending'], 0)
+        for step in range(1, 20):
+            decision = scene.tick(step * .1)
+            self.assertLessEqual(scene.policy._used['foreground'], scene.policy.foreground_budget)
+            self.assertLessEqual(scene.policy._used['background'], scene.policy.background_budget)
+            self.assertIsNone(scene.policy.search_started)
+            if decision['action'] == 'aim':
+                break
+        self.assertEqual(('aim', ('bot', 3), 2, 140.),
+            (decision['action'], decision['candidate']['target_key'],
+             decision['candidate']['sample'], decision['candidate']['expected_damage']))
+        self.assertEqual(0, scene.policy.status()['he_comparison']['pending'])
+
+    def test_unavailable_he_contact_is_not_ranked_as_zero_or_allowed_to_starve_valid_damage(self):
+        scene = Observations(clips=3, targets=2, points=1, he_validation='single_point')
+        scene.frame.update(loaded=2, ammo=(0, 0, 30))
+        scene.he(20.)
+        scene.value(2, target=2, mode='he_fallback', armor='unknown',
+                    line='unknown', contact=None, expected_damage=None)
+        for step in range(8):
+            decision = scene.tick(step * .1)
+            if decision['action'] == 'aim':
+                break
+        self.assertEqual(('aim', ('bot', 1), 20.),
+            (decision['action'], decision['candidate']['target_key'],
+             decision['candidate']['expected_damage']))
+        self.assertIsNone(scene.policy.search_started)
+        self.assertEqual(1, len(scene.policy._rows_for('he_fallback', executable=True)))
 
     def test_all_he_targets_and_points_compete_by_actual_damage(self):
         scene = Observations(targets=3, points=3)
@@ -1689,7 +1791,7 @@ class NativeAtomicClosureTests(native_fire.AutomaticFireScene):
         self.assertLess(required, ATOMIC_MAX_JOBS * 167)
 
     def test_ranked_recheck_leaves_world_chords_for_the_fair_candidate(self):
-        from gui.mods.offline_lan_0922.player_control.attack_policy import WORLD_CHORDS_PER_FRONTIER
+        from gui.mods.offline_lan_0922.vehicle_control.attack_policy import WORLD_CHORDS_PER_FRONTIER
 
         shot = self.battle._gun_state.shots[0]
         shot.speed, shot.gravity = 100., .1
@@ -1705,7 +1807,7 @@ class NativeAtomicClosureTests(native_fire.AutomaticFireScene):
         self.assertEqual(WORLD_CHORDS_PER_FRONTIER, len(self.world_queries) - before)
 
     def test_fifteen_stable_enemies_three_shells_complete_in_bounded_frames(self):
-        from gui.mods.offline_lan_0922.player_control.attack_policy import ATOMIC_WALL_SECONDS
+        from gui.mods.offline_lan_0922.vehicle_control.attack_policy import ATOMIC_WALL_SECONDS
         self.pose(self.target, (0., 0., 150.))
         for index in range(1, 15):
             self.vehicle(42 + index, ((index - 7) * 8., 0., 150.), 2)

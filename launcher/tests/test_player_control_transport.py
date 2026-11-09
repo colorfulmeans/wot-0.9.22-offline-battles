@@ -32,7 +32,7 @@ class PlayerControlTransportTests(unittest.TestCase):
     def client_module(name):
         module_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..',
             'src', 'res', 'scripts', 'client', 'gui', 'mods', 'offline_lan_0922',
-            'player_control', name + '.py'))
+            'vehicle_control', name + '.py'))
         spec = importlib.util.spec_from_file_location('player_control_contract_' + name, module_path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -577,7 +577,7 @@ class PlayerControlTransportTests(unittest.TestCase):
     def test_full_projectile_snapshot_fits_bounded_reader_when_opened_late(self):
         client_path = str(Path(__file__).resolve().parents[2] / 'src/res/scripts/client')
         with mock.patch.object(sys, 'path', [client_path] + sys.path):
-            from gui.mods.offline_lan_0922.player_control import PlayerControl
+            from gui.mods.offline_lan_0922.vehicle_control.player_binding import PlayerControl
         entity = types.SimpleNamespace(isAlive=lambda: True)
         owner = types.SimpleNamespace(state='running', _battle_live=True, _battle_result=None,
             _server=types.SimpleNamespace(vehicle_id=101), _server_entity=lambda unused: entity,

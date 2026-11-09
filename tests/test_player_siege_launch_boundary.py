@@ -1,6 +1,6 @@
 """First-trigger mode boundary, independent of ammunition and native tails.
 
-These tests exercise the real foreground authorization and copied transition
+These tests exercise the real foreground authorization and shared transition
 consumers with controlled native observations. They do not emulate a Windows
 gameplay session or substitute for actual-barrel first-edge admission.
 """
@@ -9,7 +9,7 @@ import unittest
 from unittest import mock
 
 from gui.mods.offline_lan_0922 import siege_mechanics
-from gui.mods.offline_lan_0922.player_control import full_runtime
+from gui.mods.offline_lan_0922.vehicle_control import full_runtime
 
 
 class SiegeLaunchBoundaryTests(unittest.TestCase):
@@ -26,7 +26,9 @@ class SiegeLaunchBoundaryTests(unittest.TestCase):
         runtime.features = {'fire', 'drive'}
         state = dict(id=77, siege_state=mode, gun_aligned=True,
                      position=(0., 0., 0.), profile=dict(class_tag='TD'))
-        runtime.engine = SimpleNamespace(states={77: state})
+        runtime.engine = SimpleNamespace(states={77: state},
+            _descriptors={77: entity.typeDescriptor}, _descriptor_pairs={})
+        runtime.attack_policy = SimpleNamespace(decision=dict(action='wait', candidate=None))
         runtime.planner = SimpleNamespace(_target_decisions={})
         runtime._identity = ('round', 77)
         runtime._binding = lambda: runtime._identity
@@ -146,7 +148,7 @@ class SiegeLaunchBoundaryTests(unittest.TestCase):
                                  _burst_states={77: observer}, _siege_desired=desired)
         battle._local_player_burst = dict(committed=1, count=3)
         command = dict(fire_allowed=False)
-        self.assertFalse(full_runtime.copied_runtime.BotRuntime._update_bot_siege_intent(
+        self.assertFalse(full_runtime.shared_runtime.BotRuntime._update_bot_siege_intent(
             engine, state, command, None, .1))
         desired.assert_not_called()
         self.assertTrue(observer.active)

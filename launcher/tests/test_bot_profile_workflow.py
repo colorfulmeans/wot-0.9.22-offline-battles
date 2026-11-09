@@ -75,10 +75,10 @@ class ProfileEditorTests(unittest.TestCase):
         with mock.patch.object(ui.messagebox,'askyesno') as ask:
             e.profile_name.set('A');e.open_profile()
             ask.assert_not_called();self.assertEqual('A',e.document['name'])
-            e.rule_vars['reaction_seconds'].set('1');e.open_profile()
-            self.assertEqual('1',e.rule_vars['reaction_seconds'].get())
+            e.rule_vars['ammo_limit'].set('1');e.open_profile()
+            self.assertEqual('1',e.rule_vars['ammo_limit'].get())
             e.profile_name.set('B');e.open_profile();ask.assert_not_called()
-            self.assertEqual('',e.rule_vars['reaction_seconds'].get())
+            self.assertEqual('',e.rule_vars['ammo_limit'].get())
         self.errors.assert_not_called()
 
     def test_dirty_cancel_and_read_failure_keep_draft_and_display(self):

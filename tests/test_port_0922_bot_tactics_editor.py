@@ -20,7 +20,7 @@ from test_port_0922_spg_initial_positions import _graph, _states
 
 def profile():
     raw=cfg.empty('Editor regression')
-    raw['behavior']=[dict(team=0,class_tag='all',slot=-1,values={'reaction_seconds':2.5,'lead_error':0.0})]
+    raw['behavior']=[dict(team=0,class_tag='all',slot=-1,values={'ammo_limit':25})]
     graph=_graph()
     points=[list(p) for p in graph['routes']['1'][0]['waypoints'][:4]]
     points[0]=graph['spawn_anchors'][0]+[0]
@@ -66,22 +66,22 @@ class TacticsContractTests(unittest.TestCase):
 
     def test_hierarchy_global_team_class_slot(self):
         raw=cfg.empty()
-        raw['behavior']=[dict(team=1,class_tag='all',slot=2,values={'reaction_seconds':.3}),
-            dict(team=1,class_tag='heavyTank',slot=-1,values={'reaction_seconds':.7}),
-            dict(team=1,class_tag='all',slot=-1,values={'reaction_seconds':1.2}),
-            dict(team=0,class_tag='all',slot=-1,values={'reaction_seconds':2.0})]
+        raw['behavior']=[dict(team=1,class_tag='all',slot=2,values={'ammo_limit':3}),
+            dict(team=1,class_tag='heavyTank',slot=-1,values={'ammo_limit':7}),
+            dict(team=1,class_tag='all',slot=-1,values={'ammo_limit':12}),
+            dict(team=0,class_tag='all',slot=-1,values={'ammo_limit':20})]
         raw=cfg.canonical(raw)
-        self.assertEqual(.3,cfg.effective(raw,1,'heavyTank',2)['reaction_seconds'])
-        self.assertEqual(.7,cfg.effective(raw,1,'heavyTank',3)['reaction_seconds'])
-        self.assertEqual(1.2,cfg.effective(raw,1,'SPG',3)['reaction_seconds'])
-        self.assertEqual(2,cfg.effective(raw,2,'SPG',3)['reaction_seconds'])
+        self.assertEqual(3,cfg.effective(raw,1,'heavyTank',2)['ammo_limit'])
+        self.assertEqual(7,cfg.effective(raw,1,'heavyTank',3)['ammo_limit'])
+        self.assertEqual(12,cfg.effective(raw,1,'SPG',3)['ammo_limit'])
+        self.assertEqual(20,cfg.effective(raw,2,'SPG',3)['ammo_limit'])
 
     def test_bad_versions_nonfinite_unknown_fields_and_resource_mismatch_rejected(self):
         for mutation in ('version','nan','bool','extra','resource','coords','spg_route','crew','slot'):
             raw=profile()
             if mutation=='version':raw['client']='1.10'
-            elif mutation=='nan':raw['behavior'][0]['values']['reaction_seconds']=float('nan')
-            elif mutation=='bool':raw['behavior'][0]['values']['reaction_seconds']=True
+            elif mutation=='nan':raw['behavior'][0]['values']['ammo_limit']=float('nan')
+            elif mutation=='bool':raw['behavior'][0]['values']['ammo_limit']=True
             elif mutation=='extra':raw['behavior'][0]['values']['ignore_walls']=True
             elif mutation=='resource':raw['maps']['08_ruinberg']['resource_sha256']='0'*64
             elif mutation=='coords':raw['maps']['08_ruinberg']['positions'][0]['point']=[999,999]
@@ -185,13 +185,42 @@ class TacticsContractTests(unittest.TestCase):
                 actual=view.world(*view.screen(point))
                 self.assertAlmostEqual(point[0],actual[0]);self.assertAlmostEqual(point[1],actual[1])
 
-    def test_gunnery_override_changes_actual_permission_and_error(self):
-        self.assertTrue(bot_gunnery.may_fire(1,1,1,1))
-        self.assertFalse(bot_gunnery.may_fire(1,1,1,1,overrides={'reaction_seconds':3}))
-        error=bot_gunnery.engagement_error(.34,1,2,('bot',3),0,{'lead_error':0})
-        self.assertEqual(1,error['lead_scale'])
-        self.assertEqual((0,0),bot_gunnery.aim_offset_metres(.34,error,.02,300,{'aim_bias_factor':0}))
-        self.assertEqual(75,bot_gunnery.rating_parameters(1,{'crew_level':75})['crew_level'])
+    def test_retired_gunnery_fields_cannot_reenter_canonical_profiles(self):
+        raw=profile();expected=copy.deepcopy(raw)
+        native=dict(skill='elite',development='full',equipment='improved',
+                    crew_preset='50',consumables='large',outfit='on',ammo_ratios=[3,2,1])
+        raw['behavior'][0]['values'].update(native)
+        expected['behavior'][0]['values'].update(native)
+        raw['behavior'][0]['values'].update(dict((key,0.5) for key in cfg.RETIRED_GUNNERY_PARAMETERS))
+        before=copy.deepcopy(raw)
+        result=cfg.canonical(raw)
+        self.assertEqual(expected,result)
+        self.assertEqual(before,raw)
+        self.assertEqual({'ammo_limit'},set(cfg.PARAMETERS))
+        for key in cfg.RETIRED_GUNNERY_PARAMETERS:self.assertNotIn(key,cfg.dumps(result))
+
+    def test_legacy_only_rule_is_removed_without_removing_authored_geometry(self):
+        raw=profile();maps=copy.deepcopy(raw['maps'])
+        raw['behavior'][0]['values']=dict((key,1) for key in cfg.RETIRED_GUNNERY_PARAMETERS)
+        result=cfg.canonical(raw)
+        self.assertEqual([],result['behavior'])
+        self.assertEqual(maps,result['maps'])
+
+    def test_saved_custom_profile_stays_visible_and_active_when_old_fields_retire(self):
+        from bot_tactics_store import _atomic
+        expected=profile();legacy=copy.deepcopy(expected)
+        legacy['behavior'][0]['values'].update(dict((key,1) for key in cfg.RETIRED_GUNNERY_PARAMETERS))
+        with tempfile.TemporaryDirectory() as tmp:
+            store=Store(tmp)
+            _atomic(store.profile_path(legacy['name']),legacy)
+            _atomic(store.active_path,legacy)
+            self.assertIn(legacy['name'],store.names())
+            self.assertEqual(expected,store.read(legacy['name']))
+            self.assertEqual(expected,store.active())
+            store.save(store.active(),apply=True)
+            saved=json.loads(store.profile_path(legacy['name']).read_text())
+            self.assertEqual(expected,saved)
+            self.assertTrue(Path(str(store.profile_path(legacy['name']))+'.bak').exists())
 
     def test_manual_plan_cannot_cross_team_zone_or_claim_clear_fire(self):
         raw=profile();g=_graph();states=_states(g,1)
@@ -271,10 +300,10 @@ class RoundFreezeTests(unittest.TestCase):
             worker=_attach_worker(state);player,error=state.add_player(_Connection(),('127.0.0.1',1001),_hello(1));self.assertIsNone(error)
             start,error=state.request_start(player.player_id);self.assertIsNone(error)
             first=copy.deepcopy(start['bot_tactics']);self.assertEqual(first,state.bot_tactics)
-            new=profile();new['behavior'][0]['values']['reaction_seconds']=4;store.save(new,apply=True)
+            new=profile();new['behavior'][0]['values']['ammo_limit']=40;store.save(new,apply=True)
             state.phase='battle';self.assertEqual(first,state.current_battle_message()['bot_tactics'])
             state._reset_round();start,error=state.request_start(player.player_id);self.assertIsNone(error)
-            self.assertEqual(4,start['bot_tactics']['behavior'][0]['values']['reaction_seconds'])
+            self.assertEqual(40,start['bot_tactics']['behavior'][0]['values']['ammo_limit'])
             stale=dict(start,bot_tactics=first)
             with mock.patch.object(worker,'offer_reliable',return_value=True) as offer,mock.patch.object(player,'offer_reliable',return_value=True):
                 self.assertTrue(state.broadcast_loading_transition(stale))
@@ -325,12 +354,8 @@ class RealRuntimeIntegrationTests(unittest.TestCase):
         self.assertEqual('launcher_manual_v1',byid[11]['spg_initial']['source'])
         self.assertEqual('user_west',byid[12]['route']['id'])
         self.assertEqual('elite',byid[11]['skill']);self.assertEqual(75,rt.bot_crew_level(11))
-        self.assertEqual(2.5,rt._bot_behavior[11]['reaction_seconds'])
-        gun=types.SimpleNamespace(current_dispersion_factor=1)
-        target={'id':15,'target_kind':'bot','position':(10,0,10)}
-        self.assertFalse(rt._gunner_ready(rt.states[11],gun,target,1.0))
-        self.assertFalse(rt._gunner_ready(rt.states[11],gun,target,2.0))
-        self.assertTrue(rt._gunner_ready(rt.states[11],gun,target,4.0))
+        self.assertEqual(25,rt._bot_behavior[11]['ammo_limit'])
+        self.assertFalse(set(rt._bot_behavior[11]) & cfg.RETIRED_GUNNERY_PARAMETERS)
 
     def test_parking_accepts_only_a_single_region_without_route_nodes(self):
         message=self.message();zone=message['bot_tactics']['maps']['08_ruinberg']['positions'][0]
@@ -372,7 +397,7 @@ class RealRuntimeIntegrationTests(unittest.TestCase):
         self.assertEqual('user_west',rt.states[12]['route']['id'])
 
     def test_fixed_routes_are_not_rebalanced_to_a_different_lane(self):
-        from server_bot_ai import BotPlanner
+        from gui.mods.offline_lan_0922.vehicle_control.strategy import BotPlanner
         from test_port_0922_server_bot_ai import _bot,_route,_state,_contact
         planner=BotPlanner();planner.tactics=profile();planner.tactics_map='08_ruinberg'
         west=_route('user_west',[(-100,300,False),(-100,-250,False)])

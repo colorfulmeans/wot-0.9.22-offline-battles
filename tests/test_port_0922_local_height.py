@@ -330,8 +330,8 @@ class NativeColumnContractTests(unittest.TestCase):
         return ns[name]
 
     def test_native_column_recasts_below_each_layer_and_preserves_normals(self):
-        call=self.method('_navigation_height_columns',
-            'src/res/scripts/client/gui/mods/offline_lan_0922/battle_runtime.py','BattleRuntime')
+        from gui.mods.offline_lan_0922.vehicle_control.geometry import SharedBattleGeometry
+        call=SharedBattleGeometry._navigation_height_columns
         starts=[]
         def collide(start,end):
             starts.append(start)

@@ -9,8 +9,8 @@ import test_player_control_completion as completion
 import test_port_0922_battle_runtime as runtime_fixture
 import test_player_full_runtime as full_runtime_fixture
 
-from gui.mods.offline_lan_0922.player_control import PlayerControl
-from gui.mods.offline_lan_0922.player_control.test_actions import MAX_WATCHERS, TestActions
+from gui.mods.offline_lan_0922.vehicle_control.player_binding import PlayerControl
+from gui.mods.offline_lan_0922.vehicle_control.test_actions import MAX_WATCHERS, TestActions
 
 
 class ActionHarness(object):

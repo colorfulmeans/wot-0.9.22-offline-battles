@@ -1,4 +1,4 @@
-"""Contract tests for the Bot gunnery skill tiers and their presets."""
+"""Fitting-only difficulty contract after artificial gunnery retirement."""
 
 import importlib.util
 from pathlib import Path
@@ -31,51 +31,60 @@ def _load(module_name):
 
 gunnery = _load('bot_gunnery')
 
-ROOKIE = gunnery.rating_for_skill(gunnery.SKILL_ROOKIE)
-REGULAR = gunnery.rating_for_skill(gunnery.SKILL_REGULAR)
-VETERAN = gunnery.rating_for_skill(gunnery.SKILL_VETERAN)
-ELITE = gunnery.rating_for_skill(gunnery.SKILL_ELITE)
 
-
-class SkillTierTableTests(unittest.TestCase):
-    def test_the_tiers_are_ordered_from_the_weakest_to_the_best_gunner(self):
-        """Every knob has to move the same way, or a preset means nothing."""
-        rows = [gunnery.skill_parameters(skill)
-                for skill in gunnery.SKILL_TIERS]
-        for name in ('reaction_seconds', 'converged_factor',
-                     'aim_bias_factor', 'lead_error'):
-            values = [row[name] for row in rows]
-            self.assertEqual(sorted(values, reverse=True), values, name)
-            self.assertEqual(len(set(values)), len(values), name)
-        for name in ('patience_seconds',):
-            values = [row[name] for row in rows]
-            self.assertEqual(sorted(values), values, name)
-            self.assertEqual(len(set(values)), len(values), name)
-        # The crew level only has to never fall, because it is the one knob
-        # that also moves view range and reload; tiers are allowed to share
-        # a full crew and separate on gunnery alone.
-        levels = [row['crew_level'] for row in rows]
-        self.assertEqual(sorted(levels), levels)
-
-    def test_every_crew_level_is_one_1513_can_train(self):
-        for skill in gunnery.SKILL_TIERS:
-            level = gunnery.crew_level(skill)
-            self.assertGreaterEqual(level, 50)
-            self.assertLessEqual(level, 100)
-        self.assertEqual(100, gunnery.crew_level(gunnery.SKILL_ELITE))
-
-    def test_only_the_two_weaker_tiers_train_below_a_full_crew(self):
-        """The crew level is deliberately not the knob that ranks tiers.
-
-        It also shortens view range and slows reload, so spending it on every
-        tier would turn a gunnery preset into a spotting preset.  Veteran and
-        elite share #1513's full crew and separate on the gunner model alone.
-        """
+class FittingTierTableTests(unittest.TestCase):
+    def test_native_crew_levels_follow_the_existing_fitting_tiers(self):
         self.assertEqual(
             [50, 75, 100, 100],
             [gunnery.crew_level(skill) for skill in gunnery.SKILL_TIERS])
 
-    def test_unknown_names_fall_back_instead_of_raising(self):
+    def test_retired_gunnery_effects_and_random_strategy_gates_are_deleted(self):
+        retired = (
+            'rating_parameters', 'skill_parameters', 'bias_epoch',
+            'engagement_error', 'aim_offset_metres', 'may_fire',
+            'capability_onset', 'capability_probability', 'capability_allowed',
+            'CAPABILITIES', 'TARGET_CAPABILITIES', 'LATCHED_CAPABILITIES',
+            'CAPABILITY_ONSETS', 'CAPABILITY_EXPONENT', 'AIM_BIAS_SECONDS',
+            'VERTICAL_BIAS_SHARE', 'MAX_AIM_OFFSET_METRES', '_PARAMETERS')
+        for name in retired:
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(gunnery, name))
+        self.assertFalse(any(name.startswith('CAPABILITY_')
+                             for name in vars(gunnery)))
+
+    def test_two_full_crews_still_have_different_native_fittings(self):
+        from gui.mods.offline_lan_0922 import bot_fittings
+        veteran = bot_fittings.plan('ussr:R04_T-34', 'veteran')
+        elite = bot_fittings.plan('ussr:R04_T-34', 'elite')
+        self.assertEqual(100, veteran['crew'])
+        self.assertEqual(100, elite['crew'])
+        self.assertNotEqual(veteran['devices'], elite['devices'])
+        self.assertIsNone(veteran['directive'])
+        self.assertEqual('rammerBattleBooster', elite['directive'])
+
+    def test_stock_and_full_vehicle_modules_remain_distinct(self):
+        from gui.mods.offline_lan_0922 import bot_fittings
+        stock = bot_fittings.plan('ussr:R04_T-34', 'rookie')
+        full = bot_fittings.plan('ussr:R04_T-34', 'elite')
+        self.assertEqual('_76mm_L-11', stock['modules']['gun'])
+        self.assertEqual('_76mm_S-54', full['modules']['gun'])
+        self.assertEqual([], stock['devices'])
+        self.assertEqual(3, len(full['devices']))
+
+    def test_independent_fitting_overrides_are_not_collapsed_into_crew(self):
+        from gui.mods.offline_lan_0922 import bot_fittings, bot_tactics
+        values = dict(development='full', equipment='improved',
+                      crew_preset='50', consumables='large',
+                      outfit='on', ammo_ratios=[3, 2, 1], ammo_limit=40)
+        self.assertEqual(values, bot_tactics.normalize_values(values))
+        actual = bot_fittings.plan('ussr:R04_T-34', 'rookie', values)
+        self.assertEqual(50, actual['crew'])
+        self.assertEqual('_76mm_S-54', actual['modules']['gun'])
+        self.assertEqual(3, len(actual['devices']))
+        self.assertEqual('rammerBattleBooster', actual['directive'])
+        self.assertIsNotNone(actual['style'])
+
+    def test_unknown_names_keep_the_existing_fitting_default(self):
         for value in (None, '', 'perfect', 7, object()):
             self.assertEqual(gunnery.DEFAULT_SKILL,
                              gunnery.normalize_skill(value))
@@ -86,51 +95,51 @@ class SkillTierTableTests(unittest.TestCase):
         for mode in gunnery.SKILL_MODES:
             points = gunnery._MODE_RATING_POINTS[mode]
             self.assertEqual(5, len(points), mode)
-            self.assertTrue(
-                all(0.0 <= point <= 1.0 for point in points), mode)
-            # An inverse CDF may not run backwards.
+            self.assertTrue(all(0.0 <= point <= 1.0 for point in points), mode)
             self.assertEqual(sorted(points), list(points), mode)
 
-    def test_each_preset_hits_the_mean_rating_it_specifies(self):
-        """The presets are specified by their mean, not by their shape."""
+    def test_each_preset_preserves_its_existing_mean_rating(self):
         expected = {'easy': 0.10, 'relaxed': 0.30, 'mixed': 0.60,
                     'hard': 0.80, 'brutal': 1.00}
         for mode in gunnery.SKILL_MODES:
             self.assertAlmostEqual(
                 expected[mode], gunnery._mode_mean(mode), places=6, msg=mode)
 
-    def test_the_pub_default_is_the_widest_spread(self):
-        """One mixed roster has to hold a hopeless Bot and a dangerous one."""
-        spans = {}
-        for mode in gunnery.SKILL_MODES:
-            points = gunnery._MODE_RATING_POINTS[mode]
-            spans[mode] = points[-1] - points[0]
+    def test_the_mixed_preset_keeps_the_widest_fitting_distribution(self):
+        spans = dict((mode, points[-1] - points[0])
+                     for mode, points in gunnery._MODE_RATING_POINTS.items())
         self.assertEqual('mixed', max(spans, key=lambda mode: spans[mode]))
         self.assertEqual(0.0, spans['brutal'])
 
 
-class SkillResolutionTests(unittest.TestCase):
+class FittingResolutionTests(unittest.TestCase):
     def _roster(self, mode, round_id=5):
         return [gunnery.resolve_skill(mode, round_id, team, slot)
                 for team in (1, 2) for slot in range(15)]
 
-    def test_one_slot_resolves_the_same_way_everywhere(self):
-        first = gunnery.resolve_skill('mixed', 9, 2, 4)
-        self.assertEqual(first, gunnery.resolve_skill('mixed', 9, 2, 4))
-        self.assertIn(first, gunnery.SKILL_TIERS)
+    def test_seeded_slot_assignments_survive_removing_the_gunner_model(self):
+        expected = {
+            'easy': 0.0866027172861106,
+            'relaxed': 0.26420333558654996,
+            'mixed': 0.5466412293927252,
+            'hard': 0.8434346083690549,
+            'brutal': 1.0,
+        }
+        for mode, rating in expected.items():
+            self.assertEqual(rating, gunnery.resolve_rating(mode, 9, 2, 4))
+            self.assertEqual(
+                gunnery.skill_for_rating(rating),
+                gunnery.resolve_skill(mode, 9, 2, 4))
 
     def test_the_brutal_preset_is_every_bot_elite(self):
-        self.assertEqual(
-            set([gunnery.SKILL_ELITE]), set(self._roster('brutal')))
+        self.assertEqual(set(['elite']), set(self._roster('brutal')))
 
-    def test_the_easy_preset_never_produces_a_strong_gunner(self):
+    def test_easy_does_not_assign_the_top_two_fitting_presets(self):
         for round_id in range(1, 40):
-            roster = self._roster('easy', round_id)
-            self.assertEqual(
-                set(), set(roster) & set(
-                    (gunnery.SKILL_VETERAN, gunnery.SKILL_ELITE)))
+            self.assertFalse(set(self._roster('easy', round_id)) &
+                             set(('veteran', 'elite')))
 
-    def test_the_pub_mix_spreads_over_the_whole_ladder(self):
+    def test_the_mixed_roster_still_uses_every_fitting_tier(self):
         seen = set()
         for round_id in range(1, 20):
             seen.update(self._roster('mixed', round_id))
@@ -146,210 +155,37 @@ class SkillResolutionTests(unittest.TestCase):
                 delta=0.01, msg=mode)
             self.assertTrue(all(0.0 <= value <= 1.0 for value in drawn), mode)
 
-    def test_an_unknown_preset_still_resolves_a_supported_tier(self):
-        self.assertIn(
-            gunnery.resolve_skill('impossible', 3, 1, 0), gunnery.SKILL_TIERS)
+    def test_an_unknown_preset_resolves_a_supported_fitting_tier(self):
+        self.assertIn(gunnery.resolve_skill('impossible', 3, 1, 0),
+                      gunnery.SKILL_TIERS)
 
-
-class EngagementErrorTests(unittest.TestCase):
-    def test_the_same_engagement_epoch_reproduces_the_same_gunner(self):
-        first = gunnery.engagement_error(REGULAR, 5, 11, ('human', 2), 3)
-        second = gunnery.engagement_error(REGULAR, 5, 11, ('human', 2), 3)
-        self.assertEqual(first, second)
-
-    def test_a_new_epoch_re_lays_the_gun(self):
-        errors = [gunnery.engagement_error(REGULAR, 5, 11, ('human', 2), n)
-                  for n in range(6)]
-        self.assertGreater(len(set(error['radius'] for error in errors)), 1)
-
-    def test_the_radius_stays_inside_the_tier_envelope(self):
-        for epoch in range(500):
-            error = gunnery.engagement_error(
-                ROOKIE, 5, 11, ('bot', 12), epoch)
-            self.assertGreaterEqual(error['radius'], 0.0)
-            self.assertLessEqual(error['radius'], 1.0)
-            self.assertGreaterEqual(error['azimuth'], 0.0)
-
-    def test_the_lead_error_is_bounded_by_the_rating(self):
+    def test_each_anchor_retains_its_fitting_and_crew(self):
         for skill in gunnery.SKILL_TIERS:
             rating = gunnery.rating_for_skill(skill)
-            bound = gunnery.rating_parameters(rating)['lead_error']
-            for epoch in range(200):
-                scale = gunnery.engagement_error(
-                    rating, 5, 11, ('human', 2), epoch)['lead_scale']
-                self.assertGreaterEqual(scale, 1.0 - bound - 1e-9)
-                self.assertLessEqual(scale, 1.0 + bound + 1e-9)
+            self.assertEqual(skill, gunnery.skill_for_rating(rating))
+            self.assertEqual(gunnery.crew_level(skill),
+                             gunnery.rating_crew_level(rating))
 
-    def test_the_aim_offset_grows_with_range_and_with_the_gun_circle(self):
-        error = {'radius': 1.0, 'azimuth': 0.0}
-        near = gunnery.aim_offset_metres(ROOKIE, error, 0.0035, 100.0)
-        far = gunnery.aim_offset_metres(ROOKIE, error, 0.0035, 200.0)
-        wide = gunnery.aim_offset_metres(ROOKIE, error, 0.0070, 100.0)
-        self.assertAlmostEqual(2.0 * near[0], far[0], places=6)
-        self.assertAlmostEqual(2.0 * near[0], wide[0], places=6)
+    def test_midpoint_ties_keep_the_lower_fitting_tier(self):
+        for index in range(len(gunnery.RATING_ANCHORS) - 1):
+            middle = sum(gunnery.RATING_ANCHORS[index:index + 2]) * 0.5
+            self.assertEqual(gunnery.SKILL_TIERS[index],
+                             gunnery.skill_for_rating(middle))
 
-    def test_a_better_gunner_lays_the_gun_closer_to_the_centre(self):
-        error = {'radius': 1.0, 'azimuth': 0.0}
-        offsets = [abs(gunnery.aim_offset_metres(
-            gunnery.rating_for_skill(skill), error, 0.0035, 300.0)[0])
-            for skill in gunnery.SKILL_TIERS]
-        self.assertEqual(sorted(offsets, reverse=True), offsets)
-
-    def test_a_long_shot_never_aims_at_the_sky(self):
-        error = {'radius': 1.0, 'azimuth': 0.5 * 3.14159265}
-        lateral, vertical = gunnery.aim_offset_metres(
-            ROOKIE, error, 0.0035, 100000.0)
-        self.assertLessEqual(abs(lateral), gunnery.MAX_AIM_OFFSET_METRES)
-        self.assertLessEqual(
-            abs(vertical),
-            gunnery.MAX_AIM_OFFSET_METRES * gunnery.VERTICAL_BIAS_SHARE)
-
-    def test_a_missing_gun_circle_removes_the_bias_instead_of_raising(self):
-        error = {'radius': 1.0, 'azimuth': 0.0}
-        self.assertEqual(
-            (0.0, 0.0), gunnery.aim_offset_metres(ROOKIE, error, 0.0, 100.0))
-        self.assertEqual(
-            (0.0, 0.0),
-            gunnery.aim_offset_metres(ROOKIE, error, 0.0035, 0.0))
-        self.assertEqual(
-            (0.0, 0.0), gunnery.aim_offset_metres(ROOKIE, {}, 0.0035, 100.0))
-
-
-class FireGateTests(unittest.TestCase):
-    def test_no_gunner_fires_before_it_has_reacted(self):
-        for rating in (ROOKIE, REGULAR, VETERAN, ELITE, 0.2, 0.55, 0.9):
-            reaction = gunnery.rating_parameters(rating)['reaction_seconds']
-            self.assertFalse(gunnery.may_fire(rating, reaction - 0.01, 99.0,
-                                              1.0))
-            self.assertTrue(gunnery.may_fire(rating, reaction, 0.0, 1.0))
-
-    def test_a_converged_circle_fires_without_spending_the_patience(self):
-        params = gunnery.rating_parameters(VETERAN)
-        self.assertTrue(gunnery.may_fire(
-            VETERAN, params['reaction_seconds'], 0.0,
-            params['converged_factor']))
-        self.assertFalse(gunnery.may_fire(
-            VETERAN, params['reaction_seconds'], 0.0,
-            params['converged_factor'] + 0.01))
-
-    def test_no_gunner_opens_fire_later_than_its_own_patience(self):
-        for rating in (ROOKIE, REGULAR, VETERAN, ELITE, 0.2, 0.55, 0.9):
-            params = gunnery.rating_parameters(rating)
-            self.assertTrue(gunnery.may_fire(
-                rating,
-                params['reaction_seconds'] + params['patience_seconds'],
-                params['patience_seconds'], float('inf')))
-
-    def test_a_moving_bot_still_fires_once_its_patience_expires(self):
-        params = gunnery.rating_parameters(ELITE)
-        self.assertFalse(gunnery.may_fire(
-            ELITE, 30.0, params['patience_seconds'] - 0.01, 6.0))
-        self.assertTrue(gunnery.may_fire(
-            ELITE, 30.0, params['patience_seconds'], 6.0))
-
-    def test_only_the_opening_shot_waits_for_the_aiming_circle(self):
-        """After the first shot the gun's own reload owns the cadence."""
-        self.assertFalse(gunnery.may_fire(ELITE, 300.0, 0.0, 6.0))
-        self.assertTrue(
-            gunnery.may_fire(ELITE, 300.0, 0.0, 6.0, opening_shot=False))
-
-    def test_a_better_gunner_never_fires_a_follow_up_later_than_a_worse_one(
-            self):
-        """The spectrum must not invert on a fast or clip gun."""
-        ratings = [index / 20.0 for index in range(21)]
-        for bloom in (1.0, 2.0, 4.2, float('inf')):
-            for laying in (0.0, 0.3, 1.0, 3.0):
-                allowed = [gunnery.may_fire(rating, 300.0, laying, bloom,
-                                            opening_shot=False)
-                           for rating in ratings]
-                self.assertEqual(
-                    sorted(allowed), allowed,
-                    'bloom=%r laying=%r' % (bloom, laying))
-
-    def test_an_unusable_clock_holds_fire_instead_of_guessing(self):
-        self.assertFalse(gunnery.may_fire(REGULAR, float('nan'), 0.0, 1.0))
-        self.assertFalse(gunnery.may_fire(REGULAR, 5.0, 0.0, float('nan')))
-        self.assertFalse(gunnery.may_fire(REGULAR, None, 0.0, 1.0))
-
-    def test_an_infinite_circle_waits_for_the_patience_bound(self):
-        params = gunnery.rating_parameters(REGULAR)
-        self.assertFalse(gunnery.may_fire(
-            REGULAR, 30.0, params['patience_seconds'] - 0.01, float('inf')))
-        self.assertTrue(gunnery.may_fire(
-            REGULAR, 30.0, params['patience_seconds'], float('inf')))
-
-
-class RatingSpectrumTests(unittest.TestCase):
-    """The tiers survive as anchors on one continuous competence axis."""
-
-    NAMES = ('reaction_seconds', 'patience_seconds', 'converged_factor',
-             'aim_bias_factor', 'lead_error', 'crew_level')
-
-    def test_every_anchor_reproduces_its_reviewed_bundle_exactly(self):
-        """The reviewed calibration must survive becoming an anchor.
-
-        Anchors are not evenly spaced and float interpolation does not have
-        to land on an endpoint, so this is a real property, not a tautology.
-        """
-        for skill in gunnery.SKILL_TIERS:
-            reviewed = gunnery._PARAMETERS[skill]
-            interpolated = gunnery.rating_parameters(
-                gunnery.rating_for_skill(skill))
-            for name in self.NAMES:
-                self.assertEqual(
-                    reviewed[name], interpolated[name],
-                    '%s %s' % (skill, name))
-
-    def test_every_gunnery_knob_moves_one_way_across_the_spectrum(self):
-        ratings = [index / 50.0 for index in range(51)]
-        rows = [gunnery.rating_parameters(rating) for rating in ratings]
-        for name in ('reaction_seconds', 'converged_factor',
-                     'aim_bias_factor', 'lead_error'):
-            values = [row[name] for row in rows]
-            self.assertEqual(sorted(values, reverse=True), values, name)
-        for name in ('patience_seconds',):
-            values = [row[name] for row in rows]
-            self.assertEqual(sorted(values), values, name)
-        levels = [row['crew_level'] for row in rows]
+    def test_only_native_crew_presets_are_selected_across_the_rating_axis(self):
+        levels = [gunnery.rating_crew_level(index / 100.0)
+                  for index in range(101)]
         self.assertEqual(sorted(levels), levels)
+        self.assertEqual(set(gunnery.PROVEN_CREW_LEVELS), set(levels))
 
-    def test_a_crew_level_is_never_one_this_project_has_not_seen(self):
-        """An unproven level silently degrades to a full default crew."""
-        for index in range(101):
-            level = gunnery.rating_crew_level(index / 100.0)
-            self.assertIn(level, gunnery.PROVEN_CREW_LEVELS)
-
-    def test_the_anchor_crew_levels_follow_fitting_tiers(self):
-        self.assertEqual(
-            [50, 75, 100, 100],
-            [gunnery.crew_level(skill) for skill in gunnery.SKILL_TIERS])
-
-    def test_a_label_never_claims_more_competence_than_the_rating(self):
-        for index in range(201):
-            rating = index / 200.0
-            label = gunnery.skill_for_rating(rating)
-            anchor = gunnery.rating_for_skill(label)
-            self.assertLessEqual(
-                anchor - rating, 0.17 + 1e-9, 'rating=%r' % (rating,))
-
-    def test_an_anchor_labels_itself(self):
-        for skill in gunnery.SKILL_TIERS:
-            self.assertEqual(skill, gunnery.skill_for_rating(
-                gunnery.rating_for_skill(skill)))
-
-    def test_an_unusable_rating_becomes_the_default_instead_of_raising(self):
-        for value in (None, '', 'elite', float('nan'), float('inf'),
-                      object()):
+    def test_unusable_ratings_keep_existing_normalization(self):
+        for value in (None, '', 'elite', float('nan'), float('inf'), object()):
             self.assertEqual(gunnery.DEFAULT_RATING,
                              gunnery.normalize_rating(value))
         self.assertEqual(0.0, gunnery.normalize_rating(-3.0))
         self.assertEqual(1.0, gunnery.normalize_rating(9.0))
 
-    def test_one_slot_resolves_the_same_rating_everywhere(self):
-        first = gunnery.resolve_rating('mixed', 9, 2, 4)
-        self.assertEqual(first, gunnery.resolve_rating('mixed', 9, 2, 4))
-
-    def test_the_easy_preset_never_draws_a_competent_bot(self):
+    def test_easy_preserves_the_reviewed_upper_rating_bound(self):
         ceiling = gunnery._MODE_RATING_POINTS['easy'][-1]
         for round_id in range(60):
             for team in (1, 2):
@@ -358,250 +194,33 @@ class RatingSpectrumTests(unittest.TestCase):
                         gunnery.resolve_rating('easy', round_id, team, slot),
                         ceiling)
 
-    def test_the_brutal_preset_draws_a_complete_bot_every_time(self):
+    def test_brutal_preserves_complete_fitting_ratings(self):
         for round_id in range(20):
             for slot in range(15):
                 self.assertEqual(
                     1.0, gunnery.resolve_rating('brutal', round_id, 1, slot))
 
 
-class CapabilityTests(unittest.TestCase):
-    """The rating is also the chance of doing the right thing once."""
-
-    def test_retired_movement_capabilities_are_not_registered(self):
-        for name in ('URGENT_COVER', 'TACTICAL_COVER', 'COVER_PEEK',
-                     'CROSSFIRE', 'WITHDRAW', 'FLANK'):
-            self.assertFalse(hasattr(gunnery, 'CAPABILITY_' + name))
-        self.assertEqual(frozenset((gunnery.CAPABILITY_HULL_ANGLING,)),
-                         gunnery.LATCHED_CAPABILITIES)
-
-    def test_the_ends_of_the_spectrum_are_honest(self):
-        for capability in gunnery.CAPABILITIES:
-            self.assertFalse(gunnery.capability_allowed(
-                0.0, capability, 7, 11, 'occasion'), capability)
-            self.assertTrue(gunnery.capability_allowed(
-                1.0, capability, 7, 11, 'occasion'), capability)
-
-    def test_one_occasion_reaches_the_same_answer_every_time(self):
-        """A planner rebuilds an order every tick and after a failover."""
-        for rating in (0.2, 0.5, 0.8):
-            first = gunnery.capability_allowed(
-                rating, gunnery.CAPABILITY_WEAK_SPOT, 4, 9, 'bot', 3)
-            for unused_repeat in range(5):
-                self.assertEqual(first, gunnery.capability_allowed(
-                    rating, gunnery.CAPABILITY_WEAK_SPOT, 4, 9,
-                    'bot', 3))
-
-    def test_a_new_occasion_is_a_new_decision(self):
-        answers = set(
-            gunnery.capability_allowed(
-                0.5, gunnery.CAPABILITY_WEAK_SPOT, 4, 9, 'bot', index)
-            for index in range(40))
-        self.assertEqual(set((True, False)), answers)
-
-    def test_two_capabilities_never_share_one_draw(self):
-        """Otherwise a Bot would know everything or nothing at 0.5."""
-        for rating in (0.35, 0.5, 0.65):
-            answers = set(
-                gunnery.capability_allowed(rating, capability, 4, 9, 'x')
-                for capability in gunnery.CAPABILITIES)
-            self.assertEqual(set((True, False)), answers, rating)
-
-    def test_a_rating_succeeds_at_about_its_own_rate(self):
-        for rating in (0.1, 0.3, 0.6, 0.8):
-            hits = sum(
-                1 for index in range(4000)
-                if gunnery.capability_allowed(
-                    rating, gunnery.CAPABILITY_SHELL_CHOICE, 1, index))
-            self.assertAlmostEqual(
-                rating, hits / 4000.0, delta=0.025, msg=rating)
-
-    def test_competence_never_costs_a_bot_a_capability(self):
-        """More competence must never mean fewer right decisions."""
-        occasions = [(1, index) for index in range(600)]
-        counts = []
-        for index in range(11):
-            rating = index / 10.0
-            counts.append(sum(
-                1 for occasion in occasions
-                if gunnery.capability_allowed(
-                    rating, gunnery.CAPABILITY_HULL_ANGLING, *occasion)))
-        self.assertEqual(sorted(counts), counts)
-
-    def test_the_latched_capabilities_are_real_capabilities(self):
-        self.assertTrue(gunnery.LATCHED_CAPABILITIES)
-        for capability in gunnery.LATCHED_CAPABILITIES:
-            self.assertIn(capability, gunnery.CAPABILITIES)
-
-    def test_the_exponent_is_the_reviewed_product_choice(self):
-        """One knob answers "the tactical half bites harder than gunnery"."""
-        self.assertEqual(1.0, gunnery.CAPABILITY_EXPONENT)
-
-
-class CapabilityOnsetTests(unittest.TestCase):
-    """An onset turns one probability into a difficulty ladder."""
-
-    def test_a_capability_without_an_onset_is_exactly_the_old_draw(self):
-        """Nothing the ladder did not name may move."""
-        for capability in gunnery.CAPABILITIES:
-            if gunnery.capability_onset(capability) > 0.0:
-                continue
-            for rating in (0.0, 0.05, 0.3, 0.5, 0.87, 1.0):
-                self.assertAlmostEqual(
-                    rating,
-                    gunnery.capability_probability(rating, capability),
-                    msg=(capability, rating))
-
-    def test_a_tactic_is_out_of_reach_below_its_onset(self):
-        for capability in gunnery.CAPABILITIES:
-            onset = gunnery.capability_onset(capability)
-            if onset <= 0.0:
-                continue
-            self.assertEqual(
-                0.0, gunnery.capability_probability(onset, capability))
-            for occasion in range(60):
-                self.assertFalse(gunnery.capability_allowed(
-                    onset, capability, 3, 11, occasion), capability)
-
-    def test_every_tactic_still_reaches_certainty_at_the_top(self):
-        for capability in gunnery.CAPABILITIES:
-            self.assertEqual(
-                1.0, gunnery.capability_probability(1.0, capability),
-                capability)
-            self.assertEqual(
-                0.0, gunnery.capability_probability(0.0, capability),
-                capability)
-
-    def test_a_stronger_bot_never_reaches_for_fewer_tactics(self):
-        previous = None
-        for index in range(21):
-            rating = index / 20.0
-            available = frozenset(
-                capability for capability in gunnery.CAPABILITIES
-                if gunnery.capability_probability(rating, capability) > 0.0)
-            if previous is not None:
-                self.assertTrue(previous <= available, rating)
-            previous = available
-
-    def test_the_ladder_really_has_more_than_one_rung(self):
-        """A rookie, a regular and a veteran must not be offered the same set."""
-        counts = []
-        for rating in gunnery.RATING_ANCHORS:
-            counts.append(len([
-                capability for capability in gunnery.TARGET_CAPABILITIES
-                if gunnery.capability_probability(
-                    rating + 1e-6, capability) > 0.0]))
-        self.assertEqual(sorted(counts), counts)
-        self.assertLess(counts[0], counts[-1])
-        self.assertEqual(len(gunnery.TARGET_CAPABILITIES), counts[-1])
-
-    def test_the_target_ladder_is_ordered_the_way_it_is_documented(self):
-        nearest = gunnery.capability_onset(
-            gunnery.CAPABILITY_TARGET_NEAREST)
-        priority = gunnery.capability_onset(
-            gunnery.CAPABILITY_TARGET_PRIORITY)
-        retaliation = gunnery.capability_onset(
-            gunnery.CAPABILITY_TARGET_RETALIATION)
-        human = gunnery.capability_onset(gunnery.CAPABILITY_TARGET_HUMAN)
-        self.assertEqual(0.0, nearest)
-        self.assertEqual(0.0, priority)
-        self.assertLess(priority, retaliation)
-        self.assertLess(retaliation, human)
-        self.assertLess(human, 1.0)
-        # An onset sits between two anchors, never on one. A launcher lineup
-        # pin resolves a tier name to that tier's exact anchor, so an onset
-        # on the anchor would promise a rung the labelled Bot never reaches.
-        self.assertLess(gunnery.RATING_ANCHORS[0], retaliation)
-        self.assertLess(retaliation, gunnery.RATING_ANCHORS[1])
-        self.assertLess(gunnery.RATING_ANCHORS[1], human)
-        self.assertLess(human, gunnery.RATING_ANCHORS[2])
-
-    def test_a_tier_label_never_promises_a_rung_the_bot_cannot_reach(self):
-        """A Bot the launcher calls veteran really does hunt the player."""
-        promises = {
-            gunnery.CAPABILITY_TARGET_NEAREST: gunnery.SKILL_ROOKIE,
-            gunnery.CAPABILITY_TARGET_PRIORITY: gunnery.SKILL_ROOKIE,
-            gunnery.CAPABILITY_TARGET_RETALIATION: gunnery.SKILL_REGULAR,
-            gunnery.CAPABILITY_TARGET_HUMAN: gunnery.SKILL_VETERAN,
-        }
-        for capability, promised in promises.items():
-            floor = gunnery.SKILL_TIERS.index(promised)
-            for index in range(2001):
-                rating = index / 2000.0
-                if rating <= 0.0:
-                    continue
-                labelled = gunnery.SKILL_TIERS.index(
-                    gunnery.skill_for_rating(rating))
-                reachable = gunnery.capability_probability(
-                    rating, capability) > 0.0
-                if labelled >= floor:
-                    self.assertTrue(
-                        reachable, (capability, rating))
-                else:
-                    self.assertFalse(
-                        reachable, (capability, rating))
-            # The pinned anchor itself is the case a launcher lineup
-            # creates.  The rookie anchor is rating 0, which is the honest
-            # floor of the whole spectrum and reaches nothing by design.
-            anchor = gunnery.rating_for_skill(promised)
-            if anchor > 0.0:
-                self.assertTrue(
-                    gunnery.capability_probability(anchor, capability) > 0.0,
-                    capability)
-
-    def test_the_target_capabilities_are_real_capabilities(self):
-        self.assertTrue(gunnery.TARGET_CAPABILITIES)
-        for capability in gunnery.TARGET_CAPABILITIES:
-            self.assertIn(capability, gunnery.CAPABILITIES)
-
-    def test_an_onset_capability_still_succeeds_at_its_own_rate(self):
-        capability = gunnery.CAPABILITY_TARGET_HUMAN
-        onset = gunnery.capability_onset(capability)
-        for rating in (0.75, 0.85, 0.95):
-            expected = (rating - onset) / (1.0 - onset)
-            hits = sum(
-                1 for index in range(4000)
-                if gunnery.capability_allowed(rating, capability, 1, index))
-            self.assertAlmostEqual(
-                expected, hits / 4000.0, delta=0.025, msg=rating)
-
-    def test_competence_never_costs_a_bot_an_onset_capability(self):
-        occasions = [(1, index) for index in range(600)]
-        counts = []
-        for index in range(11):
-            counts.append(sum(
-                1 for occasion in occasions
-                if gunnery.capability_allowed(
-                    index / 10.0, gunnery.CAPABILITY_TARGET_HUMAN,
-                    *occasion)))
-        self.assertEqual(sorted(counts), counts)
-
-
 class SkillVocabularyParityTests(unittest.TestCase):
-    """One vocabulary, four owners: worker, wire, room panel and launcher."""
-
-    def test_the_launcher_offers_the_same_tiers_as_the_worker(self):
+    def test_launcher_and_worker_share_the_fitting_tier_vocabulary(self):
         import bot_lineup_profiles
+        self.assertEqual(tuple(gunnery.SKILL_TIERS),
+                         tuple(bot_lineup_profiles.BOT_SKILL_TIERS_0922))
 
-        self.assertEqual(
-            tuple(gunnery.SKILL_TIERS),
-            tuple(bot_lineup_profiles.BOT_SKILL_TIERS_0922))
-
-    def test_the_waiting_room_offers_every_preset_in_order(self):
+    def test_waiting_room_presets_remain_available_in_the_existing_order(self):
         waiting_room_ui = _load('waiting_room_ui')
-
         self.assertEqual(
             ('mixed', 'easy', 'relaxed', 'hard', 'brutal'),
             tuple(value for value, unused_label
                   in waiting_room_ui.BOT_SKILL_OPTIONS))
         self.assertEqual(set(gunnery.SKILL_MODES),
-                         set(value for value, label in waiting_room_ui.BOT_SKILL_OPTIONS))
+                         set(value for value, label
+                             in waiting_room_ui.BOT_SKILL_OPTIONS))
 
-    def test_the_wire_accepts_exactly_the_supported_presets(self):
+    def test_wire_still_accepts_exactly_the_supported_presets(self):
         lan_client = _load('lan_client')
-
-        self.assertEqual(
-            frozenset(gunnery.SKILL_MODES), lan_client.BOT_SKILL_MODES)
+        self.assertEqual(frozenset(gunnery.SKILL_MODES),
+                         lan_client.BOT_SKILL_MODES)
 
 
 if __name__ == '__main__':

@@ -96,10 +96,10 @@ class EditorProtectionTests(unittest.TestCase):
         self.assertEqual(['Default'],e.store.names())
     def test_adopt_resets_pending_fields_and_both_histories(self):
         e=self.editor;e.adopt(storage.contract.default_profile('Custom'))
-        e.rule_vars['reaction_seconds'].set('0.125');e.ammo_vars[0].set('9');e.wait_seconds.set('123')
+        e.rule_vars['ammo_limit'].set('125');e.ammo_vars[0].set('9');e.wait_seconds.set('123')
         e.checkpoint('behavior');e.checkpoint('maps')
         e.adopt(storage.contract.default_profile('Other'))
-        self.assertEqual('',e.rule_vars['reaction_seconds'].get());self.assertEqual(['','',''],[v.get() for v in e.ammo_vars])
+        self.assertEqual('',e.rule_vars['ammo_limit'].get());self.assertEqual(['','',''],[v.get() for v in e.ammo_vars])
         self.assertEqual('60',e.wait_seconds.get());self.assertEqual({'behavior':([],[]),'maps':([],[])},e.histories)
     def test_import_collision_is_rejected_without_replacing_default(self):
         e=self.editor;source=Path(self.temp.name)/'import.json';storage._atomic(source,storage.contract.default_profile())
@@ -137,11 +137,13 @@ class EditorProtectionTests(unittest.TestCase):
         values=storage.contract.effective(e.store.read('Custom'),1,'heavyTank',0)
         self.assertEqual('none',values['equipment']);self.assertEqual('stock',values['development'])
 
-    def test_numeric_forms_are_readonly_and_keep_imported_fraction(self):
+    def test_numeric_forms_are_readonly_and_keep_imported_ammunition_limit(self):
         e=self.editor;e.adopt(storage.contract.default_profile('Custom'))
         for box in list(e.rule_boxes.values())+e.ammo_boxes:self.assertEqual('readonly',str(box.cget('state')))
-        e.document['behavior']=[dict(team=0,class_tag='all',slot=-1,values={'reaction_seconds':0.125})]
+        self.assertFalse(set(e.rule_vars) & storage.contract.RETIRED_GUNNERY_PARAMETERS)
+        e.document['behavior']=[dict(team=0,class_tag='all',slot=-1,values={'ammo_limit':125})]
         e._refresh_rules();e.rules.selection_set('0');e._select_rule()
-        self.assertIn('0.125',e.rule_boxes['reaction_seconds'].keys)
+        self.assertEqual('125',e.rule_vars['ammo_limit'].get())
+        self.assertIn('125',e.rule_boxes['ammo_limit'].keys)
 
 if __name__=='__main__':unittest.main()

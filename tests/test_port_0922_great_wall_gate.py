@@ -18,7 +18,7 @@ import unittest
 from unittest import mock
 import contextlib
 import route_scene_fixture
-from server_bot_ai import BotPlanner
+from gui.mods.offline_lan_0922.vehicle_control.strategy import BotPlanner
 
 import test_port_0922_bot_runtime as runtime_fixtures
 from effective_params_fixture import bot_default_crew_factors

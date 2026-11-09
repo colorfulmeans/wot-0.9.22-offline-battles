@@ -16,8 +16,8 @@ sys.path[:0] = [str(ROOT / 'src/res/scripts/client'), str(ROOT / 'server')]
 
 from gui.mods.offline_lan_0922 import lan_client, siege_mechanics
 from gui.mods.offline_lan_0922.battle_runtime import BattleRuntime
-from gui.mods.offline_lan_0922.player_control.commands import CommandGateway
-from gui.mods.offline_lan_0922.player_control.native_actions import NativeActions
+from gui.mods.offline_lan_0922.vehicle_control.commands import CommandGateway
+from gui.mods.offline_lan_0922.vehicle_control.native_actions import NativeActions
 import test_port_0922_consumable_audit as equipment_fixture
 
 

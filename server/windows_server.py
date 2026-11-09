@@ -170,12 +170,12 @@ def _load_server():
     from gui.mods.offline_lan_0922 import roof_crush_test
     if roof_crush_test.enabled():
         from lan_battle_server import BattleState
-        from server_bot_ai import BotPlanner
+        from gui.mods.offline_lan_0922.vehicle_control.strategy import BotPlanner
         roof_crush_test.install_server(BattleState, BotPlanner)
     from gui.mods.offline_lan_0922 import equipment_test
     if equipment_test.enabled():
         from lan_battle_server import BattleState
-        from server_bot_ai import BotPlanner
+        from gui.mods.offline_lan_0922.vehicle_control.strategy import BotPlanner
         equipment_test.install_server(BattleState, BotPlanner)
     return (DEFAULT_MAP, run_server)
 

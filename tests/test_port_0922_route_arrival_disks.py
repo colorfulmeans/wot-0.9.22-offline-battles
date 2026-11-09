@@ -7,7 +7,7 @@ from unittest import mock
 
 from test_port_0922_navigation import TerrainNavigator
 from test_port_0922_server_bot_ai import BotPlanner, _route, _bot, _state
-from server_bot_ai import _route_point_reached, ROUTE_ARRIVAL_RADIUS
+from gui.mods.offline_lan_0922.vehicle_control.strategy import _route_point_reached, ROUTE_ARRIVAL_RADIUS
 from gui.mods.offline_lan_0922 import bot_tactics
 
 

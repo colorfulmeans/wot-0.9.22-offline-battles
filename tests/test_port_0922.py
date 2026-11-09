@@ -42,7 +42,10 @@ def _load_tool(name):
 def _load_port_source(name):
     path = (PORT_ROOT / 'src' / 'res' / 'scripts' / 'client' / 'gui' /
             'mods' / 'offline_lan_0922' / (name + '.py'))
-    spec = importlib.util.spec_from_file_location('port0922_' + name, path)
+    # Isolate module globals between cases while retaining the shipping
+    # package context for its shared protocol and other relative imports.
+    module_name = 'gui.mods.offline_lan_0922.' + name.replace('/', '.')
+    spec = importlib.util.spec_from_file_location(module_name, path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

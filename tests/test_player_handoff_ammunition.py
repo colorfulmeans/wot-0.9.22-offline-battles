@@ -87,9 +87,17 @@ class HandoffAmmunitionTests(unittest.TestCase):
         gun, policy = scene.battle._gun_state, scene.runtime.attack_policy
         initial_ammo = tuple(gun.ammo)
         saw_execution_filter = False
+        saw_post_move_filter = False
         entered_range = False
-        for unused in range(100):
-            scene.tick()
+        range_plan_deadline = None
+        # Drive the actual controller at 50 Hz. Its 18-point CURRENT ranking
+        # pass is bounded and its selected rows must be fresh after motion.
+        # The fixture must not rely on an 8 ms atomic slice finishing all
+        # work before the independent 1 Hz strategy refresh.
+        for unused in range(500):
+            scene.tick(.02)
+            if entered_range:
+                self.assertLess(scene.now, range_plan_deadline)
             self.assertEqual(('advance', 5),
                 (scene.original_order()['combat_mode'], scene.original_order()['target_id']))
             self.assertTrue(scene.runtime.combat_stop.active)
@@ -98,11 +106,19 @@ class HandoffAmmunitionTests(unittest.TestCase):
             self.assertIsNone(policy.reload_authority)
             self.assertEqual(0, gun.shot_index)
             candidate = policy.decision.get('candidate')
-            best = policy._best_he(0)
+            # CURRENT ranking hints are not the strict all-fresh NEXT HE
+            # comparison. Both returned CURRENT choices still need live
+            # native rows and the unchanged navigation consumption gate.
+            best = policy._best_current_he(0)
             if (candidate is not None and candidate['mode'] == 'he_fallback' and
                     candidate['target']['network_id'] == 5 and best is not None and
                     best['target']['network_id'] == 2):
                 saw_execution_filter = True
+                saw_post_move_filter = saw_post_move_filter or entered_range
+                self.assertIsNotNone(policy.current_row(best))
+                self.assertIsNotNone(policy.current_row(candidate))
+                self.assertEqual(candidate['key'],
+                    policy._best_current_he(0, consumable=True)['key'])
                 self.assertGreater(best['expected_damage'], candidate['expected_damage'])
                 self.assertTrue(policy._executable(best, 'he_fallback'))
                 self.assertFalse(scene.runtime.attack_candidate_consumable(best))
@@ -119,9 +135,10 @@ class HandoffAmmunitionTests(unittest.TestCase):
                 # Observe progress along the existing (30, 20) route segment
                 # after a real strategic refresh, not a forged planner order.
                 # The native pose now admits a shot before the next 1 Hz
-                # plan. Observe its converged native circle; reaction time,
+                # plan. Observe its converged native circle; native aiming,
                 # sampled scatter, physical ray and trigger admission remain
                 # the production gates, not always-true test replacements.
+                range_plan_deadline = scene.runtime._strategic_due
                 scene.native_position((3., 0., 2.))
                 scene.battle._avatar.gunRotator.setShotPosition(scene.entity.id,
                     scene.battle._vector(scene.origin),
@@ -130,6 +147,8 @@ class HandoffAmmunitionTests(unittest.TestCase):
                 entered_range = True
         self.assertTrue(saw_execution_filter, policy.status())
         self.assertTrue(entered_range)
+        self.assertTrue(saw_post_move_filter, policy.status())
+        self.assertLess(scene.now, range_plan_deadline)
         self.assertEqual(1, len(scene.launches()), scene.runtime.status())
         self.assertEqual(5, scene.runtime.weapon.target['network_id'])
         self.assertEqual([0], [row['shell_index'] for row in scene.launches()])

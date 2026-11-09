@@ -161,7 +161,7 @@ class RuntimeReceiptTests(unittest.TestCase):
         from unittest import mock
         self.runtime._server_orders[11] = dict(combat_mode='advance_contact',
             move_position=(10.,0.,20.), fire_allowed=False,
-            tactical_evidence=dict(at=500.,selection=dict(outcome='no_local_lane')))
+            tactical_evidence=dict(at=500.,selection=dict(outcome='movement_lease')))
         def hold(state, order, targets, now, clear):
             return dict(order, move_position=(state['x'],state['y'],state['z']),
                         throttle_override=0., combat_mode='engage')
@@ -180,7 +180,7 @@ class RuntimeReceiptTests(unittest.TestCase):
         self.assertEqual(0.,current['final_order']['throttle_override'])
         self.assertEqual('engage',current['final_order']['combat_mode'])
         self.assertEqual(500.,current['server_selection']['at'])
-        self.assertEqual('no_local_lane',current['server_selection']['selection']['outcome'])
+        self.assertEqual('movement_lease',current['server_selection']['selection']['outcome'])
         self.assertEqual('advance_contact',current['received_order']['combat_mode'])
 
     def test_refresh_creates_new_identity_without_mutating_old_witness(self):
@@ -376,7 +376,7 @@ class LeaseAndEntryReceiptTests(unittest.TestCase):
             shootable_by_bot_ids=[11])
         cases=((dict(contact,radio_bot_until={}), 'not_known_to_bot'),
                (dict(contact,visible=False), 'not_visible'),
-               (dict(contact,shootable_by_bot_ids=[]), 'no_local_lane'),
+               (dict(contact,shootable_by_bot_ids=[]), 'eligible'),
                (dict(contact,position=dict(x=0.,y=0.,z=5000.)), 'outside_engagement_range'),
                (contact, 'eligible'))
         for candidate,reason in cases:
@@ -387,8 +387,13 @@ class LeaseAndEntryReceiptTests(unittest.TestCase):
             self.assertEqual(bot['state']['clip'],receipt['weapon']['clip'])
             self.assertNotEqual('evaluating',receipt['outcome'])
             self.assertIn('lease_after',receipt)
+            if reason == 'eligible' and not candidate['shootable_by_bot_ids']:
+                self.assertFalse(receipt['candidates'][0]['local_lane'])
+                self.assertFalse(receipt['candidates'][0]['ready'])
+                self.assertEqual('movement_lease',receipt['outcome'])
+                self.assertEqual(('human',2),receipt['selected'])
         p._assign_targets([bot],[],2.)
-        self.assertEqual('no_team_contacts',p._target_decisions[11]['outcome'])
+        self.assertEqual('no_live_contact',p._target_decisions[11]['outcome'])
         order=p.build_orders(f.manifest,f.states,[],3.)['orders'][0]
         evidence=order['tactical_evidence']
         self.assertEqual('server_monotonic_seconds',evidence['clock_basis'])

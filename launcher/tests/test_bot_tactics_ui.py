@@ -402,10 +402,10 @@ class EditorUITests(unittest.TestCase):
     def test_behavior_form_changes_actual_schema_and_can_be_removed(self):
         self.ui.book.select(0);self.root.update()
         self.ui.rule_vars['team'].set('1');self.ui.rule_vars['class_tag'].set('SPG')
-        self.ui.rule_vars['crew_preset'].set('all');self.ui.rule_vars['reaction_seconds'].set('2.7')
+        self.ui.rule_vars['crew_preset'].set('all');self.ui.rule_vars['ammo_limit'].set('27')
         self.ui.save_rule();self.ui.save(True)
         raw=self.ui.store.active();actual=storage.contract.effective(raw,1,'SPG',2)
-        self.assertEqual({'crew_preset':'all','reaction_seconds':2.7},actual)
+        self.assertEqual({'crew_preset':'all','ammo_limit':27},actual)
         self.assertEqual({},storage.contract.effective(raw,2,'SPG',2))
         self.ui.rules.selection_set('0');self.root.update();self.ui.delete_rule();self.ui.save(True)
         self.assertEqual([],self.ui.store.active()['behavior'])

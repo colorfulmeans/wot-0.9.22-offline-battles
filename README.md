@@ -59,42 +59,45 @@ capture begins. Failed implicit tasks retire their movement/fire ownership and
 retry with bounded backoff; explicit mission outcomes remain visible until the
 user replaces or releases them.
 
-### Independent foreground behaviour
+### Shared control, independent actors
 
 Player automation runs on **each participant's own visible client**, including
-LAN joiners. `player_control/copied/` contains a mechanical copy of the complete
-Bot behaviour dependency closure: its local decision loop, server-side planner,
-navigation, traffic, recovery, hull aiming, artillery and geometry consumers.
-`tools/sync_player_behavior_copy.py --check` verifies the copy against its
-recorded source transformations. It is not the former reduced player controller,
-and it does not call the worker's Bot behaviour objects.
+LAN joiners. Players and worker-controlled Bots now use the same canonical
+`vehicle_control` planner and combat laws. The retired player copies and
+competing Bot decision paths are removed, not retained behind a selector or
+fallback. There is no source-copy or synchronization step.
+`tools/check_shared_vehicle_control.py --check` verifies the shared-source
+structure and actor-isolation contracts.
 
-`FullPlayerRuntime` binds that private copy to the foreground vehicle. Its
-observations include other visible vehicles, but its controlled-actor set contains
-only the local player. Native movement, reload, dispersion, ammunition and physical
-projectiles retain their existing foreground owners; the copied decision loop
-cannot simulate those a second time or publish Bot authority. The room worker is
-still required for Bots and world authority. Immutable content and neutral
-collision, physics and networking services remain shared.
+`FullPlayerRuntime` binds the common control laws to the foreground vehicle;
+`BotControlBinding` binds them to each worker-owned Bot. Each actor retains
+separate mission, navigation, targeting, recovery and trigger state. Bindings
+observe their own physical vehicle and apply inputs through its existing owner.
+Foreground native movement, reload, dispersion, ammunition and projectiles are
+not simulated a second time, and a player's controller never publishes Bot
+authority. The room worker remains required for Bots and world authority, but
+does not execute the visible player's decisions.
 
-| Capability | Foreground implementation |
+| Capability | Shared implementation and physical boundary |
 | --- | --- |
-| Routes, traffic and recovery | The copied planner, route mixins and complete local loop retain the current Bot laws and independent state. Both implementations retire the old tactical retreat, cover-peek and flank strategies together; blocked-waypoint skipping and physical recovery remain. A manifest and source comparison expose every copying adaptation. |
-| Aim and movement | Copied hull, turret, artillery and firing-position laws request native input. One foreground owner arbitrates the final controls; a predicted gun angle is not a physical firing receipt. |
-| Current ammunition | New `AttackPolicy` validates the mounted shell first. The first executable penetration candidate stops travel and starts aiming without waiting for background alternatives. A still-valid current-shell penetration proof obstructed by another vehicle or the world retains its ammunition ownership. |
+| Routes, traffic and recovery | One shared planner and the common navigation laws use actor-owned state. Tactical retreat, cover-peek and flank strategies are deleted; blocked-waypoint skipping and physical recovery remain. |
+| Initial target | Ordinary acquisition starts with the nearest living enemy; exactly equal distance is broken by lower armour. Point-by-point penetration validation remains authoritative. A valid current penetration engagement is not replaced by an attacker bonus, player preference or background next-shot proposal. |
+| Artillery target | Reachable targets are ranked by actual HE damage estimates from proved arcs and contact geometry, not nominal shell damage or the old target score. Native trajectory, obstruction and launch checks still apply. |
+| Aim and movement | Common hull, turret, artillery and firing-position laws request input through the actor's physical binding. The existing native owner arbitrates final movement and firing; a predicted gun angle is not a physical firing receipt. |
+| Current ammunition | `AttackPolicy` validates the mounted shell first. The first executable penetration candidate stops travel and starts aiming without waiting for background alternatives. A still-valid current-shell penetration proof obstructed by another vehicle or the world retains its ammunition ownership. |
 | Global search | Ordinary firing-position recovery is separate from the eight-second penetration search. The latter requires complete, fresh failure evidence for all relevant enemies and points in the required ammunition domain. Blocked, mechanically unavailable, pending and unknown points are not armour failures. |
-| Background and HE | Independent bounded work compares all stocked shells, visible enemies and relevant points for the next trigger or magazine. HE penetration and fallback are separate candidates; valid zero-HP HE contact is allowed in fallback. Pose changes invalidate evidence. |
-| Trigger admission | New `TriggerAdmission` proves only a new automatic trigger's first physical launch. It freezes that launch's scatter draw through pending proof and rechecks identity and actual geometry before commit. It has no tactical burst-tail continuation or cancellation operation. |
+| Background and HE | Independent bounded work compares all stocked shells, visible enemies and relevant points for the next trigger or magazine. HE penetration and fallback are separate candidates; valid zero-damage HE contact is allowed in fallback. Pose changes invalidate evidence. |
+| Trigger admission | The shared `TriggerAdmission` proves only a new automatic trigger's first physical launch. It freezes that launch's scatter draw through pending proof and rechecks identity and actual geometry before commit. It has no tactical burst-tail continuation or cancellation operation. |
 | Physical firing | Manual control and Bots use the same trigger contract. Every shell independently samples the actual gun pose and dispersion, consumes ammunition, receives a unique projectile identity and settles its own collision. Stop, a new blocker or target loss cannot cancel the tail of a committed trigger. |
-| Ownership | Every player has its own copied planner, navigation, targeting and recovery state. The foreground adapter reads actual vehicle and equipment state and sends ordinary native input; it never advances another actor or borrows a worker decision. |
+| Ownership | Sharing code does not share actor state or physics. The foreground binding reads actual vehicle/equipment state and sends ordinary native input; the Bot binding uses that Bot's worker-owned state. Neither advances another actor or creates shadow physics. |
 
-Source comparison and regression tests are not Windows gameplay acceptance.
+Shared-source and regression tests are not Windows gameplay acceptance.
 Native frame cost, long-arc moving-target fire,
 slopes/bridges, busy narrow passages and two-machine LAN independence still need
 an observed Chinese HD #1513 client run. See `COMPATIBILITY_REVIEW.md` for the
-current test evidence and the remaining acceptance boundary. A complete copy
-proves retained source, not a guarantee that a physically blocked passage can be
-traversed. Foreground input and lifecycle integration need their own evidence.
+current test evidence and the remaining acceptance boundary. Shared code is not
+a guarantee that a physically blocked passage can be traversed. Each binding's
+physical input and lifecycle integration need their own evidence.
 
 ### Player command protocol for local tests
 
@@ -399,8 +402,10 @@ After a custom room, Automatic starts from 15 slots per team with editable contr
 Restart the room after selecting or saving a different launcher lineup. Legacy
 profiles retain their unpinned random vehicles and explicitly saved difficulty.
 Random (mixed distribution) draws one stable rating per round/team/slot, not four
-equally likely difficulty labels. Explicit tactics still override lineup difficulty;
-the effective preview identifies lineup sources without modifying tactics files.
+equally likely difficulty labels. That rating selects a native fitting preset,
+not artificial aiming or tactical errors. Explicit Bot-tactics fitting overrides
+still take precedence over lineup defaults; the effective preview identifies
+lineup sources without modifying tactics files.
 
 Acceptance: test both languages, per-team bulk actions, empty versus random slots,
 clear a team then set Elite, save/reopen and enable Random vehicles (the slots must
@@ -893,18 +898,18 @@ whose profile changed after it started must be restarted first.
   module and crew damage, fires and repairs.
 - Spotting with view range, camouflage, movement, firing, foliage, line of
   sight and last-known positions.
-- Bots that use map geometry, terrain, water, firing lanes, team strength and
-  shared contacts to route, pick targets and choose ammunition,
-  including SPG arcs. Navigation and foliage data ship for all 41 supported
-  standard-battle maps.
+- Bots use the shared vehicle-control laws for routing, target validation and
+  ammunition, including SPG arcs. Map geometry, terrain, water, firing lanes and
+  shared contacts remain inputs to those decisions. Navigation and foliage data
+  ship for all 41 supported standard-battle maps.
 - Completing the final macro-route point hands travel over to a stationary
   engagement or capture hold. The Bot keeps its selected enemy and existing
   firing-lane permission instead of circling the base coordinate; a displaced
   hull resumes travel when it leaves the existing arrival area. Intermediate
   points, explicit waits, route recovery and collision checks keep their
   own owners. `tactical_evidence.route_terminal` records the decision and release.
-- Bots and the independent player copy no longer run tactical withdrawal,
-  timed cover-peeking, flank manoeuvres or personality-driven range shuffling.
+- All automatically controlled actors use the same logic without tactical
+  withdrawal, timed cover-peeking, flank manoeuvres or personality-driven range shuffling.
   Being hit, low health, several enemy directions, local numerical disadvantage,
   a close enemy or an empty magazine does not create a retreat destination.
   Magazine reloads do not wait for cover or a retreat receipt. Physical
@@ -942,20 +947,19 @@ whose profile changed after it started must be restarted first.
   pool and roster size determine whether artillery is selected. Manually
   assigned Bot lineups retain the host's choices; tank destroyers do not count
   toward the artillery quota.
-- Bot competence is a spectrum, not a tier. Each Bot gets one rating that
-  sets the crew level its vehicle is trained to, how long that gunner takes
-  to react, how patiently it waits for the aiming circle, how far off centre
-  it lays the gun and how badly it leads a moving target. The same rating is
-  the chance it does the tactically right thing each time the situation
-  comes up: angling its hull, picking the round that beats the armour in front
-  of it, aiming at the part it can actually hurt and turning on whoever just
-  hit it. Retired retreat, cover-peek and flank strategies are not competence
-  capabilities. A weak Bot is not a Bot that
-  does everything slightly worse; it is one that does not think of some of
-  it. The waiting room chooses how competence is spread over the whole roster
-  - easy, relaxed, pub mix, hard or brutal - and the launcher's exact Bot
-  lineup can still pin one slot to a named tier, with or without also pinning
-  its vehicle.
+- Bot difficulty selects native vehicle and crew configuration, not tactical
+  intelligence. A room or slot rating now resolves only a fitting preset; it
+  is not equivalent to crew proficiency alone. Stock/intermediate/full modules,
+  crew training and skills, equipment and directives, consumables and outfit
+  keep their existing configuration rules and independent overrides. Their
+  real effects on reload, aiming time and physical dispersion remain. There
+  are no extra rating-based reaction delays, aiming patience, artificial
+  dispersion, aim-point offsets or moving-target lead errors. Random weak-spot
+  and shell-choice gates, player preference and attacker-retaliation overrides
+  are removed.
+  The waiting room's easy, relaxed, pub mix, hard and brutal choices distribute
+  fitting presets across the roster. The launcher's exact Bot lineup can still
+  pin one slot to a named fitting tier, with or without pinning its vehicle.
 - Live combat statistics, a damage log with assists, hit and critical-damage
   messages, target outlines, vehicle fires, wrecks, and a consumables panel
   that counts down each cooldown.

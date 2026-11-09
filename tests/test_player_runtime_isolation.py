@@ -119,7 +119,7 @@ class PlayerRuntimeIsolationTests(unittest.TestCase):
         self.assertEqual((.1, .2, .3), result)
         predict.assert_called_once()
 
-    def test_player_consumable_copy_runs_without_original_bot_methods(self):
+    def test_shared_consumable_decision_uses_player_native_equipment_executor(self):
         from test_player_control_completion import CanonicalConsumableCompletionTests
         import test_port_0922_consumable_audit as consumables
         completion = CanonicalConsumableCompletionTests()
@@ -141,13 +141,19 @@ class PlayerRuntimeIsolationTests(unittest.TestCase):
         entity.typeDescriptor.extras = {82: types.SimpleNamespace(name='gunHealth'),
                                        83: types.SimpleNamespace(name='leftTrackHealth')}
         before = copy.deepcopy(critical)
+        engine = control.runtime.engine
+        self.assertIsInstance(engine, fixture.bot_runtime.BotRuntime)
+        self.assertNotIn('_poll_bot_equipments', type(engine).__dict__)
+        shared_poll = fixture.bot_runtime.BotRuntime._poll_bot_equipments
         with mock.patch.object(fixture.bot_runtime.BotRuntime, '_poll_bot_equipments',
-                side_effect=AssertionError('player used original Bot equipment decision')), \
+                autospec=True, side_effect=shared_poll) as poll, \
                 mock.patch.object(fixture.bot_runtime.BotRuntime, '_apply_bot_equipment_effect',
-                side_effect=AssertionError('player used original Bot equipment executor')):
+                side_effect=AssertionError('player used Bot physical equipment executor')):
             completion.poll_equipment(control)
             self.assertFalse(sent)
             completion.poll_equipment(control)
+        self.assertGreaterEqual(poll.call_count, 2)
+        self.assertTrue(all(call[0][0] is engine for call in poll.call_args_list))
         self.assertEqual('gunHealth', sent[0]['selected'])
         self.assertTrue(player.equipment_intent_result['accepted'])
         self.assertNotIn('gunHealth', player.critical['destroyed'])
