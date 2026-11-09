@@ -385,9 +385,13 @@ class SiegeEngagementTests(unittest.TestCase):
         runtime, gun = scene.runtime, scene.battle._gun_state
         self.advance_until(scene, lambda: runtime._siege_pending is not None,
                            actuate=False)
-        # Mode entry needs no speculative point or attack-policy snapshot.
+        # The existing native recovery request admits mode entry without a
+        # speculative enabled-descriptor shot or a penetration certificate.
         self.assertEqual(3, gun.clip_size)
-        self.assertIsNone(runtime.attack_policy.frame)
+        self.assertIsNotNone(runtime.attack_policy.frame)
+        self.assertEqual(siege_mechanics.DISABLED,
+                         runtime.attack_policy.frame['source']['siege_state'])
+        self.assertTrue(runtime.combat_stop.combat_owned)
         self.assertTrue(runtime._siege_pending['enabled'])
         self.assertIsNone(runtime._siege_aim_candidate)
         self.assertTrue(runtime.combat_stop.waiting_for_siege())
@@ -443,7 +447,8 @@ class SiegeEngagementTests(unittest.TestCase):
         self.assertEqual('running', runtime.set_mission('attack', {})['status'])
         self.advance_until(scene, lambda: runtime._siege_pending is not None,
                            actuate=False)
-        self.assertEqual('engage', runtime.combat_stop.task_order['combat_mode'])
+        self.assertEqual('team_attack', runtime.combat_stop.task_order['combat_mode'])
+        self.assertEqual('engage', runtime.engine._server_orders[runtime.actor_id]['combat_mode'])
         self.assertEqual('attack', runtime._mission['action'])
         entering = runtime._siege_pending
         self.assertTrue(entering['enabled'])

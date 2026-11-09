@@ -31,7 +31,8 @@ class CaptureFireHandoffTests(unittest.TestCase):
         def observe(source, command, target, now):
             original = copy.deepcopy(command)
             result, selected = consume(source, command, target, now)
-            if selected is not None and selected['network_id'] == 2 and target['network_id'] == 5:
+            if (selected is not None and selected['network_id'] == 2 and
+                    (target is None or target['network_id'] == 5)):
                 for field in ('move_position', 'face_position', 'throttle', 'turn',
                               'brake', 'movement_intent', 'recovery_mode', 'combat_mode'):
                     self.assertEqual(original.get(field), result.get(field), field)
@@ -60,7 +61,8 @@ class CaptureFireHandoffTests(unittest.TestCase):
             candidate = scene.runtime.attack_policy.decision.get('candidate')
             if owner.active and candidate and candidate['target']['network_id'] == 2:
                 saw_conflict = True
-                self.assertEqual(5, owner.task_order['target_id'])
+                self.assertIsNone(owner.task_order['target_id'])
+                self.assertEqual(5, owner.task_order['initial_target_hint']['target_id'])
                 self.assertFalse(owner.stop_allowed)
                 self.assertEqual((45., 0., 45.), scene.applied_order()['move_position'])
                 self.assertEqual(0., scene.battle._sender.forward)
@@ -211,8 +213,8 @@ class CaptureFireHandoffTests(unittest.TestCase):
                         break
                 runtime = scene.runtime
                 self.assertIsNotNone(runtime._gun_handoff)
-                original_target = next(row for row in runtime.visible_targets() if row['network_id'] == 5)
-                command = dict(scene.control.last_order, target_id=5, target_kind='bot')
+                original_target = None
+                command = dict(scene.control.last_order, target_id=None, target_kind=None)
                 if stop:
                     runtime.stop('test_stop')
                 result, target = runtime.consume_gun_handoff(runtime.state, command, original_target,

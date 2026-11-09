@@ -256,7 +256,8 @@ class AuthorityWorkerLANClient(LANClient):
                                  human_ram_armors=None,
                                  edge_sample_time_us=None,
                                  edge_revision=None,
-                                 detached_turrets=None, push_contacts=None):
+                                 detached_turrets=None, push_contacts=None,
+                                 combat_movement_owners=None):
         """Queue BotRuntime's canonical publication as one frozen wire blob."""
         if not self.is_bot_authority():
             return False
@@ -267,6 +268,10 @@ class AuthorityWorkerLANClient(LANClient):
             return False
         message = {
             'type': 'bot_state', 'round_id': self.round_id, 'rows': rows}
+        if combat_movement_owners is not None:
+            from gui.mods.offline_lan_0922 import bot_state_codec
+            message['combat_movement_owners'] = \
+                bot_state_codec.normalize_combat_movement_owners(combat_movement_owners)
         if sample_time_us is not None:
             sample_time_us = _exact_int(sample_time_us)
             if (sample_time_us is None or

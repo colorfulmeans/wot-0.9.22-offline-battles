@@ -94,16 +94,35 @@ class RadioPlannerTests(unittest.TestCase):
         planner.report_contacts([contact], planner.known_targets(states, players), 1.0)
         orders = {row['id']: row for row in planner.build_orders(
             manifest, states, players, 1.0)['orders']}
-        self.assertEqual(2, orders[11].get('target_id'))
+        self.assertEqual(dict(target_kind='human', target_id=2), orders[11]['initial_target_hint'])
+        self.assertIsNone(orders[11].get('target_id'))
+        self.assertNotIn('combat_task_target', orders[11])
+        self.assertNotIn('initial_target_hint', orders[12])
         self.assertIsNone(orders[12].get('target_id'))
-        expired = planner.build_orders(manifest, states, players, 1.6)['orders']
+        # An explicit enemy task is separate from an ordinary review hint,
+        # and still cannot invent a disconnected recipient's knowledge.
+        command = dict(command_id='radio-1', command='ATTACKENEMY', team=1,
+            issuer_id=1, issued_tick=100, expires_tick=200,
+            recipient_bot_ids=[11, 12], target_kind='human', target_id=2)
+        commanded = {row['id']: row for row in planner.build_orders(
+            manifest, states, players, 1., team_orders=[command])['orders']}
+        self.assertEqual(dict(target_kind='human', target_id=2),
+                         commanded[11]['combat_task_target'])
+        self.assertEqual(orders[11]['initial_target_hint'], commanded[11]['initial_target_hint'])
+        self.assertNotIn('combat_task_target', commanded[12])
+        self.assertNotIn('initial_target_hint', commanded[12])
+        expired = planner.build_orders(manifest, states, players, 1.6,
+                                       team_orders=[command])['orders']
         self.assertTrue(all(row.get('target_id') is None for row in expired))
+        self.assertTrue(all(not row.get('initial_target_hint') for row in expired))
+        self.assertTrue(all(not row.get('combat_task_target') for row in expired))
         self.assertTrue(all(not row.get('fire_allowed') for row in expired))
         # A new team contact cannot recreate an expired recipient's lease.
         contact['radio_recipients'] = []
         planner.report_contacts([contact], planner.known_targets(states, players), 2.0)
         disconnected = planner.build_orders(manifest, states, players, 2.0)['orders']
         self.assertTrue(all(row.get('target_id') is None for row in disconnected))
+        self.assertTrue(all(not row.get('initial_target_hint') for row in disconnected))
 
 
 if __name__ == '__main__':

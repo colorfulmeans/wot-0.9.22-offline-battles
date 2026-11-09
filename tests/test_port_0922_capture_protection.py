@@ -53,15 +53,16 @@ class CaptureProtectionTests(unittest.TestCase):
         p.report_contacts([contact],p.known_targets(states,[]),now)
         return [o for o in p.build_orders(bots,states,[],now,defense)['orders'] if o['team']==2]
 
-    def test_reported_two_capturers_keep_aim_without_chasing_outside(self):
+    def test_reported_two_capturers_keep_candidate_without_chasing_outside(self):
         scene=self.scene();self.orders(scene,0.,shootable=True)
         for now in (1.,3.,8.,12.,30.):
             for order in self.orders(scene,now):
-                if now==1.:self.assertEqual(('bot',1),(order['target_kind'],order['target_id']))
+                self.assertIsNone(order['target_id'])
+                self.assertEqual(dict(target_kind='bot',target_id=1),order['initial_target_hint'])
                 self.assertFalse(order['fire_allowed'])
                 self.assertEqual(0.,order['throttle_override'])
                 self.assertTrue(capture_orders.inside(order['move_position'],order['capture_area']))
-                self.assertNotEqual(order['aim_position'],order['move_position'])
+                self.assertIsNone(order['aim_position'])
 
     def test_more_than_three_arrivals_keep_capture_even_with_three_humans(self):
         scene=self.scene(6)
@@ -85,7 +86,8 @@ class CaptureProtectionTests(unittest.TestCase):
         self.assertEqual('base_capture',order['combat_mode'])
         self.assertEqual(dict(x=195.851,y=0.,z=352.782),order['move_position'])
         self.assertIsNone(order['throttle_override'])
-        self.assertEqual(1,order['target_id'])
+        self.assertIsNone(order['target_id'])
+        self.assertEqual(dict(target_kind='bot',target_id=1),order['initial_target_hint'])
 
     def test_death_and_round_reset_clear_capture_arrival(self):
         scene=self.scene(1);self.orders(scene)

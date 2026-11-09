@@ -25336,6 +25336,8 @@ class BattleRuntime(SharedBattleGeometry):
             state_kwargs = {}
             if 'push_contacts' in message:
                 state_kwargs['push_contacts'] = message['push_contacts']
+            if 'combat_movement_owners' in message:
+                state_kwargs['combat_movement_owners'] = message['combat_movement_owners']
             if self._worker_mode:
                 turrets = dict(self._detached_turret_rows)
                 turrets.update(self._detached_turret_proposals)

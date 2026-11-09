@@ -1952,6 +1952,9 @@ def _server_order_signature(order):
     result.pop('route_attempt', None)
     result.pop('route_assignment', None)
     result.pop('tactical_evidence', None)
+    # Candidate discovery is not a movement-task transition. The accepted
+    # owner/target/goal still participate in this signature below.
+    result.pop('initial_target_hint', None)
     if result.get('target_id') is not None:
         result.pop('aim_position', None)
         if not result.get('stable_hull_face', False):
@@ -3455,6 +3458,8 @@ class BotRuntime(SharedEngineControl):
                 self._equipment_publication_edge(state['id']),
                 (state.get('shot_yaw', _PUBLICATION_EDGE_MISSING),
                  state.get('shot_pitch', _PUBLICATION_EDGE_MISSING)),
+                bot_state_codec.normalize_combat_movement_owner(
+                    state.get('_combat_movement_owner')),
             ))
         launch_edges = tuple(
             (launch.get('id'), launch.get('fire_seq'))
@@ -18993,6 +18998,8 @@ class BotRuntime(SharedEngineControl):
             'sample_time_us': self._sample_time_us,
             'edge_sample_time_us': edge_sample_time_us,
             'edge_revision': edge_revision,
+            'combat_movement_owners':
+                bot_state_codec.project_combat_movement_owners(published_states),
         }
         publication['push_contacts'] = dict(
             contacts=list(getattr(self, '_environment_push_proofs', {}).values()),

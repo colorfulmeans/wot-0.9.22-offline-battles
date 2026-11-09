@@ -3,7 +3,9 @@
 Regressions for the 2026-11-08 AMX AC mle. 48 / STB-1 reports.  The worlds
 below deliberately separate a visible enemy from a locally shootable enemy.
 They execute PlayerControl, FullPlayerRuntime, the shared BotPlanner/driver,
-NativeAttackEvaluator and native trigger admission.  Only native terrain,
+NativeAttackEvaluator and native trigger admission. Ordinary strategy hints
+retain the route; the shared native combat task separately admits movement.
+Only native terrain,
 poses, component armour and collision observations are fixtures.  In
 particular, neither the planner order nor an AttackPolicy decision is mocked.
 
@@ -36,6 +38,12 @@ def navigation_view(order):
         elif value is not None:
             result[key] = tuple(value)
     return result
+
+
+def initial_hint(order):
+    """A strategic candidate is deliberately not the execution target."""
+    hint = order.get('initial_target_hint') or {}
+    return hint.get('target_kind'), hint.get('target_id')
 
 
 class OwnershipScene(AutomaticFireScene):
@@ -166,6 +174,14 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
         self.assertEqual(original, actual)
         self.assertEqual('class_mt_rim_east', actual['route_id'])
 
+    def assert_route_hint(self, scene, identity):
+        order = scene.original_order()
+        self.assertEqual('route', order['combat_mode'])
+        self.assertIsNone(order.get('target_id'))
+        self.assertIsNone(order.get('target_kind'))
+        self.assertEqual(('bot', identity), initial_hint(order))
+        self.assertEqual('class_mt_rim_east', order['route_id'])
+
     def test_visible_blocked_contact_enters_shared_review_without_fire_authority(self):
         for limited in (False, True):
             with self.subTest(limited=limited):
@@ -178,12 +194,14 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
                         scene.tick()
                         raw = scene.original_order()
                         selection = raw['tactical_evidence']['selection']
-                        self.assertEqual('movement_lease', selection['outcome'])
+                        self.assertEqual('evaluation_pending', selection['outcome'])
                         self.assertEqual('initial_distance_armor', selection['selection_law'])
                         self.assertEqual('eligible', selection['candidates'][0]['reason'])
                         self.assertFalse(selection['candidates'][0]['local_lane'])
-                        self.assertEqual(('advance_contact', 2),
-                            (raw['combat_mode'], raw.get('target_id')))
+                        self.assert_route_hint(scene, 2)
+                        self.assert_original_navigation(scene)
+                        self.assertFalse(scene.runtime.combat_stop.combat_owned)
+                        self.assertFalse(scene.runtime.combat_stop.stop_allowed)
                         self.assertEqual((2,), tuple(row['network_id'] for row in
                             scene.runtime.combat_targets()))
                         self.assertEqual('class_mt_rim_east', scene.applied_order()['route_id'])
@@ -213,7 +231,8 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
             for step in range(15):
                 scene.native_position((.4 * step, 0., .25 * step))
                 scene.tick()
-                self.assertEqual('advance_contact', scene.original_order()['combat_mode'])
+                self.assert_route_hint(scene, 2)
+                self.assert_original_navigation(scene)
                 self.assertFalse(scene.applied_order()['fire_allowed'])
                 self.assertFalse(scene.launches())
             # Native line obstruction is now a shared point-review input,
@@ -255,7 +274,7 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
         for unused in range(12):
             scene.tick()
             raw = scene.original_order()
-            self.assertEqual(('advance_contact', 2), (raw['combat_mode'], raw['target_id']))
+            self.assert_route_hint(scene, 2)
             candidates = dict((row['target'][1], row) for row in
                               raw['tactical_evidence']['selection']['candidates'])
             self.assertEqual('eligible', candidates[5]['reason'])
@@ -264,7 +283,9 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
             self.assertFalse(candidates[2]['local_lane'])
             self.assertEqual({2, 5}, set(row['network_id'] for row in
                 scene.runtime.combat_targets()))
-            self.assertEqual(2, scene.applied_order().get('target_id'))
+            self.assertIsNone(scene.applied_order().get('target_id'))
+            self.assert_original_navigation(scene)
+            self.assertFalse(scene.runtime.combat_stop.combat_owned)
             candidate = scene.runtime.attack_policy.decision.get('candidate')
             if candidate is not None:
                 self.assertEqual(2, candidate['target']['network_id'])
@@ -290,13 +311,12 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
         for unused in range(60):
             scene.tick()
             raw = scene.original_order()
-            self.assertEqual(('engage', 5), (raw['combat_mode'], raw['target_id']))
+            self.assert_route_hint(scene, 5)
             self.assertGreater(360., raw['fire_range'])
             self.assertEqual({2, 5}, set(row['target'][1] for row in
                 raw['tactical_evidence']['selection']['candidates']
                 if row['reason'] == 'eligible'))
             self.assertTrue(scene.runtime.combat_stop.active)
-            self.assertTrue(scene.runtime.combat_stop.stop_allowed)
             self.assertEqual(raw['route_id'], scene.applied_order()['route_id'])
             self.assertEqual(raw['route_index'], scene.applied_order()['route_index'])
             policy = scene.runtime.attack_policy
@@ -306,6 +326,7 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
             if candidates:
                 alternative_reviewed = True
                 self.assertTrue(policy._executable_current(candidates[0]))
+                self.assertTrue(scene.runtime.combat_stop.stop_allowed)
                 self.assertEqual(2, scene.applied_order()['target_id'])
                 self.assertEqual(500., scene.applied_order()['fire_range'])
             if scene.launches():
@@ -323,7 +344,7 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
             if scene.launches():
                 break
         raw = scene.original_order()
-        self.assertEqual(('engage', 5), (raw['combat_mode'], raw['target_id']))
+        self.assert_route_hint(scene, 5)
         self.assertTrue(scene.launches(), scene.runtime.status())
         self.assertEqual(5, scene.applied_order().get('target_id'))
         self.assertEqual(0., scene.applied_order().get('throttle_override'))
@@ -332,14 +353,15 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
         scene = self.scene()
         scene.eligible_enemy(5)
         # No primed cache, candidate, forced policy aim, or synthetic planner
-        # order.  Original lane observation must eventually admit the contact.
+        # order. Native point review must eventually admit the combat task.
         admitted = False
         for unused in range(100):
             scene.tick()
             raw = scene.original_order()
-            if raw['combat_mode'] == 'route':
+            self.assert_route_hint(scene, 5)
+            if not scene.runtime.combat_stop.combat_owned:
                 self.assert_original_navigation(scene)
-            elif raw.get('target_id') == 5:
+            elif scene.applied_order().get('target_id') == 5:
                 admitted = True
             if scene.launches():
                 break
@@ -355,7 +377,7 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
         for unused in range(80):
             scene.tick()
             raw = scene.original_order()
-            self.assertEqual(('engage', 5), (raw['combat_mode'], raw['target_id']))
+            self.assert_route_hint(scene, 5)
             policy = scene.runtime.attack_policy
             self.assertIsNone(policy.search_started,
                 'an already loaded HE clip does not need the eight-second gate')
@@ -447,7 +469,7 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
             scene.battle._advance_local_gun_to(scene.entity, scene.now)
             scene.tick()
             raw = scene.original_order()
-            self.assertEqual(('engage', 5), (raw['combat_mode'], raw['target_id']))
+            self.assert_route_hint(scene, 5)
             self.assertEqual({2, 5, 6}, set(row['target'][1] for row in
                 raw['tactical_evidence']['selection']['candidates']
                 if row['reason'] == 'eligible'))
@@ -557,8 +579,9 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
         scene.eligible_enemy(5)
         self.assertEqual({5: True}, scene.sample_original_lanes())
         scene.tick()
-        self.assertEqual(('engage', 5), (scene.original_order()['combat_mode'],
-                                        scene.original_order()['target_id']))
+        self.assert_route_hint(scene, 5)
+        self.assertEqual(('engage', 5), (scene.applied_order()['combat_mode'],
+                                        scene.applied_order()['target_id']))
         self.assertEqual(0., scene.applied_order()['throttle_override'])
         friend = scene.vehicle(3, (10., 0., 20.), team=1)
         engine = scene.runtime.engine
@@ -609,8 +632,9 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
                         for unused in range(10):
                             scene.tick()
                             order = scene.applied_order()
-                            self.assertEqual('engage', order['combat_mode'])
-                            self.assertEqual(2, order.get('target_id'))
+                            self.assertEqual('hold' if mission == 'hold_position' else
+                                             'base_capture', order['combat_mode'])
+                            self.assertIsNone(order.get('target_id'))
                             self.assertEqual(point, order['move_position'])
                             self.assertEqual(0., order['throttle_override'])
                             self.assertIsNone(scene.runtime.attack_policy.search_started)
@@ -658,13 +682,14 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
         scene.eligible_enemy(5)
         self.assertEqual({5: True}, scene.sample_original_lanes())
         scene.tick()
-        self.assertEqual(5, scene.original_order()['target_id'])
+        self.assert_route_hint(scene, 5)
+        self.assertTrue(scene.runtime.combat_stop.combat_owned)
         scene.battle._records['bot:5']['spot_visible'] = False
         resumed = False
         for step in range(15):
             scene.native_position((.4 * step, 0., .25 * step))
             scene.tick()
-            if scene.original_order()['combat_mode'] == 'route':
+            if not scene.runtime.combat_stop.active:
                 resumed = True
                 self.assert_original_navigation(scene)
                 self.assertIsNone(scene.applied_order().get('target_id'))

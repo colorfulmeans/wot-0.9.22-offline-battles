@@ -7832,6 +7832,32 @@ class BattleState:
                 return self._set_protocol_reject(
                     "bot_state", "batch_members",
                     "missing=%s" % sorted(set(identities) - set(next_states)))
+            try:
+                movement_owners = dict((entry['id'], entry['owner']) for entry in
+                    bot_state_codec.normalize_combat_movement_owners(
+                        message.get('combat_movement_owners', [])))
+            except bot_state_codec.BotStateCodecError:
+                # Malformed advisory metadata cannot cancel another actor's
+                # admitted task or reject an otherwise valid motion batch.
+                movement_owners = None
+            for bot_id, current in next_states.items():
+                if bot_id in next_unavailable_checkpoints:
+                    # An identity-only row is not an observation of release.
+                    if not current.get('alive'):
+                        # Canonical death already ended that actor's task.
+                        # Do not mutate the previous checkpoint before commit.
+                        current = next_states[bot_id] = dict(current)
+                        current.pop('_combat_movement_owner', None)
+                    continue
+                current.pop('_combat_movement_owner', None)
+                if not current.get('alive'):
+                    continue
+                owner = ((self.bot_states.get(bot_id) or {}).get(
+                    '_combat_movement_owner') if movement_owners is None else
+                    movement_owners.get(bot_id))
+                owner = bot_state_codec.normalize_combat_movement_owner(owner)
+                if owner is not None:
+                    current['_combat_movement_owner'] = owner
             self._commit_human_ram_armors(human_ram_armors)
             progress = message.get('push_contacts', {})
             if not isinstance(progress, dict):

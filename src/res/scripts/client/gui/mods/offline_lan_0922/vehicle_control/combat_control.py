@@ -263,7 +263,7 @@ class CombatControl(object):
         A limited gun outside its actual arc never gains a new turn here.
         """
         owner, state = self.combat_stop, self.state
-        if (not owner.active or not owner.combat_owned or owner.stop_allowed or
+        if (not owner.active or owner.stop_allowed or
                 owner.explicit_travel or self._mission_brakes() or
                 not owner.contains(candidate.get('target')) or
                 not self.attack_policy._executable(candidate, candidate.get('mode', 'penetration'))):
@@ -273,8 +273,9 @@ class CombatControl(object):
                 _distance(_point(task.get('move_position') or state['position']),
                           state['position']) > shared_driver.WAYPOINT_ARRIVAL_RADIUS):
             return False
-        if (not command or command.get('movement_intent', True) or
-                abs(float(command.get('throttle', 0.))) > .01 or
+        if (not command or 'drive' in self.features and (
+                command.get('movement_intent', True) or
+                abs(float(command.get('throttle', 0.))) > .01) or
                 any(state.get(name) for name in ('_gun_angle_adjustment',
                     '_rear_aim_episode', '_rear_hull_aim', '_rear_motion_lease')) or
                 self.actor_id in self.engine._friendly_repositions):
@@ -316,7 +317,8 @@ class CombatControl(object):
         owner = self.combat_stop
         target = candidate.get('target') or {}
         selected = (owner.task_order.get('target_kind'), owner.task_order.get('target_id'))
-        if owner.stop_allowed or (target.get('kind'), target.get('network_id')) == selected:
+        if (owner.stop_allowed or owner.candidate_consumable(candidate) or
+                (target.get('kind'), target.get('network_id')) == selected):
             return True
         return self._gun_handoff_preserves_controls(candidate, self._last_order)
 
@@ -338,12 +340,14 @@ class CombatControl(object):
         """Refine only the gun after proving the original movement is unchanged."""
         lease = getattr(self, '_gun_handoff', None)
         candidate = self.attack_policy.decision.get('candidate')
+        original_target = ((target.get('kind'), target.get('network_id'))
+                           if isinstance(target, dict) else (None, None))
         if (lease is None or lease['at'] != now or lease['generation'] != self.generation or
                 candidate is None or lease['candidate'] != candidate['key'] or
-                target is None or lease['original'] !=
-                    (target.get('kind'), target.get('network_id')) or
-                command.get('target_id') not in (target.get('id'), target.get('network_id')) or
-                command.get('target_kind') not in (None, target.get('kind'))):
+                lease['original'] != original_target or
+                command.get('target_id') not in ((target.get('id'), target.get('network_id'))
+                                                if isinstance(target, dict) else (None,)) or
+                command.get('target_kind') not in (None, original_target[0])):
             return command, target
         selected = candidate['target']
         current = self.current_attack_candidate(source, selected)
@@ -683,7 +687,7 @@ class CombatControl(object):
 
     def attack_search_drive_available(self):
         mission = self._mission or {}
-        return bool(self.combat_stop.stop_allowed and not self._mission_brakes() and
+        return bool(self.combat_stop.can_request_movement and not self._mission_brakes() and
                     self._implicit_retry is None and not mission.get('capture_started') and
                     not (mission.get('explicit') and mission.get('destination') is not None))
 
@@ -693,6 +697,12 @@ class CombatControl(object):
             return order
         decision = self.attack_policy.decision
         action = decision.get('action')
+        if (self._move_episode is not None and self.attack_policy.search_authority is not None and
+                action in ('wait', 'preaim', 'firing_position')):
+            # The already accepted search owns its goal and clock while a
+            # native snapshot is pending. A fresh point/terminal task still
+            # retires it through the existing policy lifecycle below.
+            return order
         if action == 'firing_position':
             self._move_episode = None
             return order
@@ -810,6 +820,7 @@ class CombatControl(object):
                         reason='engagement_waits_native_siege', candidate=None)
                 else:
                     self.attack_policy.update(now)
+                order = self.combat_stop.resolve(order, now)
                 self.prepare_gun_handoff(now)
                 self._refresh_siege_aim(now)
                 order = self.attack_policy.apply_order(order, now)
@@ -819,6 +830,7 @@ class CombatControl(object):
             else:
                 self._suspend_attack()
         order = self._mission_guard_order(order, now)
+        order = self.combat_stop.finish(order)
         if self.siege_navigation_owns(order):
             # Mode debounce must not keep the last enemy's hydraulic input
             # alive after navigation has already accepted control. The normal

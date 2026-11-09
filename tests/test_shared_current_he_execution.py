@@ -117,7 +117,8 @@ class SharedCurrentHEExecutionTests(unittest.TestCase):
                 for unused in range(25):
                     scene.observe_control()
                     self.assert_current(scene, first['key'])
-                    self.assertEqual(14, scene.original_order()['target_id'])
+                    self.assertIsNone(scene.original_order()['target_id'])
+                    self.assertEqual(14, scene.original_order()['initial_target_hint']['target_id'])
                     self.assertEqual({2, 14}, {row['network_id'] for row in scene.runtime.combat_targets()})
                     plan, unused_reason = scene.runtime.attack_policy.next_at_edge()
                     if plan is not None:

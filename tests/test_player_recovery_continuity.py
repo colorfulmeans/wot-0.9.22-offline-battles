@@ -7,10 +7,12 @@ These tests do not certify Windows BigWorld motion or frame timing.
 """
 import copy
 import math
+from types import SimpleNamespace
 import unittest
 
 from test_player_combat_stop import Scene
 from test_player_combat_ownership import OwnershipScene
+from gui.mods.offline_lan_0922.vehicle_control.attack_policy import AttackPolicy, SEARCH_SECONDS
 
 
 class OriginalRecoveryContinuityTests(unittest.TestCase):
@@ -84,8 +86,30 @@ class OriginalRecoveryContinuityTests(unittest.TestCase):
         self.assertEqual('engage', result['combat_mode'])
         self.assertEqual(0., result['throttle_override'])
 
+    def test_ordinary_route_hint_cannot_retire_the_accepted_recovery(self):
+        scene = self.scene()
+        self.consume(scene, 0.)
+        marker = scene.state['_gun_angle_adjustment']
+        scene.raw_order.update(combat_mode='route', target_id=None, target_kind=None,
+            move_position=(20., 0., -30.), throttle_override=None,
+            aim_position=None, fire_allowed=False)
+        scene.candidate.update(mechanical='reachable', line='clear')
+        scene.decide('firing_position', reason='global_snapshot_budget_pending')
+        before = copy.deepcopy(scene.raw_order)
+        result = self.consume(scene, .1)
+        self.assertEqual(before, scene.raw_order)
+        self.assertTrue(scene.owner.combat_owned)
+        self.assertTrue(scene.owner.stop_allowed)
+        self.assertIs(marker, scene.state['_gun_angle_adjustment'])
+        self.assertEqual(0., marker['start'])
+        self.assertNotIn('_gun_angle_last_terminal', scene.state)
+        self.assertNotEqual('route', result['combat_mode'])
+        self.assertNotEqual(before['move_position'], result['move_position'])
+        self.assertEqual(2, result['target_id'])
+        self.assertFalse(result['fire_allowed'])
+
     def test_real_task_handoff_still_retires_original_recovery(self):
-        for mode in ('route', 'team_return_base', 'withdraw'):
+        for mode in ('team_return_base', 'withdraw'):
             with self.subTest(mode=mode):
                 scene = self.scene()
                 self.consume(scene, 0.)
@@ -120,6 +144,87 @@ class OriginalRecoveryContinuityTests(unittest.TestCase):
         result = self.consume(scene, 0.)
         self.assertEqual('advance_contact', result['combat_mode'])
         self.assertNotIn('_gun_angle_adjustment', scene.state)
+
+    def test_query_wait_keeps_an_accepted_approach_without_a_legacy_recovery_marker(self):
+        scene = self.scene()
+        scene.candidate.update(mechanical='reachable', line='world_blocked', armor='passed')
+        scene.decide('firing_position', reason='current_penetration_obstructed')
+        approach = scene.apply(0.)
+        self.assertEqual('advance_contact', approach['combat_mode'])
+        self.assertIsNone(approach['throttle_override'])
+        for name in ('_gun_angle_adjustment', '_rear_aim_episode', '_rear_motion_lease'):
+            self.assertNotIn(name, scene.state)
+        self.assertFalse(scene.runtime.engine._friendly_repositions)
+        scene.decide('wait', candidate=False, reason='stationary_domain_review_pending')
+        for now in (.1, .2, .3):
+            waiting = scene.apply(now)
+            for name in ('combat_mode', 'move_position', 'throttle_override', 'target_id'):
+                self.assertEqual(approach[name], waiting[name])
+            self.assertTrue(scene.owner.combat_owned)
+            self.assertTrue(scene.owner.stop_allowed)
+            self.assertFalse(waiting['fire_allowed'])
+
+
+class RecoveryEpisodeTransitionTests(unittest.TestCase):
+    """Unit boundary for chosen actions, not fabricated native proof tests.
+
+    These supplied action/point observations deliberately isolate the real
+    AttackPolicy._choose and navigation_result state transitions. Native
+    evaluation and all-enemy failure qualification have separate full-loop
+    tests; assigning search_authority here is not evidence of either.
+    """
+    @staticmethod
+    def policy_and_candidate():
+        # _choose consumes supplied observations in this isolated boundary;
+        # it must not instantiate or imply a native evaluator execution.
+        policy = AttackPolicy(SimpleNamespace(), evaluator=SimpleNamespace())
+        target = dict(kind='bot', id=2, network_id=2, position=(0., 0., 40.))
+        candidate = dict(target=target, target_key=('bot', 2), shell_index=0,
+            sample=0, key=(0, ('bot', 2), 0, 'penetration'), mode='penetration',
+            armor='passed', line='clear', mechanical='reachable',
+            solution=dict(point=(0., 1., 40.)))
+        return policy, candidate
+
+    def test_pending_status_does_not_renew_movement_episode_or_global_search_deadline(self):
+        for action in ('firing_position', 'search_penetration'):
+            with self.subTest(action=action):
+                policy, candidate = self.policy_and_candidate()
+                if action == 'search_penetration':
+                    policy.search_authority = dict(qualified_at=9.)
+                first = policy._choose(action, 'supplied_observation', candidate)
+                episode = first['move_request']['episode_id']
+                if action == 'search_penetration':
+                    policy.navigation_result(dict(action=action, episode_id=episode,
+                        status='accepted', attempted=True, at=10.))
+                deadline = first['move_request']['deadline']
+                for reason in ('stationary_domain_review_pending',
+                               'he_damage_comparison_pending',
+                               'global_snapshot_budget_pending', 'observation_unavailable'):
+                    waiting = policy._choose('wait', reason)
+                    self.assertIsNone(waiting['candidate'])
+                    resumed = policy._choose(action, 'supplied_observation_resumed', candidate)
+                    self.assertEqual(episode, resumed['move_request']['episode_id'])
+                    self.assertEqual(deadline, resumed['move_request']['deadline'])
+                    self.assertEqual(deadline, resumed['search_deadline'])
+                if action == 'search_penetration':
+                    self.assertEqual(10., policy.search_started)
+                    self.assertEqual(10. + SEARCH_SECONDS, deadline)
+
+    def test_completed_or_changed_movement_phase_starts_a_new_episode(self):
+        for completion in ('aim', 'navigate', 'switch_shell', 'reload_clip'):
+            with self.subTest(completion=completion):
+                policy, candidate = self.policy_and_candidate()
+                first = policy._choose('firing_position', 'supplied_recovery', candidate)
+                episode = first['move_request']['episode_id']
+                terminal = policy._choose(completion, 'supplied_terminal', candidate)
+                self.assertEqual(completion, terminal['action'])
+                later = policy._choose('firing_position', 'new_supplied_recovery', candidate)
+                self.assertNotEqual(episode, later['move_request']['episode_id'])
+        policy, candidate = self.policy_and_candidate()
+        first = policy._choose('firing_position', 'supplied_recovery', candidate)
+        policy.search_authority = dict(qualified_at=9.)
+        search = policy._choose('search_penetration', 'supplied_negative_domain', candidate)
+        self.assertNotEqual(first['move_request']['episode_id'], search['move_request']['episode_id'])
 
 
 class FullRecoveryAndFireTests(unittest.TestCase):

@@ -26,22 +26,22 @@ class TargetEvidenceTests(unittest.TestCase):
         self.states[0].update(aim_feedback_kind='human', aim_feedback_id=2,
             aim_feedback_error=error, aim_feedback_aligned=aligned)
 
-    def test_damaged_turret_tracking_has_no_artificial_patience_timeout(self):
-        self.assertEqual(2, self.orders(1)['target_id'])
+    def test_damaged_turret_cannot_create_a_hint_patience_timeout(self):
+        self.assertEqual(2, ai._initial_hint(self.orders(1))['target_id'])
         self.contacts[1]['health'] = 10
         for now, error in ((3.1, 2.6), (6, 1.5), (9, .4)):
             self.aim(error)
-            self.assertEqual(2, self.orders(now)['target_id'])
-        self.assertEqual(2, self.orders(15.1)['target_id'])
+            self.assertEqual(2, ai._initial_hint(self.orders(now))['target_id'])
+        self.assertEqual(2, ai._initial_hint(self.orders(15.1))['target_id'])
         self.assertFalse(hasattr(self.planner, '_target_assignments'))
 
     def test_first_shot_does_not_restore_a_low_health_target_bonus(self):
         self.orders(1)
         self.aim(.1)
         self.contacts[1]['health'] = 10
-        self.assertEqual(2, self.orders(3.1)['target_id'])
+        self.assertEqual(2, ai._initial_hint(self.orders(3.1))['target_id'])
         self.states[0]['fire_seq'] = 1
-        self.assertEqual(2, self.orders(5.2)['target_id'])
+        self.assertEqual(2, ai._initial_hint(self.orders(5.2))['target_id'])
 
     def test_health_loss_cannot_restore_an_attacker_preemption_hook(self):
         self.orders(1)
@@ -49,17 +49,20 @@ class TargetEvidenceTests(unittest.TestCase):
         self.states[0]['health'] -= 100
         self.assertFalse(hasattr(self.planner, 'report_damage'))
         self.assertFalse(hasattr(self.planner, '_recent_hit'))
-        self.assertEqual(2, self.orders(1.2)['target_id'])
+        self.assertEqual(2, ai._initial_hint(self.orders(1.2))['target_id'])
 
-    def test_slow_aim_cannot_be_released_by_a_retired_idle_fire_timer(self):
+    def test_slow_aim_cannot_create_a_macro_idle_fire_timer(self):
         initial = self.orders(1)
+        baseline = ai.BotPlanner()
+        baseline.build_orders(self.manifest, self.states, self.players, 1.)
         for now, error in ((3., 2.6), (8., .5), (15., .5), (30., .5)):
             self.aim(error)
             order = self.orders(now)
-            self.assertEqual(2, order['target_id'])
-            self.assertEqual('engage', order['combat_mode'])
-            self.assertEqual(0., order['throttle_override'])
-            self.assertEqual(initial['move_position'], order['move_position'])
+            self.assertEqual(2, ai._initial_hint(order)['target_id'])
+            self.assertEqual('route', order['combat_mode'])
+            self.assertIsNone(order['throttle_override'])
+            route = baseline.build_orders(self.manifest, self.states, self.players, now)['orders'][0]
+            self.assertEqual(route['move_position'], order['move_position'])
             self.assertNotIn('firing_hold', order['tactical_evidence'])
         self.assertFalse(hasattr(self.planner, '_release_unproductive_firing_hold'))
         self.assertFalse(hasattr(self.planner, '_firing_holds'))
@@ -68,28 +71,28 @@ class TargetEvidenceTests(unittest.TestCase):
         self.orders(1)
         self.aim(2.6)
         self.contacts[1].update(x=0, z=20)
-        self.assertEqual(3, self.orders(1.1)['target_id'])
+        self.assertEqual(3, ai._initial_hint(self.orders(1.1))['target_id'])
         self.assertEqual('initial_hint', self.planner._target_decisions[11]['owner'])
         self.assertFalse(hasattr(self.planner, '_target_assignments'))
 
-    def test_lane_loss_retains_tracking_but_releases_fire_and_stationary_hold(self):
+    def test_lane_loss_retains_hint_without_overriding_route(self):
         self.orders(1)
         self.contacts[0]['shootable_by_bot_ids'] = []
         for now in (1.1, 3.2, 30.):
             held = self.orders(now)
-            self.assertEqual(2, held['target_id'])
+            self.assertEqual(2, ai._initial_hint(held)['target_id'])
             self.assertFalse(held['fire_allowed'])
-            self.assertEqual('advance_contact', held['combat_mode'])
+            self.assertEqual('route', held['combat_mode'])
             self.assertIsNone(held['throttle_override'])
         self.contacts[0]['shootable_by_bot_ids'] = [11]
-        self.assertTrue(self.orders(30.2)['fire_allowed'])
+        self.assertFalse(self.orders(30.2)['fire_allowed'])
 
-    def test_target_death_releases_aim_immediately(self):
+    def test_target_death_removes_the_initial_hint_immediately(self):
         self.orders(1)
         self.aim(2.6)
         self.players[0]['alive'] = False
         self.contacts = self.contacts[1:]
-        self.assertEqual(3, self.orders(1.2)['target_id'])
+        self.assertEqual(3, ai._initial_hint(self.orders(1.2))['target_id'])
 
     def test_capturer_changes_task_hint_without_creating_a_gun_target_owner(self):
         self.orders(1)

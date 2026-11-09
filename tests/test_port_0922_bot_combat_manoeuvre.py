@@ -264,10 +264,13 @@ class LocalActionFeedbackTests(unittest.TestCase):
 
 
 class ServerManoeuvreOwnershipTests(unittest.TestCase):
-    def test_retired_tactical_modes_cannot_reenter_through_movement_leases(self):
+    def test_retired_tactical_modes_have_no_macro_movement_lease_entry(self):
         planner = BotPlanner()
-        bot = dict(id=14, state=_state(14, 1, -150., 74.4))
-        focus = dict(target_kind='bot', id=20)
+        bot = _bot(14, 1, 0, _route('lane', [(-150., 74.4, False),
+                   (-100., 74.4, False)]), 'mediumTank')
+        bot['state'] = _state(14, 1, -150., 74.4)
+        focus = dict(target_kind='bot', id=20, visible=True,
+                     position=dict(x=-148.837, y=1.1, z=75.174))
         for mode in ('flank', 'support_hold', 'take_cover', 'cover_hold', 'cover_peek',
                      'cover_return', 'withdraw', 'low_health_retreat',
                      'magazine_reload_retreat', 'team_turnback'):
@@ -279,10 +282,12 @@ class ServerManoeuvreOwnershipTests(unittest.TestCase):
                         move_position=dict(x=-148.837,y=1.1,z=75.174),
                         throttle_override=1.)
                     planner._last_orders = dict(orders=[previous])
-                    order = {}
-                    self.assertFalse(planner._apply_leased_movement_order(
-                        order, bot, focus))
-                    self.assertEqual({}, order)
+                    order = planner._order_for(bot, 0, 1, focus, [focus], 1.)
+                    self.assertFalse(hasattr(planner, '_apply_leased_movement_order'))
+                    self.assertEqual('route', order['combat_mode'])
+                    self.assertEqual(dict(x=-100., y=0., z=74.4), order['move_position'])
+                    self.assertIsNone(order['throttle_override'])
+                    self.assertEqual(dict(target_kind='bot', target_id=20), order['initial_target_hint'])
 
     def test_codec_carries_begin_and_end_without_extra_columns(self):
         state = _bot_state()
@@ -296,6 +301,7 @@ class ServerManoeuvreOwnershipTests(unittest.TestCase):
 
     def test_local_manoeuvre_receipt_cannot_start_an_idle_fire_timer(self):
         planner = BotPlanner()
+        baseline = BotPlanner()
         route = _route('lane', [(0, -100, False), (0, 100, False)])
         bot = _bot(10, 1, 0, route, 'mediumTank')
         state = _state(10, 1, 0., 0.)
@@ -309,10 +315,12 @@ class ServerManoeuvreOwnershipTests(unittest.TestCase):
                 planner.known_targets([state], [player]), now)
             command = planner.build_orders(
                 [bot], [state], [player], now)['orders'][0]
-            self.assertEqual('engage', command['combat_mode'])
-            self.assertEqual(dict(x=0., y=0., z=0.), command['move_position'])
-            self.assertEqual(0., command['throttle_override'])
-            self.assertTrue(command['fire_allowed'])
+            route_order = baseline.build_orders([bot], [state], [player], now)['orders'][0]
+            self.assertEqual('route', command['combat_mode'])
+            self.assertEqual(route_order['move_position'], command['move_position'])
+            self.assertIsNone(command['throttle_override'])
+            self.assertFalse(command['fire_allowed'])
+            self.assertEqual(dict(target_kind='human', target_id=20), command['initial_target_hint'])
             self.assertNotIn('firing_hold', command['tactical_evidence'])
         self.assertFalse(hasattr(planner, '_firing_holds'))
 

@@ -47,10 +47,16 @@ class SPGTrackingTests(unittest.TestCase):
             self.assertEqual({'x': 200., 'y': 0., 'z': 0.}, order['face_position'])
 
     def test_non_spg_tracks_blocked_contact_without_a_launch_permission(self):
-        order = self._order(BotPlanner(), _contact(2, 200, 0, []), 1.0, 'mediumTank')
-        self.assertEqual(2, order['target_id'])
+        contact = _contact(2, 200, 0, [])
+        order = self._order(BotPlanner(), contact, 1.0, 'mediumTank')
+        baseline = self._order(BotPlanner(), dict(contact, visible=False), 1.0, 'mediumTank')
+        self.assertEqual(dict(target_kind='human', target_id=2), order['initial_target_hint'])
+        self.assertIsNone(order['target_id'])
+        self.assertNotIn('combat_task_target', order)
         self.assertFalse(order['fire_allowed'])
-        self.assertEqual('advance_contact', order['combat_mode'])
+        self.assertEqual('route', order['combat_mode'])
+        for name in ('move_position', 'face_position', 'route_id', 'route_index'):
+            self.assertEqual(baseline[name], order[name], name)
         self.assertIsNone(order['throttle_override'])
 
     def test_explicit_radio_disconnect_never_grants_artillery_target(self):

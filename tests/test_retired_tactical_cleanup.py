@@ -1,15 +1,15 @@
 """The confirmed tactical deletions cannot reappear through old entry points.
 
-These tests define the replacement contract: valid local shots stay owned by
-aim/fire; only actual range or lane failure changes combat movement. Physical
-route recovery and the separately owned eight-second penetration policy are
-not reimplemented here.
+These tests keep macro candidate hints separate from execution rights. Native
+aim/fire and movement acquisition are covered through the shared actor bindings;
+this planner/driver fixture has no native attack evaluator. Physical route
+recovery and the eight-second penetration policy are not reimplemented here.
 """
 import random
 import unittest
 
 from test_port_0922_server_bot_ai import (
-    BotPlanner, _bot, _contact, _profile, _route, _state,
+    BotPlanner, _bot, _contact, _profile, _route, _state, _initial_hint,
 )
 from gui.mods.offline_lan_0922.ai.planner import make_personality
 from gui.mods.offline_lan_0922.ai import planner as setup_data
@@ -31,6 +31,7 @@ class RetiredTacticalEntryPointTests(unittest.TestCase):
             '_should_flank', '_flank_point', '_stable_range_mode',
             '_combat_states', '_ally_support_score', '_firing_holds',
             '_release_unproductive_firing_hold',
+            '_engage_anchors', '_combat_approach', '_apply_leased_movement_order',
         )
         for action in (lambda: None, lambda: planner.reset(2),
                        planner.clear_observations):
@@ -70,8 +71,8 @@ class RetiredTacticalEntryPointTests(unittest.TestCase):
             self.assertEqual(rng.uniform(-4.0, 4.0), traits['route_jitter'])
 
 
-class CurrentShootingPositionTests(unittest.TestCase):
-    def test_server_holds_across_health_range_personality_and_magazine_states(self):
+class CandidateRouteOwnershipTests(unittest.TestCase):
+    def test_hints_preserve_route_across_health_range_personality_and_magazine_states(self):
         route = _route('authored', [(45, -240, False), (45, 300, False)])
         for class_tag in ('lightTank', 'mediumTank', 'heavyTank', 'AT-SPG'):
             for health in (1000, 200, 1):
@@ -97,14 +98,15 @@ class CurrentShootingPositionTests(unittest.TestCase):
                                 health=1000, max_health=1000)
                             order = planner._order_for(
                                 bot, 0, 1, focus, [focus], 1.0)
-                            self.assertEqual('engage', order['combat_mode'])
-                            self.assertEqual(dict(x=45.0, y=0.0, z=-180.0),
+                            self.assertEqual('route', order['combat_mode'])
+                            self.assertEqual(dict(x=45.0, y=0.0, z=300.0),
                                              order['move_position'])
-                            self.assertEqual(0.0, order['throttle_override'])
-                            self.assertEqual(2, order['target_id'])
-                            self.assertEqual(ready, order['fire_allowed'])
+                            self.assertIsNone(order['throttle_override'])
+                            self.assertEqual(2, _initial_hint(order)['target_id'])
+                            self.assertEqual(ready, order['tactical_evidence']['weapon_ready'])
+                            self.assertFalse(order['fire_allowed'])
 
-    def test_shared_planner_and_driver_stay_when_outnumbered_damaged_or_too_close(self):
+    def test_hint_does_not_change_driver_when_outnumbered_damaged_or_too_close(self):
         profile = _profile('mediumTank', {'flanker': 1.0, 'support': 1.0})
         profile.update(desired_range=180.0, fire_range=450.0)
         for health in (1000, 200, 1):
@@ -117,11 +119,17 @@ class CurrentShootingPositionTests(unittest.TestCase):
                         -180.+distance, [11]) for identity in (2, 3, 4, 5)]
                     order, command = shared_plan_and_drive(
                         adapter, BotPlanner(), actor, state, contacts=contacts)
-                    self.assertEqual('engage', order['combat_mode'])
-                    self.assertEqual((45., 0., -180.), command['move_position'])
-                    self.assertEqual(0., command['throttle'])
-                    self.assertTrue(order['fire_allowed'])
-                    self.assertEqual(2, command['target_id'])
+                    baseline_adapter = BotAdapter('04_himmelsdorf', 45)
+                    baseline_actor = baseline_adapter.roster.register_profile(11, 1, profile, 'Bot')
+                    baseline_order, baseline_command = shared_plan_and_drive(
+                        baseline_adapter, BotPlanner(), baseline_actor, state)
+                    self.assertEqual('route', order['combat_mode'])
+                    self.assertEqual(baseline_order['move_position'], order['move_position'])
+                    for field in ('move_position', 'throttle', 'turn', 'brake'):
+                        self.assertEqual(baseline_command.get(field), command.get(field), field)
+                    self.assertFalse(order['fire_allowed'])
+                    self.assertEqual(2, _initial_hint(order)['target_id'])
+                    self.assertIsNone(command['target_id'])
                     self.assertNotIn('force_balance', command)
 
     def test_role_range_cannot_force_approach_before_native_validation(self):
@@ -137,16 +145,16 @@ class CurrentShootingPositionTests(unittest.TestCase):
         actor['route'] = route
         order, command = shared_plan_and_drive(adapter, BotPlanner(), actor,
             state, contacts=[_contact(2, 45., 175., [11])])
-        self.assertEqual('engage', order['combat_mode'])
-        self.assertEqual(dict(x=45., y=0., z=-180.), order['move_position'])
+        self.assertEqual('route', order['combat_mode'])
+        self.assertEqual(dict(x=45., y=0., z=300.), order['move_position'])
         self.assertEqual('authored', order['route_id'])
-        self.assertEqual(0., order['throttle_override'])
-        self.assertEqual(2, order['target_id'])
-        self.assertEqual('engage', command['combat_mode'])
-        self.assertEqual(0., command['throttle'])
+        self.assertIsNone(order['throttle_override'])
+        self.assertEqual(2, _initial_hint(order)['target_id'])
+        self.assertEqual('route', command['combat_mode'])
+        self.assertGreater(command['throttle'], 0.)
         self.assertEqual(route, actor['route'])
 
-    def test_current_blocked_lane_still_hands_off_to_position_recovery(self):
+    def test_macro_lane_change_does_not_create_native_position_recovery(self):
         route = _route('authored', [(0, -100, False), (0, 500, False)])
         bot = _bot(11, 1, 0, route, 'mediumTank')
         state = _state(11, 1, 0.0, 0.0)
@@ -155,16 +163,15 @@ class CurrentShootingPositionTests(unittest.TestCase):
         clear = _contact(2, 0.0, 150.0, [11])
         planner.report_contacts([clear], planner.known_targets([state], [player]), 1.0)
         first = planner.build_orders([bot], [state], [player], 1.0)['orders'][0]
-        self.assertTrue(first['fire_allowed'])
+        self.assertFalse(first['fire_allowed'])
         blocked = _contact(2, 0.0, 150.0, [])
         planner.report_contacts([blocked], planner.known_targets([state], [player]), 1.5)
         order = planner.build_orders([bot], [state], [player], 1.5)['orders'][0]
-        self.assertEqual('advance_contact', order['combat_mode'])
-        self.assertEqual(2, order['target_id'])
-        self.assertEqual(first['aim_position'], order['move_position'])
+        self.assertEqual('route', order['combat_mode'])
+        self.assertEqual(2, _initial_hint(order)['target_id'])
+        self.assertEqual(first['move_position'], order['move_position'])
         self.assertFalse(order['fire_allowed'])
-        self.assertEqual('stationary_lane_lost',
-                         order['tactical_evidence']['blocked_hold_handoff']['reason'])
+        self.assertNotIn('blocked_hold_handoff', order['tactical_evidence'])
 
 
 class NoSyntheticRouteFallbackTests(unittest.TestCase):
@@ -207,9 +214,9 @@ class NoSyntheticRouteFallbackTests(unittest.TestCase):
             position=dict(x=270.0, y=0.0, z=40.0), visible=True,
             shootable_by_bot_ids=[11], health=1000, max_health=1000)
         order = planner._order_for(bot, 0, 1, focus, [focus], 1.0)
-        self.assertEqual('engage', order['combat_mode'])
+        self.assertEqual('route', order['combat_mode'])
         self.assertEqual(dict(x=270., y=0., z=-350.), order['move_position'])
-        self.assertEqual(2, order['target_id'])
+        self.assertEqual(2, _initial_hint(order)['target_id'])
         self.assertEqual('', order['route_id'])
         self.assertNotIn(11, planner._route_states)
 

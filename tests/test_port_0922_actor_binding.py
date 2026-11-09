@@ -111,16 +111,32 @@ class ActorBindingTests(unittest.TestCase):
         self.assertNotIn('test_actor', self.other._last_order)
 
     def test_worker_search_movement_uses_common_navigation_and_mission_gate(self):
-        self.binding.combat_stop.active = True
-        self.binding.combat_stop.stop_allowed = False
+        target = dict(kind='bot', id=12, network_id=12, team=1,
+                      alive=True, visible=True, health=1000,
+                      position=(12., 3., 20.))
+        self.assertTrue(self.binding.observe(1., [target]))
+        route = dict(combat_mode='route', move_position=(20., 3., 40.),
+                     throttle_override=None, target_id=None,
+                     initial_target_hint=dict(target_kind='bot', target_id=12))
+        self.binding.combat_stop.accept(dict(route, combat_mode='hold',
+                                             throttle_override=0.))
         self.assertFalse(self.binding.attack_search_drive_available())
-        self.binding.combat_stop.stop_allowed = True
+        self.binding.combat_stop.accept(route)
+        self.assertTrue(self.binding.combat_stop.can_request_movement)
+        self.assertFalse(self.binding.combat_stop.stop_allowed)
+        self.assertFalse(self.binding.combat_stop.combat_owned)
+        # Search may request movement before a proposal is committed. Making
+        # stop_allowed a prerequisite would deadlock that native admission.
         self.assertTrue(self.binding.attack_search_drive_available())
         self.binding._mission = dict(capture_started=True)
+        self.binding.combat_stop.accept(route)
         self.assertFalse(self.binding.attack_search_drive_available())
         self.binding._mission = dict(explicit=True, destination=(20., 0., 20.))
+        self.binding.combat_stop.accept(route)
         self.assertFalse(self.binding.attack_search_drive_available())
         self.binding._mission = None
+        self.binding.combat_stop.accept(route)
+        self.assertTrue(self.binding.attack_search_drive_available())
         self.binding._implicit_retry = dict(at=1.)
         self.assertFalse(self.binding.attack_search_drive_available())
 

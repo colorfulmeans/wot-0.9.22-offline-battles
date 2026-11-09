@@ -1075,25 +1075,23 @@ class FullRuntimeMissionOwnershipTests(unittest.TestCase):
                 request.assert_called_once_with(True, mock.ANY)
                 self.assertTrue(scene.battle._local_siege_pending or scene.battle._local_siege_braking)
 
-    def test_originally_admitted_siege_contact_enters_before_point_validation(self):
+    def test_explicit_attack_admits_siege_before_current_point_validation(self):
         scene = self.scene(siege=True, siege_vehicle='sweden:S21_UDES_03')
         revision = [0]
         scene.battle._destructibles = types.SimpleNamespace(
             _spatial_revision_1513=lambda: revision[0])
         scene.pose(scene.target, (0., 0., 24.))
         scene.world = [((-100., -100., 5.), (100., 100., 16.))]
-        scene.runtime.set_mission('hold_position', dict(timeout=180.))
+        scene.runtime.set_mission('attack', dict(timeout=180.))
         request = mock.Mock(wraps=scene.battle._request_player_control_siege)
         scene.battle._request_player_control_siege = request
         for unused in range(24):
             row = scene.tick()
             self.assertIsNone(scene.control.last_control_failure, row)
         self.assertTrue(scene.world_queries)
-        # configure acquired the original planner's clear lane before this
-        # wall appeared. That retained original combat lease admits siege,
-        # not mere visibility of a never-admitted blocked target. Neither
-        # the retained contact nor the
-        # submitted mode request authorizes a physical round.
+        # The explicit attack admits this task, not an old macro engage or
+        # a stale lane sampled before the wall appeared. Neither the task
+        # nor its submitted mode request authorizes a physical round.
         request.assert_called_once_with(True, mock.ANY)
         token = scene.runtime._siege_pending
         self.assertIsNotNone(token)

@@ -28,21 +28,24 @@ class TerminalRouteHandoffTests(unittest.TestCase):
             self.assertEqual(1,planner.report_contacts([report],planner.known_targets(states,[]),now))
         return next(o for o in planner.build_orders(manifest,states,[],now,defense)['orders'] if o['id']==17)
 
-    def test_reported_endpoint_hands_hull_to_enemy_without_changing_target(self):
+    def test_endpoint_keeps_hint_separate_from_an_admitted_execution_target(self):
         scene=self.scene(); order=self.order(scene)
-        self.assertEqual('engage',order['combat_mode'])
-        self.assertEqual(('bot',8),(order['target_kind'],order['target_id']))
-        self.assertTrue(order['fire_allowed'])
+        self.assertEqual('hold',order['combat_mode'])
+        self.assertEqual((None,None),(order['target_kind'],order['target_id']))
+        self.assertEqual(dict(target_kind='bot',target_id=8),order['initial_target_hint'])
+        self.assertFalse(order['fire_allowed'])
         self.assertEqual(0.,order['throttle_override'])
-        self.assertEqual('tactical_owner',order['tactical_evidence']['route_terminal']['outcome'])
-        self.assertNotIn('terminal_hold',scene[0]._route_states[17])
-        # Exercise the actual macro-arrival handoff separately. A valid shot
-        # now stops before this stage, not through the retired preferred-range
-        # advance branch that the original fixture depended on.
+        self.assertEqual('hold',order['tactical_evidence']['route_terminal']['outcome'])
+        self.assertIn('terminal_hold',scene[0]._route_states[17])
+        # Isolated terminal-consumer input for an already admitted execution
+        # target. This does not pretend the macro hint supplied native proof.
+        # The unchanged consumer must preserve that caller's target and gate.
         planner,manifest,states,defense=scene
         bot=planner._alive_bots(manifest,states)[0]
         order.update(combat_mode='advance',throttle_override=1.,
-                     move_position=dict(x=2.,y=0.,z=-250.))
+                     move_position=dict(x=2.,y=0.,z=-250.),
+                     target_kind='bot',target_id=8,fire_allowed=True,
+                     face_position=dict(x=states[1]['x'],y=states[1]['y'],z=states[1]['z']))
         target_before=(order['target_kind'],order['target_id'],order['fire_allowed'])
         planner._handoff_route_terminal(
             order,bot,planner._capture_target(defense,2),2.)
@@ -62,14 +65,15 @@ class TerminalRouteHandoffTests(unittest.TestCase):
         expected=math.atan2(face['x']-pose['x'],face['z']-pose['z'])
         self.assertAlmostEqual(expected,command['target_yaw'])
 
-    def test_enemy_lane_loss_keeps_target_but_does_not_authorize_fire(self):
+    def test_enemy_lane_loss_keeps_hint_and_terminal_hold_without_fire_authority(self):
         scene=self.scene(); self.order(scene)
         order=self.order(scene,2.,lane=False)
-        self.assertEqual(8,order['target_id'])
+        self.assertIsNone(order['target_id'])
+        self.assertEqual(dict(target_kind='bot',target_id=8),order['initial_target_hint'])
         self.assertFalse(order['fire_allowed'])
         self.assertEqual(0.,order['throttle_override'])
-        self.assertEqual('engage',order['combat_mode'])
-        self.assertNotEqual(order['aim_position'],order['move_position'])
+        self.assertEqual('hold',order['combat_mode'])
+        self.assertIsNone(order['aim_position'])
 
     def test_contact_free_capture_finishes_with_a_stable_hold(self):
         scene=self.scene()
@@ -83,12 +87,13 @@ class TerminalRouteHandoffTests(unittest.TestCase):
         self.assertEqual(0.,second['throttle_override'])
         self.assertFalse(second['fire_allowed'])
 
-    def test_reloading_at_terminal_keeps_engagement_and_existing_fire_gate(self):
+    def test_reloading_at_terminal_keeps_hold_and_evaluation_hint(self):
         scene=self.scene();first=self.order(scene)
         scene[2][0].update(clip=0,reload_time=8.,ammo_reload_pending=True,fire_seq=1)
         order=self.order(scene,2.)
-        self.assertEqual('engage',order['combat_mode'])
-        self.assertEqual(8,order['target_id'])
+        self.assertEqual('hold',order['combat_mode'])
+        self.assertIsNone(order['target_id'])
+        self.assertEqual(dict(target_kind='bot',target_id=8),order['initial_target_hint'])
         self.assertFalse(order['fire_allowed'])
         self.assertEqual(first['move_position'],order['move_position'])
         self.assertEqual(0.,order['throttle_override'])
@@ -122,13 +127,15 @@ class TerminalRouteHandoffTests(unittest.TestCase):
     def test_low_health_and_empty_magazine_never_create_withdrawal_ownership(self):
         scene=self.scene();scene[2][0].update(health=10)
         order=self.order(scene)
-        self.assertEqual('engage',order['combat_mode'])
+        self.assertEqual('hold',order['combat_mode'])
         self.assertEqual(0.,order['throttle_override'])
-        self.assertTrue(order['fire_allowed'])
+        self.assertFalse(order['fire_allowed'])
+        self.assertIsNone(order['target_id'])
+        self.assertEqual(8,order['initial_target_hint']['target_id'])
         self.assertFalse(hasattr(scene[0],'_retreat_states'))
         scene=self.scene();scene[2][0].update(clip=0,clip_size=4,fire_seq=1,reload_time=25.)
         order=self.order(scene)
-        self.assertEqual('engage',order['combat_mode'])
+        self.assertEqual('hold',order['combat_mode'])
         self.assertEqual(0.,order['throttle_override'])
         self.assertFalse(order['fire_allowed'])
         self.assertFalse(hasattr(scene[0],'_retreat_states'))

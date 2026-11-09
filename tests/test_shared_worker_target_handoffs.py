@@ -61,7 +61,8 @@ class SharedWorkerTargetHandoffTests(unittest.TestCase):
             # The ordinary initial hint changes naturally with distance. The
             # native armour review keeps the existing blocked target instead
             # of laundering that hint into a second physical target owner.
-            self.assertEqual(15, scene.engine._server_orders[11]['target_id'])
+            self.assertIsNone(scene.engine._server_orders[11]['target_id'])
+            self.assertEqual(15, scene.engine._server_orders[11]['initial_target_hint']['target_id'])
             self.assertEqual(('bot', 14), binding.attack_policy.current_target_key())
             self.assertEqual('firing_position', binding.attack_policy.decision['action'])
             self.assertIs(marker, scene.engine._friendly_repositions.get(11),

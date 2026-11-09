@@ -1,4 +1,4 @@
-"""Reload engagement preserves route metadata and dated physical evidence."""
+"""Reload observations preserve route tasks and dated physical evidence."""
 import copy
 import math
 from pathlib import Path
@@ -32,15 +32,16 @@ class ReloadEngagementGoalTests(unittest.TestCase):
         players = fixture._report(planner, [_contact(2, x, 148, [11])])
         return planner.build_orders(fixture.manifest, fixture.states, players, 1.)['orders'][0]
 
-    def test_reloading_low_health_vehicles_keep_current_firing_position(self):
+    def test_reloading_low_health_candidates_do_not_replace_the_route(self):
         for class_tag in ('AT-SPG', 'mediumTank', 'heavyTank'):
             with self.subTest(class_tag=class_tag):
                 order = self.order(class_tag)
-                self.assertEqual(order['combat_mode'], 'engage')
-                self.assertEqual(order['move_position'], dict(x=192., y=0., z=128.))
+                self.assertEqual(order['combat_mode'], 'route')
+                self.assertEqual(order['move_position'], dict(x=250., y=0., z=128.))
                 self.assertEqual(order['route_anchor'], dict(x=192., y=0., z=128.))
-                self.assertEqual(order['throttle_override'], 0.)
-                self.assertEqual(order['target_id'], 2)
+                self.assertIsNone(order['throttle_override'])
+                self.assertIsNone(order['target_id'])
+                self.assertEqual(dict(target_kind='human', target_id=2), order['initial_target_hint'])
                 self.assertFalse(order['fire_allowed'])
 
     def test_join_segment_remains_route_metadata_not_a_reload_destination(self):
@@ -50,17 +51,18 @@ class ReloadEngagementGoalTests(unittest.TestCase):
         self.assertEqual(order['route_id'], 'lane')
         self.assertEqual(order['route_index'], 1)
         self.assertTrue(order['route_join'])
-        self.assertEqual(order['move_position'], dict(x=192., y=0., z=128.))
-        self.assertEqual(order['combat_mode'], 'engage')
+        self.assertEqual(order['move_position'], dict(x=250., y=0., z=128.))
+        self.assertEqual(order['combat_mode'], 'route')
         self.assertFalse(order['fire_allowed'])
 
-    def test_previous_route_point_has_only_ordinary_engagement_hold(self):
+    def test_previous_route_point_does_not_become_a_reload_hold(self):
         order = self.order(reached=True)
-        self.assertEqual(order['combat_mode'], 'engage')
+        self.assertEqual(order['combat_mode'], 'route')
         self.assertNotIn('tactical_phase', order)
-        self.assertEqual(order['throttle_override'], 0.)
-        self.assertEqual(order['move_position'], dict(x=160., y=0., z=128.))
-        self.assertEqual(order['target_id'], 2)
+        self.assertIsNone(order['throttle_override'])
+        self.assertEqual(order['move_position'], dict(x=250., y=0., z=128.))
+        self.assertIsNone(order['target_id'])
+        self.assertEqual(dict(target_kind='human', target_id=2), order['initial_target_hint'])
         self.assertFalse(order['fire_allowed'])
 
 

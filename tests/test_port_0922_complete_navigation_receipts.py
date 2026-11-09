@@ -391,7 +391,7 @@ class LeaseAndEntryReceiptTests(unittest.TestCase):
             if reason == 'eligible' and not candidate['shootable_by_bot_ids']:
                 self.assertFalse(receipt['candidates'][0]['local_lane'])
                 self.assertFalse(receipt['candidates'][0]['ready'])
-                self.assertEqual('movement_lease',receipt['outcome'])
+                self.assertEqual('evaluation_pending',receipt['outcome'])
                 self.assertEqual(('human',2),receipt['selected'])
         p._initial_target_hints([bot],[],2.)
         self.assertEqual('no_live_contact',p._target_decisions[11]['outcome'])

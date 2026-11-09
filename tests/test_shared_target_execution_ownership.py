@@ -7,7 +7,7 @@ collision observations are fixtures; policy outcomes are never substituted.
 import copy
 import unittest
 
-from test_player_combat_ownership import OwnershipScene
+from test_player_combat_ownership import OwnershipScene, initial_hint
 from test_player_fire_admission_complete import ArtilleryFireScene, ballistics, shot_geometry
 
 
@@ -32,7 +32,8 @@ class SharedTargetExecutionOwnershipTests(unittest.TestCase):
             if (scene.runtime.attack_policy.decision['action'] == 'aim' and
                     candidate.get('target_key') == ('bot', 14)):
                 break
-        self.assertEqual(1, scene.original_order()['target_id'])
+        self.assertEqual(('bot', 1), initial_hint(scene.original_order()))
+        self.assertIsNone(scene.original_order()['target_id'])
         self.assertEqual('aim', scene.runtime.attack_policy.decision['action'])
         candidate = scene.runtime.attack_policy.decision['candidate']
         self.assertEqual(('bot', 14), candidate['target_key'])
@@ -46,7 +47,8 @@ class SharedTargetExecutionOwnershipTests(unittest.TestCase):
     def receipt(scene):
         policy = scene.runtime.attack_policy
         candidate = policy.decision.get('candidate') or {}
-        return dict(macro_target=scene.original_order().get('target_id'),
+        return dict(macro_hint=initial_hint(scene.original_order()),
+            macro_target=scene.original_order().get('target_id'),
             macro_mode=scene.original_order().get('combat_mode'),
             applied_target=scene.applied_order().get('target_id'),
             action=policy.decision['action'], reason=policy.decision['reason'],
@@ -127,7 +129,8 @@ class SharedTargetExecutionOwnershipTests(unittest.TestCase):
         scene.pose(closer, (-10., 0., 10.))
         scene.runtime._strategic_due = 0.
         scene.tick(.1)
-        self.assertEqual(3, scene.original_order()['target_id'])
+        self.assertEqual(('bot', 3), initial_hint(scene.original_order()))
+        self.assertIsNone(scene.original_order()['target_id'])
         self.assertEqual('aim', policy.decision['action'])
         self.assertEqual(key, policy.decision['candidate']['key'])
         self.assertEqual(14, scene.applied_order()['target_id'])
@@ -205,7 +208,8 @@ class SharedTargetExecutionOwnershipTests(unittest.TestCase):
         policy = scene.runtime.attack_policy
         self.assertEqual('aim', policy.decision['action'])
         self.assertEqual(('bot', 3), policy.decision['candidate']['target_key'])
-        self.assertEqual(3, scene.original_order()['target_id'])
+        self.assertEqual(('bot', 3), initial_hint(scene.original_order()))
+        self.assertIsNone(scene.original_order()['target_id'])
         self.assertEqual(3, scene.applied_order()['target_id'])
         self.assertTrue(policy._executable_current(policy.decision['candidate']))
 
@@ -224,7 +228,8 @@ class SharedTargetExecutionOwnershipTests(unittest.TestCase):
         self.assertEqual(1, len(scene.launches()))
         self.assertEqual(14, scene.applied_order()['target_id'])
         self.assertEqual(500., scene.applied_order()['fire_range'])
-        self.assertEqual('engage', scene.original_order()['combat_mode'])
+        self.assertEqual('route', scene.original_order()['combat_mode'])
+        self.assertEqual(('bot', 14), initial_hint(scene.original_order()))
         self.assertTrue(scene.runtime.combat_stop.stop_allowed)
 
     def test_native_mounted_range_still_rejects_a_truly_unreachable_contact(self):
@@ -246,8 +251,13 @@ class SharedTargetExecutionOwnershipTests(unittest.TestCase):
         self.assertFalse(any(policy._executable_current(row) for row in policy.rows.values()))
         self.assertEqual(original_ammo, scene.battle._gun_state.ammo)
         self.assertEqual('firing_position', policy.decision['action'])
-        self.assertEqual('accepted', policy.navigation_receipt['status'])
-        self.assertGreater(policy.navigation_receipt['throttle'], 0.)
+        self.assertFalse(scene.runtime.combat_stop.combat_owned)
+        self.assertFalse(scene.runtime.combat_stop.stop_allowed)
+        self.assertEqual('route', scene.original_order()['combat_mode'])
+        self.assertEqual('route', scene.applied_order()['combat_mode'])
+        self.assertEqual(scene.original_order()['move_position'],
+            dict(zip(('x', 'y', 'z'), scene.applied_order()['move_position'])))
+        self.assertIsNone(scene.applied_order().get('target_id'))
         self.assertIsNone(policy.search_started,
             'true range obstruction is navigation work, not an armour-negative certificate')
 

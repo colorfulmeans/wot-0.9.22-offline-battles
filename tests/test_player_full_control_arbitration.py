@@ -60,18 +60,13 @@ class FullControlArbitrationTests(unittest.TestCase):
                 original = self.original_order(scene)
                 self.assertEqual(('bot', scene.target.id),
                     original['tactical_evidence']['selection']['selected'])
-                # A ready shot does not turn authored-route advance into a
-                # newly invented stop or an approach to the enemy's position.
-                if original['combat_mode'] == 'advance':
-                    applied = scene.runtime.engine._server_orders[scene.runtime.actor_id]
-                    self.assertEqual(original['combat_mode'], applied['combat_mode'])
-                    self.assertEqual(tuple(original['move_position'][axis]
-                                           for axis in ('x', 'y', 'z')),
-                                     tuple(applied['move_position']))
-                    self.assertNotEqual(0., applied.get('throttle_override'))
-                else:
-                    self.assertEqual((0., 0., True), row['sender'], row)
-                    self.assertEqual('engage', scene.runtime._last_order['combat_mode'])
+                # Strategy still carries the route. The proved current shot,
+                # not the initial hint, owns the accepted physical stop.
+                self.assertEqual('route', original['combat_mode'])
+                self.assertIsNone(original.get('target_id'))
+                self.assertTrue(scene.runtime.combat_stop.combat_owned)
+                self.assertEqual((0., 0., True), row['sender'], row)
+                self.assertEqual('engage', scene.runtime._last_order['combat_mode'])
 
     def test_ready_lane_reaches_real_fire_transaction_without_shadow_gun_debit(self):
         # This scene specifically tests a firing hold. Distant authored
@@ -210,7 +205,12 @@ class FullControlArbitrationTests(unittest.TestCase):
                 selection = original['tactical_evidence']['selection']
                 self.assertEqual(('bot', scene.target.id), selection['selected'])
                 self.assertEqual('initial_distance_armor', selection['selection_law'])
-                self.assertEqual(scene.target.id, scene.runtime._last_order.get('target_id'), row)
+                self.assertIsNone(scene.runtime._last_order.get('target_id'), row)
+                self.assertEqual('route', original['combat_mode'])
+                self.assertEqual('route', scene.runtime._last_order['combat_mode'])
+                self.assertFalse(scene.runtime.combat_stop.combat_owned)
+                self.assertEqual({scene.target.id}, {target['network_id']
+                    for target in scene.runtime.combat_targets()})
                 self.assertNotIn(row['action'], ('aim', 'search_penetration'))
                 self.assertFalse(scene.runtime._last_order['fire_allowed'])
                 self.assertIsNone(policy.search_started)
@@ -219,7 +219,8 @@ class FullControlArbitrationTests(unittest.TestCase):
             [candidate['reason'] for candidate in selection['candidates']])
         self.assertFalse(selection['candidates'][0]['local_lane'])
         self.assertEqual('firing_position', policy.decision['action'])
-        self.assertEqual('firing_position', policy.navigation_receipt['action'])
+        self.assertFalse(policy.navigation_receipt,
+            'candidate-only review cannot publish an accepted combat movement')
         scene.trigger.assert_not_called()
 
     def test_reopened_lane_retires_the_firing_position_navigation_receipt(self):
@@ -237,13 +238,21 @@ class FullControlArbitrationTests(unittest.TestCase):
         scene.set_hull(.01)
         self.advance_until(scene, lambda result:
             result['action'] == 'firing_position' and
-            self.original_order(scene)['combat_mode'] == 'advance_contact')
+            scene.runtime._last_order['combat_mode'] == 'advance_contact')
         policy = scene.runtime.attack_policy
         original = self.original_order(scene)
         self.assertEqual(('bot', scene.target.id),
                          original['tactical_evidence']['selection']['selected'])
-        self.assertEqual('movement_lease',
-                         original['tactical_evidence']['selection']['outcome'])
+        # The native obstruction can arrive before the next macro sampling
+        # interval. Neither a cached assigned hint nor a freshly pending hint
+        # owns the movement task or supplies the current blocked-ray proof.
+        self.assertIn(original['tactical_evidence']['selection']['outcome'],
+                      ('assigned', 'evaluation_pending'))
+        self.assertEqual('initial_hint',
+                         original['tactical_evidence']['selection']['owner'])
+        self.assertEqual('world_blocked', policy.decision['candidate']['line'])
+        self.assertEqual('route', original['combat_mode'])
+        self.assertTrue(scene.runtime.combat_stop.combat_owned)
         self.assertEqual(scene.target.id, scene.runtime._last_order['target_id'])
         self.assertIsNone(policy.search_started)
         scene.trigger.assert_not_called()

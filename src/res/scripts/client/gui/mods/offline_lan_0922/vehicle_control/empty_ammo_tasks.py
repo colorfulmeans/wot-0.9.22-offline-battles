@@ -23,7 +23,6 @@ class EmptyAmmoMixin:
                 for mapping in (self._route_states, self._route_history, self._route_recoveries,
                                 self._wreck_route_progress, self._wreck_route_avoid,
                                 self._recovery_route_visits, self._previous_player,
-                                self._engage_anchors,
                                 self._artillery_anchors,
                                 self._capture_arrivals):
                     mapping.pop(actor, None)

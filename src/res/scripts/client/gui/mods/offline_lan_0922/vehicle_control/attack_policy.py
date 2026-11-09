@@ -255,6 +255,7 @@ class AttackPolicy(object):
         self._atomic_deadline = float('-inf')
         self._atomic_receipt = dict(status='not_started')
         self._move_episode = 0
+        self._move_kind = None
         self._evidence_wait_since = None
         self._frame_invalid = False
         self._job_frame = None
@@ -1310,8 +1311,9 @@ class AttackPolicy(object):
                    background_queries=self._used['background'])
         row.update(fields)
         if action in ('firing_position', 'search_penetration'):
-            if self.decision.get('action') != action:
+            if self._move_kind != action:
                 self._move_episode += 1
+            self._move_kind = action
             episode_id = (self._identity, self._combat_signature, action, self._move_episode)
             row['move_request'] = dict(kind=action, reason=reason,
                 target=candidate.get('target') if candidate else None,
@@ -1322,6 +1324,11 @@ class AttackPolicy(object):
                 episode_id=episode_id)
             if action == 'search_penetration':
                 self.search_authority['episode_id'] = episode_id
+        elif action not in ('wait', 'preaim', 'trigger_active'):
+            # A native query wait changes evidence status, not the accepted
+            # movement task. A real aim/navigation/loading transition still
+            # completes the old phase before a later recovery starts anew.
+            self._move_kind = None
         self.decision = row
         if action in ('aim', 'preaim', 'firing_position', 'switch_shell', 'reload_clip') and candidate is not None:
             # Intent stability and evidence validity are separate lifetimes.

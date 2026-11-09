@@ -32,7 +32,7 @@ from gui.mods.offline_lan_0922.ai.navigation import (
 )
 from gui.mods.offline_lan_0922 import prebaked_navigation
 from lan_battle_server import MAP_POOL
-from test_port_0922_server_bot_ai import _state, _contact
+from test_port_0922_server_bot_ai import _state, _contact, _initial_hint
 
 
 def wire_route(route, height=0.):
@@ -463,7 +463,7 @@ class BotAiPortTests(unittest.TestCase):
         self.assertEqual(0.0, order['turn'])
         self.assertEqual(0.25, order['target_yaw'])
 
-    def test_shared_planner_and_driver_hold_a_valid_shot_without_jiggle(self):
+    def test_macro_candidate_cannot_manufacture_a_driver_hold_or_jiggle(self):
         descriptor = {
             'type': {'name': 'heavy', 'tags': ('heavyTank',)},
             'physics': {'speedLimits': (12.0,)},
@@ -474,19 +474,24 @@ class BotAiPortTests(unittest.TestCase):
         adapter = BotAdapter('04_himmelsdorf', 45)
         actor = adapter.register(401, 1, descriptor, 'Stationary')
         planner = BotPlanner()
+        baseline_adapter = BotAdapter('04_himmelsdorf', 45)
+        baseline_actor = baseline_adapter.register(401, 1, descriptor, 'Stationary')
+        baseline_planner = BotPlanner()
         self.assertNotIn('jiggle', planner._personality(401))
         state = _state(401, 1, 185., -82.)
         contact = _contact(402, 185., -22., [401], 'heavyTank')
-        modes, throttle_values = set(), set()
         for tick in range(600):
             order, command = shared_plan_and_drive(
                 adapter, planner, actor, state, tick * .2, [contact])
-            modes.add(order['combat_mode'])
-            throttle_values.add(command['throttle'])
-            self.assertEqual(402, command['target_id'])
-            self.assertTrue(order['fire_allowed'])
-        self.assertEqual({'engage'}, modes)
-        self.assertEqual({0.0}, throttle_values)
+            route, drive = shared_plan_and_drive(baseline_adapter, baseline_planner,
+                baseline_actor, state, tick * .2)
+            self.assertEqual(route['combat_mode'], order['combat_mode'])
+            self.assertEqual(route['move_position'], order['move_position'])
+            for field in ('throttle', 'turn', 'brake', 'move_position'):
+                self.assertEqual(drive.get(field), command.get(field), field)
+            self.assertEqual(402, _initial_hint(order)['target_id'])
+            self.assertIsNone(command['target_id'])
+            self.assertFalse(order['fire_allowed'])
 
     def test_discovered_artillery_has_no_class_bonus_over_a_nearer_target(self):
         adapter = BotAdapter('04_himmelsdorf', 46)
@@ -496,8 +501,8 @@ class BotAiPortTests(unittest.TestCase):
         artillery = dict(_contact(403, 0., 130., [401], 'SPG'), health=500, max_health=500)
         order, command = shared_plan_and_drive(adapter, BotPlanner(), actor,
             _state(401, 1, 0., 0.), contacts=[nearby, artillery])
-        self.assertEqual(402, order['target_id'])
-        self.assertEqual(402, command['target_id'])
+        self.assertEqual(402, _initial_hint(order)['target_id'])
+        self.assertIsNone(command['target_id'])
 
     def test_unspotted_artillery_does_not_override_a_visible_target(self):
         adapter = BotAdapter('04_himmelsdorf', 47)
@@ -508,8 +513,8 @@ class BotAiPortTests(unittest.TestCase):
             visible=False, health=500, max_health=500)
         order, command = shared_plan_and_drive(adapter, BotPlanner(), actor,
             _state(401, 1, 0., 0.), contacts=[nearby, artillery])
-        self.assertEqual(402, order['target_id'])
-        self.assertEqual(402, command['target_id'])
+        self.assertEqual(402, _initial_hint(order)['target_id'])
+        self.assertIsNone(command['target_id'])
 
     def test_navigation_accepts_caller_probes(self):
         grid = TerrainGrid(lambda x, z, hint_y: 0.0,

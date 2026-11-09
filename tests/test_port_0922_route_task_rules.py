@@ -105,6 +105,98 @@ class CommandCooldownTests(unittest.TestCase):
 
 
 class RouteTaskTests(unittest.TestCase):
+    def test_committed_native_owner_pauses_route_gates_and_existing_attempt_budget(self):
+        planner = BotPlanner()
+        route = _route('lane', [(0, -100, False), (0, 100, False),
+                                (0, 300, False), (0, 500, False)])
+        manifest = [_bot(11, 1, 0, route, 'mediumTank')]
+        state = _state(11, 1, 0., 0.)
+        first = planner.build_orders(manifest, [state], [], 1.)['orders'][0]
+        task = {key: copy.deepcopy(first.get(key)) for key in (
+            'route_id', 'route_index', 'move_position', 'route_anchor', 'route_join')}
+        receipt = dict(owned=True, target=('human', 2), task_order=task)
+        state['_combat_movement_owner'] = copy.deepcopy(receipt)
+        for now, z in ((2., 100.), (30., 300.), (300., 500.)):
+            state['z'] = z
+            order = planner.build_orders(manifest, [state], [], now)['orders'][0]
+            for key, value in task.items():
+                self.assertEqual(value, order[key], key)
+            self.assertEqual(1, planner._route_states[11]['index'])
+            self.assertEqual('paused_by_combat_owner',
+                order['route_assignment']['progress']['outcome'])
+            self.assertEqual('pause_combat_owner', order['route_attempt']['action'])
+            self.assertEqual(receipt, state['_combat_movement_owner'])
+        state.pop('_combat_movement_owner')
+        # Resume before the pending gate. Once navigation owns the pose again,
+        # its existing forward-corridor arrival rule may consume passed gates.
+        state['z'] = 30.
+        resumed = planner.build_orders(manifest, [state], [], 301.)['orders'][0]
+        self.assertEqual(1, resumed['route_index'])
+        self.assertEqual(task['move_position'], resumed['move_position'])
+        self.assertEqual(299., resumed['route_attempt']['resumed_after_pause'])
+        state['z'] = 100.
+        reached = planner.build_orders(manifest, [state], [], 302.)['orders'][0]
+        self.assertEqual(2, reached['route_index'])
+        self.assertEqual(dict(x=0., y=0., z=300.), reached['move_position'])
+
+    def test_previous_combat_receipt_does_not_cancel_new_explicit_stop(self):
+        planner = BotPlanner()
+        route = _route('lane', [(0, -100, False), (0, 100, False)])
+        manifest = [_bot(11, 1, 0, route, 'mediumTank')]
+        state = _state(11, 1, 0., 0.)
+        first = planner.build_orders(manifest, [state], [], 1.)['orders'][0]
+        state['_combat_movement_owner'] = dict(owned=True, target=('human', 2),
+            task_order={key: copy.deepcopy(first.get(key)) for key in (
+                'route_id', 'route_index', 'move_position', 'route_anchor', 'route_join')})
+        planner.build_orders(manifest, [state], [], 2.)
+        state.update(x=20., z=40.)
+        request = dict(command_id='stop', command='STOP', team=1, issuer_id=1,
+            issued_tick=100, expires_tick=200, recipient_bot_ids=[11])
+        order = planner.build_orders(manifest, [state], [], 3.,
+                                     team_orders=[request])['orders'][0]
+        self.assertEqual('team_stop', order['combat_mode'])
+        self.assertEqual(dict(x=20., y=0., z=40.), order['move_position'])
+        self.assertEqual(0., order['throttle_override'])
+        self.assertEqual('STOP', order['team_command'])
+        self.assertNotIn('player_command_cancelled', order)
+
+    def test_stale_combat_receipt_cannot_restore_forward_goal_over_explicit_return(self):
+        planner = BotPlanner()
+        route = _route('lane', [(0, -100, False), (0, 100, False), (0, 300, False)])
+        manifest = [_bot(11, 1, 0, route, 'mediumTank')]
+        state = _state(11, 1, 0., 0.)
+        first = planner.build_orders(manifest, [state], [], 1.)['orders'][0]
+        receipt = dict(owned=True, target=('human', 2),
+            task_order={key: copy.deepcopy(first.get(key)) for key in (
+                'route_id', 'route_index', 'move_position', 'route_anchor', 'route_join')})
+        # This is a planner publication boundary: keep the old native owner's
+        # receipt in flight while a newly admitted explicit task is applied.
+        # It is not a fabricated claim that combat was acquired in this test.
+        state['_combat_movement_owner'] = copy.deepcopy(receipt)
+        planner.build_orders(manifest, [state], [], 2.)
+        request = dict(command_id='return', command='BACKTOBASE', team=1, issuer_id=1,
+            issued_tick=100, expires_tick=200, recipient_bot_ids=[11])
+        base = dict(id='home', x=-25., y=0., z=-450., radius=30.)
+        defense = dict(capture_bases={'1': [base]})
+        for now, pose, goal in (
+                (3., (20., 40.), (0., -100.)),
+                (3.1, (20., 40.), (0., -100.)),
+                (4., (0., -100.), (-25., -450.))):
+            with self.subTest(now=now):
+                state.update(x=pose[0], z=pose[1])
+                order = planner.build_orders(manifest, [state], [], now,
+                    defense=defense, team_orders=[request])['orders'][0]
+                self.assertEqual('BACKTOBASE', order['team_command'])
+                self.assertNotIn('player_command_cancelled', order)
+                self.assertEqual('team_back_to_base', order['combat_mode'])
+                self.assertEqual(dict(x=goal[0], y=0., z=goal[1]), order['move_position'])
+                self.assertNotEqual(receipt['task_order']['move_position'], order['move_position'])
+                self.assertIsNone(order['throttle_override'])
+                self.assertEqual('guard', planner._travel_tasks[11]['kind'])
+                self.assertEqual(dict(x=-25., y=0., z=-450.),
+                                 planner._travel_tasks[11]['base']['point'])
+                self.assertEqual(receipt, state['_combat_movement_owner'])
+
     def test_empty_source_diagnostic_is_opt_in_bounded_and_resets_per_round(self):
         planner=BotPlanner()
         bot=planner._alive_bots([_bot(11,1,0,{},'SPG')],[_state(11,1,100.,100.)])[0]

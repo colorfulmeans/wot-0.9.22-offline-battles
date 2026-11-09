@@ -5,8 +5,10 @@ This is interpreter/logic evidence, not a native-client acceptance run.
 """
 from __future__ import print_function
 import collections
+import copy
 import os
 import importlib
+import json
 import sys
 import types
 import unittest
@@ -306,6 +308,133 @@ class EmbeddedSharedImportOrderTests(unittest.TestCase):
         self.assertGreaterEqual(batch.milliseconds['roof_stage'], 0.)
         self.assertIs(geometry._PROFILE_CLOCK, batch.clock)
         self.assertIs(geometry._SUPPORT_PROFILE_CLOCK, batch.clock)
+
+    def test_combat_movement_receipt_keeps_only_json_route_metadata_on_python27(self):
+        codec = importlib.import_module('gui.mods.offline_lan_0922.bot_state_codec')
+        raw = dict(owned=True, target=('bot', 12), task_order=dict(
+            route_id=u'route_\u8def', route_index=1, move_position=(30., .25, 120.),
+            route_anchor=None, route_join=None, fire_allowed=True),
+            native_receipt=object())
+        expected = dict(owned=True, target=['bot', 12], task_order=dict(
+            route_id=u'route_\u8def', route_index=1,
+            move_position=dict(x=30., y=.25, z=120.),
+            route_anchor=None, route_join=None))
+        self.assertEqual(expected, codec.normalize_combat_movement_owner(raw))
+        state = dict(id=11, alive=True, _combat_movement_owner=raw)
+        table = codec.project_combat_movement_owners([state])
+        self.assertEqual([dict(id=11, owner=expected)], table)
+        self.assertEqual(table, codec.normalize_combat_movement_owners(
+            json.loads(json.dumps(table))))
+        # Ownership metadata is a side table, never a new pose/weapon column.
+        self.assertEqual(codec.encode_row(dict(id=11, alive=True)), codec.encode_row(state))
+        raw['task_order']['route_index'] = 2
+        self.assertEqual(1, table[0]['owner']['task_order']['route_index'])
+        state.pop('_combat_movement_owner')
+        self.assertEqual([], codec.project_combat_movement_owners([state]))
+        self.assertIsNone(codec.normalize_combat_movement_owner(dict(owned=False)))
+        for bad in (dict(raw, target=('bot', True)),
+                    dict(raw, task_order=dict(move_position=(float('nan'), 0., 0.))),
+                    dict(raw, task_order=dict(move_position=(0., float('inf'), 0.)))):
+            with self.assertRaises(codec.BotStateCodecError):
+                codec.normalize_combat_movement_owner(bad)
+
+    def combat_movement_fixture(self):
+        """Use the real owner/policy predicates; stub only observation inputs.
+
+        This interpreter contract does not run native evaluation, the driver
+        or an actual game. Production-loop regressions cover those adapters.
+        """
+        owner_module = importlib.import_module(
+            'gui.mods.offline_lan_0922.vehicle_control.combat_stop')
+        policy_module = importlib.import_module(
+            'gui.mods.offline_lan_0922.vehicle_control.attack_policy')
+        runtime = types.ModuleType('embedded_movement_runtime')
+        runtime.state = dict(position=(0., 0., 0.),
+                             profile=dict(class_tag='AT-SPG'))
+        runtime.features = frozenset(('drive', 'fire'))
+        runtime._mission = {}
+        runtime._mission_brakes = lambda: False
+        target = dict(kind='bot', id=12, network_id=12, visible=True,
+                      alive=True, health=1000, position=(200., 0., -110.))
+        runtime.visible_targets = lambda: [target]
+        runtime.attack_policy = policy_module.AttackPolicy(runtime, evaluator=object())
+        # The native observer's current row is the only proof seam supplied
+        # here. _plannable/_executable/current_target_key remain production.
+        runtime.attack_policy.current_row = lambda candidate, require_line=True: candidate
+        owner = owner_module.CombatStop(runtime)
+        route = dict(combat_mode='route', move_position=dict(x=30., y=0., z=120.),
+            route_id='class_mt_rim_east', route_index=1,
+            route_anchor=dict(x=0., y=0., z=0.), route_join=False,
+            target_kind=None, target_id=None, throttle_override=None, fire_allowed=False,
+            initial_target_hint=dict(target_kind='bot', target_id=12))
+        return runtime, owner, target, route
+
+    def test_route_candidate_and_pending_combat_keep_one_owner_on_python27(self):
+        runtime, owner, target, route = self.combat_movement_fixture()
+        policy = runtime.attack_policy
+        blocked = dict(target=target, armor='unknown', line='world_blocked',
+            mechanical='unknown', solution=dict(yaw=0.), mode='penetration')
+        policy.decision = dict(action='firing_position', candidate=blocked)
+        accepted = owner.accept(route)
+        result = owner.finish(owner.resolve(accepted, 1.))
+        self.assertTrue(owner.active)
+        self.assertFalse(owner.combat_owned)
+        self.assertFalse(owner.stop_allowed)
+        self.assertEqual(route, result)
+        self.assertNotIn('_combat_movement_owner', runtime.state)
+        original_signature = owner.signature
+
+        current = dict(blocked, armor='passed', line='clear', mechanical='reachable')
+        policy.decision = dict(action='aim', candidate=current)
+        admitted = owner.finish(owner.resolve(owner.accept(route), 2.))
+        self.assertTrue(owner.combat_owned)
+        self.assertTrue(owner.stop_allowed)
+        self.assertEqual('engage', admitted['combat_mode'])
+        self.assertEqual((0., 0., 0.), admitted['move_position'])
+        self.assertEqual(original_signature, owner.signature)
+        first_receipt = copy.deepcopy(runtime.state['_combat_movement_owner'])
+        episode = owner.receipt['episode']
+
+        policy.decision = dict(action='wait', reason='native_review_pending', candidate=None)
+        self.assertIsNone(policy.current_target_key())
+        runtime.state['position'] = (1., 0., 1.)
+        next_route = dict(route, route_index=2, move_position=dict(x=60., y=0., z=140.))
+        continued = owner.finish(owner.resolve(owner.accept(next_route), 3.))
+        self.assertTrue(owner.combat_owned)
+        self.assertEqual(episode, owner.receipt['episode'])
+        self.assertEqual(first_receipt, runtime.state['_combat_movement_owner'])
+        self.assertEqual(admitted['move_position'], continued['move_position'])
+        self.assertEqual(12, continued['target_id'])
+
+        target.update(alive=False, health=0)
+        released = owner.finish(owner.resolve(owner.accept(route), 4.))
+        self.assertFalse(owner.active)
+        self.assertFalse(owner.combat_owned)
+        self.assertFalse(owner.stop_allowed)
+        self.assertNotIn('_combat_movement_owner', runtime.state)
+        self.assertEqual(route, released)
+
+    def test_legitimate_recovery_admission_and_explicit_exit_on_python27(self):
+        runtime, owner, target, route = self.combat_movement_fixture()
+        candidate = dict(target=target, armor='unknown', line='clear',
+            mechanical='mechanical_limited', solution=dict(yaw=1.), mode='penetration')
+        runtime.attack_policy.decision = dict(action='firing_position', candidate=candidate)
+        admitted = owner.resolve(owner.accept(route), 1.)
+        self.assertTrue(owner.combat_owned)
+        # finish consumes the existing recovery driver's output; this fixture
+        # does not claim to generate or physically execute that recovery.
+        recovery = dict(admitted, combat_mode='advance_contact',
+                        move_position=(8., 0., 3.), throttle_override=None)
+        owner.finish(recovery)
+        runtime.attack_policy.decision = dict(action='wait', candidate=None)
+        continued = owner.finish(owner.resolve(owner.accept(route), 2.))
+        self.assertEqual((8., 0., 3.), continued['move_position'])
+        self.assertEqual('advance_contact', continued['combat_mode'])
+        self.assertTrue(owner.stop_allowed)
+        travel = dict(route, combat_mode='team_return_base')
+        self.assertEqual(travel, owner.finish(owner.resolve(owner.accept(travel), 3.)))
+        self.assertFalse(owner.combat_owned)
+        self.assertNotIn('_combat_movement_owner', runtime.state)
 
 
 class EmbeddedSharedRuntimeTests(unittest.TestCase):

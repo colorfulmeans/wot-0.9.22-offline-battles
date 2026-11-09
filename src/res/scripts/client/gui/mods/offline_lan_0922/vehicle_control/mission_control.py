@@ -149,7 +149,11 @@ class MissionControl(object):
 
     def _mission_order(self, order, now):
         mission = self._mission
-        if mission is None and order.get('combat_mode') == 'base_capture' and self._implicit_retry is None:
+        if (mission is None and order.get('combat_mode') == 'base_capture' and
+                not order.get('initial_target_hint') and self._implicit_retry is None):
+            # A physical circle constraint may label an ordinary route as
+            # base_capture while its enemy is only an evaluation hint. That
+            # is not a new strategic capture task and must not create one.
             self._mission_sequence += 1
             mission = self._mission = dict(id='auto-capture-%d' % self._mission_sequence,
                 action='capture_base', explicit=False, payload={}, status='running',

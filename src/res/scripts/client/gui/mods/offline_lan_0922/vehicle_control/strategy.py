@@ -95,6 +95,7 @@ def _order_signature(order):
     signature.pop('route_attempt', None)
     signature.pop('route_assignment', None)
     signature.pop('tactical_evidence', None)
+    signature.pop('initial_target_hint', None)
     if signature.get("target_id") is not None:
         # The worker overlays these coordinates from the live target pose.
         # Movement of that pose is not a new tactical decision, including
@@ -130,7 +131,6 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
         self._next_route_rebalance = {1: 0.0, 2: 0.0}
         self._task_init()
         self._empty_ammo_bots = set()
-        self._engage_anchors = {}
         self._target_decisions = {}
         self._base_defense = {1: {}, 2: {}}
         self._capture_arrivals = {}
@@ -157,7 +157,6 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
         self._next_route_rebalance = {1: 0.0, 2: 0.0}
         self._task_init()
         self._empty_ammo_bots = set()
-        self._engage_anchors = {}
         self._target_decisions = {}
         self._base_defense = {1: {}, 2: {}}
         self._capture_arrivals = {}
@@ -355,9 +354,7 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
                  _integer(contact.get("id"))) !=
                     (target_kind, target_id)):
                 continue
-            if (contact.get("visible") and
-                    bot["id"] in (contact.get(
-                        "shootable_by_bot_ids") or ()) and
+            if (contact.get("visible") and target_selection.live_contact(contact) and
                     BotPlanner._weapon_can_recover(bot)):
                 return contact
         return None
@@ -510,7 +507,8 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
             contributors = self._defense_contributor_keys(defense, 3-team)
             for bot in team_bots:
                 pose = bot['state']
-                if (('bot', bot['id']) in contributors or
+                if (self._combat_movement_task(bot) is not None or
+                        ('bot', bot['id']) in contributors or
                         (target is not None and
                          (self._capture_arrivals.get(bot['id']) == target or
                           (pose.get('world_pose') and not pose.get('airborne') and
@@ -522,13 +520,13 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
             assignments = self._prioritize_base_invaders(
                 team, team_bots, contacts[team], assignments,
                 defenders.get(team, {}), defense, now)
+            command_targets = {}
             for bot in team_bots:
                 commanded_focus = self._team_order_focus(
                     team_order_by_bot.get(bot["id"]), bot,
                     self._contacts_for_bot(bot, contacts[team], now))
-                if (commanded_focus is not None and assignments.get(bot['id']) is None and
-                        bot["id"] not in defenders.get(team, {})):
-                    assignments[bot["id"]] = commanded_focus
+                if commanded_focus is not None:
+                    command_targets[bot['id']] = commanded_focus
             for index, bot in enumerate(team_bots):
                 order = self._order_for(
                     bot, index, len(team_bots), assignments.get(bot["id"]),
@@ -546,15 +544,28 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
                     player_order = None
                 else:
                     self._apply_team_order(order, bot, player_order, players, defense, route_point)
+                    commanded_focus = command_targets.get(bot['id'])
+                    if player_order is not None and commanded_focus is not None:
+                        # An explicit enemy task names its own contact. The
+                        # ordinary nearest hint remains only an evaluation hint.
+                        order['combat_task_target'] = dict(
+                            target_kind=commanded_focus.get('target_kind'),
+                            target_id=commanded_focus['id'])
                 self._task_apply(order, bot, now, defenders.get(team,{}).get(bot['id']), player_order, defense)
-                self._task_capture_handoff(order,bot,capture_targets[team])
-                self._apply_authored_route_order(order, bot, route_point, now)
-                self._handoff_route_terminal(order, bot, capture_targets[team], now)
-                self._reroute_wreck_stall(order, bot, manifest, now)
-                if ((order.get('route_attempt') or {}).get('action') in (
-                        'recovery_complete', 'switch_at_start') and
-                        bot['id'] not in self._route_recoveries):
+                if (self._combat_movement_task(bot) is not None and
+                        self._task_combat(order, bot)):
+                    # Combat position is not progress along the suspended
+                    # route. Its existing attempt budget resumes on release.
+                    self._task_pause_route(order, bot, now)
+                else:
+                    self._task_capture_handoff(order,bot,capture_targets[team])
+                    self._apply_authored_route_order(order, bot, route_point, now)
                     self._handoff_route_terminal(order, bot, capture_targets[team], now)
+                    self._reroute_wreck_stall(order, bot, manifest, now)
+                    if ((order.get('route_attempt') or {}).get('action') in (
+                            'recovery_complete', 'switch_at_start') and
+                            bot['id'] not in self._route_recoveries):
+                        self._handoff_route_terminal(order, bot, capture_targets[team], now)
                 self._protect_capture_order(order, bot, capture_targets[team])
                 evidence = order['tactical_evidence']
                 evidence['final'] = dict((key, order.get(key)) for key in (
@@ -663,7 +674,6 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
     def clear_observations(self):
         """Discard authority-owned tactical observations after a failover."""
         self._contacts = {1: {}, 2: {}}
-        self._engage_anchors = {}
 
     def _prune_tactical_state(self, bots, known_targets, now):
         live_capture_ids = set(bot['id'] for bot in bots)
@@ -700,9 +710,6 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
         for bot_id in list(self._route_assignments):
             if bot_id not in live_bots:
                 del self._route_assignments[bot_id]
-        for bot_id in list(self._engage_anchors):
-            if bot_id not in live_bots:
-                del self._engage_anchors[bot_id]
         for bot_id in list(self._artillery_anchors):
             if bot_id not in live_bots:
                 del self._artillery_anchors[bot_id]
@@ -1154,7 +1161,6 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
         return progressed
 
     def _apply_base_defense_order(self, order, bot, base):
-        self._engage_anchors.pop(bot["id"], None)
         order["combat_mode"] = "base_defense"
         order["defense_base_id"] = str(base["base_id"])
         order["move_position"] = dict(base["point"])
@@ -1243,7 +1249,6 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
 
     def _apply_base_capture_order(self, order, bot, target):
         """Send an unengaged vehicle to the opposing CTF capture circle."""
-        self._engage_anchors.pop(bot["id"], None)
         point = dict(target["point"])
         order["combat_mode"] = "base_capture"
         order["capture_base_id"] = str(target["id"])
@@ -1407,63 +1412,11 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
         return True
 
 
-    def _previous_target_order(self, bot_id, focus):
-        target_key = (focus.get("target_kind"), focus.get("id"))
-        orders = ((self._last_orders or {}).get("orders") or ())
-        for order in orders:
-            if (_integer(order.get("id")) == _integer(bot_id) and
-                    (order.get("target_kind"), order.get("target_id")) ==
-                    target_key):
-                return order
-        return None
-
-    @staticmethod
-    def _combat_approach(order, position, reason):
-        """A lost firing lane changes combat movement, not objective ownership."""
-        order.update(combat_mode='advance_contact', move_position=dict(position),
-                     throttle_override=None, fire_allowed=False)
-        order.setdefault('tactical_evidence', {})['combat_handoff'] = dict(
-            owner='combat', reason=reason, destination=dict(position))
-
-    def _apply_leased_movement_order(self, order, bot, focus):
-        """Debounce movement while the current lane generation catches up."""
-        previous = self._previous_target_order(bot["id"], focus)
-        if not isinstance(previous, dict) or previous.get(
-                "combat_mode") not in (
-                "advance", "advance_contact", "engage"):
-            return False
-        if (previous.get('combat_mode') == 'engage' and
-                previous.get('throttle_override') == 0.0):
-            if bot['id'] in focus.get('pending_lane_by_bot_ids', ()):
-                # The authority retained a positive ray while refreshing it.
-                # Keep this stationary owner without authorizing a stale shot.
-                order.setdefault('tactical_evidence', {})['blocked_hold_handoff'] = dict(
-                    reason='lane_refresh_pending', previous_mode=previous['combat_mode'])
-            else:
-                # Release only the stationary hold. The caller keeps the combat
-                # objective and lets the existing navigator seek an approach.
-                order.setdefault('tactical_evidence', {})['blocked_hold_handoff'] = dict(
-                    reason='stationary_lane_lost', previous_mode=previous['combat_mode'])
-                return False
-        for name in (
-                "combat_mode", "move_position", "face_position",
-                "throttle_override"):
-            if name in previous:
-                if name == "move_position" and previous.get("combat_mode") == "advance":
-                    continue
-                value = previous[name]
-                order[name] = dict(value) if isinstance(value, dict) else value
-        if previous.get("combat_mode") == "advance_contact":
-            order["move_position"] = dict(focus["position"])
-        # The movement lease is deliberately not a launch authorization.
-        order["fire_allowed"] = False
-        return True
-
     def _initial_target_hints(self, bots, contacts, now):
         """Suggest nearest/lower armour without a second current-target state.
 
         Every known live candidate remains in the evidence domain. This
-        hint does not authorize a shot, retain a gun target, or replace the
+        hint does not authorize movement or a shot, retain a gun target, or replace the
         local armour/HE policy. That actor-local owner retains a current point
         and revalidates its own recovery. Artillery's final rank belongs to
         the local reachable-arc HE evaluator.
@@ -1509,11 +1462,9 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
             contact = selected[1]
             key = (contact.get('target_kind'), contact['id'])
             ready = selected[2] and self._weapon_ready(bot)
-            if not ready:
-                contact = dict(contact, movement_lease=True)
             assigned[bot_id] = contact
             observation.update(selected=key,
-                outcome='assigned' if ready else 'movement_lease',
+                outcome='assigned' if ready else 'evaluation_pending',
                 tracking_reason='initial_distance_armor')
         return assigned
 
@@ -2327,6 +2278,24 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
         self._apply_authored_route_order(order, bot, move, now)
 
     def _route(self, bot, now):
+        suspended = self._combat_movement_task(bot)
+        if suspended is not None:
+            # Only the native shared owner can publish this receipt. Reuse
+            # its original route task while combat changes the physical pose.
+            # In particular, do not consume gates crossed during recovery.
+            route_id = suspended.get('route_id') or ''
+            index = _integer(suspended.get('route_index'))
+            position = _point(suspended['move_position'])
+            anchor = _point(suspended.get('route_anchor') or suspended['move_position'])
+            join = bool(suspended.get('route_join'))
+            state = self._route_states.get(bot['id'])
+            if state is not None:
+                state.pop('arrival_previous_pose', None)
+                state['progress_receipt'] = dict(at=now, route_id=route_id,
+                    previous_index=state.get('index'), selected_index=index,
+                    point=dict(position), anchor=dict(anchor), route_join=join,
+                    outcome='paused_by_combat_owner')
+            return route_id, index, position, anchor, join
         if bot['id'] in self._travel_tasks:
             return self._task_position(bot, now)
         if bot['id'] in self._route_recoveries:
@@ -2548,7 +2517,8 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
             if (not capture and not final_inside and capture_target and
                     route_state.get('completed_terminal') == final and
                     order.get('combat_mode') in ('route', 'advance') and
-                    not order.get('target_id') and not order.get('team_command') and
+                    not order.get('target_id') and not order.get('initial_target_hint') and
+                    not order.get('team_command') and
                     not order.get('parking_phase') and not route_state.get('holding') and
                     order.get('move_position') == final):
                 self._apply_base_capture_order(order, bot, capture_target)
@@ -2577,7 +2547,8 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
             evidence['outcome'] = 'physical_or_capture_not_arrived'
             return
         route_state['completed_terminal'] = final
-        if not capture and capture_target and not final_inside and order.get('target_id') is None:
+        if (not capture and capture_target and not final_inside and
+                order.get('target_id') is None and not order.get('initial_target_hint')):
             # Complete a lane outside the circle before handing travel to the
             # objective. A combat or authored parking owner still takes priority.
             self._apply_base_capture_order(order, bot, capture_target)
@@ -2762,7 +2733,6 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
         return int(selected) if selected in indices else (indices[0] if indices else 0)
 
     def _apply_artillery_order(self, order, bot, team_axis):
-        self._engage_anchors.pop(bot["id"], None)
         anchor = self._artillery_anchor(bot, team_axis)
         point = anchor["point"]
         state = bot.get("state") if isinstance(bot.get("state"), dict) else {}
@@ -2808,6 +2778,7 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
             "id": bot["id"],
             "team": bot["team"],
             "target_id": None,
+            "target_kind": None,
             "aim_position": None,
             "face_position": None,
             "move_position": move,
@@ -2870,41 +2841,15 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
             self._apply_artillery_order(order, bot, team_axis)
             return order
 
-        if focus is None:
-            self._engage_anchors.pop(bot["id"], None)
-            return order
-
-        observers = focus.get("shootable_by_bot_ids")
-        locally_shootable = bool(focus.get("visible") and
-                                 bot["id"] in (observers or ()))
-        self._set_target(
-            order, bot, focus, locally_shootable)
-
-        if not locally_shootable:
-            if focus.get("movement_lease") and self._apply_leased_movement_order(
-                    order, bot, focus):
-                return order
-            self._engage_anchors.pop(bot["id"], None)
-            # The selected, known enemy remains the objective. A blocked or
-            # expired lane disables launch; it does not authorize route travel.
-            # Native navigation, collision and final-fire checks still apply.
-            self._combat_approach(order, focus['position'], 'local_lane_lost')
-            return order
-
-        # This is only the initial contact hint. The shared native evaluator
-        # owns the mounted shell's actual reach and any resulting approach;
-        # profile role ranges cannot prevent its first proof or valid shot.
-        order["combat_mode"] = "engage"
-        target_key = (focus.get("target_kind"), focus["id"])
-        anchor_state = self._engage_anchors.get(bot["id"])
-        if anchor_state is None or anchor_state["target"] != target_key:
-            anchor_state = {
-                "target": target_key,
-                "position": _point(state),
-            }
-            self._engage_anchors[bot["id"]] = anchor_state
-        order["move_position"] = dict(anchor_state["position"])
-        order["throttle_override"] = 0.0
+        if focus is not None:
+            # The shared native policy may evaluate every known live enemy.
+            # Its committed movement owner, not this initial hint or a lane
+            # advisory, decides when an ordinary route yields to combat.
+            # Keep target_id empty as the live-order adapter uses it to face
+            # an enemy even when the macro mode still says route.
+            order['initial_target_hint'] = dict(
+                target_kind=focus.get('target_kind'), target_id=focus['id'])
+            order['shell_index'] = self._shell_index(profile, state)
         return order
 
     @staticmethod

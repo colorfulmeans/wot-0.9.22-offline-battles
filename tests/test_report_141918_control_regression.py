@@ -169,9 +169,29 @@ class Report141918ControlRegressionTests(unittest.TestCase):
         self.addCleanup(scene.doCleanups)
         return scene.configure_report(extra_contacts)
 
-    def assert_task_and_domain(self, scene, row):
+    def assert_task_and_domain(self, scene, row, combat_admitted=True):
+        self.assertEqual(dict(target_kind='bot', target_id=14),
+                         row['original']['initial_target_hint'])
+        self.assertIsNone(row['original']['target_id'])
+        self.assertEqual('route', row['original']['combat_mode'])
+        if combat_admitted:
+            self.assertTrue(scene.runtime.combat_stop.combat_owned)
+            self.assertEqual(14, row['applied']['target_id'])
+            self.assertNotEqual('route', row['applied']['combat_mode'])
+        else:
+            # Cold HE comparison is evaluation, not an accepted stop. This
+            # branch is used only before the first real admission below.
+            self.assertFalse(scene.runtime.combat_stop.combat_owned)
+            self.assertFalse(scene.runtime.combat_stop.stop_allowed)
+            self.assertEqual(('wait', 'he_damage_comparison_pending'),
+                             (row['policy']['action'], row['policy']['reason']))
+            self.assertEqual('route', row['applied']['combat_mode'])
+            self.assertIsNone(row['applied']['target_id'])
+            self.assertEqual(point(row['original']['move_position']),
+                             point(row['applied']['move_position']))
+            self.assertFalse(row['applied']['fire_allowed'])
+            self.assertEqual(0, row['shots'])
         for order in (row['original'], row['applied']):
-            self.assertEqual(14, order.get('target_id'))
             self.assertEqual(ROUTE_ID, order.get('route_id'))
             self.assertNotIn('hull_angle_degrees', order)
         self.assertEqual((14,), tuple(t['network_id'] for t in scene.runtime.combat_targets()))
@@ -207,12 +227,19 @@ class Report141918ControlRegressionTests(unittest.TestCase):
             scene = self.scene()
             route = copy.deepcopy(scene.runtime.state['route'])
             self.assertEqual({14: True}, scene.block_lane(False))
+            admitted = False
             for unused in range(180):
                 row = scene.step_control()
-                self.assert_task_and_domain(scene, row)
-                self.assert_clear_hull_owner(scene, row)
+                owned = scene.runtime.combat_stop.combat_owned
+                if admitted:
+                    self.assertTrue(owned, 'accepted HE task returned to cold route evaluation')
+                admitted = admitted or owned
+                self.assert_task_and_domain(scene, row, combat_admitted=admitted)
+                if admitted:
+                    self.assert_clear_hull_owner(scene, row)
                 if scene.launches():
                     break
+            self.assertTrue(admitted)
             self.assertEqual(1, len(scene.launches()), scene.runtime.status())
             self.assertGreater(scene.battle._gun_state.reload_time, 0.)
 
@@ -251,7 +278,7 @@ class Report141918ControlRegressionTests(unittest.TestCase):
             self.assertEqual([2] * 4, [launch['shell_index'] for launch in scene.launches()])
             self.assertEqual([0, 0, 6], scene.battle._gun_state.ammo)
             self.assertEqual(route, scene.runtime.state['route'])
-            self.assertEqual({'assigned', 'movement_lease'}, set(
+            self.assertEqual({'assigned', 'evaluation_pending'}, set(
                 row['original']['tactical_evidence']['selection']['outcome']
                 for row in scene.trace))
 
@@ -267,7 +294,9 @@ class Report141918ControlRegressionTests(unittest.TestCase):
                 if row['policy']['action'] == 'aim' and row['policy']['target'] == ('bot', 14):
                     break
             self.assertEqual(('bot', 14), row['policy']['target'], row['policy'])
-            self.assertEqual(1, row['original']['target_id'])
+            self.assertEqual(dict(target_kind='bot', target_id=1),
+                             row['original']['initial_target_hint'])
+            self.assertIsNone(row['original']['target_id'])
             preserved = 0
             for index in range(100):
                 # Actual native blocking changes only actor1's lane. It must
@@ -281,7 +310,9 @@ class Report141918ControlRegressionTests(unittest.TestCase):
                 other.health = 20 if blocked else 500
                 scene.battle._records['bot:1']['state']['health'] = other.health
                 row = scene.step_control()
-                self.assertEqual(1, row['original']['target_id'])
+                self.assertEqual(dict(target_kind='bot', target_id=1),
+                                 row['original']['initial_target_hint'])
+                self.assertIsNone(row['original']['target_id'])
                 self.assertEqual({1, 14}, set(t['network_id'] for t in scene.runtime.combat_targets()))
                 self.assertEqual(ROUTE_ID, row['applied']['route_id'])
                 self.assertIsNone(scene.runtime.attack_policy.search_started)

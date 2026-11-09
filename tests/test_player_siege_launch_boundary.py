@@ -49,7 +49,9 @@ class SiegeLaunchBoundaryTests(unittest.TestCase):
     def test_navigation_handoff_revokes_an_earlier_automatic_trigger_context(self):
         runtime, unused_battle, unused_state, context = self.scene(clip=6)
         self.assertIsNone(runtime.authorize_trigger(context, runtime.entity, runtime.gun, None))
-        runtime.combat_stop.accept(dict(combat_mode='route', move_position=(100., 0., 0.)))
+        # An ordinary route hint no longer cancels an existing combat task.
+        # This is a real priority-travel handoff, not that retired shortcut.
+        runtime.combat_stop.accept(dict(combat_mode='team_return_base', move_position=(100., 0., 0.)))
         self.assertEqual('original_combat_not_admitted', runtime.authorize_trigger(
             context, runtime.entity, runtime.gun, None))
         self.assertEqual(6, runtime.gun.clip)

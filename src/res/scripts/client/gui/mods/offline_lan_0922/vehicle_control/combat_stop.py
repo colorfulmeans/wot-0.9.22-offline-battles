@@ -6,6 +6,7 @@ revoke them. Native geometry and the existing driver still own proof and motion.
 """
 from __future__ import division
 
+import copy
 import math
 
 from .actor_observation import observation
@@ -23,11 +24,13 @@ _COMBAT_MODES = ('engage', 'advance_contact', 'advance',
                  'team_return_base', 'team_defend_base', 'team_hold_position',
                  'team_back_to_base', 'team_attention_cell',
                  'team_follow')
-_STOP_MODES = ('engage', 'advance_contact', 'advance')
-_ORDINARY_MODES = ('route', 'advance', 'advance_contact', 'engage')
+_ORDINARY_MODES = ('route', 'advance', 'advance_contact', 'engage', 'team_attack')
 _TRAVEL_MODES = ('base_defense', 'team_back_to_base', 'team_attention_cell',
                  'team_follow', 'team_attack', 'team_return_base',
                  'team_defend_base', 'team_hold_position')
+_ROUTE_FIELDS = ('route_id', 'route_index', 'move_position', 'route_anchor', 'route_join')
+_MOTION_FIELDS = ('combat_mode', 'move_position', 'face_position',
+                  'throttle_override', 'stable_hull_face')
 
 
 def _point(value):
@@ -66,25 +69,39 @@ class CombatStop(object):
         self.signature = (False, ())
         self.pivot = None
         self.receipt = {}
+        self.can_request_movement = False
+        self._intent_target = None
+        self._motion_order = None
+        self._route_task = None
+        self._episode = 0
+        state = getattr(self.runtime, 'state', None)
+        if state is not None:
+            state.pop('_combat_movement_owner', None)
 
     def accept(self, order):
-        """Accept task authority without giving ordinary hints a second gun."""
+        """Observe candidates and task restrictions, without claiming motion.
+
+        Evaluation admission is not movement admission. In particular a route
+        hint must reach the native evaluator without becoming an enemy goal.
+        Only resolve() can commit a new ordinary combat movement task.
+        """
         runtime = self.runtime
         self.task_order = dict(order)
         visible = dict((_key(row), row) for row in runtime.visible_targets()
                        if live_contact(row) and row.get('visible', True))
-        hint = _key(dict(kind=order.get('target_kind'), id=order.get('target_id')))
+        initial = order.get('initial_target_hint') or order
+        hint = _key(dict(kind=initial.get('target_kind'), id=initial.get('target_id')))
         mode = order.get('combat_mode')
         state = runtime.state or {}
-        current_target = getattr(runtime.attack_policy, 'current_target_key', None)
-        current = current_target() if callable(current_target) else None
-        retained = bool(self.combat_owned and mode in _ORDINARY_MODES and current in visible)
-        selected = current if retained else (min(visible,
+        retained = bool(self.combat_owned and mode in _ORDINARY_MODES + ('hold', 'base_capture', 'base_screen') and
+                        self._intent_target in visible)
+        selected = self._intent_target if retained else (min(visible,
             key=lambda key: ordinary_initial_key(state['position'], visible[key]))
             if hint in visible else hint)
         self.active = bool('fire' in runtime.features and
             (state.get('profile') or {}).get('class_tag') != 'SPG' and
-            (mode in _COMBAT_MODES or retained) and selected in visible and
+            (mode in _COMBAT_MODES + ('route', 'hold', 'base_capture', 'base_screen') or retained) and
+            visible and
             not order.get('empty_ammo') and not runtime._mission_brakes())
         mission = getattr(runtime, '_mission', None) or {}
         destination = mission.get('destination')
@@ -97,15 +114,28 @@ class CombatStop(object):
             explicit_travel = not (capture_orders.inside(state, mission['capture_area']) and
                                    not state.get('airborne', False))
         self.explicit_travel = explicit_travel
-        self.active = bool(self.active and mode not in _TRAVEL_MODES and not explicit_travel)
+        self.active = bool(self.active and
+            (mode not in _TRAVEL_MODES or mode == 'team_attack') and not explicit_travel)
+        if mode == 'base_capture' and order.get('throttle_override') != 0.:
+            self.active = False
         # A capture/parking hold may legitimately fire without donating its
         # translation to combat. Likewise fire-only control cannot move the
         # vehicle, but may operate the gun/mode after original admission.
-        self.combat_owned = bool(self.active)
-        self.stop_allowed = bool(self.combat_owned and 'drive' in runtime.features and
-            (mode in _STOP_MODES or retained) and not order.get('parking_phase') and
+        self.can_request_movement = bool(self.active and 'drive' in runtime.features and
+            mode in _ORDINARY_MODES and not order.get('parking_phase') and
             not order.get('capture_area') and not mission.get('capture_started') and
             not explicit_travel)
+        self.combat_owned = bool(self.active and retained)
+        self.stop_allowed = bool(self.combat_owned and self.can_request_movement)
+        if not self.combat_owned:
+            self._intent_target = None
+            self._motion_order = None
+            self._route_task = dict((name, copy.deepcopy(order.get(name)))
+                                    for name in _ROUTE_FIELDS)
+            for name in ('move_position', 'route_anchor'):
+                point = self._route_task.get(name)
+                if point is not None:
+                    self._route_task[name] = dict(zip(('x', 'y', 'z'), _point(point)))
         # All observed living enemies belong to the armour-validation domain.
         # Old score/focus/retaliation filters may not hide a penetrable target
         # or manufacture an all-enemy failure. Blocked geometry stays unknown,
@@ -118,7 +148,9 @@ class CombatStop(object):
         # Priority is not a geometry/admission change. Reordering the same
         # original eligible enemies must not restart the all-enemy eight-
         # second search or discard an otherwise current NEXT proof.
-        self.signature = (self.active, tuple(sorted(admitted)), self.stop_allowed)
+        # Committing movement must not invalidate the very native evidence
+        # which authorized it, or reset the same all-enemy search next tick.
+        self.signature = (self.active, tuple(sorted(admitted)))
         if not self.stop_allowed:
             self.pivot = None
             runtime._native_hull_laying = None
@@ -127,19 +159,130 @@ class CombatStop(object):
             selected=selected if self.active else None,
             initial_hint=hint, retained_attack_intent=bool(retained and self.active),
             admitted=tuple(admitted), excluded=(),
-            status='admitted' if self.active else 'navigation',
-            reason='observed_living_enemies' if self.active else 'navigation_owned')
-        if retained and self.stop_allowed:
-            # Reconstruct only this existing combat hold. The current point
-            # is freshly evaluated below; neither an old aim coordinate nor
-            # old launch permission is carried across the boundary. Route
-            # metadata and genuine travel/mission commands remain untouched.
-            target = visible[selected]
-            return dict(order, target_kind=selected[0], target_id=selected[1],
-                combat_mode='engage', move_position=tuple(state['position']),
-                face_position=target['position'], aim_position=None,
-                throttle_override=0., fire_allowed=False)
+            status='continuing' if self.combat_owned else 'evaluating' if self.active else 'navigation',
+            reason='retained_combat_task' if self.combat_owned else
+                'candidate_evaluation_only' if self.active else 'navigation_owned',
+            movement_owner='combat' if self.stop_allowed else 'task',
+            episode=self._episode)
+        self._publish_owner()
         return order
+
+    def candidate_consumable(self, candidate):
+        """A current executable point may propose a normal route handoff.
+
+        This is a read-only permission check used by AttackPolicy's existing
+        frontier. It neither selects another target nor grants a fire edge.
+        """
+        hint = self.task_order.get('initial_target_hint') or self.task_order
+        primary = _key(dict(kind=hint.get('target_kind'), id=hint.get('target_id')))
+        stationary_primary = bool(self.task_order.get('throttle_override') == 0. and
+            _key(candidate.get('target') or {}) == primary and not self.explicit_travel)
+        return bool(self.active and self.contains(candidate.get('target')) and
+                    (self.can_request_movement or 'drive' not in self.runtime.features or
+                     stationary_primary))
+
+    def _proposal(self):
+        policy = self.runtime.attack_policy
+        decision = policy.decision
+        candidate = decision.get('candidate')
+        if candidate is None or not self.contains(candidate.get('target')):
+            return None
+        current = policy.current_row(candidate, require_line=True)
+        if current is None:
+            return None
+        mode = current.get('mode', 'penetration')
+        if policy._plannable(current, mode):
+            return current
+        if decision.get('action') == 'firing_position':
+            # These are the existing native recovery requests, not a new
+            # shootability gate. A proved physical path with a limited gun,
+            # or a real friendly blocker, can request laying/repositioning
+            # before there is an executable shot or a penetration result.
+            if (isinstance(current.get('solution'), dict) and
+                    (current.get('armor') == 'passed' and policy._needs_firing_position(current) or
+                     current.get('line') == 'friendly_blocked' or
+                     current.get('line') == 'clear' and current.get('mechanical') in
+                        ('hull_laying', 'mechanical_limited'))):
+                return current
+        if (decision.get('action') == 'search_penetration' and
+                policy.search_authority is not None):
+            return current
+        return None
+
+    def resolve(self, order, now):
+        """Commit one movement owner after the existing native policy runs."""
+        if not self.active:
+            return order
+        runtime, policy = self.runtime, self.runtime.attack_policy
+        proposal = self._proposal()
+        mission = getattr(runtime, '_mission', None) or {}
+        explicit_attack = bool(not self.explicit_travel and (
+            mission.get('explicit') and mission.get('action') == 'attack' and
+                mission.get('destination') is None or
+            order.get('team_command') in ('ATTACK', 'ATTACKENEMY', 'SUPPORTMEWITHFIRE')))
+        target = proposal.get('target') if proposal is not None else None
+        requested = order.get('combat_task_target') or {}
+        if explicit_attack and requested:
+            requested_key = _key(dict(kind=requested.get('target_kind'), id=requested.get('target_id')))
+            target = next((row for row in self.targets if _key(row) == requested_key), None)
+        elif target is None and explicit_attack:
+            target = self.engagement_target(order)
+        if not self.combat_owned and target is not None:
+            self.combat_owned = True
+            self._intent_target = _key(target)
+            self._episode += 1
+            self.receipt.update(status='admitted', reason='explicit_attack' if explicit_attack else
+                'native_attack_proposal', episode=self._episode, admitted_at=now)
+        if not self.combat_owned:
+            return order
+        # A temporary empty candidate is not a terminal task. Preserve the
+        # accepted target and last movement phase while its proof refreshes.
+        current = policy.current_target_key()
+        if current is not None and any(_key(row) == current for row in self.targets):
+            self._intent_target = current
+        target = next((row for row in self.targets if _key(row) == self._intent_target), None)
+        if target is None:
+            return order
+        self.stop_allowed = bool(self.can_request_movement)
+        self.receipt.update(combat_owned=True, stop_allowed=self.stop_allowed,
+            selected=self._intent_target, movement_owner='combat' if self.stop_allowed else 'task')
+        result = dict(order, aim_position=None, fire_allowed=False)
+        if self.stop_allowed:
+            result.update(target_kind=self._intent_target[0], target_id=self._intent_target[1])
+            if self._motion_order is not None:
+                result.update(copy.deepcopy(self._motion_order))
+            else:
+                result.update(combat_mode='engage', move_position=tuple(runtime.state['position']),
+                              face_position=target['position'], throttle_override=0.)
+        else:
+            hint = self.task_order.get('initial_target_hint') or self.task_order
+            primary = _key(dict(kind=hint.get('target_kind'), id=hint.get('target_id')))
+            if (self._intent_target == primary and
+                    (order.get('throttle_override') == 0. or 'drive' not in runtime.features)):
+                # The existing stationary task may lay its own primary gun
+                # inside its capture/parking constraints. This is a native
+                # policy proposal, not the macro hint taking translation.
+                # Another gun target still needs the controls-preserving
+                # handoff after the driver; it cannot acquire a hull turn.
+                result.update(target_kind=self._intent_target[0], target_id=self._intent_target[1])
+        self._publish_owner()
+        return result
+
+    def finish(self, order):
+        """Retain the final accepted movement, never its old firing proof."""
+        if self.stop_allowed:
+            self._motion_order = dict((name, copy.deepcopy(order.get(name)))
+                                      for name in _MOTION_FIELDS if name in order)
+        self._publish_owner()
+        return order
+
+    def _publish_owner(self):
+        state = self.runtime.state
+        if self.stop_allowed and self._route_task is not None:
+            state['_combat_movement_owner'] = dict(owned=True, target=self._intent_target,
+                                                  task_order=copy.deepcopy(self._route_task))
+        else:
+            state.pop('_combat_movement_owner', None)
 
     def mission_handoff(self, now):
         """A new explicit travel task retires the previous combat-only hold.
@@ -171,7 +314,8 @@ class CombatStop(object):
     def engagement_target(self, order=None, target=None):
         if self.contains(target):
             return next(row for row in self.targets if _key(row) == _key(target))
-        for intent in (order or {}, self.task_order):
+        for intent in (order or {}, self.task_order,
+                       self.task_order.get('initial_target_hint') or {}):
             identity = _key(dict(kind=intent.get('target_kind'), id=intent.get('target_id')))
             found = next((row for row in self.targets if _key(row) == identity or
                           intent.get('target_kind') is None and
@@ -182,7 +326,8 @@ class CombatStop(object):
 
     def navigation_owns(self, order=None, task_only=False):
         order = order or {}
-        if (not self.combat_owned or order.get('combat_mode') in _TRAVEL_MODES or
+        mode = order.get('combat_mode')
+        if (not self.combat_owned or mode in _TRAVEL_MODES and mode != 'team_attack' or
                 order.get('empty_ammo') or self.runtime._mission_brakes()):
             return True
         return False
@@ -204,7 +349,10 @@ class CombatStop(object):
 
     def _stop(self, order, reason, now, face=None):
         self.receipt.update(status='stopped', reason=reason, at=now)
-        result = dict(order, move_position=tuple(self.runtime.state['position']),
+        previous = self._motion_order or {}
+        anchor = (previous.get('move_position') if previous.get('combat_mode') == 'engage' and
+                  previous.get('throttle_override') == 0. else None)
+        result = dict(order, move_position=anchor or tuple(self.runtime.state['position']),
                       throttle_override=0., combat_mode='engage')
         if face is not None:
             result['face_position'] = face
@@ -247,7 +395,10 @@ class CombatStop(object):
         if policy.stationary_review_wait():
             # Existing local recovery is not reset or restarted by a multi-
             # frame point review. Its unchanged consumer keeps its own lease.
-            if (runtime.engine._friendly_repositions.get(runtime.actor_id) or
+            if ((self._motion_order is not None and
+                    self._motion_order.get('combat_mode') != 'engage') or
+                    getattr(runtime, '_move_episode', None) or
+                    runtime.engine._friendly_repositions.get(runtime.actor_id) or
                     runtime.state.get('_gun_angle_adjustment') or
                     runtime.state.get('_rear_aim_episode') or
                     runtime.state.get('_rear_motion_lease')):

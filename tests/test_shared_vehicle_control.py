@@ -791,18 +791,19 @@ class ForegroundPlannerObservationTests(unittest.TestCase):
         result = runtime._planner_order(now)
         return result, {row["id"]: row for row in runtime.planner._last_orders["orders"]}
 
-    def test_accepted_peer_lane_keeps_both_shooters_stationary_without_a_flanker(self):
+    def test_accepted_peer_lane_is_observation_not_either_actors_movement_owner(self):
         battle, runtime = self.scene()
         self.assertTrue(self.accept(runtime, self.receipt(), 0.))
         local, orders = self.plan(runtime, 0.)
-        self.assertEqual("engage", local["combat_mode"])
-        self.assertEqual("engage", orders[runtime.actor_id]["combat_mode"])
-        self.assertEqual("engage", orders[12]["combat_mode"])
-        self.assertEqual(0., local["throttle_override"])
-        self.assertEqual(0., orders[12]["throttle_override"])
-        self.assertEqual(dict(x=0., y=0., z=-40.), local["move_position"])
-        self.assertTrue(orders[runtime.actor_id]["fire_allowed"])
-        self.assertTrue(orders[12]["fire_allowed"])
+        self.assertEqual("route", local["combat_mode"])
+        self.assertEqual("route", orders[runtime.actor_id]["combat_mode"])
+        self.assertEqual("route", orders[12]["combat_mode"])
+        for order in (local, orders[runtime.actor_id], orders[12]):
+            self.assertIsNone(order["throttle_override"])
+            self.assertIsNone(order["target_id"])
+            self.assertEqual(dict(target_kind="human", target_id=2), order["initial_target_hint"])
+            self.assertFalse(order["fire_allowed"])
+        self.assertEqual(orders[runtime.actor_id]["move_position"], local["move_position"])
         self.assertEqual({12, runtime.actor_id}, set(
             runtime.planner._contacts[1][("human", 2)]["shootable_by_bot_ids"]))
         self.assertEqual([runtime.actor_id], [row["id"] for row in runtime.engine.controlled_states()])
@@ -818,8 +819,9 @@ class ForegroundPlannerObservationTests(unittest.TestCase):
         original_gun = copy.deepcopy(battle._gun_state.__dict__)
         battle._last_frame_time = .1
         runtime.update(.1, .1)
-        self.assertEqual("engage", runtime._last_order["combat_mode"])
-        self.assertEqual(0., runtime._last_order["throttle"])
+        self.assertEqual("route", runtime._last_order["combat_mode"])
+        self.assertIsNone(runtime._last_order["target_id"])
+        self.assertFalse(runtime.combat_stop.combat_owned)
         self.assertEqual(original_peer, battle.entities[8].matrix.__dict__)
         self.assertEqual(original_gun, battle._gun_state.__dict__)
         self.assertEqual([runtime.actor_id], [row["id"] for row in runtime.engine.controlled_states()])
@@ -900,7 +902,8 @@ class ForegroundPlannerObservationTests(unittest.TestCase):
                 unused, runtime = self.scene()
                 self.accept(runtime, self.receipt(), 0.)
                 local, unused = self.plan(runtime, 0.)
-                self.assertEqual("engage", local["combat_mode"])
+                self.assertEqual("route", local["combat_mode"])
+                self.assertIsNone(local["target_id"])
                 self.assertEqual({12, runtime.actor_id}, set(
                     runtime.planner._contacts[1][("human", 2)]["shootable_by_bot_ids"]))
                 if hidden:

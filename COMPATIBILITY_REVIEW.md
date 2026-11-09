@@ -1,3 +1,86 @@
+# November 10: separate route observation from committed combat movement
+
+The earlier statement that ordinary initial hints could not replace movement
+was incomplete. At `63b99540`, `_order_for` first produced the authored route
+and then changed its destination to the initial enemy through
+`_combat_approach(..., 'local_lane_lost')`. A clear-lane hint instead created a
+macro engage anchor. Neither path was a native shared combat admission.
+The user's AT7 report starts with route loss and stop/go at spawn, before the
+later shooting symptoms. That ordering, not brake or steering tuning, defines
+this repair. The available STB1 report independently records an initial route
+goal followed by an enemy-position navigation goal within about two metres
+of net displacement from spawn, not a measured cumulative travel distance.
+Intermediate order rewrites alone do not prove alternating final frame inputs.
+
+Ordinary strategy now emits only `initial_target_hint`, with no execution
+target, enemy-facing override, stop or approach. The retired macro engage
+anchors and movement-lease methods are removed. All observed living enemies
+remain available to the existing native evaluator; no `no_local_lane`, role
+range, new distance threshold, cooldown or fixed target lock is introduced.
+An explicit enemy task has its own `combat_task_target`, separate from the
+ordinary hint. It is an admission input, not a second target lock: a valid
+native current execution still retains its existing priority. Candidate-only
+changes do not invalidate movement-order caches.
+
+`CombatStop.accept` opens evaluation under the existing mission restrictions.
+`resolve`, after the native policy update, separately commits movement from
+its existing executable/stationary plan, supported physical recovery request,
+qualified search, or explicit attack authorization. A world-blocked unknown
+point or an unfinished query cannot cold-start an ordinary pursuit. Admission
+is not limited to an already executable shot: native safe hull laying,
+mechanical/friendly recovery and authorized attack remain possible. Capture,
+parking, fire-only control and explicit travel retain their movement limits.
+
+Once accepted, the same task retains its target intention and final accepted
+movement phase across a temporarily empty candidate, invalidated proof or
+query wait. It does not retain old shot permission or aim evidence. A wait
+does not increment the existing recovery movement episode or restart its
+eight-second search deadline. Genuine phase completion, target death/loss,
+manual cancellation and explicit travel still retire the appropriate owner.
+The final common order is retained only after the existing mission guard.
+
+The common controller publishes a narrow `_combat_movement_owner` receipt.
+Route consumers use its original five route fields to pause route progress,
+terminal/parking handoffs and the existing blocked-route budget while combat
+moves; they do not implement another combat controller. A new STOP or travel
+command is not cancelled by the previous callback's receipt. Worker receipts
+travel with the canonical `bot_state` publication in a bounded side table,
+not a changed integer pose layout or a new client. Only a valid current
+authority/round/actor checkpoint can update or release them. Live unavailable
+rows preserve the previous observation; death clears it; server echoes cannot
+resurrect a local worker owner. Owner changes participate in publication edges.
+
+Regression verification checks final driver/sender throttle, turn and brake,
+not just order labels. New cold-start route cases first fail on the previous
+source, then cover the player medium/limited-gun paths and the worker cadence.
+Native admission, continued recovery, budget-pending review, target death,
+explicit travel, route resumption and actor isolation have separate cases.
+The shared-source gate now includes route ownership and receipt transport.
+The complete embedded contract runs 28 cases under actual CPython 2.7.18;
+its new cases execute the production accept/resolve/finish and JSON boundaries.
+They are not claims of running BigWorld's exact Python 2.7.7 game process.
+
+Old tests which treated a macro hint as an execution target or launch permit
+are migrated to the new hint/admission contract. Isolated physical-consumer
+tests explicitly supply an already admitted command; full native admission
+remains covered by the shared player/worker fixtures. CURRENT/NEXT and burst
+tests retain real point evaluation, ammunition debit and physical tail shots;
+controlled budget clocks isolate the logical contract from host scheduling.
+The unrelated quarantine-retention count test pins a non-boundary input clock:
+the unchanged millisecond filename loop can still fail on repeated calls at
+the final millisecond of a second. This independent existing defect is not
+claimed fixed by this change.
+
+Default route data, obstacle avoidance, reverse escape, near-point braking,
+physical driver laws, penetration threshold, global eight-second qualification,
+HE ranking/fallback and clip/automatic-burst execution rules are unchanged.
+No third client or foreground/background performance migration is included.
+Windows AT7/STB1 route/control behavior, sound and FPS still require the new
+package play test. The previously recorded continuously moving 63-point
+negative-domain limitation remains unresolved, not waived by passing tests.
+Final commit, CI/artifact identity, suite totals and platform skips belong in
+the current PR and versioned handoff; earlier figures below are historical.
+
 # November 10: repair the shared support clock at the Python 2.7 boundary
 
 Native report `wot-error-report-20261110-012126-21ccf2af9d47.zip` rejects

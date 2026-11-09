@@ -24,24 +24,31 @@ class CaptureReloadTests(unittest.TestCase):
         contact = h._contact(7, 0, 460, [3])
         defense = dict(bases={'1':[dict(id='1:0', x=0.,y=0.,z=0.)],
                               '2':[dict(id='2:0', x=0.,y=0.,z=450.)]},
+            capture_bases={'2':[dict(id='2:0', x=0.,y=0.,z=450.,radius=50.)]},
             states={'1':dict(points=30, time_left=60., invaders=1, stopped=False)},
             contributors={'1':[dict(kind='human',id=7)],
                           '2':[dict(kind='bot',id=3,points=0)]})
         for now in (1., 4., 10., 25.):
             planner.report_contacts([contact], planner.known_targets([state], players), now)
             order = planner.build_orders(manifest, [state], players, now, defense)['orders'][0]
-            self.assertEqual('engage', order['combat_mode'])
+            self.assertEqual('hold', order['combat_mode'])
             self.assertEqual(0., order['throttle_override'])
-            self.assertEqual(7, order['target_id'])
+            self.assertIsNone(order['target_id'])
+            self.assertEqual(dict(target_kind='human', target_id=7), order['initial_target_hint'])
+            self.assertEqual('2:0', order['capture_area']['id'])
             self.assertFalse(order['fire_allowed'])
             self.assertEqual([3], planner._base_defense[1]['capture_protection']['protected'])
             self.assertNotIn('withdrawal', order['tactical_evidence'])
             self.assertFalse(hasattr(planner, '_retreat_states'))
-        # A completed reload returns to combat without needing to leave capture.
+        # Reload completion does not grant macro fire/movement authority or
+        # abandon the actual capture circle; native policy owns any shot.
         state.update(clip=4, reload_time=0.)
         planner.report_contacts([contact], planner.known_targets([state], players), 28.)
         ready = planner.build_orders(manifest, [state], players, 28., defense)['orders'][0]
-        self.assertTrue(ready['fire_allowed'])
+        self.assertFalse(ready['fire_allowed'])
+        self.assertIsNone(ready['target_id'])
+        self.assertEqual(7, ready['initial_target_hint']['target_id'])
+        self.assertEqual(0., ready['throttle_override'])
         self.assertNotEqual('base_defense', ready['combat_mode'])
         # Actual capture exit releases only this guard and normal defense applies.
         defense['contributors']['2'] = []
@@ -51,16 +58,18 @@ class CaptureReloadTests(unittest.TestCase):
         self.assertEqual([], planner._base_defense[1]['capture_protection']['protected'])
         self.assertNotIn('withdrawal', out['tactical_evidence'])
 
-    def test_reload_uses_normal_engagement_without_a_retreat_guard(self):
+    def test_reload_candidate_keeps_route_without_a_retreat_or_combat_hold(self):
         h=server_fixture; p=h.BotPlanner()
         bot=h._bot(3,1,0,h._route('capture',[(0,0,False),(0,450,False)]),'heavyTank')
         bot['state']=h._weapon_state(h._state(3,1,0,440),clip=0,clip_size=4,reload_time=27.,fire_seq=18)
         focus=dict(id=7,target_kind='human',visible=True,shootable_by_bot_ids=[3],position=dict(x=0.,y=0.,z=460.))
         for now in (1., 2., 30.):
             order=p._order_for(bot,0,1,focus,[focus],now)
-            self.assertEqual('engage',order['combat_mode'])
-            self.assertEqual(dict(x=0.,y=0.,z=440.),order['move_position'])
-            self.assertEqual(0.,order['throttle_override'])
+            self.assertEqual('route',order['combat_mode'])
+            self.assertEqual(dict(x=0.,y=0.,z=450.),order['move_position'])
+            self.assertIsNone(order['throttle_override'])
+            self.assertIsNone(order['target_id'])
+            self.assertEqual(dict(target_kind='human',target_id=7),order['initial_target_hint'])
             self.assertFalse(order['fire_allowed'])
             self.assertNotIn('withdrawal',order['tactical_evidence'])
         self.assertFalse(hasattr(p,'_retreat_states'))

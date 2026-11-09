@@ -1,6 +1,9 @@
 """Shared combat stops preserve task ownership and current native evidence.
 
-The small fixture supplies an already resolved task order and observations.
+The small fixture supplies an isolated, already established combat task and
+current-row evidence stubs. It enters that task through accept/resolve, never
+by giving a macro engage label movement permission. Cold admission is explicit
+with admitted=False; it is not a native-proof integration claim.
 Cold-start, lane checks, routes and final native controls belong to separate
 full-runtime tests. Every living observed enemy participates in armour review;
 retired priority metadata cannot filter or reorder that domain. Recovery
@@ -26,7 +29,7 @@ from gui.mods.offline_lan_0922.vehicle_control.full_runtime import (
 
 
 class Scene:
-    def __init__(self, siege=None):
+    def __init__(self, siege=None, admitted=True):
         has_siege = siege is not None
         siege = siege if has_siege else siege_mechanics.DISABLED
         self.state = dict(id=1, team=1, position=(0., 0., 0.), x=0., y=0., z=0.,
@@ -47,9 +50,13 @@ class Scene:
         engine.navigator = SimpleNamespace(bot_states={}, paths={},
             grid=SimpleNamespace(_proof_deferred=False))
         self.policy = SimpleNamespace(decision={}, rows={}, search_started=None,
+            search_authority=None, selected=None,
             _executable=AttackPolicy._executable,
+            _needs_firing_position=AttackPolicy._needs_firing_position,
             _planned_evidence=AttackPolicy._planned_evidence,
-            _plannable=AttackPolicy._plannable, frame=dict(loaded=0), receipts=[])
+            _plannable=AttackPolicy._plannable,
+            frame=dict(loaded=0, reloading=False), receipts=[])
+        self.policy.current_target_key = lambda: AttackPolicy.current_target_key(self.policy)
         self.policy.navigation_result = self.policy.receipts.append
         self.policy.stationary_review_wait = lambda: AttackPolicy.stationary_review_wait(self.policy)
         self.policy._stationary_review_order = lambda order: AttackPolicy._stationary_review_order(
@@ -91,6 +98,11 @@ class Scene:
             solution=dict(point=(0., 1., 80.), yaw=0., mechanical_reason='world_blocked'))
         self.decide('firing_position')
         self.owner.accept(self.raw_order)
+        if admitted:
+            # The supplied passed plate / real-blocker shape is an isolated
+            # recovery-admission seam. Full native proof acquisition is covered
+            # by the production-loop ownership suites, not this fixture.
+            self.owner.finish(self.owner.resolve(self.raw_order, 0.))
 
     def decide(self, action, candidate=True, **fields):
         self.policy.decision = dict(action=action, reason='observed_point',
@@ -100,7 +112,11 @@ class Scene:
     def apply(self, now):
         self.runtime.now = now
         self.owner.accept(self.raw_order)
-        result = self.owner.apply_order(dict(self.raw_order), now)
+        result = self.owner.resolve(dict(self.raw_order), now)
+        if self.owner.active:
+            result = AttackPolicy.apply_order(self.policy, result, now)
+        result = self.owner.apply_order(result, now)
+        result = self.owner.finish(result)
         self.runtime.engine._server_orders[1] = dict(result)
         return result
 
@@ -121,23 +137,25 @@ class Scene:
 
 
 class OriginalOwnershipBoundaryTests(unittest.TestCase):
-    def test_visible_contact_without_original_selected_target_is_noop(self):
-        scene = Scene()
+    def test_visible_contact_without_native_task_proposal_preserves_route(self):
+        scene = Scene(admitted=False)
         scene.raw_order.update(target_id=None, target_kind=None, combat_mode='route',
-                               move_position=(17., 0., 31.), throttle_override=None)
-        scene.candidate.update(line='clear', armor='passed')
-        scene.decide('aim')
+            move_position=(17., 0., 31.), throttle_override=None,
+            aim_position=None, fire_allowed=False)
+        scene.candidate.update(line='world_blocked', armor='unknown')
+        scene.decide('firing_position')
         before = copy.deepcopy(scene.raw_order)
         result = scene.apply(0.)
         self.assertEqual(before, result)
-        self.assertFalse(scene.owner.active)
+        self.assertTrue(scene.owner.active)
+        self.assertFalse(scene.owner.combat_owned)
         self.assertFalse(scene.owner.stop_allowed)
-        self.assertEqual((), scene.owner.targets)
-        self.assertIsNone(scene.owner.engagement_target(result, scene.target))
+        self.assertEqual((scene.target,), scene.owner.targets)
+        self.assertTrue(scene.owner.contains(scene.target))
         scene.runtime.planner._route.assert_not_called()
 
     def test_protected_navigation_keeps_destinations(self):
-        cases = ('route', 'base_defense',
+        cases = ('base_defense',
                  'team_attack', 'team_return_base', 'team_defend_base', 'team_follow',
                  'team_attention_cell', 'team_hold_position')
         for mode in cases:
@@ -146,6 +164,9 @@ class OriginalOwnershipBoundaryTests(unittest.TestCase):
                     scene = Scene()
                     scene.raw_order.update(combat_mode=mode, move_position=(17., 0., 31.),
                                            throttle_override=None, route_index=3)
+                    if mode == 'team_attack':
+                        scene.runtime._mission = dict(explicit=True, action='attack',
+                            destination=(17., 0., 31.), radius=2.)
                     scene.candidate.update(line='clear')
                     scene.decide(action)
                     before = copy.deepcopy(scene.raw_order)
@@ -159,11 +180,13 @@ class OriginalOwnershipBoundaryTests(unittest.TestCase):
                 scene = Scene()
                 scene.raw_order.update(fields)
                 before = copy.deepcopy(scene.raw_order)
-                self.assertEqual(before, scene.apply(0.))
+                self.assertEqual(dict(before, aim_position=scene.candidate['solution']['point'],
+                                      fire_allowed=False), scene.apply(0.))
                 self.assertFalse(scene.owner.stop_allowed)
         scene = Scene()
         scene.runtime._mission = dict(capture_started=True)
-        self.assertEqual(scene.raw_order, scene.apply(0.))
+        self.assertEqual(dict(scene.raw_order, aim_position=scene.candidate['solution']['point'],
+                              fire_allowed=False), scene.apply(0.))
         self.assertFalse(scene.owner.stop_allowed)
 
     def test_retired_tactical_modes_cannot_supply_combat_stop(self):
@@ -180,7 +203,7 @@ class OriginalOwnershipBoundaryTests(unittest.TestCase):
                 self.assertFalse(scene.owner.combat_owned)
 
     def test_selected_target_then_full_live_domain_ignores_old_scores_and_refusals(self):
-        scene = Scene()
+        scene = Scene(admitted=False)
         extra = [dict(scene.target, id=i, network_id=i) for i in range(3, 8)]
         scene.runtime._targets = (scene.target,) + tuple(extra)
         selection = scene.raw_order['tactical_evidence']['selection']
@@ -197,7 +220,7 @@ class OriginalOwnershipBoundaryTests(unittest.TestCase):
         self.assertTrue(scene.owner.contains(scene.target))
         self.assertTrue(all(scene.owner.contains(row) for row in extra))
         self.assertEqual((), scene.owner.receipt['excluded'])
-        self.assertEqual('observed_living_enemies', scene.owner.receipt['reason'])
+        self.assertEqual('candidate_evaluation_only', scene.owner.receipt['reason'])
 
     def test_initial_key_selects_nearest_before_lower_armor(self):
         scene = Scene()
@@ -235,7 +258,7 @@ class OriginalOwnershipBoundaryTests(unittest.TestCase):
                         ordinary_initial_key(scene.state['position'], soft))
 
     def test_macro_target_is_only_a_hint_before_policy_acquires_an_intention(self):
-        scene = Scene()
+        scene = Scene(admitted=False)
         near = dict(scene.target, id=3, network_id=3,
                     position=(0., 0., 20.), armor=300.)
         farther = dict(scene.target, id=4, network_id=4,
@@ -259,7 +282,7 @@ class OriginalOwnershipBoundaryTests(unittest.TestCase):
         self.assertEqual((2, 3), tuple(row['id'] for row in scene.owner.targets))
         self.assertTrue(scene.owner.contains(living))
         self.assertTrue(all(not scene.owner.contains(row) for row in invalid))
-        self.assertEqual((True, (('bot', 2), ('bot', 3)), True), scene.owner.signature)
+        self.assertEqual((True, (('bot', 2), ('bot', 3))), scene.owner.signature)
 
     def test_retired_priority_metadata_cannot_change_target_or_domain_signature(self):
         scene = Scene()
@@ -281,7 +304,7 @@ class OriginalOwnershipBoundaryTests(unittest.TestCase):
         self.assertEqual((), scene.owner.receipt['excluded'])
 
     def test_ordinary_advance_admits_full_native_review_and_current_shot_stop(self):
-        scene = Scene()
+        scene = Scene(admitted=False)
         other = dict(scene.target, id=3, network_id=3)
         scene.runtime._targets += (other,)
         scene.raw_order.update(combat_mode='advance', move_position=(17., 0., 31.),
@@ -290,11 +313,12 @@ class OriginalOwnershipBoundaryTests(unittest.TestCase):
             dict(target=('bot', 3), reason='eligible', score=10.))
         scene.owner.accept(scene.raw_order)
         self.assertTrue(scene.owner.active)
-        self.assertTrue(scene.owner.stop_allowed)
+        self.assertFalse(scene.owner.stop_allowed)
         self.assertEqual((2, 3), tuple(row['id'] for row in scene.owner.targets))
         scene.candidate.update(line='clear')
         scene.decide('aim')
         result = scene.apply(0.)
+        self.assertTrue(scene.owner.stop_allowed)
         self.assertEqual('engage', result['combat_mode'])
         self.assertEqual(scene.state['position'], result['move_position'])
         self.assertEqual(0., result['throttle_override'])
@@ -350,6 +374,7 @@ class OriginalOwnershipBoundaryTests(unittest.TestCase):
         scene.state['_rear_motion_lease'] = dict(start=0., goal=(0., 0., 80.))
         scene.runtime.engine.navigator.bot_states[1] = dict(path_key=('route', 1))
         before = copy.deepcopy(scene.state)
+        before.pop('_combat_movement_owner')
         scene.owner.reset()
         self.assertEqual(before, scene.state)
         self.assertIs(original, scene.state['_gun_angle_adjustment'])
@@ -363,7 +388,10 @@ class NativePlanningInputTests(unittest.TestCase):
         actual = copy.deepcopy(scene.candidate)
         with mock.patch.object(scene.policy, 'current_row', wraps=scene.policy.current_row) as current:
             result = scene.apply(0.)
-        current.assert_called_once_with(scene.candidate, require_line=True)
+        self.assertGreaterEqual(current.call_count, 2)
+        current.assert_any_call(scene.candidate, require_line=True)
+        self.assertEqual(mock.call(scene.candidate, require_line=True),
+                         current.call_args_list[-1])
         self.assertEqual('native_lay', scene.owner.receipt['reason'])
         self.assertEqual('copied_combat_hull_aim', scene.runtime._last_navigation['owner'])
         self.assertEqual(scene.state['position'], result['move_position'])
@@ -448,6 +476,9 @@ class NativePlanningInputTests(unittest.TestCase):
                     scene.candidate['armor'] = 'unknown'
                 scene.raw_order.update(combat_mode='advance_contact',
                     move_position=(0., 0., 80.), throttle_override=None)
+                # This boundary begins with an accepted approach, not a new
+                # macro request that is allowed to replace an existing stop.
+                scene.owner.finish(scene.raw_order)
                 scene.decide('aim')
                 result = scene.apply(0.)
                 self.assertEqual((0., 0., 80.), result['move_position'])
@@ -530,7 +561,7 @@ class UnchangedRecoveryConsumerTests(unittest.TestCase):
         self.assertEqual(2, rejected.call_count)
         self.assertEqual('bounded_attempt_complete', scene.state['_gun_angle_last_terminal']['reason'])
         self.assertEqual('advance_contact', result['combat_mode'])
-        self.assertEqual(scene.target['position'], result['move_position'])
+        self.assertEqual(scene.candidate['solution']['point'], result['move_position'])
         self.assertEqual(2, result['target_id'])
         self.assertEqual(3, scene.runtime.gun.clip)
         self.assertIsNone(scene.policy.search_started)
@@ -713,6 +744,9 @@ class EarlyStopNotLateControlRewriteTests(unittest.TestCase):
                 order = dict(scene.raw_order, combat_mode=mode,
                     move_position=(17., 0., 31.), throttle_override=None,
                     face_position=(-9., 0., 22.))
+                if mode == 'team_attack':
+                    scene.runtime._mission = dict(explicit=True, action='attack',
+                        destination=order['move_position'], radius=2.)
                 scene.owner.accept(order)
                 result = AttackPolicy.apply_order(scene.policy, order, 0.)
                 for name in ('target_id', 'target_kind', 'face_position',
@@ -735,6 +769,9 @@ class EarlyStopNotLateControlRewriteTests(unittest.TestCase):
                 order = dict(scene.raw_order, combat_mode=mode,
                     move_position=(17., 0., 31.), throttle_override=None,
                     face_position=(-9., 0., 22.))
+                if mode == 'team_attack':
+                    scene.runtime._mission = dict(explicit=True, action='attack',
+                        destination=order['move_position'], radius=2.)
                 scene.owner.accept(order)
                 result = AttackPolicy.apply_order(scene.policy, order, 0.)
                 expected = dict(order, fire_allowed=False)
@@ -802,7 +839,7 @@ class SiegeOriginalOwnershipTests(unittest.TestCase):
                 siege_correction=pitch, hydraulic_pitch=pitch, needs_hydraulic=True,
                 siege_aim=True, source_verified=False, reachable=False))
 
-    def test_original_admission_enters_without_point_or_penetration_precheck(self):
+    def test_established_combat_enters_siege_without_requiring_another_point_proof(self):
         for clip in (1, 3, 6):
             with self.subTest(clip=clip):
                 scene = Scene(siege=siege_mechanics.DISABLED)
@@ -816,9 +853,12 @@ class SiegeOriginalOwnershipTests(unittest.TestCase):
                 self.assertIsNone(scene.policy.search_started)
 
     def test_unselected_visible_enemy_cannot_start_siege_even_as_late_callback_target(self):
-        scene = Scene(siege=siege_mechanics.DISABLED)
+        scene = Scene(siege=siege_mechanics.DISABLED, admitted=False)
         scene.raw_order.update(target_id=None, target_kind=None, combat_mode='route',
-                               move_position=(0., 0., 40.), throttle_override=None)
+            move_position=(0., 0., 40.), throttle_override=None,
+            aim_position=None, fire_allowed=False)
+        scene.candidate.update(armor='unknown')
+        scene.decide('wait', candidate=False)
         scene.owner.accept(scene.raw_order)
         self.assertFalse(self.desired(scene, target=scene.target))
         self.assertEqual(scene.raw_order, scene.apply(0.))
@@ -835,6 +875,7 @@ class SiegeOriginalOwnershipTests(unittest.TestCase):
         scene.runtime._targets = (scene.target,)
         scene.raw_order = selected
         scene.owner.accept(scene.raw_order)
+        scene.owner.resolve(scene.raw_order, 0.)
         self.assertTrue(self.desired(scene))
 
     def test_local_recovery_does_not_exit_siege_because_of_travel_distance(self):
@@ -855,6 +896,9 @@ class SiegeOriginalOwnershipTests(unittest.TestCase):
                 scene = Scene(siege=siege_mechanics.ENABLED)
                 scene.raw_order.update(combat_mode=mode, move_position=(40., 0., 40.),
                                        throttle_override=None)
+                if mode == 'team_attack':
+                    scene.runtime._mission = dict(explicit=True, action='attack',
+                        destination=scene.raw_order['move_position'], radius=2.)
                 scene.owner.accept(scene.raw_order)
                 overwritten = dict(scene.raw_order, combat_mode='engage',
                     move_position=(0., 0., 0.), throttle_override=0.)
@@ -870,6 +914,7 @@ class SiegeOriginalOwnershipTests(unittest.TestCase):
         self.assertFalse(self.desired(scene))
         scene.position((9., 0., 0.))
         scene.owner.accept(scene.raw_order)
+        scene.owner.resolve(scene.raw_order, 0.)
         self.assertTrue(self.desired(scene))
 
     def test_native_transition_direction_is_atomic_across_owner_changes(self):
@@ -928,7 +973,13 @@ class SiegeOriginalOwnershipTests(unittest.TestCase):
                 scene = Scene(siege=siege_mechanics.ENABLED)
                 self.motion(scene)
                 scene.decide(action)
-                self.assertEqual(scene.raw_order, scene.apply(0.))
+                result = scene.apply(0.)
+                for name in ('target_id', 'combat_mode', 'move_position',
+                             'face_position', 'throttle_override', 'shell_index'):
+                    self.assertEqual(scene.raw_order[name], result[name])
+                self.assertFalse(result['fire_allowed'])
+                self.assertNotEqual(scene.runtime._siege_aim_candidate['solution']['point'],
+                                    result['aim_position'])
                 self.assertTrue(scene.owner.active)
                 self.assertIsNone(scene.owner.pivot)
                 self.assertIsNone(scene.policy.search_started)
@@ -943,7 +994,7 @@ class SiegeOriginalOwnershipTests(unittest.TestCase):
         self.motion(scene)
         motion = scene.runtime._siege_aim_candidate
         motion['target'] = other
-        self.assertEqual(scene.raw_order, scene.apply(0.))
+        self.assertEqual(dict(scene.raw_order, aim_position=None, fire_allowed=False), scene.apply(0.))
         self.assertTrue(scene.owner.contains(other))
         self.assertIsNone(scene.owner.pivot)
         self.assertIsNone(scene.runtime.siege_aim_candidate(scene.target))

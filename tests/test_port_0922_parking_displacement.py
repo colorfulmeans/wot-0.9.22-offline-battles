@@ -61,7 +61,7 @@ class WaitDisplacementTests(unittest.TestCase):
         self.setUp()
         self.assertEqual(0, self.orders(2, [human])['parking_slot'])
 
-    def test_small_shove_keeps_clock_holds_current_pose_and_can_aim(self):
+    def test_small_shove_keeps_clock_and_current_pose_while_exposing_candidate(self):
         self.states[0]['x'] = 0
         self.orders(1)
         self.states[0]['x'] = 4
@@ -72,8 +72,9 @@ class WaitDisplacementTests(unittest.TestCase):
         self.assertEqual('waiting', order['parking_phase'])
         self.assertEqual(4, order['move_position']['x'])
         self.assertEqual(0, order['throttle_override'])
-        self.assertEqual(2, order['target_id'])
-        self.assertTrue(order['fire_allowed'])
+        self.assertIsNone(order['target_id'])
+        self.assertEqual(dict(target_kind='human', target_id=2), order['initial_target_hint'])
+        self.assertFalse(order['fire_allowed'])
         self.assertEqual(1, self.orders(11)['route_index'])
 
     def test_large_or_vertical_shove_redeploys_without_resetting_wait_clock(self):

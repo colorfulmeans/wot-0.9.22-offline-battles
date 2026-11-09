@@ -1,4 +1,4 @@
-"""Ordered travel tasks. Combat/fire selection remains in BotPlanner."""
+"""Ordered travel tasks observing the shared native combat movement owner."""
 from __future__ import division
 from gui.mods.offline_lan_0922.vehicle_control.strategy_compat import text as str, round_py3 as round
 import copy
@@ -25,10 +25,41 @@ def distance(a, b):
 
 class RouteTasksMixin:
     @staticmethod
-    def _task_combat(order):
+    def _combat_movement_task(bot):
+        """Read the native owner's suspended route, without deciding combat."""
+        if not isinstance(bot, dict) or bot.get('empty_ammo'):
+            return None
+        receipt = (bot.get('state') or {}).get('_combat_movement_owner')
+        if not isinstance(receipt, dict) or receipt.get('owned') is not True:
+            return None
+        task = receipt.get('task_order')
+        if not isinstance(task, dict) or not isinstance(task.get('move_position'), dict):
+            return None
+        return task
+
+    def _task_combat(self, order, bot=None):
         mode=order.get('combat_mode')
-        return bool(order.get('target_id') is not None and mode in (
+        explicit = bool(order.get('target_id') is not None and mode in (
             'engage', 'advance_contact'))
+        # A new explicit task is evaluated by its existing task owner. A
+        # receipt from the previous callback must not cancel that command.
+        combat_command = order.get('team_command') in (
+            None, 'ATTACK', 'ATTACKENEMY', 'SUPPORTMEWITHFIRE')
+        return bool(explicit or (combat_command and
+            mode in ('route', 'advance', 'advance_contact', 'engage', 'team_attack') and
+            not order.get('defense_base_id') and self._combat_movement_task(bot) is not None))
+
+    def _task_pause_route(self, order, bot, now):
+        """Pause the existing route-attempt clock while native combat moves."""
+        progress = self._wreck_route_progress.get(bot['id'])
+        if progress is not None:
+            progress.setdefault('paused_at', now)
+            progress.setdefault('pause_pose', point(bot['state']))
+            recovery = self._route_recoveries.get(bot['id'])
+            order['route_attempt'] = dict(route_id=progress['key'][0],
+                route_index=progress['key'][1], action='pause_combat_owner',
+                elapsed=round(progress['paused_at']-progress['since'], 3),
+                phase=recovery['phase'] if recovery else None)
 
     def _task_init(self):
         self._travel_tasks = {}
@@ -204,6 +235,7 @@ class RouteTasksMixin:
     def _task_capture_handoff(self,order,bot,target):
         if (target is None or bot['id'] in self._travel_tasks or bot['id'] in self._route_recoveries or
                 order.get('team_command') or order.get('target_id') is not None or
+                order.get('initial_target_hint') or
                 bot['profile'].get('class_tag')=='SPG' or
                 order.get('combat_mode') not in ('route','advance','base_screen')):return
         route=self._task_route(bot)
@@ -216,7 +248,7 @@ class RouteTasksMixin:
     def _task_apply(self, order, bot, now, defense_record=None, player_order=None, defense=None):
         if bot.get('empty_ammo'):return
         actor = bot['id']
-        combat = self._task_combat(order)
+        combat = self._task_combat(order, bot)
         previous=self._previous_player.get(actor)
         command_id=(player_order or {}).get('command_id')
         if previous and previous['id']!=command_id:
@@ -232,7 +264,7 @@ class RouteTasksMixin:
                 self._previous_player[actor]=previous
         task = self._travel_tasks.get(actor)
         released=False
-        combat = self._task_combat(order)
+        combat = self._task_combat(order, bot)
         if defense_record is not None:
             if task is None or task['kind'] != 'defense':task = self._task_begin(bot, 'defense', defense_record, now=now)
         elif task and task['kind'] == 'defense':

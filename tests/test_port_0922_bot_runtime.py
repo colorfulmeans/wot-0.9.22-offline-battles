@@ -7105,6 +7105,20 @@ class BotRuntimeTests(unittest.TestCase):
         player = [{'id': 2, 'team': 1, 'alive': True,
                    'x': 5, 'y': 0, 'z': 5}]
         player = [_admit_player(value) for value in player]
+        # This fixture isolates the publication/gun clocks below an accepted
+        # execution order. It has no BattleRuntime native-admission binding;
+        # an ordinary planner hint is no longer permission to fire.
+        self.assertIsNone(self.runtime._control_for(self.runtime.states[11]))
+        self.assertTrue(self.runtime._apply_orders({
+            'bot_order_revision': 1,
+            'bot_orders': [{
+                'id': 11, 'target_kind': 'human', 'target_id': 2,
+                'fire_allowed': True, 'fire_range': 500.0, 'shell_index': 0,
+                'combat_mode': 'engage',
+                'aim_position': (5.0, 0.0, 5.0),
+                'face_position': (5.0, 0.0, 5.0),
+            }],
+        }))
         self.runtime.update(.20, 1.22, players=player)
         self.runtime.update(.20, 1.42, players=player)
         result = self.runtime.update(.04, 1.46, players=player)
@@ -20397,18 +20411,23 @@ class BotRuntimeTests(unittest.TestCase):
         orders = dict((order['id'], order) for order in
                       planner.build_orders(
                           manifest, bot_states, [enemy], 1.0)['orders'])
-        self.assertEqual(2, orders[11]['target_id'])
-        self.assertEqual('advance_contact', orders[11]['combat_mode'])
+        self.assertIsNone(orders[11]['target_id'])
+        self.assertEqual({'target_kind': 'human', 'target_id': 2},
+                         orders[11]['initial_target_hint'])
+        self.assertEqual('route', orders[11]['combat_mode'])
         self.assertFalse(orders[11]['fire_allowed'])
         self.assertIsNone(orders[11]['throttle_override'])
-        for key in ('route_id', 'route_index', 'route_anchor'):
+        for key in ('route_id', 'route_index', 'route_anchor', 'move_position'):
             self.assertEqual(route_orders[11][key], orders[11][key], key)
         self.assertEqual(manifest_before, manifest)
         candidate = orders[11]['tactical_evidence']['selection']['candidates'][0]
         self.assertEqual('eligible', candidate['reason'])
         self.assertFalse(candidate['local_lane'])
-        self.assertEqual(2, orders[12]['target_id'])
-        self.assertEqual('human', orders[12]['target_kind'])
+        self.assertIsNone(orders[12]['target_id'])
+        self.assertIsNone(orders[12]['target_kind'])
+        self.assertEqual({'target_kind': 'human', 'target_id': 2},
+                         orders[12]['initial_target_hint'])
+        self.assertEqual('route', orders[12]['combat_mode'])
         self.assertFalse(orders[12]['fire_allowed'])
 
         payload = planner.build_orders(
@@ -20417,9 +20436,8 @@ class BotRuntimeTests(unittest.TestCase):
             'bot_order_revision': payload['revision'],
             'bot_orders': payload['orders'],
         }))
-        # Both actors retain the live contact for shared combat recovery.
-        # Only bot 12 owns a proved barrel lane; tracking cannot grant bot 11
-        # a shot or replace the stored route geometry.
+        # Both actors retain the live candidate without a macro movement or
+        # firing grant, including the actor with a clear lane diagnostic.
         for index in range(4):
             now = 1.21 + index * .21
             runtime.update(.06, now, players=[enemy])
@@ -20429,6 +20447,27 @@ class BotRuntimeTests(unittest.TestCase):
                 'bot_order_revision': payload['revision'],
                 'bot_orders': payload['orders'],
             })
+        self.assertEqual(0, runtime.states[11]['fire_seq'])
+        self.assertEqual(0, runtime.states[12]['fire_seq'])
+        # Exercise the actual final lane/fire components with accepted input.
+        # This bare BotRuntime has no native admission binding; the preceding
+        # planner assertions do not claim a lane diagnostic grants combat.
+        accepted = []
+        for order in payload['orders']:
+            state = runtime.states[order['id']]
+            self.assertIsNone(runtime._control_for(state))
+            accepted.append(dict(order,
+                target_kind='human', target_id=2,
+                combat_mode='engage', fire_allowed=True,
+                fire_range=500.0, shell_index=0,
+                aim_position=(0.0, 0.0, 100.0),
+                face_position=(0.0, 0.0, 100.0)))
+        self.assertTrue(runtime._apply_orders({
+            'bot_order_revision': payload['revision'] + 1,
+            'bot_orders': accepted,
+        }))
+        for index in range(4):
+            runtime.update(.06, 2.05 + index * .21, players=[enemy])
         self.assertEqual(0, runtime.states[11]['fire_seq'])
         self.assertGreater(runtime.states[12]['fire_seq'], 0)
         self.assertEqual(manifest_before, manifest)
@@ -20471,6 +20510,8 @@ class BotRuntimeTests(unittest.TestCase):
         enemy = _admit_player(enemy)
         planner = BotPlanner()
         bot_states = [dict(state)]
+        route_order = planner.build_orders(
+            manifest, bot_states, [enemy], .9)['orders'][0]
         self.assertEqual(1, planner.report_contacts([{
             'observing_team': 1, 'target_kind': 'human',
             'target_id': 2, 'target_team': 2,
@@ -20482,13 +20523,29 @@ class BotRuntimeTests(unittest.TestCase):
             manifest, bot_states, [enemy], 1.0)
         order = payload['orders'][0]
 
-        self.assertEqual('engage', order['combat_mode'])
-        self.assertEqual(0.,order['throttle_override'])
-        self.assertEqual({'x': 0.0, 'y': 0.0, 'z': 0.0},
-                         order['move_position'])
+        self.assertEqual('route', order['combat_mode'])
+        self.assertIsNone(order['target_id'])
+        self.assertEqual({'target_kind': 'human', 'target_id': 2},
+                         order['initial_target_hint'])
+        self.assertFalse(order['fire_allowed'])
+        self.assertIsNone(order['throttle_override'])
+        self.assertEqual(route_order['move_position'], order['move_position'])
+        self.assertIsNone(runtime._control_for(state))
+
+        def accepted_stationary_order(task_order):
+            # Input to the real driver, physics and gun components. Native
+            # combat admission is covered by the bound ownership scenes;
+            # low health must not rewrite an already accepted stationary aim.
+            return dict(task_order, combat_mode='engage',
+                target_kind='human', target_id=2, fire_allowed=True,
+                fire_range=500.0, throttle_override=0.0,
+                move_position=(0.0, 0.0, 0.0),
+                aim_position=(0.0, 0.0, 20.0),
+                face_position=(0.0, 0.0, 20.0))
+
         runtime.apply_snapshot({
             'bot_order_revision': payload['revision'],
-            'bot_orders': payload['orders'], 'bots': [],
+            'bot_orders': [accepted_stationary_order(order)], 'bots': [],
         })
 
         yaws = []
@@ -20505,9 +20562,11 @@ class BotRuntimeTests(unittest.TestCase):
                     'health': 1000, 'max_health': 1000,
                 }], planner.known_targets(bot_states, [enemy]), now)
                 payload = planner.build_orders(manifest, bot_states, [enemy], now)
+                self.assertEqual('route', payload['orders'][0]['combat_mode'])
+                self.assertIsNone(payload['orders'][0]['throttle_override'])
                 runtime._apply_orders({
                     'bot_order_revision': payload['revision'],
-                    'bot_orders': payload['orders'],
+                    'bot_orders': [accepted_stationary_order(payload['orders'][0])],
                 })
             runtime.update(0.02, 1.0 + frame * 0.02,
                            players=[enemy])
@@ -20520,7 +20579,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertGreaterEqual(runtime.states[11]['fire_seq'], 1)
         self.assertAlmostEqual(0.,runtime.states[11]['z'])
 
-    def test_non_close_support_target_still_uses_engage_hold(self):
+    def test_non_close_support_target_keeps_route_and_only_hints_combat(self):
         planner = BotPlanner()
         profile = {
             'dominant_role': 'support', 'desired_range': 200.0,
@@ -20548,6 +20607,8 @@ class BotRuntimeTests(unittest.TestCase):
             'id': 2, 'team': 2, 'alive': True,
             'x': 0.0, 'y': 0.0, 'z': 150.0,
         }
+        route_order = planner.build_orders(
+            manifest, bot_states, [enemy], .9)['orders'][0]
         self.assertEqual(1, planner.report_contacts([{
             'observing_team': 1, 'target_kind': 'human',
             'target_id': 2, 'target_team': 2,
@@ -20559,10 +20620,14 @@ class BotRuntimeTests(unittest.TestCase):
         order = planner.build_orders(
             manifest, bot_states, [enemy], 1.0)['orders'][0]
 
-        self.assertEqual(2, order['target_id'])
-        self.assertTrue(order['fire_allowed'])
-        self.assertEqual('engage', order['combat_mode'])
-        self.assertEqual(0.0, order['throttle_override'])
+        self.assertIsNone(order['target_id'])
+        self.assertEqual({'target_kind': 'human', 'target_id': 2},
+                         order['initial_target_hint'])
+        self.assertFalse(order['fire_allowed'])
+        self.assertEqual('route', order['combat_mode'])
+        self.assertIsNone(order['throttle_override'])
+        for key in ('route_id', 'route_index', 'route_anchor', 'move_position'):
+            self.assertEqual(route_order[key], order[key], key)
 
     def test_far_detail_observation_keeps_all_bots_and_explicit_lane_list(self):
         runtime = self.module.BotRuntime(
@@ -20604,8 +20669,11 @@ class BotRuntimeTests(unittest.TestCase):
             [contact], planner.known_targets(bot_states, [enemy]), 1.0))
         orders = planner.build_orders(
             manifest, bot_states, [enemy], 1.0)['orders']
-        self.assertTrue(all(order['target_id'] == 2 for order in orders))
-        self.assertTrue(all(order['combat_mode'] == 'advance_contact'
+        self.assertTrue(all(order['target_id'] is None for order in orders))
+        self.assertTrue(all(order['initial_target_hint'] ==
+                            {'target_kind': 'human', 'target_id': 2}
+                            for order in orders))
+        self.assertTrue(all(order['combat_mode'] == 'route'
                             for order in orders))
         self.assertTrue(all(not order['fire_allowed'] for order in orders))
         for order in orders:
@@ -21546,8 +21614,8 @@ class BotRuntimeTests(unittest.TestCase):
         observation_batches = 0
         observation_times = []
         per_frame_lane_probes = []
-        ready_order_batches = 0
-        maximum_targeted = 0
+        ready_hint_batches = 0
+        maximum_hinted = 0
         manifest_before = copy.deepcopy(manifest)
 
         # Drive the runtime at 50 FPS for 120 seconds. Periodic firing-lane
@@ -21586,41 +21654,49 @@ class BotRuntimeTests(unittest.TestCase):
             contact_by_target = dict(
                 ((contact['target_kind'], contact['target_id']), contact)
                 for contact in contacts)
-            targeted = 0
-            firing = 0
+            hinted = 0
+            ready_hints = 0
             for order in orders:
                 expected_contacts = set((row['target_kind'], row['target_id'])
                     for row in contacts if row['observing_team'] == order['team'])
                 selection = order['tactical_evidence']['selection']
                 self.assertEqual(expected_contacts,
                     set(row['target'] for row in selection['candidates']))
-                if order['target_id'] is None:
-                    self.assertFalse(order['fire_allowed'])
-                    self.assertEqual('route', order['combat_mode'])
+                self.assertIsNone(order['target_id'])
+                self.assertFalse(order['fire_allowed'])
+                self.assertEqual('route', order['combat_mode'])
+                hint = order.get('initial_target_hint')
+                if hint is None:
                     continue
-                targeted += 1
-                contact = contact_by_target[
-                    (order['target_kind'], order['target_id'])]
-                if order['fire_allowed']:
-                    firing += 1
+                hinted += 1
+                target = (hint['target_kind'], hint['target_id'])
+                self.assertIn(target, expected_contacts)
+                contact = contact_by_target[target]
+                candidate = next(row for row in selection['candidates']
+                                 if row['target'] == target)
+                self.assertEqual(order['id'] in contact['shootable_by_bot_ids'],
+                                 candidate['local_lane'])
+                if candidate['ready']:
+                    ready_hints += 1
                     self.assertIn(order['id'],
                                   contact['shootable_by_bot_ids'])
             if len(runtime._shot_los_cache) == 420:
-                # Reload and empty ammunition now affect permission even when
-                # a lane exists. Every live contact remains trackable, but
-                # only the two clear observers can acquire launch permission.
+                # All live contacts stay in the evaluation domain. The two
+                # clear observers retain ready diagnostics; neither those
+                # diagnostics nor the hint is a movement or launch grant.
                 self.assertTrue(all(order['id'] in (11, 25)
                                     for order in orders
-                                    if order['fire_allowed']))
-            maximum_targeted = max(maximum_targeted, targeted)
-            self.assertLessEqual(firing, 2)
-            self.assertLessEqual(firing, targeted)
-            ready_order_batches += int(firing > 0)
+                                    if any(row.get('ready') for row in
+                                        order['tactical_evidence']['selection']['candidates'])))
+            maximum_hinted = max(maximum_hinted, hinted)
+            self.assertLessEqual(ready_hints, 2)
+            self.assertLessEqual(ready_hints, hinted)
+            ready_hint_batches += int(ready_hints > 0)
 
         self.assertTrue(observation_times)
-        self.assertGreater(maximum_targeted, 2)
+        self.assertGreater(maximum_hinted, 2)
         self.assertEqual(manifest_before, manifest)
-        self.assertGreater(ready_order_batches, 0)
+        self.assertGreater(ready_hint_batches, 0)
         self.assertLessEqual(
             observation_times[0],
             1.0 + self.module.PUBLICATION_SECONDS + 0.02 + 1e-6)
