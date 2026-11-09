@@ -177,6 +177,56 @@ class FullShellSettingsTests(unittest.TestCase):
         self.assertEqual([(scene.settings.CURRENT_SHELLS, 102)],
             [call for call in scene.setting_calls if call[0] == scene.settings.CURRENT_SHELLS])
 
+    def test_failed_ordinary_he_switches_during_native_load_and_fires_replacement(self):
+        scene = self.scene(clip=1, burst=1, third=True)
+        runtime, gun = scene.runtime, scene.battle._gun_state
+        he = gun.shots[2]
+        he.shell.kind, he.shell.explosionRadius = 'HIGH_EXPLOSIVE', 5.
+        he.piercingPower = (1., 1.)
+        source = scene.battle.client.effective_params['gun']['shots'][2]['source_shot']
+        source['shell'].update(kind='HIGH_EXPLOSIVE', explosionRadius=5.)
+        source['piercingPower'] = he.piercingPower
+        gun.reload = 4.
+        # Start a real native HE load before asking the shared policy to act.
+        # No policy decision or replacement proof is supplied by this fixture.
+        self.assertTrue(runtime._shell_setting('CURRENT_SHELLS', 2))
+        self.assertEqual(2, gun.shot_index)
+        self.assertGreater(gun.reload_time, 0.)
+        self.assertIsNone(runtime._loading_switch)
+        runtime.attack_policy.reset()
+        scene.setting_calls[:] = []
+        setting, observed = scene.battle.change_vehicle_setting, []
+
+        def observe_current(code, value):
+            if code == scene.settings.CURRENT_SHELLS:
+                observed.append(dict(reload_time=gun.reload_time,
+                                     decision=copy.deepcopy(runtime.attack_policy.decision)))
+            return setting(code, value)
+
+        scene.battle.change_vehicle_setting = observe_current
+        before = list(gun.ammo)
+        scene.rotator_enabled = True
+        switched = None
+        for unused in range(160):
+            was_loading = gun.reload_time > 0.
+            self.tick_weapon(scene)
+            if gun.shot_index == 0 and switched is None:
+                switched = dict(runtime._shell_receipt)
+                self.assertTrue(was_loading)
+                self.assertGreater(observed[0]['reload_time'], 0.)
+                self.assertEqual('passed', observed[0]['decision']['candidate']['armor'])
+                self.assertEqual(('CURRENT_SHELLS', True, 'ordinary_he_point_failed'),
+                    (switched['setting'], switched['accepted'], switched['reason']))
+                self.assertEqual(before, gun.ammo)
+                self.assertIs(gun, runtime._loading_switch)
+            if scene.launches():
+                break
+        self.assertIsNotNone(switched, scene.trace[-3:])
+        self.assertEqual([0], [shot['shell_index'] for shot in scene.launches()])
+        self.assertEqual([before[0] - 1, before[1], before[2]], gun.ammo)
+        self.assertEqual([(scene.settings.CURRENT_SHELLS, 101)],
+            [call for call in scene.setting_calls if call[0] == scene.settings.CURRENT_SHELLS])
+
     def test_manual_current_ap_still_accepts_a_verified_he_for_the_very_next_load(self):
         scene = self.scene(clip=1, burst=1, third=True)
         gun = scene.battle._gun_state

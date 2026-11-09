@@ -4,8 +4,6 @@ from __future__ import print_function
 
 import math
 
-from .. import bot_runtime as shared_runtime
-
 
 def _angle(value):
     return (float(value) + math.pi) % (2. * math.pi) - math.pi
@@ -51,6 +49,10 @@ class SharedEngineControl(object):
         runtime = self._control_for(state)
         if runtime is None:
             return self._physical_cadenced_ballistic_solution(state, target, descriptor, shell_index, now, force)
+        # BotRuntime inherits this boundary. Import its physical timing values
+        # only after the owner exists, not while Python 2 is defining that
+        # class through this module. The values still have one physical owner.
+        from .. import bot_runtime as shared_runtime
         if (state.get('profile') or {}).get('class_tag') != 'SPG':
             candidate = runtime.current_attack_candidate(state, target, for_aim=True)
             if candidate is not None and int(candidate['shell_index']) == int(shell_index):

@@ -166,7 +166,7 @@ aim bias; its removal is not retroactive proof that bias caused this report.
 
 ## Verification record
 
-Final host commands (CPython 3.12; each test file runs in its own interpreter):
+Original shared-tree host commands (CPython 3.12; each test file runs in its own interpreter):
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python tools/run_test_suite.py --jobs 4 \
@@ -210,11 +210,53 @@ bounded slice cannot certify every failing plate at once, so it correctly uses
 or fallback permission. A later valid positive point can still be selected.
 The current-HE ranking fix must not turn old hints into a negative certificate.
 
+## Resumed delivery fixes
+
+The first remote shared-control commit, `4ca0c85a`, has exactly the same tree
+as the original local `55b1c732` (`a3f24a3891d9ec4df1d530ae220b6dbfca4cb30b`).
+Its first CI run exposed two checks that the original host-only run could not
+exercise: a Python 2 cold-import cycle and an obsolete thirteen-row Windows
+editor smoke expectation. Neither failure is represented as a successful build.
+
+- `SharedEngineControl` no longer imports its partially defined `BotRuntime`
+  owner while the physical class is importing its base. The method that needs
+  physical timing constants imports their one existing owner at execution time.
+  No constants, control algorithm or legacy implementation were copied.
+  Three cold-import tests cover both production import orders and explicitly
+  reject the reverse import during base-class definition, including on Python 3.
+- Loading-time single-shot replacement admission now uses the current candidate
+  and native observation fences instead of a second whitelist of policy reason
+  strings. The old whitelist omitted `ordinary_he_point_failed`, delaying a
+  verified replacement until loading finished. Single-shot/burst restrictions,
+  manual input ownership, current inventory, first-edge ownership and the
+  once-per-load guard remain. A new real evaluator-to-input-to-shot regression
+  fails on the previous code with `reload_time == 0` at the actual input boundary,
+  then passes with a still-active load and exactly one replacement AP shot.
+  It checks the native input moment, not merely the start of the control tick.
+- The Windows editor smoke is migrated to the eight retained configuration
+  fields and their actual independent override/source semantics. Retired policy
+  fields are not restored to satisfy the old row count.
+
+Resume checks independently read every completed original test log. The 46-case
+shared checker and 145 affected combat/binding/HE cases passed, followed by 71
+ammunition, reload and actor-binding cases including the new input regression.
+The official CPython `v2.7.18` source was built locally for actual interpreter
+verification: all 22 embedded-contract tests passed without skips. The original
+failing ground check also passed 73,016 comparisons using that interpreter and
+the native extension rebuilt from the current C++ sources. All 27 native CI
+checks subsequently passed locally, including 7,008,996 control comparisons
+with maximum difference 0.0. The updated preview checks completed 20 host test
+cases (12 passed, 8 explicitly skipped for the unavailable Tk display); the
+actual Windows widget smoke remains a final CI gate. Final CI and artifact
+identities are recorded in the delivery report and PR; these targeted checks
+do not substitute for the final same-source Windows build.
+
 ## Remaining delivery and Windows acceptance
 
-The host does not contain the exact Windows BigWorld client, CPython 2.7,
-MinGW, Wine or Docker. Host Python tests cannot establish embedded-runtime
-compatibility, x86 native module identity, real actuator timing or gameplay FPS.
+The resumed Linux host has a locally built CPython 2.7.18 but does not contain
+the exact Windows BigWorld client, MinGW, Wine or Docker. Linux interpreter and
+native checks cannot establish Windows x86 payload identity, real actuator
+timing or gameplay FPS.
 The standard PR CI builds the current native module, compiles the client with
 Python 2.7, validates staged bytecode/package identity, then builds and checks
 the Windows launcher/server artifact. Do not repackage an old executable or

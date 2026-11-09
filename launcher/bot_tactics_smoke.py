@@ -7,6 +7,45 @@ import traceback
 import ui_layout
 
 
+def _verify_effective_preview_rows(rendered, language, ammo_limit):
+    """Check this smoke fixture's complete fitting values and winning scope.
+
+    Keep the expected semantics independent of preview.rows()/FIELDS: taking
+    either as the expectation would accept missing controls, retired controls,
+    or an explicit fitting silently reverting to its difficulty default.
+    """
+    if language == 'zh':
+        values = (
+            ('难度', '普通'),
+            ('研发配置', '完全体'),
+            ('配件', '3 紫色配件＋对应指令'),
+            ('弹药比例', '0 : 0 : 0（不携带炮弹）'),
+            ('携弹数量上限', str(ammo_limit)),
+            ('给养', '大急救包＋大修理箱＋自动灭火器·重复'),
+            ('BOT 使用涂装', '不使用涂装'),
+            ('成员配置', '100% 全部满技能'),
+        )
+        source = '全部队伍 / 全部车型 / 全部槽位'
+    elif language == 'en':
+        values = (
+            ('Difficulty', 'Regular'),
+            ('Development', 'Fully researched'),
+            ('Equipment', 'Three improved equipment items + matching directive'),
+            ('Ammunition ratios', '0 : 0 : 0 (no ammunition)'),
+            ('Ammunition count limit', str(ammo_limit)),
+            ('Consumables', 'Large first aid + large repair + automatic extinguisher; reusable'),
+            ('Bot outfit', 'Do not use an outfit'),
+            ('Crew preset', '100% + all skills fully trained'),
+        )
+        source = 'All teams / All vehicle classes / All slots'
+    else:
+        raise AssertionError('Unsupported smoke preview language: %s' % language)
+    expected = tuple((field, value, source) for field, value in values)
+    actual = tuple(tuple(str(cell) for cell in row) for row in rendered)
+    assert actual == expected, 'Effective fitting preview mismatch (%s): expected=%r actual=%r' % (
+        language, expected, actual)
+
+
 def _verify_vehicle_editor_language(root, tk, ttk):
     """Exercise shipped widgets with an isolated, read-only numeric fixture."""
     from types import SimpleNamespace
@@ -166,17 +205,21 @@ def run(destination):
             ui.save_rule()
             report['independent_presets_and_empty_ammo']=True
             preview=ui.preview_rule();root.update()
-            rendered=[preview.table.item(i,'values') for i in preview.table.get_children()]
-            assert len(rendered)==13 and any('0 : 0 : 0' in str(row) for row in rendered)
-            assert sum(row[0]=='Crew preset' for row in rendered)==1
-            assert any(row[0]=='Ammunition count limit' and row[1]=='0' for row in rendered)
+            def verify_preview(language, limit):
+                rendered=[preview.table.item(i,'values') for i in preview.table.get_children()]
+                _verify_effective_preview_rows(rendered,language,limit)
+            verify_preview('en',0)
             ui.set_language('zh');root.update()
             assert preview.root.title()=='生效值预览'
-            assert any('成员配置' in str(preview.table.item(i,'values')) for i in preview.table.get_children())
-            ui.set_language('en');root.update();preview.root.destroy()
+            verify_preview('zh',0)
+            ui.set_language('en');root.update();verify_preview('en',0);preview.root.destroy()
             ui.rule_vars['ammo_limit'].set('1');ui.save_rule()
             assert any(row['values'].get('ammo_limit')==1 for row in ui.document['behavior'])
+            preview=ui.preview_rule();root.update();verify_preview('en',1)
+            ui.set_language('zh');root.update();verify_preview('zh',1)
+            ui.set_language('en');root.update();verify_preview('en',1);preview.root.destroy()
             report['zero_one_ammo_limit']=True
+            report['effective_preview_values_and_sources_en_zh']=True
             report['scoped_effective_preview']=True
             import save_slots
             slots_root=Path(temp)/'isolated-saves'

@@ -602,10 +602,11 @@ class CombatControl(object):
         # Stock CURRENT may restart an ordinary load (or transfer progress
         # with Intuition). Only the policy's proved replacement for this
         # single-shot load may exercise that input, once during the load.
+        # Admission follows the current replacement proof below, not a second
+        # list of policy reason labels. Ordinary HE and fallback transitions
+        # need the same loading-time input as other proved replacements.
         if reloading and (action != 'switch_shell' or gun.clip_size > 1 or
                 gun.burst_count > 1 or self._loading_switch is gun or
-                decision.get('reason') not in ('current_shell_all_armour_failed',
-                                               'current_ammunition_exhausted') or
                 decision.get('candidate') is None and gun.ammo[gun.shot_index] > 0):
             return
         index = decision.get('shell_index')

@@ -150,6 +150,82 @@ class EmbeddedForegroundContractTests(unittest.TestCase):
         self.assertTrue(rest.observe(owner, 1.9))
 
 
+class EmbeddedSharedImportOrderTests(unittest.TestCase):
+    """Cold imports must work in both directions in the embedded interpreter."""
+
+    def setUp(self):
+        self.saved_gui = dict((name, module) for name, module in sys.modules.items()
+                              if name == 'gui' or name.startswith('gui.'))
+        for name in self.saved_gui:
+            del sys.modules[name]
+        self.addCleanup(self.restore_namespace)
+        package_root = os.path.dirname(BASE)
+        mods_root = os.path.dirname(package_root)
+        for name, path in (('gui', os.path.dirname(mods_root)),
+                           ('gui.mods', mods_root),
+                           ('gui.mods.offline_lan_0922', package_root),
+                           ('gui.mods.offline_lan_0922.vehicle_control', BASE)):
+            package = types.ModuleType(name)
+            package.__path__ = [path]
+            package.__package__ = name
+            sys.modules[name] = package
+            if '.' in name:
+                parent, child = name.rsplit('.', 1)
+                setattr(sys.modules[parent], child, package)
+
+    def restore_namespace(self):
+        for name in list(sys.modules):
+            if name == 'gui' or name.startswith('gui.'):
+                del sys.modules[name]
+        sys.modules.update(self.saved_gui)
+
+    def test_engine_boundary_does_not_import_its_partially_defined_owner(self):
+        owner_name = 'gui.mods.offline_lan_0922.bot_runtime'
+        class NoPhysicalOwnerDuringBoundaryImport(object):
+            def find_module(self, fullname, path=None):
+                if fullname == owner_name:
+                    raise ImportError('engine boundary re-entered its owner')
+                return None
+
+            def find_spec(self, fullname, path=None, target=None):
+                if fullname == owner_name:
+                    raise ImportError('engine boundary re-entered its owner')
+                return None
+        guard = NoPhysicalOwnerDuringBoundaryImport()
+        sys.meta_path.insert(0, guard)
+        self.addCleanup(sys.meta_path.remove, guard)
+        engine = importlib.import_module(
+            'gui.mods.offline_lan_0922.vehicle_control.engine_control')
+        self.assertTrue(hasattr(engine, 'SharedEngineControl'))
+        self.assertNotIn(owner_name, sys.modules)
+
+    def check_live_types(self, first):
+        prefix = 'gui.mods.offline_lan_0922.'
+        importlib.import_module(prefix + first)
+        runtime = importlib.import_module(prefix + 'bot_runtime')
+        engine = importlib.import_module(prefix + 'vehicle_control.engine_control')
+        combat = importlib.import_module(prefix + 'vehicle_control.combat_control')
+        player = importlib.import_module(prefix + 'vehicle_control.full_runtime')
+        worker = importlib.import_module(prefix + 'vehicle_control.bot_binding')
+        self.assertTrue(issubclass(runtime.BotRuntime, engine.SharedEngineControl))
+        # Python 2 wraps a class function in a fresh unbound-method object on
+        # each access. Compare its function, not that transient wrapper.
+        def function(method):
+            return getattr(method, 'im_func', method)
+        self.assertIs(function(runtime.BotRuntime._cadenced_ballistic_solution),
+                      function(engine.SharedEngineControl._cadenced_ballistic_solution))
+        for binding in (player.FullPlayerRuntime, worker.BotControlBinding):
+            self.assertTrue(issubclass(binding, combat.CombatControl))
+            self.assertIs(function(binding._ordinary_firing_order),
+                          function(combat.CombatControl._ordinary_firing_order))
+
+    def test_physical_runtime_imports_before_shared_bindings(self):
+        self.check_live_types('bot_runtime')
+
+    def test_shared_combat_imports_before_physical_runtime(self):
+        self.check_live_types('vehicle_control.combat_control')
+
+
 class EmbeddedSharedRuntimeTests(unittest.TestCase):
     """Import the real package modules with only the stock GUI/native seam.
 
