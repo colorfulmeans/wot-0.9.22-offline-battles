@@ -79,8 +79,8 @@ collision, physics and networking services remain shared.
 
 | Capability | Foreground implementation |
 | --- | --- |
-| Routes, traffic and recovery | The copied planner, route mixins and complete local loop retain their original branches, timers, progress tests, fallback paths and private state. A manifest and source comparison expose every copying adaptation. Native foreground contact observations feed the copied recovery owners. |
-| Aim and movement | Copied hull, turret, artillery, cover and firing-position laws request native input. One foreground owner arbitrates the final controls; a predicted gun angle is not a physical firing receipt. |
+| Routes, traffic and recovery | The copied planner, route mixins and complete local loop retain the current Bot laws and independent state. Both implementations retire the old tactical retreat, cover-peek and flank strategies together; blocked-waypoint skipping and physical recovery remain. A manifest and source comparison expose every copying adaptation. |
+| Aim and movement | Copied hull, turret, artillery and firing-position laws request native input. One foreground owner arbitrates the final controls; a predicted gun angle is not a physical firing receipt. |
 | Current ammunition | New `AttackPolicy` validates the mounted shell first. The first executable penetration candidate stops travel and starts aiming without waiting for background alternatives. A still-valid current-shell penetration proof obstructed by another vehicle or the world retains its ammunition ownership. |
 | Global search | Ordinary firing-position recovery is separate from the eight-second penetration search. The latter requires complete, fresh failure evidence for all relevant enemies and points in the required ammunition domain. Blocked, mechanically unavailable, pending and unknown points are not armour failures. |
 | Background and HE | Independent bounded work compares all stocked shells, visible enemies and relevant points for the next trigger or magazine. HE penetration and fallback are separate candidates; valid zero-HP HE contact is allowed in fallback. Pose changes invalidate evidence. |
@@ -894,18 +894,28 @@ whose profile changed after it started must be restarted first.
 - Spotting with view range, camouflage, movement, firing, foliage, line of
   sight and last-known positions.
 - Bots that use map geometry, terrain, water, firing lanes, team strength and
-  shared contacts to route, take cover, pick targets and choose ammunition,
+  shared contacts to route, pick targets and choose ammunition,
   including SPG arcs. Navigation and foliage data ship for all 41 supported
   standard-battle maps.
 - Completing the final macro-route point hands travel over to a stationary
   engagement or capture hold. The Bot keeps its selected enemy and existing
   firing-lane permission instead of circling the base coordinate; a displaced
   hull resumes travel when it leaves the existing arrival area. Intermediate
-  points, explicit waits, cover, withdrawal and collision checks keep their
+  points, explicit waits, route recovery and collision checks keep their
   own owners. `tactical_evidence.route_terminal` records the decision and release.
-- Low health does not trigger Bot withdrawal. Combat withdrawal is reserved
-  for a fired, empty reloadable magazine; a loaded magazine keeps fighting,
-  and ammunition recovery releases the withdrawal owner.
+- Bots and the independent player copy no longer run tactical withdrawal,
+  timed cover-peeking, flank manoeuvres or personality-driven range shuffling.
+  Being hit, low health, several enemy directions, local numerical disadvantage,
+  a close enemy or an empty magazine does not create a retreat destination.
+  Magazine reloads do not wait for cover or a retreat receipt. Physical
+  avoidance/unsticking, blocked-waypoint skipping, actual out-of-range approach
+  and the existing firing-position recovery remain separate owners.
+- The launcher's owner-reviewed October Default is the single bundled route
+  geometry source for all 41 maps. The August AI route sketches and their
+  projector are removed. Old or incomplete graph route coordinates cannot
+  silently replace the reviewed Default. Valid named user profiles remain
+  supported; grid hazards, collision links and authored coordinates are not
+  rewritten to compensate for a wrong route source.
 - Team text chat, minimap pings and fixed battle messages are relayed to
   human teammates, including the sender, independently from Bot responses.
   Text and pings remain available during the countdown and after the sender's
@@ -937,10 +947,10 @@ whose profile changed after it started must be restarted first.
   to react, how patiently it waits for the aiming circle, how far off centre
   it lays the gun and how badly it leads a moving target. The same rating is
   the chance it does the tactically right thing each time the situation
-  comes up: reaching for cover, peeking out of it, angling its hull, picking
-  the round that beats the armour in front of it, aiming at the part it can
-  actually hurt, turning on whoever just hit it, breaking off when it should,
-  avoiding a crossfire and going around a flank. A weak Bot is not a Bot that
+  comes up: angling its hull, picking the round that beats the armour in front
+  of it, aiming at the part it can actually hurt and turning on whoever just
+  hit it. Retired retreat, cover-peek and flank strategies are not competence
+  capabilities. A weak Bot is not a Bot that
   does everything slightly worse; it is one that does not think of some of
   it. The waiting room chooses how competence is spread over the whole roster
   - easy, relaxed, pub mix, hard or brutal - and the launcher's exact Bot

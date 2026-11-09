@@ -49,25 +49,18 @@ class TargetEvidenceTests(unittest.TestCase):
         self.planner.report_damage(11, 'player', 3, 100, 1.1)
         self.assertEqual(3, self.orders(1.2)['target_id'])
 
-    def test_idle_fire_timer_cannot_cancel_a_progressing_slow_aim(self):
-        self.orders(1)
-        bot = self.planner._alive_bots(self.manifest, self.states, self.planner.tactics)[0]
-        bot['state'].update(aim_feedback_kind='human', aim_feedback_id=2,
-            aim_feedback_error=2.6, aim_feedback_aligned=False)
-        order = dict(combat_mode='engage', throttle_override=0.,
-            target_kind='human', target_id=2, fire_allowed=True)
-        self.planner._release_unproductive_firing_hold(order, bot,
-            dict(x=0, y=0, z=100), dict(x=0, y=0, z=0), 3)
-        self.assertEqual('executed_aim_in_progress',
-            order['tactical_evidence']['firing_hold']['reason'])
-        self.assertEqual('engage', order['combat_mode'])
-        bot['state']['aim_feedback_error'] = .5
-        self.planner._release_unproductive_firing_hold(order, bot,
-            dict(x=0, y=0, z=100), dict(x=0, y=0, z=0), 8)
-        self.assertNotIn(11, self.planner._firing_holds)
-        self.planner._release_unproductive_firing_hold(order, bot,
-            dict(x=0, y=0, z=100), dict(x=0, y=0, z=0), 15)
-        self.assertIn(11, self.planner._firing_holds)
+    def test_slow_aim_cannot_be_released_by_a_retired_idle_fire_timer(self):
+        initial = self.orders(1)
+        for now, error in ((3., 2.6), (8., .5), (15., .5), (30., .5)):
+            self.aim(error)
+            order = self.orders(now)
+            self.assertEqual(2, order['target_id'])
+            self.assertEqual('engage', order['combat_mode'])
+            self.assertEqual(0., order['throttle_override'])
+            self.assertEqual(initial['move_position'], order['move_position'])
+            self.assertNotIn('firing_hold', order['tactical_evidence'])
+        self.assertFalse(hasattr(self.planner, '_release_unproductive_firing_hold'))
+        self.assertFalse(hasattr(self.planner, '_firing_holds'))
 
     def test_close_threat_still_preempts(self):
         self.orders(1)

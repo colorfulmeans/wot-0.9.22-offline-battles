@@ -93,7 +93,7 @@ class MechanicalHandoffTests(unittest.TestCase):
         self.runtime._gun_angle_order(self.state,self.hold,{11:self.target},0.,lambda *a:True)
         result=self.runtime._gun_angle_order(self.state,self.hold,{11:self.target},2.,lambda *a:True)
         self.assertLess(result['move_position'][2],0.)
-        self.assertEqual('withdraw',result['combat_mode'])
+        self.assertEqual('gun_angle_adjust',result['combat_mode'])
         checks=self.state['_gun_angle_handoff']['candidate_checks']
         self.assertLess(checks[0]['target_fraction'],1.)
         self.assertEqual(1.,checks[1]['target_fraction'])

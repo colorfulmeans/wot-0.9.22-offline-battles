@@ -134,9 +134,8 @@ class OriginalOwnershipBoundaryTests(unittest.TestCase):
         self.assertIsNone(scene.owner.engagement_target(result, scene.target))
         scene.runtime.planner._route.assert_not_called()
 
-    def test_original_advance_cover_and_protected_navigation_keep_destinations(self):
-        cases = ('route', 'advance', 'flank', 'take_cover', 'cover_return', 'cover_peek',
-                 'base_defense', 'withdraw', 'low_health_retreat', 'magazine_reload_retreat',
+    def test_original_advance_and_protected_navigation_keep_destinations(self):
+        cases = ('route', 'advance', 'base_defense',
                  'team_attack', 'team_return_base', 'team_defend_base', 'team_follow',
                  'team_attention_cell', 'team_hold_position')
         for mode in cases:
@@ -165,15 +164,18 @@ class OriginalOwnershipBoundaryTests(unittest.TestCase):
         self.assertEqual(scene.raw_order, scene.apply(0.))
         self.assertFalse(scene.owner.stop_allowed)
 
-    def test_only_arrived_cover_hold_may_supply_combat_stop(self):
-        scene = Scene()
-        scene.raw_order.update(combat_mode='cover_hold', throttle_override=0.)
-        scene.candidate.update(line='clear')
-        scene.decide('aim')
-        result = scene.apply(0.)
-        self.assertTrue(scene.owner.stop_allowed)
-        self.assertEqual(scene.state['position'], result['move_position'])
-        self.assertEqual('verified_shot', scene.owner.receipt['reason'])
+    def test_retired_tactical_modes_cannot_supply_combat_stop(self):
+        for mode in ('flank', 'take_cover', 'cover_hold', 'cover_peek', 'cover_return',
+                     'magazine_reload_retreat', 'low_health_retreat', 'withdraw'):
+            with self.subTest(mode=mode):
+                scene = Scene()
+                scene.raw_order.update(combat_mode=mode, throttle_override=0.)
+                scene.candidate.update(line='clear')
+                scene.decide('aim')
+                before = copy.deepcopy(scene.raw_order)
+                self.assertEqual(before, scene.apply(0.))
+                self.assertFalse(scene.owner.stop_allowed)
+                self.assertFalse(scene.owner.combat_owned)
 
     def test_original_selected_lease_first_then_score_order_with_rejections_excluded(self):
         scene = Scene()
@@ -610,7 +612,7 @@ class EarlyStopNotLateControlRewriteTests(unittest.TestCase):
             self.assertEqual(order[name], result[name])
 
     def test_travel_refines_only_original_target_point_and_retains_its_hull_facing(self):
-        for mode in ('advance', 'take_cover', 'cover_return', 'team_attack', 'base_defense'):
+        for mode in ('advance', 'team_attack', 'base_defense'):
             with self.subTest(mode=mode):
                 scene = Scene()
                 scene.candidate.update(line='clear')
@@ -627,7 +629,7 @@ class EarlyStopNotLateControlRewriteTests(unittest.TestCase):
                 self.assertTrue(result['fire_allowed'])
 
     def test_other_eligible_policy_target_cannot_replace_original_travel_target_or_face(self):
-        for mode in ('advance', 'take_cover', 'cover_return', 'team_attack', 'base_defense'):
+        for mode in ('advance', 'team_attack', 'base_defense'):
             with self.subTest(mode=mode):
                 scene = Scene()
                 other = dict(scene.target, id=3, network_id=3, position=(25., 0., 70.))
@@ -747,7 +749,7 @@ class SiegeOriginalOwnershipTests(unittest.TestCase):
     def test_local_recovery_does_not_exit_siege_because_of_travel_distance(self):
         scene = Scene(siege=siege_mechanics.ENABLED)
         for mode in ('engage', 'advance_contact', 'gun_angle_adjust',
-                     'friendly_lane_reposition', 'cover_hide', 'cover_hold'):
+                     'friendly_lane_reposition'):
             with self.subTest(mode=mode):
                 # These are derived local commands, not replacement raw
                 # planner admission. The accepted original owner stays put.
@@ -757,8 +759,7 @@ class SiegeOriginalOwnershipTests(unittest.TestCase):
                 self.assertTrue(self.desired(scene, command, scene.target))
 
     def test_protected_raw_navigation_cannot_be_overridden_by_a_stale_engage_label(self):
-        for mode in ('advance', 'base_defense', 'magazine_reload_retreat', 'withdraw',
-                     'team_attack', 'team_back_to_base'):
+        for mode in ('advance', 'base_defense', 'team_attack', 'team_back_to_base'):
             with self.subTest(mode=mode):
                 scene = Scene(siege=siege_mechanics.ENABLED)
                 scene.raw_order.update(combat_mode=mode, move_position=(40., 0., 40.),
@@ -831,7 +832,7 @@ class SiegeOriginalOwnershipTests(unittest.TestCase):
         scene.runtime.planner._route.assert_not_called()
 
     def test_actual_siege_preaim_never_steals_reload_trigger_or_armor_search(self):
-        for action in ('trigger_active', 'search_penetration', 'reload_clip', 'switch_shell', 'retreat'):
+        for action in ('trigger_active', 'search_penetration', 'reload_clip', 'switch_shell', 'navigate'):
             with self.subTest(action=action):
                 scene = Scene(siege=siege_mechanics.ENABLED)
                 self.motion(scene)

@@ -48,7 +48,6 @@ class BotPlanningTierTests(unittest.TestCase):
             turret_yaw=0., aim_yaw=0., gun_pitch=0.)
         self.runtime._next_observation = 1000.
         self.runtime._next_shot_lane_refresh = 1000.
-        self.runtime._next_cover_refresh = 1000.
 
     def tearDown(self):
         self.runtime.close()

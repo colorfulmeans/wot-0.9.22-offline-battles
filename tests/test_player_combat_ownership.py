@@ -53,9 +53,8 @@ class OwnershipScene(AutomaticFireScene):
                   player_id=1):
         self.control.close()
         if player_id != self.battle.client.player_id:
-            # Player identity is an ordinary session input. The copied BOT's
-            # deterministic personality can legitimately choose advance for
-            # player2 and a support hold for player1 in the same physical scene.
+            # Player identity is an ordinary session input. Keep the native
+            # record and planner identity together when testing another owner.
             record = self.battle._records.pop('player:%s' % self.battle.client.player_id)
             record['network_id'] = record['state']['id'] = player_id
             self.battle.client.player_id = player_id
@@ -261,15 +260,19 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
     def test_authored_advance_keeps_original_target_when_other_admitted_plate_is_better(self):
         scene = self.scene(player_id=2)
         harder = scene.eligible_enemy(5, armor=10000.)
-        scene.pose(harder, (0., 0., 220.))
+        # A real out-of-range contact retains the authored advance. An
+        # in-range contact no longer moves to a personality preferred range.
+        scene.pose(harder, (0., 0., 360.))
         softer = scene.eligible_enemy(2, armor=10.)
-        scene.pose(softer, (40., 0., 240.))
+        scene.pose(softer, (40., 0., 380.))
         self.assertEqual({5: True, 2: True}, scene.sample_original_lanes())
         alternative_reviewed = False
         for unused in range(12):
             scene.tick()
             raw = scene.original_order()
             self.assertEqual(('advance', 5), (raw['combat_mode'], raw['target_id']))
+            self.assertGreater(360., raw['fire_range'])
+            self.assertEqual(1., raw['throttle_override'])
             self.assertEqual({2, 5}, set(row['target'][1] for row in
                 raw['tactical_evidence']['selection']['candidates']
                 if row['reason'] == 'eligible'))

@@ -84,6 +84,9 @@ def _graph():
         'cell_size': 4.0, 'origin': (0.0, 0.0),
         'bounds': (0, 0, 8, 0), 'width': 3, 'height': 1,
         'heights_mm': (0, 0, 0),
+        # Link bits 3 and 4 are the west/east edges of this corridor.
+        'directions': ((-1, -1), (0, -1), (1, -1), (-1, 0),
+                       (1, 0), (-1, 1), (0, 1), (1, 1)),
         'links': (1 << 4, (1 << 3) | (1 << 4), 1 << 3),
         'hazards': (0, 0, 0),
         'spawn_anchors': ((0.0, 0.0), (8.0, 0.0)),

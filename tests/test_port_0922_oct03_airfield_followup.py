@@ -1,4 +1,4 @@
-"""Small native trees, realised recovery failures and finite firing holds."""
+"""Small native trees, realised recovery failures and stable firing holds."""
 import math
 import contextlib
 import io
@@ -207,40 +207,45 @@ class CloseRouteAndAcquisitionTests(unittest.TestCase):
 
 class FiringHoldTests(unittest.TestCase):
     def setUp(self):
+        from test_port_0922_server_bot_ai import _bot, _route, _state
         self.planner = BotPlanner()
-        self.bot = dict(id=20, state=dict(x=-143., y=1.1, z=275.,
-                        fire_seq=2, reload_time=0., ammo_remaining=[10, 0, 0],
-                        shell_index=0))
-        self.goal = dict(x=-100., y=1.1, z=275.)
-        self.anchor = dict(x=-180., y=1.1, z=275.)
+        self.bot = _bot(20, 1, 0, _route('lane', [(-143., 275., False),
+            (-100., 275., False)]), 'mediumTank')
+        self.bot['state'] = _state(20, 1, -143., 275.)
+        self.bot['state'].update(y=1.1, fire_seq=2, reload_time=0.,
+                                ammo_remaining=[10, 0, 0], shell_index=0)
+        self.focus = dict(id=6, target_kind='bot', visible=True,
+            shootable_by_bot_ids=[20], position=dict(x=-90., y=1.1, z=300.))
 
-    def order(self, now, mode='support_hold'):
-        order = dict(combat_mode=mode, throttle_override=0.,
-                     target_id=6, target_kind='bot', fire_allowed=True,
-                     aim_position=dict(x=-90.,y=1.1,z=300.))
-        self.planner._release_unproductive_firing_hold(
-            order, self.bot, self.goal, self.anchor, now)
-        return order
+    def order(self, now):
+        return self.planner._order_for(self.bot, 0, 1,
+                                      self.focus, [self.focus], now)
 
-    def test_ready_unfired_hold_keeps_combat_approach_with_a_finite_lease(self):
-        self.assertEqual('support_hold', self.order(1.)['combat_mode'])
-        moved = self.order(9.)
-        self.assertEqual('advance_contact', moved['combat_mode'])
-        self.assertEqual(dict(x=-90.,y=1.1,z=300.), moved['move_position'])
-        self.assertFalse(moved['fire_allowed'])
-        self.assertEqual('advance_contact', self.order(10.)['combat_mode'])
-        self.assertEqual('support_hold', self.order(13.)['combat_mode'])
+    def test_ready_unfired_hold_has_no_legacy_automatic_movement_deadline(self):
+        self.assertFalse(hasattr(self.planner, '_release_unproductive_firing_hold'))
+        for now in (1., 9., 10., 13., 60.):
+            held = self.order(now)
+            self.assertEqual('engage', held['combat_mode'])
+            self.assertEqual(dict(x=-143., y=1.1, z=275.), held['move_position'])
+            self.assertEqual(0., held['throttle_override'])
+            self.assertEqual(self.focus['position'], held['aim_position'])
+            self.assertTrue(held['fire_allowed'])
 
-    def test_reloading_shots_and_deliberate_cover_holds_do_not_trigger(self):
+    def test_reload_and_completed_shots_keep_the_same_firing_position(self):
         self.order(1.)
         self.bot['state']['reload_time'] = 20.
-        self.assertEqual('support_hold', self.order(30.)['combat_mode'])
+        reload_order = self.order(30.)
+        self.assertEqual('engage', reload_order['combat_mode'])
+        self.assertFalse(reload_order['fire_allowed'])
+        self.assertEqual(0., reload_order['throttle_override'])
         self.bot['state']['reload_time'] = 0.
-        self.order(31.)
+        ready = self.order(31.)
+        self.assertTrue(ready['fire_allowed'])
         self.bot['state']['fire_seq'] += 1
-        self.assertEqual('support_hold', self.order(38.)['combat_mode'])
-        self.assertEqual('cover_hold', self.order(50., 'cover_hold')['combat_mode'])
-        self.assertEqual('low_health_defend', self.order(60., 'low_health_defend')['combat_mode'])
+        fired = self.order(38.)
+        self.assertEqual('engage', fired['combat_mode'])
+        self.assertEqual(reload_order['move_position'], fired['move_position'])
+        self.assertEqual(0., fired['throttle_override'])
 
     def test_real_commander_hold_resumes_its_authored_route_and_resets_on_target_loss(self):
         from test_port_0922_server_bot_ai import _bot, _route, _state
@@ -251,11 +256,15 @@ class FiringHoldTests(unittest.TestCase):
                      shootable_by_bot_ids=[20], position=dict(x=0., y=0., z=180.))
         first = self.planner._order_for(bot, 0, 1, focus, [focus], 1.)
         self.assertEqual('engage', first['combat_mode'])
-        moved = self.planner._order_for(bot, 0, 1, focus, [focus], 9.)
-        self.assertEqual('advance_contact', moved['combat_mode'])
-        self.assertGreater(moved['move_position']['z'], 0.)
-        self.planner._order_for(bot, 0, 1, None, [], 10.)
-        self.assertNotIn(20, self.planner._firing_holds)
+        held = self.planner._order_for(bot, 0, 1, focus, [focus], 9.)
+        self.assertEqual('engage', held['combat_mode'])
+        self.assertEqual(first['move_position'], held['move_position'])
+        resumed = self.planner._order_for(bot, 0, 1, None, [], 10.)
+        self.assertEqual('route', resumed['combat_mode'])
+        self.assertEqual('lane', resumed['route_id'])
+        self.assertGreater(resumed['move_position']['z'], 0.)
+        self.assertNotIn(20, self.planner._engage_anchors)
+        self.assertFalse(hasattr(self.planner, '_firing_holds'))
         renewed = self.planner._order_for(bot, 0, 1, focus, [focus], 30.)
         self.assertEqual('engage', renewed['combat_mode'])
 

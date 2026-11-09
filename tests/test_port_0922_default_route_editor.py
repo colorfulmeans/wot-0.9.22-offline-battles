@@ -65,14 +65,22 @@ class DefaultRouteTests(unittest.TestCase):
         unedited,unused=planning.default_routes(config.empty(),'31_airfield',self.graph)
         self.assertEqual(unedited['2'],routes['2'])
         self.assertEqual(source,self.graph)
-        self.assertEqual({'1:'+first['id']:'baked_route_connected'},status)
+        # Sparse edits now resolve all untouched owner Default variants too;
+        # an empty per-round override must not restore graph-embedded routes.
+        expected_status = dict(('%s:%s' % (row['team'],config.default_route_id(row)),
+                                'baked_route_connected') for row in
+                               config.effective_map(profile,'31_airfield')['default_routes'])
+        self.assertEqual(expected_status,status)
 
     def test_disconnected_edit_falls_back_without_overriding_other_routes(self):
         graph=copy.deepcopy(self.graph);graph['links']=[0]*len(graph['links'])
         profile=edited_profile(self.graph)
         routes,status=planning.default_routes(profile,'31_airfield',graph)
         self.assertEqual(planning.default_routes(config.empty(),'31_airfield',graph)[0],routes)
-        self.assertEqual(['waypoints_disconnected'],list(status.values()))
+        expected_status = dict(('%s:%s' % (row['team'],config.default_route_id(row)),
+                                'waypoints_disconnected') for row in
+                               config.effective_map(profile,'31_airfield')['default_routes'])
+        self.assertEqual(expected_status,status)
 
     def test_worker_installs_edits_before_assignment_and_host_catalog_receives_geometry(self):
         module=native._load();runtime=module.BotRuntime(1)
@@ -106,7 +114,7 @@ class DefaultRouteTests(unittest.TestCase):
         self.assertEqual([(p[0],p[1]) for p in expected],
                          [(p['x'],p['z']) for p in catalog[route['id']]['waypoints']])
         self.assertFalse(route['id'].startswith('user_'))
-        # The next round with no override must use the unmodified graph again.
+        # The next round with no override must use the reviewed Default again.
         runtime.adapter_factory=factory
         runtime._bot_tactics=config.empty();runtime._new_adapter('31_airfield',6)
         self.assertEqual(planning.default_routes(config.empty(),'31_airfield',self.graph)[0],
@@ -143,8 +151,11 @@ class DefaultRouteTests(unittest.TestCase):
         runtime._prepare_user_routes(dict(map='31_airfield'),False)
         self.assertEqual(config.default_route_id(edit),runtime.states[11]['route']['id'])
         medium=runtime.states[12]['route']
-        source=next(r for r in self.graph['routes']['1'] if r['id']==medium['id'])
-        self.assertEqual([tuple(p[:3]) for p in source['waypoints']],list(medium['waypoints']))
+        # The independent medium may select its reviewed class variant; the
+        # physical graph stores only the shared geometry and is not authority.
+        source=next(r for r in config.default_map('31_airfield')['default_routes']
+                    if r['team']==1 and config.default_route_id(r)==medium['id'])
+        self.assertEqual([tuple(p[:3]) for p in source['points']],list(medium['waypoints']))
         self.assertTrue(all(len(p)==3 for p in runtime.states[11]['route']['waypoints']))
         cfg=config.route_config(runtime._bot_tactics,'31_airfield',runtime.states[11]['route']['id'],1)
         self.assertEqual(12.5,cfg['points'][0][4][0][2])

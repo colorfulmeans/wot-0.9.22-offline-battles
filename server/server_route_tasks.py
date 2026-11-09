@@ -22,10 +22,8 @@ class RouteTasksMixin:
     @staticmethod
     def _task_combat(order):
         mode=order.get('combat_mode')
-        retreats=('low_health_retreat','low_health_defend','magazine_reload_retreat','magazine_reload_hold',
-            'under_fire_withdraw','under_fire_hold','crossfire_withdraw','crossfire_hold','withdraw')
-        return bool(mode in retreats or order.get('target_id') is not None and mode in (
-            'engage','flank','advance_contact','take_cover','cover_hold','cover_peek','cover_return','support_hold'))
+        return bool(order.get('target_id') is not None and mode in (
+            'engage', 'advance_contact'))
 
     def _task_init(self):
         self._travel_tasks = {}
@@ -227,15 +225,6 @@ class RouteTasksMixin:
             if not previous or previous['id']!=command_id:
                 previous=dict(id=command_id,command=player_order.get('command'),goal=copy.deepcopy(order.get('move_position')))
                 self._previous_player[actor]=previous
-            if previous['command']=='TURNBACK':
-                order['move_position']=previous['goal']
-                if distance(point(bot['state']),point(previous['goal']))<=bot_tactics.ROUTE_ARRIVAL_RADIUS:
-                    order['player_command_cancelled']=True
-                    self._previous_player.pop(actor,None)
-                    self._task_rejoin(bot)
-                    identity,index,move,anchor,join=self._route(bot,now)
-                    order.update(route_id=identity,route_index=index,move_position=move,route_anchor=anchor,route_join=join,combat_mode='route',throttle_override=None)
-                    player_order=None
         task = self._travel_tasks.get(actor)
         released=False
         combat = self._task_combat(order)

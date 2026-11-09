@@ -368,6 +368,13 @@ class RatingSpectrumTests(unittest.TestCase):
 class CapabilityTests(unittest.TestCase):
     """The rating is also the chance of doing the right thing once."""
 
+    def test_retired_movement_capabilities_are_not_registered(self):
+        for name in ('URGENT_COVER', 'TACTICAL_COVER', 'COVER_PEEK',
+                     'CROSSFIRE', 'WITHDRAW', 'FLANK'):
+            self.assertFalse(hasattr(gunnery, 'CAPABILITY_' + name))
+        self.assertEqual(frozenset((gunnery.CAPABILITY_HULL_ANGLING,)),
+                         gunnery.LATCHED_CAPABILITIES)
+
     def test_the_ends_of_the_spectrum_are_honest(self):
         for capability in gunnery.CAPABILITIES:
             self.assertFalse(gunnery.capability_allowed(
@@ -379,16 +386,16 @@ class CapabilityTests(unittest.TestCase):
         """A planner rebuilds an order every tick and after a failover."""
         for rating in (0.2, 0.5, 0.8):
             first = gunnery.capability_allowed(
-                rating, gunnery.CAPABILITY_TACTICAL_COVER, 4, 9, 'bot', 3)
+                rating, gunnery.CAPABILITY_WEAK_SPOT, 4, 9, 'bot', 3)
             for unused_repeat in range(5):
                 self.assertEqual(first, gunnery.capability_allowed(
-                    rating, gunnery.CAPABILITY_TACTICAL_COVER, 4, 9,
+                    rating, gunnery.CAPABILITY_WEAK_SPOT, 4, 9,
                     'bot', 3))
 
     def test_a_new_occasion_is_a_new_decision(self):
         answers = set(
             gunnery.capability_allowed(
-                0.5, gunnery.CAPABILITY_TACTICAL_COVER, 4, 9, 'bot', index)
+                0.5, gunnery.CAPABILITY_WEAK_SPOT, 4, 9, 'bot', index)
             for index in range(40))
         self.assertEqual(set((True, False)), answers)
 
@@ -405,7 +412,7 @@ class CapabilityTests(unittest.TestCase):
             hits = sum(
                 1 for index in range(4000)
                 if gunnery.capability_allowed(
-                    rating, gunnery.CAPABILITY_COVER_PEEK, 1, index))
+                    rating, gunnery.CAPABILITY_SHELL_CHOICE, 1, index))
             self.assertAlmostEqual(
                 rating, hits / 4000.0, delta=0.025, msg=rating)
 
@@ -418,7 +425,7 @@ class CapabilityTests(unittest.TestCase):
             counts.append(sum(
                 1 for occasion in occasions
                 if gunnery.capability_allowed(
-                    rating, gunnery.CAPABILITY_FLANK, *occasion)))
+                    rating, gunnery.CAPABILITY_HULL_ANGLING, *occasion)))
         self.assertEqual(sorted(counts), counts)
 
     def test_the_latched_capabilities_are_real_capabilities(self):

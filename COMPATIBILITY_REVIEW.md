@@ -1,3 +1,79 @@
+# November 9: retire legacy tactics and make reviewed Default authoritative
+
+This change starts from rollback `669fa46ecb9daa3374a515de24c785d7ee11475b`,
+whose tree equals `d7f8a698`. The user explicitly approved changing both the
+Bot implementation and its independent foreground-player copy. Earlier
+instructions below to preserve every original tactical branch describe their
+historical task boundaries, not this cleanup's requirement.
+
+The removed class is legacy tactical movement: retreat after damage, low health,
+crossfire, numerical disadvantage, close range or magazine exhaustion; retreat
+destinations and hold/resume state; old TURNBACK-to-previous-waypoint behavior;
+cover approach/hold/peek/return, its candidate probes and wire state; tactical
+flanking and suppressor election; jiggle and preferred-range movement during an
+otherwise valid engagement; and the independent ready-without-shot eight-second
+timer that requested a four-second approach. The foreground wrapper's early
+reload retreat gate and unusable-ammunition retreat are removed too. No disabled
+secondary implementation or compatibility switch keeps these behaviors alive.
+
+The retained class is physical/task recovery: blocked-waypoint skipping,
+navigation recovery, friend/terrain/collision handling, necessary physical
+reverse, true out-of-range approach, and the current shooting-position recovery.
+The penetration-failure eight-second search, HE fallback, ammunition selection,
+trigger grouping and native shot admission are not replaced. Qualifying a reload
+no longer grants or waits for tactical movement. Explicit attack, return-to-base,
+defend and hold still retain their authority. Stock radio-message presentation
+does not grant a removed Bot retreat command.
+
+The owner-reviewed October Default in `bot_tactics_default_data.py` is the
+authoritative route geometry, including its negative coordinates and class
+variants. The five August AI sketch modules and their dedicated projection
+implementation are removed from the vendored baker. Runtime graph loading and
+profile application reconstruct the route catalog from the reviewed data rather
+than preserving stale graph waypoint lists when an edit is absent or invalid.
+Valid named user edits remain supported. Physical grids, links, map gate sampling,
+spawns and bases are not replaced by this route-source cleanup.
+
+Verification must distinguish deliberately retired old-behavior tests from
+unchanged preservation tests. The former are replaced by explicit absence and
+new-requirement contracts, including reload without retreat; the latter keep
+their ammo, aim, identity, manual input, physical reverse, skip and collision
+assertions. Copy parity is checked against the new Bot sources, not waived.
+Source/test and package checks do not establish native Windows gameplay or FPS.
+
+## Local verification of this cleanup
+
+- The rollback baseline covered 496 test files. Its one initial history lookup
+  failure passed unchanged after fetching the required older commit.
+- The complete changed suite executed 498 files: 491 passed on that run and
+  seven exposed stale fixture assumptions. Those seven files then passed
+  together, with all 96 tests and no skips. Combining the latest result for each
+  file covers 10,403 tests, including nine existing environment-dependent skips.
+  The initial failures remain in the local logs; this is not a claim that the
+  first full run was green.
+- Source/copy parity passed all 58 fixture executions and 2,400 test executions.
+  The exact copy check verified 44 modules and 1,392 declarations.
+- All 49 launcher test files passed locally (1,324 tests, 170 environment skips).
+  Windows/Python 2.7/native build and frozen-package checks remain CI gates;
+  Linux results do not substitute for those checks or a real game session.
+- The October owner data, independent owner fixture, launcher source and shipped
+  physical navigation resources have no diff from the rollback baseline.
+
+Test migrations are explicit: real out-of-range contacts now exercise the
+preserved advance owner instead of the removed preferred-distance strategy;
+in-range combat stopping is checked separately from physical route arrival;
+the retained mechanical-recovery mode is named `gun_angle_adjust`; removed
+retreat diagnostics are tested for absence; and miniature graph fixtures supply
+their real link-direction schema. Target ownership, launch, inventory, collision,
+arrival and valid-route assertions were not replaced by always-successful stubs.
+
+The cleanup also exposed a genuine extraction dependency: `_sample_ground_plane`
+had previously entered the player geometry copy through the cover-method closure.
+It is still used by the stationary-turn planner, so it is now an explicit copy
+seed. Its original implementation and liquid/siege/stationary tests are retained.
+
+Historical records follow.
+
 # November 9 follow-up: one-point ordinary HE and exact HESH exceptions
 
 This follow-up starts at `23c340737abf316cab6c395ed581c87d88ad271c` and

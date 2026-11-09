@@ -34,7 +34,24 @@ class TerminalRouteHandoffTests(unittest.TestCase):
         self.assertEqual(('bot',8),(order['target_kind'],order['target_id']))
         self.assertTrue(order['fire_allowed'])
         self.assertEqual(0.,order['throttle_override'])
+        self.assertEqual('tactical_owner',order['tactical_evidence']['route_terminal']['outcome'])
+        self.assertNotIn('terminal_hold',scene[0]._route_states[17])
+        # Exercise the actual macro-arrival handoff separately. A valid shot
+        # now stops before this stage, not through the retired preferred-range
+        # advance branch that the original fixture depended on.
+        planner,manifest,states,defense=scene
+        bot=planner._alive_bots(manifest,states)[0]
+        order.update(combat_mode='advance',throttle_override=1.,
+                     move_position=dict(x=2.,y=0.,z=-250.))
+        target_before=(order['target_kind'],order['target_id'],order['fire_allowed'])
+        planner._handoff_route_terminal(
+            order,bot,planner._capture_target(defense,2),2.)
+        self.assertEqual(target_before,
+                         (order['target_kind'],order['target_id'],order['fire_allowed']))
+        self.assertEqual('engage',order['combat_mode'])
+        self.assertEqual(0.,order['throttle_override'])
         self.assertEqual('engage',order['tactical_evidence']['route_terminal']['outcome'])
+        self.assertIn('terminal_hold',planner._route_states[17])
         pose=scene[2][0]
         command=BotAdapter('86_himmelsdorf_winter',1).decide_with_order(dict(
             id=17,slot=1,team=2,position=(pose['x'],pose['y'],pose['z']),
@@ -102,23 +119,35 @@ class TerminalRouteHandoffTests(unittest.TestCase):
                 self.assertIn(order['combat_mode'],('advance','base_capture','route'))
                 self.assertNotIn(order['tactical_evidence']['route_terminal']['outcome'],('hold','base_capture'))
 
-    def test_only_empty_magazine_retains_withdrawal_ownership(self):
+    def test_low_health_and_empty_magazine_never_create_withdrawal_ownership(self):
         scene=self.scene();scene[2][0].update(health=10)
         order=self.order(scene)
-        self.assertNotIn(order['combat_mode'],('low_health_retreat','low_health_defend'))
+        self.assertEqual('engage',order['combat_mode'])
+        self.assertEqual(0.,order['throttle_override'])
+        self.assertTrue(order['fire_allowed'])
+        self.assertFalse(hasattr(scene[0],'_retreat_states'))
         scene=self.scene();scene[2][0].update(clip=0,clip_size=4,fire_seq=1,reload_time=25.)
         order=self.order(scene)
         self.assertEqual('engage',order['combat_mode'])
         self.assertEqual(0.,order['throttle_override'])
         self.assertFalse(order['fire_allowed'])
+        self.assertFalse(hasattr(scene[0],'_retreat_states'))
 
     def test_single_point_automatic_goal_keeps_existing_precise_arrival(self):
         scene=self.scene((8.,-250.))
         scene[3].clear()
         scene[1][0]['route']=_route('automatic',[(2.,-250.,False)])
-        order=self.order(scene)
+        order=self.order(scene,contact=False)
         self.assertNotEqual(0.,order['throttle_override'])
         self.assertEqual('outside_arrival',order['tactical_evidence']['route_terminal']['outcome'])
+        self.assertEqual(1.5,order['tactical_evidence']['route_terminal']['arrival_radius'])
+        self.assertNotIn('terminal_hold',scene[0]._route_states[17])
+        self.assertNotIn('completed_terminal',scene[0]._route_states[17])
+        scene[2][0].update(x=2.,z=-250.)
+        arrived=self.order(scene,2.,contact=False)
+        self.assertEqual('hold',arrived['combat_mode'])
+        self.assertEqual(0.,arrived['throttle_override'])
+        self.assertIn('terminal_hold',scene[0]._route_states[17])
 
     def test_completed_lane_without_capture_objective_holds_without_a_hull_turn(self):
         scene=self.scene();scene[3].clear()
@@ -138,17 +167,21 @@ class TerminalRouteHandoffTests(unittest.TestCase):
 
     def test_native_physical_refusal_is_not_consumed_as_completed_travel(self):
         scene=self.scene();scene[2][0]['route_wreck_blocked']=True
-        order=self.order(scene)
-        self.assertEqual('advance',order['combat_mode'])
+        order=self.order(scene,contact=False)
+        self.assertEqual('route',order['combat_mode'])
+        self.assertIsNone(order['throttle_override'])
         self.assertEqual('physical_or_capture_not_arrived',
                          order['tactical_evidence']['route_terminal']['outcome'])
+        self.assertNotIn('terminal_hold',scene[0]._route_states[17])
+        self.assertNotIn('completed_terminal',scene[0]._route_states[17])
+        self.assertNotIn(17,scene[0]._capture_arrivals)
 
     def test_parked_or_tactical_orders_and_separate_repositioning_are_untouched(self):
         scene=self.scene();original=self.order(scene);planner,manifest,states,defense=scene
         bot=planner._alive_bots(manifest,states)[0]
         # _alive_bots retains the manifest order (own Bot 17 first).
         target=planner._capture_target(defense,2)
-        for change,outcome in ((dict(combat_mode='cover_peek'),'tactical_owner'),
+        for change,outcome in ((dict(combat_mode='gun_angle_adjust'),'tactical_owner'),
                 (dict(team_command='attack'),'tactical_owner'),
                 (dict(parking_phase='approach'),'tactical_owner'),
                 (dict(move_position=dict(x=84.523,y=0.,z=-194.48)), 'different_destination')):
@@ -163,11 +196,13 @@ class TerminalRouteHandoffTests(unittest.TestCase):
                 self.assertEqual(outcome,order['tactical_evidence']['route_terminal']['outcome'])
 
     def test_hold_releases_on_goal_change_and_reset_clears_arrival(self):
-        scene=self.scene();self.order(scene)
+        scene=self.scene();scene[3].clear()
+        first=self.order(scene,contact=False)
+        self.assertEqual('hold',first['combat_mode'])
         planner=scene[0]
         self.assertIn('terminal_hold',planner._route_states[17])
         scene[1][0]['route']['waypoints'][-1].update(x=100.,z=-250.)
-        order=self.order(scene,2.)
+        order=self.order(scene,2.,contact=False)
         receipt=order['tactical_evidence']['route_terminal']
         self.assertEqual('goal_changed',receipt['released'])
         self.assertNotIn('terminal_hold',planner._route_states[17])

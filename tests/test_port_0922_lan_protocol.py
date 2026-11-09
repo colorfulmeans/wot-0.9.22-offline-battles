@@ -124,7 +124,7 @@ class LanProtocolTests(unittest.TestCase):
         self.assertTrue(worker.send_bot_manifest([{'id': 1}] * 40))
         self.assertTrue(worker.send_bot_state(bot_state_rows.rows([{
             'id': 1, 'reload_time': 0.5, 'reload_duration': 0.5}])))
-        self.assertTrue(worker.send_bot_observation([{}] * 70, [{}] * 20))
+        self.assertTrue(worker.send_bot_observation([{}] * 70, radio_links=[{}] * 35))
         self.assertTrue(worker.send_bot_ram(
             1, 'human', 2, 4, 620, 880))
         self.assertTrue(worker.send_rules_state({'1': {'points': 10}}))
@@ -140,6 +140,8 @@ class LanProtocolTests(unittest.TestCase):
         self.assertEqual('leave_battle', self.sent[0]['type'])
         self.assertEqual(30, len(bot_state_rows.bots(self.sent[1])))
         self.assertEqual(64, len(self.sent[3]['contacts']))
+        self.assertEqual(30, len(self.sent[3]['radio_links']))
+        self.assertNotIn('affordances', self.sent[3])
         self.assertEqual('bot_ram_report', self.sent[4]['type'])
         self.assertEqual(620, self.sent[4]['damage_to_bot'])
         self.assertEqual(880, self.sent[4]['damage_to_target'])

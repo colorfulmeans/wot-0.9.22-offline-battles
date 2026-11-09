@@ -2,8 +2,8 @@
 
 Original fixture parity is separate from the foreground identity, roster and
 traffic integration scenes below. These tests do not certify Windows movement
-or native trigger execution. No original test is weakened or replaced by a test
-of a new simplified policy.
+or native trigger execution. The original and independent copy receive the
+same current contract, including explicit removal of retired tactical behavior.
 """
 
 import ast
@@ -337,7 +337,7 @@ print('independent imports',len(g.CLIENT_MODULES)+len(g.SERVER_MODULES)+2)
                 expected = round(value) if digits is None else round(value, digits)
                 self.assertEqual(expected, compat.round_half_even(value, digits))
 
-    def test_server_aliases_keep_unicode_routes_and_cover_reservation_cells(self):
+    def test_server_aliases_keep_unicode_routes_and_half_even_cells(self):
         compat = importlib.import_module(COPIED + "._compat")
         tasks = importlib.import_module(COPIED + ".server_route_tasks")
         planner_module = importlib.import_module(COPIED + ".server_bot_ai")
@@ -457,7 +457,7 @@ class FullCopyOriginalFixtureTests(unittest.TestCase):
         self.assertGreater(results[0].testsRun, 10)
         self.assertEqual(results[0].testsRun, results[1].testsRun)
 
-    def test_existing_full_body_cover_and_tactical_geometry_fixtures_both_implementations(self):
+    def test_retained_firing_geometry_and_retired_cover_absence_match_both_implementations(self):
         original = fixture_module("test_port_0922_tactical_geometry.py", False)
         copied = fixture_module("test_port_0922_tactical_geometry.py", True)
         geometry_module = importlib.import_module(COPIED + ".battle_geometry")
@@ -482,7 +482,9 @@ class FullCopyOriginalFixtureTests(unittest.TestCase):
                 unittest.defaultTestLoader.loadTestsFromTestCase(module.TacticalGeometryTests).run(result)
             results.append(result)
             self.assertEqual([], result.errors + result.failures)
-        self.assertEqual(10, results[0].testsRun)
+        # Five retained physical/observation fixtures plus one guard against
+        # restoring the intentionally removed cover-only geometry entrance.
+        self.assertEqual(6, results[0].testsRun)
         self.assertEqual(results[0].testsRun, results[1].testsRun)
 
 
@@ -543,8 +545,11 @@ class FullCopyDifferentialTests(unittest.TestCase):
                       for planner in planners]
             self.assertEqual(orders[0], orders[1])
             for attribute in ("_route_states", "_route_history", "_route_recoveries", "_travel_tasks",
-                              "_route_assignments", "_cover_states", "_combat_states", "_target_assignments"):
+                              "_route_assignments", "_target_assignments"):
                 self.assertEqual(getattr(planners[0], attribute), getattr(planners[1], attribute), attribute)
+        for planner in planners:
+            for attribute in ("_cover_states", "_combat_states", "_retreat_states", "_firing_holds"):
+                self.assertFalse(hasattr(planner, attribute), attribute)
         self.assertIsNot(original_class, copied_class)
         self.assertTrue(copied_class.__module__.startswith(COPIED + "."))
 
@@ -931,7 +936,7 @@ class ForegroundTrafficObservationTests(unittest.TestCase):
 
 
 class ForegroundPlannerObservationTests(unittest.TestCase):
-    """Real cooperative branches need accepted peer evidence, not just copies."""
+    """Peer lane evidence remains factual without electing a retired flanker."""
     def scene(self):
         fixture = importlib.import_module("test_player_full_runtime").FullRuntimeTests()
         fixture.setUp()
@@ -1013,13 +1018,17 @@ class ForegroundPlannerObservationTests(unittest.TestCase):
         result = runtime._planner_order(now)
         return result, {row["id"]: row for row in runtime.planner._last_orders["orders"]}
 
-    def test_accepted_peer_lane_reaches_real_flank_and_suppressor_branches(self):
+    def test_accepted_peer_lane_keeps_both_shooters_stationary_without_a_flanker(self):
         battle, runtime = self.scene()
         self.assertTrue(self.accept(runtime, self.receipt(), 0.))
         local, orders = self.plan(runtime, 0.)
-        self.assertEqual("flank", local["combat_mode"])
-        self.assertEqual("flank", orders[runtime.actor_id]["combat_mode"])
-        self.assertNotEqual("flank", orders[12]["combat_mode"])
+        self.assertEqual("engage", local["combat_mode"])
+        self.assertEqual("engage", orders[runtime.actor_id]["combat_mode"])
+        self.assertEqual("engage", orders[12]["combat_mode"])
+        self.assertEqual(0., local["throttle_override"])
+        self.assertEqual(0., orders[12]["throttle_override"])
+        self.assertEqual(dict(x=0., y=0., z=-40.), local["move_position"])
+        self.assertTrue(orders[runtime.actor_id]["fire_allowed"])
         self.assertTrue(orders[12]["fire_allowed"])
         self.assertEqual({12, runtime.actor_id}, set(
             runtime.planner._contacts[1][("human", 2)]["shootable_by_bot_ids"]))
@@ -1036,7 +1045,8 @@ class ForegroundPlannerObservationTests(unittest.TestCase):
         original_gun = copy.deepcopy(battle._gun_state.__dict__)
         battle._last_frame_time = .1
         runtime.update(.1, .1)
-        self.assertEqual("flank", runtime._last_order["combat_mode"])
+        self.assertEqual("engage", runtime._last_order["combat_mode"])
+        self.assertEqual(0., runtime._last_order["throttle"])
         self.assertEqual(original_peer, battle.entities[8].matrix.__dict__)
         self.assertEqual(original_gun, battle._gun_state.__dict__)
         self.assertEqual([runtime.actor_id], [row["id"] for row in runtime.engine.controlled_states()])
@@ -1049,11 +1059,13 @@ class ForegroundPlannerObservationTests(unittest.TestCase):
         self.assertEqual([runtime.actor_id],
             runtime.planner._contacts[1][("human", 2)]["shootable_by_bot_ids"])
 
-    def test_wrong_round_peer_lane_does_not_enable_cooperative_flank(self):
+    def test_wrong_round_peer_lane_cannot_supply_a_shooter(self):
         unused, runtime = self.scene()
         self.assertFalse(self.accept(runtime, self.receipt(round_id=2), 0.))
         local, unused = self.plan(runtime, 0.)
         self.assertNotEqual("flank", local["combat_mode"])
+        self.assertEqual([runtime.actor_id],
+            runtime.planner._contacts[1][("human", 2)]["shootable_by_bot_ids"])
 
     def test_receipt_does_not_create_an_unknown_or_human_peer_shooter(self):
         battle, runtime = self.scene()
@@ -1115,7 +1127,9 @@ class ForegroundPlannerObservationTests(unittest.TestCase):
                 unused, runtime = self.scene()
                 self.accept(runtime, self.receipt(), 0.)
                 local, unused = self.plan(runtime, 0.)
-                self.assertEqual("flank", local["combat_mode"])
+                self.assertEqual("engage", local["combat_mode"])
+                self.assertEqual({12, runtime.actor_id}, set(
+                    runtime.planner._contacts[1][("human", 2)]["shootable_by_bot_ids"]))
                 if hidden:
                     self.accept(runtime, self.receipt(visible=False), .1)
                 later = (.11 if hidden else importlib.import_module(

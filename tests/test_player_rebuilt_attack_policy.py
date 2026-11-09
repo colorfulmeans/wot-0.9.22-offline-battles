@@ -117,6 +117,22 @@ class Observations(object):
 
 
 class RebuiltForegroundTests(unittest.TestCase):
+    def test_exhausted_inventory_returns_to_existing_navigation_without_retreat(self):
+        scene = Observations()
+        scene.frame['ammo'] = (0, 0, 0)
+        decision = scene.tick(0.)
+        self.assertEqual(('navigate', 'ammunition_exhausted'),
+                         (decision['action'], decision['reason']))
+        self.assertEqual([], scene.calls)
+        self.assertIsNone(scene.policy.search_started)
+        self.assertIsNone(scene.policy.reload_authority)
+        original = dict(combat_mode='route', move_position=(30., 0., 50.),
+            face_position=(10., 0., 80.), throttle_override=1., route_index=3)
+        order = scene.policy.apply_order(original)
+        for name, value in original.items():
+            self.assertEqual(value, order[name])
+        self.assertFalse(order['fire_allowed'])
+
     def test_first_current_point_is_ready_without_taking_movement_ownership(self):
         scene = Observations()
         scene.passed()
@@ -713,7 +729,7 @@ class RebuiltSearchAndClipTests(unittest.TestCase):
         scene.tick(13., navigation='path_refused')
         self.assertEqual(13., scene.policy.search_started)
         self.assertEqual('search_penetration', scene.tick(20.)['action'])
-        self.assertEqual('retreat', scene.tick(21.)['action'])
+        self.assertEqual('navigate', scene.tick(21.)['action'])
 
     def test_committed_next_shell_preaims_its_proved_point_until_load_completion(self):
         for clip_size in (1, 4):
@@ -1068,10 +1084,10 @@ class RebuiltFallbackTests(unittest.TestCase):
         self.assertTrue(scene.policy.fallback)
         self.assertEqual(1, scene.policy.next_shell)
 
-    def test_no_he_is_retreat_only_after_search_not_after_one_failed_sample(self):
+    def test_no_he_returns_to_navigation_only_after_search_not_after_one_failed_sample(self):
         scene = Observations(targets=1, points=1, he=False)
         self.assertEqual('search_penetration', scene.tick(0.)['action'])
-        self.assertEqual('retreat', scene.tick(8.)['action'])
+        self.assertEqual('navigate', scene.tick(8.)['action'])
 
 
 class IndependentAmmoTraverseTests(unittest.TestCase):
@@ -1209,7 +1225,7 @@ class IndependentAmmoTraverseTests(unittest.TestCase):
         scene.policy.background(.1)
         self.assertIsNone(scene.policy.next_plan)
 
-    def test_limited_single_checks_all_stock_then_fallback_without_reload_retreat(self):
+    def test_limited_single_checks_all_stock_then_fallback_without_early_reload(self):
         scene = Observations(targets=1, points=1)
         scene.frame['limited_traverse'] = True
         scene.passed(1)
@@ -1227,7 +1243,7 @@ class IndependentAmmoTraverseTests(unittest.TestCase):
         self.assertIsNone(scene.policy.search_started)
         self.assertIsNone(scene.policy.reload_authority)
 
-    def test_limited_non_he_starts_retreat_even_when_replacement_review_is_pending(self):
+    def test_limited_non_he_qualifies_reload_even_when_replacement_review_is_pending(self):
         for siege in (False, True):
             with self.subTest(siege=siege):
                 scene = Observations(clips=6, targets=1, points=1)
@@ -1241,15 +1257,15 @@ class IndependentAmmoTraverseTests(unittest.TestCase):
                 self.assertIsNone(scene.policy.search_started)
                 qualified = scene.policy.reload_authority['qualified_at']
                 for step in range(1, 10):
-                    scene.frame['pose'] = ('retreat_moving', step)
+                    scene.frame['pose'] = ('physically_moving', step)
                     scene.value(0, armor='unknown', line='pending')
                     result = scene.tick(step * .1)
                     self.assertEqual('reload_clip', result['action'])
                     self.assertEqual(qualified, result['reload_qualified_at'])
                     self.assertIsNone(scene.policy.search_started)
-                # An actual new current-shell opportunity ends the retreat
+                # An actual new current-shell opportunity ends the reload
                 # qualification rather than discarding the newly useful clip.
-                scene.frame['pose'] = ('retreat_new_lane', 11)
+                scene.frame['pose'] = ('new_firing_lane', 11)
                 scene.passed(0)
                 self.assertEqual('aim', scene.tick(1.1)['action'])
                 self.assertIsNone(scene.policy.reload_authority)

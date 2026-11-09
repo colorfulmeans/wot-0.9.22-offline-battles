@@ -217,11 +217,13 @@ def route_value(route):
 def default_routes(profile, name, graph):
     """Apply editor geometry before the director assigns or restores routes.
 
-    Keep source graphs immutable and retain identities and allocation metadata.
-    Unusable edits fall back independently, just like authored custom routes.
+    Terrain graphs are immutable physical inputs, not a fallback route source.
+    Start with the reviewed Default even for a missing/sparse round profile.
+    Unusable edits can only fall back to that same owner-authored document.
     """
-    edits = config.map_settings(profile, name).get('default_routes', ())
-    result = copy.deepcopy(graph.get('routes'))
+    from gui.mods.offline_lan_0922.ai.maps import default_route_catalog
+    edits = config.effective_map(profile, name).get('default_routes', ())
+    result = default_route_catalog(name)
     spawns, bases, radii = (graph.get(key) or () for key in
                             ('spawn_anchors', 'objective_bases', 'objective_base_radii'))
     symmetric = (len(spawns) == len(bases) == len(radii) == 2 and all(

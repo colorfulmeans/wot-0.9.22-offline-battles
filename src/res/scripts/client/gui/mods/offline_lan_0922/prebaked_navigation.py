@@ -75,6 +75,13 @@ def load_graph(map_name, base_dir=None):
 		graph = json.loads(raw)
 	finally:
 		handle.close()
+	# Route coordinates are owned by the October reviewed Default, not by an
+	# installed terrain graph's historical embedded route list. Replace the
+	# list before schema validation so an old single-point rear_guard cannot
+	# be restored (or prevent use of otherwise valid current physical data).
+	if isinstance(graph, dict) and graph.get('map') == short_name:
+		from gui.mods.offline_lan_0922.ai.maps import default_route_catalog
+		graph['routes'] = default_route_catalog(short_name)
 	graph = _validate(graph, short_name)
 	graph['_source_sha256'] = hashlib.sha256(raw).hexdigest()
 	if (base_dir is None and short_name in (

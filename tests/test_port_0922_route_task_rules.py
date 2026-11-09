@@ -7,6 +7,7 @@ import unittest
 from unittest import mock
 
 from test_port_0922_server_bot_ai import BotPlanner, _bot, _route, _state
+from server_bot_ai import TEAM_ORDER_COMMANDS, TEAM_ORDER_NAVIGATION_COMMANDS
 import test_port_0922_team_commands as command_fixture
 TICK_HZ=command_fixture.TICK_HZ
 from gui.mods.offline_lan_0922 import bot_tactics as contract, route_network
@@ -278,15 +279,15 @@ class RouteTaskTests(unittest.TestCase):
         before=copy.deepcopy(combat);p._task_apply(combat,b,1.)
         self.assertEqual(before,combat);self.assertNotIn(11,p._previous_player)
 
-    def test_turnback_has_one_frozen_goal_and_then_ends(self):
-        p,b=self.scene();request=dict(command_id='one',command='TURNBACK')
-        order=dict(self.order(),move_position=dict(x=0,y=0,z=100))
-        p._task_apply(order,b,0.,player_order=request)
-        changed=dict(self.order(),move_position=dict(x=0,y=0,z=0))
-        p._task_apply(changed,b,1.,player_order=request)
-        self.assertEqual(100,changed['move_position']['z'])
-        b['state']['z']=100;p._task_apply(changed,b,2.,player_order=request)
-        self.assertTrue(changed['player_command_cancelled']);self.assertEqual('route',changed['combat_mode'])
+    def test_retired_turnback_is_not_a_movement_command(self):
+        p,b=self.scene()
+        self.assertNotIn('TURNBACK',TEAM_ORDER_COMMANDS)
+        self.assertNotIn('TURNBACK',TEAM_ORDER_NAVIGATION_COMMANDS)
+        order=self.order();before=copy.deepcopy(order)
+        p._task_apply(order,b,0.)
+        self.assertEqual(before,order)
+        self.assertNotIn(b['id'],p._previous_player)
+        self.assertNotIn(b['id'],p._travel_tasks)
 
     def test_authored_terminal_uses_enemy_circle_and_spawn_skips_first_node(self):
         p,b=self.scene();route=p._task_route(b);route['id']='user_lane'

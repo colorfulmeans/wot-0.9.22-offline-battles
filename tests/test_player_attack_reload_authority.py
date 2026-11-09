@@ -1,7 +1,7 @@
-"""An admitted reload retreat survives pose churn and reaches native input.
+"""An admitted reload survives pose churn and reaches native input in place.
 
-Only body/plate observations are supplied. AttackPolicy, the copied retreat
-state machine, FullPlayerRuntime, _LANInputSender and GunState are production
+Only body/plate observations are supplied. AttackPolicy, FullPlayerRuntime,
+_LANInputSender and GunState are production
 consumers. These are lifecycle tests, not Windows physics acceptance.
 """
 import copy
@@ -11,7 +11,6 @@ import test_player_full_shell_settings as shell_fixtures
 import test_player_siege_engagement as siege_fixtures
 from gui.mods.offline_lan_0922 import siege_mechanics
 from gui.mods.offline_lan_0922.player_control import attack_policy
-from gui.mods.offline_lan_0922.player_control.copied import server_bot_ai
 
 
 class ReloadAuthorityLifecycleTests(unittest.TestCase):
@@ -44,44 +43,31 @@ class ReloadAuthorityLifecycleTests(unittest.TestCase):
             self.assertIsNone(policy.search_started)
             if decision['action'] == 'reload_clip' and decision.get('early_reload'):
                 return decision
-        self.fail('native complete failure did not admit limited-gun retreat: %r' % policy.status())
+        self.fail('native complete failure did not qualify limited-gun reload: %r' % policy.status())
 
-    @staticmethod
-    def route_order(scene):
-        return dict(id=scene.runtime.actor_id, combat_mode='advance',
-            target_id=scene.target.id, target_kind='bot',
-            move_position=(0., 0., -24.), face_position=(0., 0., 40.),
-            fire_allowed=False, shell_index=0)
-
-    def test_limited_retreat_keeps_qualification_across_pose_changes_until_native_load(self):
+    def test_limited_reload_keeps_qualification_across_pose_changes_without_retreat_wait(self):
         scene = self.limited_scene()
         gun = scene.battle._gun_state
         policy = scene.runtime.attack_policy
         self.qualify(scene)
         qualified_at = policy.reload_authority['qualified_at']
-        # The map fixture supplies a previous route anchor away from this
-        # observed position. Retreat endpoint freezing, progress, timeout
-        # and native loading remain the actual production consumers.
-        order = self.route_order(scene)
         settings, observed = scene.battle.change_vehicle_setting, []
 
         def capture_setting(code, value):
             if code in (scene.settings.CURRENT_SHELLS, scene.settings.RELOAD_PARTIAL_CLIP):
                 observed.append(dict(now=scene.now,
-                    decision=copy.deepcopy(scene.runtime.attack_policy.decision),
-                    retreat=copy.deepcopy(scene.runtime._reload_retreat)))
+                    decision=copy.deepcopy(scene.runtime.attack_policy.decision)))
             return settings(code, value)
 
         scene.battle.change_vehicle_setting = capture_setting
         before = list(gun.ammo)
-        trace = []
-        for step in range(240):
-            if step < 10:
-                # A real observed source change expires every old armour
-                # row, without inventing a new tactical reload transaction.
-                scene.position = (.001 * step, 0., 12.)
-                scene.origin = (.001 * step, 2., 12.)
-                scene.set_hull(0.)
+        # Delay only this isolated native consumer while supplying ten real
+        # source poses. Geometric proofs expire; reload qualification does not.
+        # This is not a production movement/timeout prerequisite for loading.
+        for step in range(10):
+            scene.position = (.001 * step, 0., 12.)
+            scene.origin = (.001 * step, 2., 12.)
+            scene.set_hull(0.)
             scene.step(.11)
             decision = policy.update(scene.now)
             self.assertIsNone(policy.search_started)
@@ -89,21 +75,28 @@ class ReloadAuthorityLifecycleTests(unittest.TestCase):
             self.assertIsNotNone(authority)
             self.assertEqual(qualified_at, authority['qualified_at'])
             self.assertEqual('reload_clip', decision['action'])
-            moved = scene.runtime._reload_order(order, scene.now)
-            trace.append((scene.now, copy.deepcopy(decision), copy.deepcopy(moved)))
-            scene.runtime._apply_shell_intent()
             policy.background(scene.now)
-            scene.runtime._apply_next_shell()
             self.assertEqual(before, gun.ammo)
-            if observed:
+        # The replacement still needs its own current-pose native proof.
+        for unused in range(40):
+            scene.step(.11)
+            decision = policy.update(scene.now)
+            if decision.get('candidate') is not None:
                 break
-        self.assertGreater(len(trace), 10)
-        self.assertEqual(1, len(observed), trace[-3:])
+            policy.background(scene.now)
+        else:
+            self.fail('replacement never regained native proof: %r' % policy.status())
+        self.assertEqual(qualified_at, policy.reload_authority['qualified_at'])
+        self.assertFalse(hasattr(scene.runtime, '_reload_order'))
+        self.assertFalse(hasattr(scene.runtime, '_reload_retreat'))
+        applied_at = scene.now
+        scene.runtime._apply_shell_intent()
+        self.assertEqual(1, len(observed))
         receipt = observed[0]
+        self.assertEqual(applied_at, receipt['now'])
         self.assertEqual('limited_traverse_current_clip_failed', receipt['decision']['reason'])
-        self.assertTrue(receipt['retreat']['ready'])
-        self.assertIn(receipt['retreat']['reason'],
-            ('copied_cover_attempt_complete', 'copied_retreat_attempt_complete'))
+        self.assertEqual('passed', receipt['decision']['candidate']['armor'])
+        self.assertEqual(before, gun.ammo)
         self.assertEqual((1, 0), (gun.shot_index, gun.clip))
         self.assertGreater(gun.reload_time, 0.)
         self.assertIsNone(scene.runtime.attack_policy.reload_authority)
@@ -123,13 +116,8 @@ class ReloadAuthorityLifecycleTests(unittest.TestCase):
         self.assertEqual(1, runtime.attack_policy.next_shell)
         runtime._apply_next_shell()
         self.assertEqual(1, gun.pending_index)
-        order = self.route_order(scene)
-        first = runtime._reload_order(order, scene.now)
-        self.assertEqual('magazine_reload_retreat', first['combat_mode'])
-        self.assertFalse(runtime._reload_retreat['ready'])
-        scene.step(server_bot_ai.RETREAT_PROGRESS_TIMEOUT_SECONDS + .01)
-        runtime._reload_order(order, scene.now)
-        self.assertTrue(runtime._reload_retreat['ready'])
+        self.assertFalse(hasattr(runtime, '_reload_order'))
+        self.assertFalse(hasattr(runtime, '_reload_retreat'))
         # This is a missing native shot descriptor, not a supplied decision.
         # The foreground update sees pending rank before the post-control
         # background pass has released its previous NEXT_SHELLS lease.
@@ -147,7 +135,7 @@ class ReloadAuthorityLifecycleTests(unittest.TestCase):
                           (scene.settings.NEXT_SHELLS, 101),
                           (scene.settings.RELOAD_PARTIAL_CLIP, 0)], scene.setting_calls)
 
-    def test_native_siege_descriptor_exit_preserves_the_same_partial_clip_retreat(self):
+    def test_native_siege_descriptor_exit_preserves_the_same_partial_clip_reload(self):
         scene = siege_fixtures.SiegeScene()
         scene.setUp()
         self.addCleanup(scene.doCleanups)
@@ -164,10 +152,8 @@ class ReloadAuthorityLifecycleTests(unittest.TestCase):
         qualified = policy.reload_authority['qualified_at']
         old_identity = policy.frame['identity']
         physical_identity = policy.frame['weapon_identity']
-        order = self.route_order(scene)
-        runtime._reload_order(order, scene.now)
-        retreat = runtime._reload_retreat
-        self.assertFalse(retreat['ready'])
+        self.assertFalse(hasattr(runtime, '_reload_order'))
+        self.assertFalse(hasattr(runtime, '_reload_retreat'))
         # A real native composite/sequence echo, not a supplied policy frame,
         # changes the mounted gun envelope to travel's exact zero pitch.
         scene.echo_mode(siege_mechanics.SWITCHING_OFF, 1)
@@ -177,15 +163,11 @@ class ReloadAuthorityLifecycleTests(unittest.TestCase):
         self.assertEqual(physical_identity, policy.frame['weapon_identity'])
         self.assertEqual(('reload_clip', qualified),
             (decision['action'], decision['reload_qualified_at']))
-        runtime._reload_order(order, scene.now)
-        self.assertIs(retreat, runtime._reload_retreat)
         scene.echo_mode(siege_mechanics.DISABLED, 1)
-        scene.step(server_bot_ai.RETREAT_PROGRESS_TIMEOUT_SECONDS + .01)
+        scene.step(.1)
         decision = policy.update(scene.now)
         self.assertEqual(('reload_clip', qualified),
             (decision['action'], decision['reload_qualified_at']))
-        runtime._reload_order(order, scene.now)
-        self.assertTrue(runtime._reload_retreat['ready'])
         runtime._apply_shell_intent()
         self.assertEqual((0, 0), (gun.shot_index, gun.clip))
         self.assertGreater(gun.reload_time, 0.)

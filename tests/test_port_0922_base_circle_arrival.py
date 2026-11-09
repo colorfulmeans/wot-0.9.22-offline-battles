@@ -73,9 +73,34 @@ class BaseCircleArrivalTests(unittest.TestCase):
             with self.subTest(field=field):
                 scene = self.helper.scene((32., -250.))
                 scene[2][0][field] = True
-                order = self.helper.order(scene)
+                # Exercise travel admission without a valid combat owner.
+                # In-range engagement now independently asks for zero throttle.
+                order = self.helper.order(scene, contact=False)
+                self.assertEqual('route', order['combat_mode'])
                 self.assertNotEqual(0., order['throttle_override'])
                 self.assertEqual('physical_or_capture_not_arrived', order['tactical_evidence']['route_terminal']['outcome'])
+                route_state = scene[0]._route_states[17]
+                self.assertNotIn('terminal_hold', route_state)
+                self.assertNotIn('completed_terminal', route_state)
+                self.assertNotIn(17, scene[0]._capture_arrivals)
+                self.assertNotIn('capture_hold', order['tactical_evidence'])
+
+    def test_combat_hold_during_invalid_physics_is_not_circle_arrival(self):
+        for field in ('airborne', 'route_wreck_blocked'):
+            with self.subTest(field=field):
+                scene = self.helper.scene((32., -250.))
+                scene[2][0][field] = True
+                order = self.helper.order(scene)
+                self.assertEqual('engage', order['combat_mode'])
+                self.assertEqual(0., order['throttle_override'])
+                self.assertEqual(8, order['target_id'])
+                self.assertEqual('tactical_owner',
+                    order['tactical_evidence']['route_terminal']['outcome'])
+                route_state = scene[0]._route_states[17]
+                self.assertNotIn('terminal_hold', route_state)
+                self.assertNotIn('completed_terminal', route_state)
+                self.assertNotIn(17, scene[0]._capture_arrivals)
+                self.assertNotIn('capture_hold', order['tactical_evidence'])
 
     def defense_scene(self, x, class_tag='SPG', radius=50.):
         planner = BotPlanner()

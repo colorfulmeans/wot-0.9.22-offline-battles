@@ -1,7 +1,8 @@
 """Rebake water eligibility on every retained grid without resetting gameplay.
 
 Decode the pinned terrain/water/collision again. Preserve grid placement,
-authored layers, routes, spawns and existing proved links. Recompute every
+authored layers, spawns and existing proved links; publish the reviewed Default
+routes rather than geometry from the input graph. Recompute every
 cell's water evidence; newly eligible water/shore cells need the same terrain,
 collision, shoulder and link proofs as the ordinary baker. This is not a
 runtime override and does not infer water from missing navigation heights.
@@ -205,14 +206,22 @@ def build(client, previous, output):
         patches.append(rebuilt); layers.append(proof)
     if 'local_meshes' in original:
         graph['local_meshes'] = patches
+    # The optional previous graph is a physical input, not a tactical-route
+    # authority. Validate and publish the current Default before either output
+    # branch, including the otherwise byte-identical remeasurement fast path.
+    baker.publish_default_routes(graph)
     if (original['bake'].get('water_depth_limit') == legacy.WATER_DEPTH_LIMIT and
             original['bake'].get('shallow_water_threshold') == legacy.SHALLOW_WATER_THRESHOLD and
             original['bake'].get('water_policy_rebake', {}).get('all_cells_measured') and
             all(all(a[k] == b[k] for k in ('heights_mm','hazards','links'))
                 for a,b in zip([original]+original.get('local_meshes',[]),[graph]+graph.get('local_meshes',[])))):
         Path(output).parent.mkdir(parents=True,exist_ok=True)
-        Path(output).write_bytes(raw)
-        print(graph['map'], 'remeasured; retained identical geometry and provenance',flush=True)
+        if graph['routes'] == original.get('routes'):
+            Path(output).write_bytes(raw)
+            print(graph['map'], 'remeasured; retained identical geometry and provenance',flush=True)
+        else:
+            Path(output).write_bytes((json.dumps(graph, separators=(',', ':'))+'\n').encode())
+            print(graph['map'], 'published reviewed Default; retained identical geometry and provenance',flush=True)
         return
     bake = graph['bake']
     bake['water_depth_limit'] = legacy.WATER_DEPTH_LIMIT
@@ -227,7 +236,7 @@ def build(client, previous, output):
     if original.get('navigation_previous_sha256'):
         identities.add(original['navigation_previous_sha256'])
     graph['navigation_previous_sha256s'] = sorted(identities)
-    for key in ('routes','spawn_formations','spawn_anchors','bases','objective_bases','bounds',
+    for key in ('spawn_formations','spawn_anchors','bases','objective_bases','bounds',
                 'origin','width','height','cell_size'):
         assert graph.get(key) == original.get(key), key
     graph['validation'].update(validate_routes(graph, legacy))

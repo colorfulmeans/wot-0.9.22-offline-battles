@@ -361,3 +361,28 @@ def normalize_map_name(map_name):
 
 def get_tactical_map(map_name):
     return TACTICAL_MAPS.get(normalize_map_name(map_name))
+
+
+def default_route_catalog(map_name):
+    """Return the reviewed Default, never geometry from an older graph.
+
+    The graph supplies terrain and links, not another tactical-route source.
+    Keep the same allocation fields emitted by the physical baker and give
+    each caller independent mutable records. Class variants are applied by
+    bot_tactics_runtime from the same owner-authored document.
+    """
+    import copy
+    tactical = get_tactical_map(map_name)
+    if tactical is None:
+        raise bot_tactics.TacticsError('Unknown Default map: %s' % map_name)
+    result = {}
+    for team in (1, 2):
+        rows = []
+        for source in tactical['routes'][team]:
+            row = dict((key, copy.deepcopy(source[key])) for key in
+                       ('id', 'capacity', 'risk', 'role_weights'))
+            row['waypoints'] = [list(point[:2]) + [bool(point[2])]
+                                for point in source['waypoints']]
+            rows.append(row)
+        result[str(team)] = rows
+    return result

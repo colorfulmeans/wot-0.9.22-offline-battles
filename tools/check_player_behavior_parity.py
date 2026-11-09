@@ -37,6 +37,7 @@ import sync_player_behavior_copy as generator
 ROOT = generator.ROOT
 TESTS = ROOT / "tests"
 FIXTURES = (
+    "test_retired_tactical_cleanup.py",
     "test_port_0922_bot_runtime.py",
     "test_port_0922_ai.py",
     "test_port_0922_navigation.py",

@@ -498,39 +498,30 @@ class SiegeEngagementTests(unittest.TestCase):
                 self.assertFalse(scene.launches())
                 scene.doCleanups()
 
-    def test_synthetic_siege_clip_accepted_cover_reload_owns_exit_not_generic_cover(self):
-        # This tests the reload consumer boundary: a policy instruction asks
-        # for early reload; the unchanged original cover law supplies its own
-        # movement/arrival result. Mode ownership follows that admitted lease.
-        for cover_x, expected_mode in ((20., 'take_cover'), (0., 'cover_hold')):
-            with self.subTest(mode=expected_mode):
-                scene = self.scene(clip=3)
-                runtime = scene.runtime
-                self.advance_until(scene, lambda: runtime.siege_aim_candidate() is not None,
-                                   actuate=False)
-                selected = runtime.siege_aim_candidate()
-                runtime.attack_policy.decision = dict(action='reload_clip', early_reload=True,
-                    reason='current_clip_all_armour_failed', candidate=selected, shell_index=1)
-                runtime._mission = None
-                planner = runtime.planner
-                cover = dict(id='fixture-cover', position=dict(x=cover_x, y=0., z=0.),
-                             peek_position=dict(x=cover_x, y=0., z=6.))
-                phase = dict(phase='approach', last_progress_at=scene.now,
-                             phase_started_at=scene.now, best_distance=abs(cover_x))
-                planner._cover_states[runtime.actor_id] = phase
-                original_order = dict(runtime.combat_stop.task_order)
-                with mock.patch.object(planner, '_capable', return_value=True), \
-                        mock.patch.object(planner, '_cover_candidate', return_value=(cover, phase)):
-                    result = runtime._reload_order(original_order, scene.now)
-                    self.assertEqual(expected_mode, result['combat_mode'])
-                    self.assertTrue(runtime._reload_retreat['navigation_owned'])
-                    self.assertFalse(runtime.combat_stop.navigation_owns(result, task_only=True))
-                    self.assertTrue(runtime.combat_stop.navigation_owns(result))
-                    self.assertFalse(runtime.siege_desired(runtime.state, result, selected['target']))
-                    self.assertFalse(result['fire_allowed'])
-                    self.assertEqual(3, scene.battle._gun_state.clip)
-                    self.assertFalse(scene.launches())
-                scene.doCleanups()
+    def test_synthetic_siege_reload_intent_cannot_create_navigation_or_mode_exit(self):
+        # This isolates mode ownership, not reload qualification: an early
+        # reload intent must not manufacture the deleted cover/retreat lease.
+        # Real native reload accounting is covered by the shell input suite.
+        scene = self.scene(clip=3)
+        runtime = scene.runtime
+        self.advance_until(scene, lambda: runtime.siege_aim_candidate() is not None,
+                           actuate=False)
+        selected = runtime.siege_aim_candidate()
+        runtime.attack_policy.decision = dict(action='reload_clip', early_reload=True,
+            reason='current_clip_all_armour_failed', candidate=selected, shell_index=1)
+        runtime._mission = None
+        original_order = dict(runtime.combat_stop.task_order)
+        result = runtime.combat_stop.apply_order(dict(original_order), scene.now)
+        self.assertFalse(hasattr(runtime, '_reload_order'))
+        self.assertFalse(hasattr(runtime, '_reload_retreat'))
+        self.assertFalse(hasattr(runtime.planner, '_cover_states'))
+        self.assertFalse(runtime.combat_stop.navigation_owns(result, task_only=True))
+        self.assertFalse(runtime.combat_stop.navigation_owns(result))
+        self.assertTrue(runtime.siege_desired(runtime.state, result, selected['target']))
+        self.assertEqual(original_order['combat_mode'], result['combat_mode'])
+        self.assertEqual(original_order['move_position'], result['move_position'])
+        self.assertEqual(3, scene.battle._gun_state.clip)
+        self.assertFalse(scene.launches())
 
     def test_original_navigation_task_owns_mode_exit_and_native_ack_fences_old_aim(self):
         scene = self.scene()

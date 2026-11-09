@@ -56,7 +56,6 @@ class TriggerRuntimeIntegrationTests(unittest.TestCase):
         runtime.battle_start(self.fixture.start)
         runtime._next_observation = 100.0
         runtime._next_shot_lane_refresh = 100.0
-        runtime._next_cover_refresh = 100.0
         state = runtime.states[11]
         state['gun_aligned'] = True
         gun = runtime._gun_states[11]

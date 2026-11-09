@@ -1102,7 +1102,6 @@ class FullPlayerRuntime(object):
         self._siege_pending = None
         self._recent_projectiles = {}
         self._damage_events = set()
-        self._reload_retreat = None
         self._shell_intent = None
         self._owned_next_shell = None
         self._manual_shell_epoch = 0
@@ -1369,7 +1368,6 @@ class FullPlayerRuntime(object):
                 not command.get('parking_phase'),
             combat_mode=command.get('combat_mode'),
             movement_intent=command.get('movement_intent', True),
-            withdrawal_aim=command.get('withdrawal_aim', False),
             rear_turn=0., allow_rear_start=not state.get('_rear_motion_blocked', False))
         return bool(not proposed[2] and abs(proposed[0] - turn) <= 1.e-12 and
                     abs(proposed[1] - throttle) <= 1.e-12)
@@ -1585,7 +1583,7 @@ class FullPlayerRuntime(object):
             obstacle_probe=geometry._navigation_obstacle,
             navigation_surface_probe=geometry._navigation_surface_observation,
             navigation_height_columns=geometry._navigation_height_columns,
-            bounds=bounds, arena_bounds=bounds, cover_probe=geometry._sample_bot_cover,
+            bounds=bounds, arena_bounds=bounds,
             turret_motion_probe=geometry._turret_motion_is_clear,
             rotation_resolver=geometry._resolve_bot_rotation,
             local_sweep_probe=geometry._probe_bot_local_motion,
@@ -2163,7 +2161,7 @@ class FullPlayerRuntime(object):
         self.planner.report_contacts(contacts, known, now)
         # A peer's certified firing lane can disappear inside the one-second
         # strategic interval. Replan that *change* immediately so copied
-        # flanking decisions do not continue relying on a stale ally; native
+        # target coordination does not continue relying on a stale ally; native
         # target tracking and ordinary motion never trigger a global rebuild.
         contact_signature = tuple((row['observing_team'], row['target_kind'],
             row['target_id'], tuple(identity for identity in
@@ -2203,7 +2201,6 @@ class FullPlayerRuntime(object):
                 order = self.combat_stop.apply_order(order, now)
                 if self.combat_stop.stop_allowed:
                     order = self._move_order(order, now)
-                    order = self._reload_order(order, now)
             else:
                 self._suspend_attack()
         order = self._mission_guard_order(order, now)
@@ -2234,7 +2231,7 @@ class FullPlayerRuntime(object):
         """Consume accepted public peer lane evidence without owning a peer.
 
         The server already relays these exact fields to foreground clients.
-        They support the copied group/flanker election, never this player's
+        They support the copied target assignment, never this player's
         native trigger admission. Target positions still come only from this
         client's current visible entities, not from hidden worker state.
         """
@@ -2500,19 +2497,14 @@ class FullPlayerRuntime(object):
         self._observe_traffic(now)
         self.geometry._artillery.advance(now, 4, self.geometry._artillery_arc_probe)
         marker = self._profile_stage(stages, marker, 'player_traffic')
-        # This is the unchanged complete copy, including navigation, recovery,
-        # traffic, hull aiming, firing gates, cover queue and route handoffs.
-        outgoing = self.engine.update(float(dt), float(now), list(self._players))
+        # The independent copy owns navigation, physical recovery, traffic,
+        # hull aiming, firing gates and route handoffs.
+        self.engine.update(float(dt), float(now), list(self._players))
         if (self.combat_stop.stop_allowed and
                 self.attack_policy.decision.get('action') == 'search_penetration'):
             # Tell the unchanged original planner this is an active bounded
             # local manoeuvre, not eight seconds of an idle ready-gun hold.
             self.state['local_combat_manoeuvre'] = True
-        for message in outgoing:
-            if message.get('type') == 'bot_observation' and message.get('affordances'):
-                self.planner.report_affordances(message['affordances'],
-                    self.planner.known_bots(self._manifest, list(self.engine.states.values())),
-                    self.planner.known_targets(list(self.engine.states.values()), self._players), now)
         marker = self._profile_stage(stages, marker, 'player_copied')
         # Only the foreground actor may have changed in this copied control
         # slice. Preserve the native-source correction without re-reading,
@@ -2716,58 +2708,6 @@ class FullPlayerRuntime(object):
                            force=at_trigger, plan=plan)
         return plan if applied else None
 
-    def _reload_order(self, order, now):
-        decision = self.attack_policy.decision
-        if not self.combat_stop.stop_allowed:
-            return order
-        if decision.get('action') != 'reload_clip' or not decision.get('early_reload'):
-            self._reload_retreat = None
-            return order
-        if self.gun.reload_time > 0. or self.gun.clip <= 0:
-            return order
-        episode = self._reload_retreat
-        if episode is None:
-            episode = self._reload_retreat = dict(started=now, ready=False,
-                loaded=int(self.gun.shot_index), clip=int(self.gun.clip), generation=self.generation)
-        if episode['ready']:
-            return order
-        bot = self._planner_bot()
-        if bot is None:
-            return order
-        own_position = dict(zip(('x', 'y', 'z'), self.state['position']))
-        if 'drive' not in self.features or (self._mission or {}).get('capture_started'):
-            # With no drive authority, or while actually contributing capture,
-            # the original planner's reload-in-place rule is the only actuator.
-            episode.update(ready=True, reason='native_stationary_reload')
-            return dict(order, fire_allowed=False, throttle_override=0.)
-        target = (decision.get('candidate') or {}).get('target') or {}
-        focus = next((contact for contact in self.planner._contacts.get(self.state['team'], {}).values()
-                      if contact.get('id') == target.get('network_id') and
-                      contact.get('target_kind') == target.get('kind')), None)
-        # Reuse the original cover lease, route retreat endpoint, progress
-        # timeout and arrival terminal. Do not invent a second retreat driver.
-        if (focus is not None and self.actor_id in self.planner._cover_states and
-                self.planner._apply_cover_order(order, bot, focus,
-                    self.planner._personality(self.actor_id), now, urgent=True)):
-            episode['navigation_owned'] = True
-            mode = str(order.get('combat_mode', ''))
-            if mode in ('cover_hide', 'cover_hold') or now - episode['started'] >= 10.:
-                episode.update(ready=True, reason='copied_cover_attempt_complete')
-            return dict(order, fire_allowed=False)
-        anchor = order.get('move_position') or own_position
-        anchor = dict(zip(('x', 'y', 'z'), _point(anchor)))
-        retreat = self.planner._retreat_point(bot, anchor)
-        face = (focus or {}).get('position') or order.get('face_position') or anchor
-        face = dict(zip(('x', 'y', 'z'), _point(face)))
-        result = dict(order, fire_allowed=False)
-        self.planner._apply_retreat_order(result, bot, retreat, face, now,
-            'magazine_reload_retreat', 'magazine_reload_hold')
-        episode['navigation_owned'] = True
-        phase = (self.planner._retreat_states.get(self.actor_id) or {}).get('phase')
-        if phase in ('hold', 'resume'):
-            episode.update(ready=True, reason='copied_retreat_attempt_complete')
-        return result
-
     def _apply_shell_intent(self):
         if not self._live() or self._mission_brakes() or 'fire' not in self.features:
             return
@@ -2794,8 +2734,6 @@ class FullPlayerRuntime(object):
                 decision.get('reason') not in ('current_shell_all_armour_failed',
                                                'current_ammunition_exhausted') or
                 decision.get('candidate') is None and gun.ammo[gun.shot_index] > 0):
-            return
-        if decision.get('early_reload') and not (self._reload_retreat or {}).get('ready'):
             return
         index = decision.get('shell_index')
         lease = self._owned_next_shell
@@ -2833,8 +2771,8 @@ class FullPlayerRuntime(object):
                     return
             if gun.clip >= gun.clip_size and gun.pending_index is None:
                 # A full cassette of the same shell has no native R action.
-                # The retreat remains completed while the background seeks
-                # a proved replacement; never fake a reload or spam refusals.
+                # Keep the qualified reload while the background seeks a
+                # proved replacement; never fake a reload or spam refusals.
                 return
             setting = 'RELOAD_PARTIAL_CLIP'
             accepted = self._shell_setting(setting)
@@ -3108,7 +3046,7 @@ class FullPlayerRuntime(object):
         self._mission_halt = HaltObservation()
         self._implicit_retry = None
         self._implicit_failures = 0
-        self._move_episode = self._reload_retreat = None
+        self._move_episode = None
         if (kind in ('return_base', 'defend_base', 'capture_base') or
                 'position' in payload or 'x' in payload and 'z' in payload):
             self.combat_stop.mission_handoff(self.now)
@@ -3341,8 +3279,6 @@ class FullPlayerRuntime(object):
             if self._last_navigation.get('action') in ('firing_position', 'search_penetration'):
                 self._last_navigation = {}
             self._move_episode = None
-            if action == 'retreat' and decision['reason'] == 'no_he_or_verified_penetration':
-                return self._unusable_ammo_retreat(order, now)
             return order
         request = decision.get('move_request') or {}
         identity = request.get('episode_id')
@@ -3416,34 +3352,14 @@ class FullPlayerRuntime(object):
     def _ordinary_firing_order(self, order, now):
         return self.combat_stop.apply_order(order, now)
 
-    def _unusable_ammo_retreat(self, order, now):
-        mission = self._mission or {}
-        if ('drive' not in self.features or self._mission_brakes() or
-                mission.get('explicit') and mission.get('action') != 'attack' or
-                mission.get('capture_started') or order.get('parking_phase') or
-                order.get('combat_mode') == 'base_defense'):
-            return order
-        bot = self._planner_bot()
-        if bot is None:
-            return order
-        position = self.state['position']
-        anchor = dict(zip(('x', 'y', 'z'), _point(
-            order.get('_route_position') or order.get('move_position') or position)))
-        retreat = order.get('_turnback_position') or self.planner._retreat_point(bot, anchor)
-        face = dict(zip(('x', 'y', 'z'), _point(order.get('face_position') or position)))
-        result = dict(order, fire_allowed=False)
-        return self.planner._apply_retreat_order(result, bot, retreat, face, now,
-                                                'withdraw', 'unusable_ammunition_hold')
-
     def _resume_firing_approach(self, order, target):
-        # Keep existing route, cover, traffic and recovery control when it
+        # Keep existing route, traffic and recovery control when it
         # already has a destination. Release only an attack-owned stop.
         position = self.state['position']
         goal = order.get('move_position') or position
         if ('drive' not in self.features or self._mission_brakes() or
                 order.get('parking_phase') or order.get('empty_ammo') or
-                order.get('combat_mode') in ('base_defense', 'low_health_retreat',
-                    'magazine_reload_retreat', 'withdraw') or
+                order.get('combat_mode') == 'base_defense' or
                 order.get('throttle_override') != 0. and _distance(_point(goal), position) > 1.):
             return order
         return self.engine._gun_angle_combat_order(self.state,

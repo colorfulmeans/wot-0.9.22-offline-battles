@@ -15,9 +15,8 @@ class HandoffAmmunitionTests(unittest.TestCase):
         scene.setUp()
         self.addCleanup(scene.doCleanups)
         scene.configure(clip=clip, burst=burst, limited=limited, player_id=player_id)
-        # configure can change the session player identity to exercise the
-        # original BOT's advance personality. Publish its real fixture
-        # parameters under that same identity for the actual launch boundary.
+        # configure can change the session player identity. Publish its real
+        # fixture parameters under that identity for the actual launch boundary.
         scene.battle.client._published_player_effective_params[player_id] = (
             scene.battle.client.effective_params)
         return scene
@@ -79,17 +78,22 @@ class HandoffAmmunitionTests(unittest.TestCase):
 
     def test_unconsumable_higher_he_damage_keeps_evidence_and_fires_original_target(self):
         scene = self.scene(player_id=2)
-        self.enemy(scene, 5, (0., 0., 220.), 40.)
-        self.enemy(scene, 2, (40., 0., 240.), 10.)
+        # Start just beyond the real 340 m fire range: the authored route,
+        # not the removed preferred-distance policy, must own this advance.
+        self.enemy(scene, 5, (0., 0., 341.), 40.)
+        self.enemy(scene, 2, (40., 0., 361.), 10.)
         scene.set_he(piercing=1.)
         self.assertEqual({5: True, 2: True}, scene.sample_original_lanes())
         gun, policy = scene.battle._gun_state, scene.runtime.attack_policy
         initial_ammo = tuple(gun.ammo)
         saw_execution_filter = False
+        entered_range = False
         for unused in range(100):
             scene.tick()
             self.assertEqual(('advance', 5),
                 (scene.original_order()['combat_mode'], scene.original_order()['target_id']))
+            self.assertTrue(scene.runtime.combat_stop.active)
+            self.assertFalse(scene.runtime.combat_stop.stop_allowed)
             self.assertIsNone(policy.search_started)
             self.assertIsNone(policy.reload_authority)
             self.assertEqual(0, gun.shot_index)
@@ -109,7 +113,23 @@ class HandoffAmmunitionTests(unittest.TestCase):
                                  (policy.next_shell, policy.next_plan['mode']))
             if scene.launches():
                 break
+            if (saw_execution_filter and not entered_range and
+                    scene.runtime._strategic_due - scene.now >= .9):
+                self.assertGreater(341., scene.original_order()['fire_range'])
+                # Observe progress along the existing (30, 20) route segment
+                # after a real strategic refresh, not a forged planner order.
+                # The native pose now admits a shot before the next 1 Hz
+                # plan. Observe its converged native circle; reaction time,
+                # sampled scatter, physical ray and trigger admission remain
+                # the production gates, not always-true test replacements.
+                scene.native_position((3., 0., 2.))
+                scene.battle._avatar.gunRotator.setShotPosition(scene.entity.id,
+                    scene.battle._vector(scene.origin),
+                    scene.battle._vector(scene.direction), gun.base_dispersion,
+                    forceValueRefresh=True)
+                entered_range = True
         self.assertTrue(saw_execution_filter, policy.status())
+        self.assertTrue(entered_range)
         self.assertEqual(1, len(scene.launches()), scene.runtime.status())
         self.assertEqual(5, scene.runtime.weapon.target['network_id'])
         self.assertEqual([0], [row['shell_index'] for row in scene.launches()])

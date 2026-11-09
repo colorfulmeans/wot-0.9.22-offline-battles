@@ -2610,6 +2610,8 @@ def _runtime():
         'origin': (-120.0, -120.0), 'cell_size': 4.0,
         'bounds': (-120.0, -120.0, 120.0, 120.0),
         'width': width, 'height': width,
+        'directions': ((-1, -1), (0, -1), (1, -1), (-1, 0),
+                       (1, 0), (-1, 1), (0, 1), (1, 1)),
         'heights_mm': tuple([0] * (width * width)),
         'links': tuple([0] * (width * width)),
         'hazards': tuple([0] * (width * width)),
@@ -13194,7 +13196,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         self.assertEqual({'clear': True, 'collision': False,
                           'water': False, 'slope': 0.0}, result)
-        self.assertEqual(1, after[4] - before[4])
+        self.assertEqual(1, after[3] - before[3])
         self.assertEqual((0.0,) * len(after),
                          battle._bots.probe_duration_totals())
 
@@ -19896,10 +19898,10 @@ class BattleRuntimeContractTests(unittest.TestCase):
             update=mock.Mock(return_value=[]),
             presentation_states=mock.Mock(return_value=()),
             probe_totals=mock.Mock(side_effect=[
-                (10, 20, 30, 40, 50), (12, 23, 30, 41, 54)]),
+                (10, 20, 40, 50), (12, 23, 41, 54)]),
             probe_duration_totals=mock.Mock(side_effect=[
-                (0.1, 0.2, 0.3, 0.4, 0.5),
-                (0.102, 0.206, 0.3, 0.404, 0.51)]),
+                (0.1, 0.2, 0.4, 0.5),
+                (0.102, 0.206, 0.404, 0.51)]),
             is_authority=mock.Mock(return_value=True))
         battle._flush_pending_bot_create = mock.Mock()
         battle._flush_pending_entities = mock.Mock()
@@ -19917,13 +19919,13 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         finish = diagnostics.finish.call_args
         self.assertEqual(
-            {'visibility': 2, 'lane': 3, 'cover': 0,
+            {'visibility': 2, 'lane': 3,
              'ground': 1, 'motion': 4},
             finish.args[5])
         durations = finish.kwargs['probe_durations']
         for name, expected in (
                 ('visibility', 0.002), ('lane', 0.006),
-                ('cover', 0.0), ('ground', 0.004), ('motion', 0.01)):
+                ('ground', 0.004), ('motion', 0.01)):
             self.assertAlmostEqual(expected, durations[name])
 
     def test_authority_observation_waits_for_the_server_relay(self):
@@ -19940,7 +19942,6 @@ class BattleRuntimeContractTests(unittest.TestCase):
             'type': 'bot_observation',
             'contacts': [{'target_kind': 'human', 'target_id': 1,
                           'observing_team': 2, 'visible': True}],
-            'affordances': [],
         }
         battle._bots = types.SimpleNamespace(
             set_planning_snapshot=mock.Mock(),
@@ -19985,7 +19986,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
             update=mock.Mock(return_value=[publication]),
             presentation_states=mock.Mock(return_value=()),
             is_authority=lambda: True,
-            probe_totals=lambda: (0, 0, 0, 0, 0),
+            probe_totals=lambda: (0, 0, 0, 0),
             set_planning_snapshot=mock.Mock(),
             set_camera_position=mock.Mock())
         battle._flush_pending_bot_create = mock.Mock()
@@ -20024,8 +20025,8 @@ class BattleRuntimeContractTests(unittest.TestCase):
             _last_update_control_steps=5,
             _last_update_max_control_step=0.2,
             _control_seconds=0.1, navigator=navigator,
-            probe_totals=lambda: (2, 3, 4, 5, 6),
-            probe_duration_totals=lambda: (0.01, 0.02, 0.03, 0.04, 0.05),
+            probe_totals=lambda: (2, 3, 5, 6),
+            probe_duration_totals=lambda: (0.01, 0.02, 0.04, 0.05),
             probe_timing_state=lambda: 'active',
             diagnostic_totals=lambda: {
                 'alive_bot_ticks': 29,
@@ -34598,7 +34599,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
             bots = bot_runtime.BotRuntime.__new__(bot_runtime.BotRuntime)
             bots._descriptors = {}
             bots._load_level = 0
-            bots._probe_totals = [0, 0, 0, 0, 0]
+            bots._probe_totals = [0] * len(bot_runtime.PROBE_KINDS)
             bots._probe_started = lambda: None
             bots._probe_finished = lambda index, started: None
             bots._physics_ground_probe = lambda x, z, hint: 2.0
@@ -34608,7 +34609,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
             for step in range(20):
                 state['x'] += 0.5
                 bots._update_slope_pose(state)
-            counts[name] = bots._probe_totals[3]
+            counts[name] = bots._probe_totals[2]
 
         self.assertGreater(counts['near'], counts['far'])
         self.assertGreater(counts['near'], 0)

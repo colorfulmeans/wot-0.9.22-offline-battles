@@ -70,19 +70,13 @@ PROVEN_CREW_LEVELS = (50, 75, 100)
 
 # Tactical capabilities the rating gates.  The rating is the probability that
 # a Bot does the right thing on one occasion; the caller decides how wide an
-# occasion is by choosing what identity it seeds the draw with.  Two of them
-# are latched to the round and slot on purpose, so a roster holds Bots with a
+# occasion is by choosing what identity it seeds the draw with. Hull angling
+# is latched to the round and slot on purpose, so a roster holds Bots with a
 # recognisable habit ("that one never angles") instead of only Bots that
 # hesitate uniformly.
 CAPABILITY_WEAK_SPOT = 'weak_spot'
 CAPABILITY_SHELL_CHOICE = 'shell_choice'
-CAPABILITY_URGENT_COVER = 'urgent_cover'
-CAPABILITY_TACTICAL_COVER = 'tactical_cover'
-CAPABILITY_COVER_PEEK = 'cover_peek'
-CAPABILITY_CROSSFIRE = 'crossfire'
-CAPABILITY_WITHDRAW = 'withdraw'
 CAPABILITY_HULL_ANGLING = 'hull_angling'
-CAPABILITY_FLANK = 'flank'
 
 # Choosing which enemy to shoot is four separate competences, each with its
 # own onset below.  They are deliberately not one draw: a Bot that ranked a
@@ -100,14 +94,10 @@ TARGET_CAPABILITIES = (
 
 CAPABILITIES = (
     CAPABILITY_WEAK_SPOT, CAPABILITY_SHELL_CHOICE,
-    CAPABILITY_URGENT_COVER,
-    CAPABILITY_TACTICAL_COVER, CAPABILITY_COVER_PEEK,
-    CAPABILITY_CROSSFIRE, CAPABILITY_WITHDRAW,
-    CAPABILITY_HULL_ANGLING, CAPABILITY_FLANK) + TARGET_CAPABILITIES
+    CAPABILITY_HULL_ANGLING) + TARGET_CAPABILITIES
 
 # Rolled once for the whole round from round and slot identity.
-LATCHED_CAPABILITIES = frozenset((
-    CAPABILITY_HULL_ANGLING, CAPABILITY_FLANK))
+LATCHED_CAPABILITIES = frozenset((CAPABILITY_HULL_ANGLING,))
 
 # Maps the rating onto the capability probability.  1.0 is the reviewed
 # product choice: the gunnery half and the tactical half read the same number.
@@ -441,7 +431,7 @@ def capability_allowed(rating, capability, *occasion):
 
     ``occasion`` is the identity of the single decision being made, and it is
     what decides how long an answer lasts.  Seeding it with a target lease,
-    an aiming epoch or a cover-manoeuvre instance gives a Bot that hesitates;
+    or an aiming epoch gives a Bot that hesitates;
     seeding it with the round and slot latches the answer for the battle.
     Nothing is stored either way, so the planner may recompute an order every
     tick and an authority takeover cannot make a Bot change its mind.

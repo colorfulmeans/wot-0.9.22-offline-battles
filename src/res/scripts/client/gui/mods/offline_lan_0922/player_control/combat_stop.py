@@ -16,17 +16,13 @@ from .native_aim import NATIVE_ANGLE_TOLERANCE
 
 
 MECHANICAL_STALL_SECONDS = 6.0
-_COMBAT_MODES = ('engage', 'advance_contact', 'advance', 'support_hold',
-                 'take_cover', 'cover_hold', 'cover_peek', 'cover_return', 'flank',
-                 'magazine_reload_hold', 'base_defense', 'low_health_retreat',
-                 'magazine_reload_retreat', 'withdraw', 'team_attack',
+_COMBAT_MODES = ('engage', 'advance_contact', 'advance',
+                 'base_defense', 'team_attack',
                  'team_return_base', 'team_defend_base', 'team_hold_position',
-                 'team_turnback', 'team_back_to_base', 'team_attention_cell',
+                 'team_back_to_base', 'team_attention_cell',
                  'team_follow')
-_STOP_MODES = ('engage', 'support_hold', 'advance_contact', 'cover_hold', 'cover_peek')
-_TRAVEL_MODES = ('base_defense', 'low_health_retreat', 'magazine_reload_retreat',
-                 'withdraw', 'under_fire_withdraw', 'crossfire_withdraw',
-                 'team_turnback', 'team_back_to_base', 'team_attention_cell',
+_STOP_MODES = ('engage', 'advance_contact')
+_TRAVEL_MODES = ('base_defense', 'team_back_to_base', 'team_attention_cell',
                  'team_follow', 'team_attack', 'team_return_base',
                  'team_defend_base', 'team_hold_position')
 
@@ -101,8 +97,7 @@ class CombatStop(object):
         self.stop_allowed = bool(self.combat_owned and 'drive' in runtime.features and
             mode in _STOP_MODES and not order.get('parking_phase') and
             not order.get('capture_area') and not mission.get('capture_started') and
-            not explicit_travel and
-            (mode not in ('cover_hold', 'cover_peek') or order.get('throttle_override') == 0.))
+            not explicit_travel)
         selection = (order.get('tactical_evidence') or {}).get('selection') or {}
         if not selection:
             selection = (getattr(runtime.planner, '_target_decisions', {}) or {}).get(
@@ -183,10 +178,7 @@ class CombatStop(object):
         if (not self.combat_owned or order.get('combat_mode') in _TRAVEL_MODES or
                 order.get('empty_ammo') or self.runtime._mission_brakes()):
             return True
-        reload_owner = getattr(self.runtime, '_reload_retreat', None) or {}
-        decision = self.runtime.attack_policy.decision
-        return bool(not task_only and reload_owner.get('navigation_owned') and
-                    decision.get('action') == 'reload_clip' and decision.get('early_reload'))
+        return False
 
     def mode_pending(self):
         runtime = self.runtime
@@ -331,7 +323,7 @@ class CombatStop(object):
             return dict(order, fire_allowed=False)
         runtime._last_navigation = dict(status='waiting', action='firing_position',
             reason=decision.get('reason'), owner='copied_ordinary_navigation')
-        # Only release an attack-owned hold; preserve authored advance, cover,
+        # Only release an attack-owned hold; preserve authored advance,
         # route waypoints and every original recovery destination verbatim.
         return runtime._resume_firing_approach(order, target)
 

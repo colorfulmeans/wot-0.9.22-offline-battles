@@ -91,7 +91,7 @@ jobs:
         run: >-
           python tools/check_player_behavior_parity.py --jobs 2
           --output-dir build/bot-test-results/player-behavior-parity
-      - name: Check traffic, withdrawal and slope aiming independently
+      - name: Check traffic, retired tactics and slope aiming independently
         env:
           PYTHONDONTWRITEBYTECODE: "1"
           PYTHONPATH: tests:server:src/res/scripts/client
@@ -99,6 +99,9 @@ jobs:
           set -euo pipefail
           patterns=(
             'test_player*.py'
+            'test_retired_tactical_cleanup.py'
+            'test_current_default_route_authority.py'
+            'test_navigation_rebake_default_authority.py'
             'test_port_0922_ai.py'
             'test_port_0922_house_corner_feedback.py'
             'test_diagnostic_log_modes.py'

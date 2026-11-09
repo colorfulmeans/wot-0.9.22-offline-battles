@@ -8,7 +8,9 @@ from bot_tactics_store import graph_data
 
 
 def profile():
-    graph=graph_data('31_airfield');doc=config.empty()
+    # Default is immutable owner data. Priority edits belong to a named
+    # editable profile, exactly as they do in the launcher and round payload.
+    graph=graph_data('31_airfield');doc=config.empty('Editable priority fixture')
     doc['maps']['31_airfield']=dict(mode='regular',resource_sha256=config.MAPS['31_airfield']['resource_sha256'],routes=[],positions=[],default_routes=[])
     return graph,doc
 
@@ -98,7 +100,8 @@ class RoutePriorityTests(unittest.TestCase):
         deletion=edit(north,'lightTank',0);deletion['disabled']=True
         doc['maps']['31_airfield']['default_routes']=[deletion]
         routes,status=planning.default_routes(config.canonical(doc),'31_airfield',graph)
-        variant=next(r for r in routes['1'] if r.get('_editor_source')==north['id'])
+        variant=next(r for r in routes['1'] if r.get('_editor_source')==north['id']
+                     and r.get('_editor_class')=='lightTank')
         self.assertEqual('reserve',variant['_route_tier'])
         self.assertEqual('lightTank',variant['_editor_class'])
         self.assertIn('baked_route_connected',status.values())

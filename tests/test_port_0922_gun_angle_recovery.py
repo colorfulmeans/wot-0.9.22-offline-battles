@@ -185,7 +185,7 @@ class GunAngleRecoveryTests(unittest.TestCase):
         self.state.pop('_gun_angle_rejected')
         self.order_at(10.)
         move = self.order_at(12., lambda yaw, distance: yaw > 1.)
-        self.assertEqual('withdraw', move['combat_mode'])
+        self.assertEqual('gun_angle_adjust', move['combat_mode'])
         self.assertEqual(1.0, move['throttle_override'])
         self.assertAlmostEqual(-8., move['move_position'][2])
         self.assertEqual(self.target['position'], move['face_position'])

@@ -94,13 +94,15 @@ class AirfieldDefaultRoadTests(unittest.TestCase):
         self.assertNotIn('bake_airfield_road_routes', (ROOT/'tools/bake_navigation_0922.py').read_text())
 
     def test_all_six_routes_are_connected_and_fit_the_existing_wire(self):
+        from gui.mods.offline_lan_0922 import bot_tactics
+        approved = bot_tactics.shared_route_points(bot_tactics.default_map('31_airfield'))
         grid=planning.graph_view('31_airfield',self.graph)
         with mock.patch.object(grid,'distances',side_effect=AssertionError('full flood')):
             for team,routes in self.graph['routes'].items():
                 for route in routes:
                     self.assertLessEqual(len(route['waypoints']),16)
                     self.assertIsNone(planning.validate_route(grid,dict(points=route['waypoints'])))
-                    self.assertIsNone(self.legacy._route_geometry_issue(route['waypoints']))
+                    self.assertEqual(approved[(int(team), route['id'])],route['waypoints'])
         for one,two in zip(self.graph['routes']['1'],self.graph['routes']['2']):
             self.assertEqual(list(reversed(one['waypoints'])),two['waypoints'])
 

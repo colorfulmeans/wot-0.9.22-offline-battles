@@ -212,21 +212,22 @@ class AuthoredRouteWaitTests(unittest.TestCase):
         bot['state'].update(x=-338,z=-322)
         self.assertEqual(1,planner._route(bot,1)[1])
 
-    def test_distant_known_enemy_cannot_pin_completed_withdrawal_forever(self):
+    def test_low_health_does_not_create_a_retreat_or_expiry_on_authored_route(self):
         planner = BotPlanner()
         bot = _bot(11, 2, 0, _route('lane', [(0, 0, 0), (100, 0, 0)]), 'lightTank')
         bot['state'] = _state(11, 2, 0, 0)
+        bot['state'].update(health=10, max_health=1000)
         bot['profile']['fire_range'] = 320.0
-        def order(now, enemy=400):
-            value = dict(target_id=15, combat_mode='route',
-                         move_position={'x':100,'y':0,'z':0}, throttle_override=None)
-            return planner._apply_retreat_order(value, bot,
-                {'x':0,'y':0,'z':0}, {'x':enemy,'y':0,'z':0}, now,
-                'low_health_retreat', 'low_health_defend')
-        self.assertEqual('low_health_retreat', order(0)['combat_mode'])
-        self.assertEqual('route', order(15)['combat_mode'])
-        self.assertEqual('route', order(16)['combat_mode'])
-        self.assertEqual('low_health_retreat', order(17, 100)['combat_mode'])
+        focus = dict(id=15, target_kind='bot', visible=True,
+                     shootable_by_bot_ids=[11], position=dict(x=400., y=0., z=0.))
+        self.assertFalse(hasattr(planner, '_apply_retreat_order'))
+        for now in (0., 15., 16., 17., 60.):
+            order = planner._order_for(bot, 0, 1, focus, [focus], now)
+            self.assertEqual('advance', order['combat_mode'])
+            self.assertEqual('lane', order['route_id'])
+            self.assertEqual(1, order['route_index'])
+            self.assertEqual(dict(x=100., y=0., z=0.), order['move_position'])
+            self.assertFalse(order['fire_allowed'])
 
     def test_unfinished_wait_does_not_count_time_spent_on_another_assignment(self):
         planner,manifest=self.setup_route('AT-SPG',30)

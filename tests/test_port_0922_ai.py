@@ -14,7 +14,7 @@ sys.path.insert(0, str(PORT_ROOT / 'server'))
 sys.path.insert(0, str(CLIENT_SCRIPTS))
 
 from gui.mods.offline_lan_0922.ai import (
-    cover, maps, navigation,
+    maps, navigation,
 )
 from gui.mods.offline_lan_0922.ai.adapter import BotAdapter
 from gui.mods.offline_lan_0922.ai.driver import (
@@ -184,16 +184,9 @@ class BotAiPortTests(unittest.TestCase):
             for team in (1, 2):
                 self.assertEqual(routes, [(r['id'], r['capacity']) for r in tactical['routes'][team]])
 
-    def test_cover_contract_is_plain_data_and_deterministic(self):
-        result = cover.score_candidates([{
-            'id': 'ridge', 'position': (1, 2, 3), 'travel_distance': 5,
-            'route_alignment': 1, 'enemy_occlusion': 1, 'exposure': 0,
-            'slope': 0, 'water': 0, 'ally_congestion': 0,
-            'peek_feasible': True, 'peek_position': (2, 2, 3),
-            'escape_feasible': True,
-        }])
-        self.assertEqual('ridge', result[0]['id'])
-        self.assertEqual({'x': 1.0, 'y': 2.0, 'z': 3.0}, result[0]['position'])
+    def test_retired_cover_module_has_no_runtime_fallback(self):
+        ai_root = CLIENT_SCRIPTS / 'gui' / 'mods' / 'offline_lan_0922' / 'ai'
+        self.assertFalse((ai_root / 'cover.py').exists())
 
     def test_adapter_returns_no_engine_objects(self):
         descriptor = {'type': {'name': 'MS-1', 'tags': ('mediumTank',)},
@@ -450,7 +443,7 @@ class BotAiPortTests(unittest.TestCase):
         self.assertEqual(0.0, order['turn'])
         self.assertEqual(0.25, order['target_yaw'])
 
-    def test_local_director_does_not_jiggle_without_confirmed_cover(self):
+    def test_local_director_holds_a_valid_shot_without_jiggle(self):
         descriptor = {
             'type': {'name': 'heavy', 'tags': ('heavyTank',)},
             'physics': {'speedLimits': (12.0,)},
@@ -460,10 +453,11 @@ class BotAiPortTests(unittest.TestCase):
             'gun': {'shots': ()},
         }
         director = BattleDirector('04_himmelsdorf', 45)
-        agent = director.register(401, 1, descriptor, 'Jiggler')
+        agent = director.register(401, 1, descriptor, 'Stationary')
+        self.assertNotIn('jiggle', agent['personality'])
         agent['personality'].update({
             'caution': 0.2, 'patience': 0.2,
-            'aggression': 0.3, 'jiggle': 0.95,
+            'aggression': 0.3,
         })
         position = (185.0, 0.0, -82.0)
         target = (185.0, 0.0, -22.0)
@@ -480,9 +474,8 @@ class BotAiPortTests(unittest.TestCase):
             modes.add(order['combat_mode'])
             throttle_values.add(order['throttle_override'])
 
-        self.assertNotIn('jiggle_forward', modes)
-        self.assertNotIn('jiggle_back', modes)
-        self.assertEqual({None}, throttle_values)
+        self.assertEqual({'engage'}, modes)
+        self.assertEqual({0.0}, throttle_values)
 
     def test_discovered_artillery_has_priority_over_a_soft_regular_target(self):
         director = BattleDirector('04_himmelsdorf', 46)

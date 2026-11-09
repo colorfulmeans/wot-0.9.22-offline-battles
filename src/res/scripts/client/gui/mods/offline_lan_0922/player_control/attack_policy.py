@@ -924,7 +924,7 @@ class AttackPolicy(object):
         return True
 
     def _grant_early_reload(self, now, reason):
-        # Qualification survives movement to cover. The next clip's point
+        # Qualification survives physical movement. The next clip's point
         # proof does not: every changed pose still requires its own review.
         self.reload_authority = dict(identity=self._weapon_identity,
             loaded=self.frame['loaded'], clip=self.frame['clip'],
@@ -938,10 +938,10 @@ class AttackPolicy(object):
         if (alternative is None and status == 'no_verified_penetration' and
                 self._fallback_qualified(self._stocked_indices(loaded))):
             alternative = self._best_he(exclude=loaded, plannable=True)
-        # Pending review does not revoke the already granted retreat. It
+        # Pending review does not revoke the already qualified reload. It
         # leaves the replacement unspecified; the existing partial-reload
         # input may continue the currently legal shell. Never substitute an
-        # unproved alternative just to finish the retreat transaction.
+        # unproved alternative just to finish the reload transaction.
         index = alternative['shell_index'] if alternative is not None else loaded
         return self._choose('reload_clip', authority['reason'], alternative,
             shell_index=index, early_reload=True,
@@ -1088,7 +1088,7 @@ class AttackPolicy(object):
             # A native siege descriptor changes every mechanical/trajectory
             # proof, but is not itself a different physical loaded cassette.
             # A changed admitted combat domain likewise retires geometric
-            # evidence, not an already granted retreat/reload transaction.
+            # evidence, not an already qualified reload transaction.
             # Retain only the target/sample intention and an already admitted
             # reload transaction for the same physical gun. Rows, trigger
             # proof, loading/NEXT plans and all geometry are still discarded.
@@ -1183,7 +1183,7 @@ class AttackPolicy(object):
             return self._choose('trigger_active', 'physical_trigger_owns_tail',
                                 self.trigger)
         if not any(amount > 0 for amount in frame.get('ammo', ())):
-            return self._choose('retreat', 'ammunition_exhausted')
+            return self._choose('navigate', 'ammunition_exhausted')
         if not frame.get('targets'):
             empty_clip = (int(frame.get('clip_size', 1)) > 1 and frame['clip'] <= 0 and
                           not frame.get('reloading'))
@@ -1340,7 +1340,7 @@ class AttackPolicy(object):
         eligible = not he_clip and (current_failed and frame['clip'] > 0
                     if is_magazine else self._all_failed(stocked))
         if eligible and frame.get('limited_traverse'):
-            # The magazine case above owns reload retreat. A limited single
+            # The magazine case above owns early reload. A limited single
             # shot reaches this branch only after every stocked shell failed.
             if not self._failure_fenced(stocked):
                 return self._recover_incomplete(now, 'observation_changed_before_fallback')
@@ -1510,7 +1510,7 @@ class AttackPolicy(object):
         he_shells = [shell for shell in self.frame['shells']
                      if shell.get('is_he') and self.frame['ammo'][shell['index']] > 0]
         if not he_shells:
-            return self._choose('retreat', 'no_he_or_verified_penetration')
+            return self._choose('navigate', 'no_he_or_verified_penetration')
         rows = self._rows_for('he_fallback', loaded if is_magazine else None, fresh_line=True)
         blocked = next((row for row in rows if row.get('contact') is True and
                         (row.get('line') != 'clear' or
@@ -1657,8 +1657,8 @@ class AttackPolicy(object):
             owner = getattr(getattr(self, 'runtime', None), 'combat_stop', None)
             if owner is not None and not owner.stop_allowed:
                 # The complete admitted domain still informs ammo/armour
-                # decisions. It does not donate an authored advance, cover
-                # leg or mission's target/facing to another policy candidate.
+                # decisions. It does not donate an authored advance or
+                # mission's target/facing to another policy candidate.
                 # During travel only refine the already selected gun target.
                 selected = (result.get('target_kind'), result.get('target_id'))
                 if _target_key(target) != selected:

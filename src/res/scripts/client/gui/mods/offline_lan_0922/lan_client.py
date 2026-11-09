@@ -3523,7 +3523,7 @@ class LANClient(object):
         self._team_chat_seq = sequence
         return sequence
 
-    def send_bot_observation(self, contacts, affordances=None, radio_links=None,
+    def send_bot_observation(self, contacts, radio_links=None,
                              player_vision_ranges=None):
         if not self.is_bot_authority():
             return False
@@ -3531,7 +3531,6 @@ class LANClient(object):
                            'round_id': self.round_id,
                            'player_vision_ranges': list(player_vision_ranges or ())[:30],
                            'contacts': list(contacts or ())[:64],
-                           'affordances': list(affordances or ())[:16],
                            'radio_links': list(radio_links or ())[:30]})
 
     def send_descriptor_catalog(self, vehicles):

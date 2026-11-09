@@ -50,8 +50,6 @@ class BotAdapter(object):
         self._wreck_attempts = {}
         self._wreck_history = {}
         self._wreck_last_terminal = {}
-        self._withdrawal_attempts = {}
-        self._flank_arrivals = {}
 
     def register(self, bot_id, team, descriptor, display_name='Bot'):
         return self.director.register(bot_id, team, descriptor, display_name)
@@ -65,8 +63,6 @@ class BotAdapter(object):
         self._wreck_attempts.pop(int(bot_id), None)
         self._wreck_history.pop(int(bot_id), None)
         self._wreck_last_terminal.pop(int(bot_id), None)
-        self._withdrawal_attempts.pop(int(bot_id), None)
-        self._flank_arrivals.pop(int(bot_id), None)
 
     def _hull_contact(self, bot_id, state, position):
         """Return geometry for a real hull contact across small gaps."""
@@ -529,102 +525,6 @@ class BotAdapter(object):
         return self._drive_order(
             bot_id, state, position, strategic, direction_clear)
 
-    def _reverse_withdrawal(self, state, strategic, position, target,
-                            destination, direction_clear):
-        """Back toward a nearby withdrawal point while preserving frontal armour.
-
-        Long withdrawals retain reverse while an in-range contact is tracked;
-        after contact is lost the ordinary route driver may turn and travel.
-        Native motion still independently proves every realised movement.
-        """
-        if strategic.get('combat_mode') not in (
-                'withdraw', 'low_health_retreat', 'magazine_reload_retreat', 'under_fire_withdraw',
-                'crossfire_withdraw'):
-            return None
-        if strategic.get('throttle_override') is not None:
-            return None
-        dx, dz = target[0] - position[0], target[2] - position[2]
-        distance = math.hypot(dx, dz)
-        if distance <= WAYPOINT_ARRIVAL_RADIUS:
-            return None
-        goal_distance = math.hypot(
-            destination[0] - position[0], destination[2] - position[2])
-        threat = _position(strategic.get('aim_position'), position)
-        exposed = (strategic.get('target_id') is not None and
-                   math.hypot(threat[0] - position[0],
-                              threat[2] - position[2]) <=
-                   float(strategic.get('fire_range', 0.0)))
-        if goal_distance > 30.0 and not exposed:
-            return None
-        # Backing bypasses LocalDriver.drive, including its progress clock.
-        # Bound this owner independently so a denied rear sweep cannot hold
-        # the tank forever or repeatedly steal control from local recovery.
-        bot_id = int(state.get('id', 0))
-        attempt = self._withdrawal_attempts.get(bot_id)
-        if (attempt is None or math.hypot(
-                destination[0] - attempt['goal'][0],
-                destination[2] - attempt['goal'][2]) > 2.0):
-            attempt = {'goal': tuple(destination), 'position': tuple(position),
-                       'distance': goal_distance, 'age': 0.0, 'fallback': False}
-            self._withdrawal_attempts[bot_id] = attempt
-        # Net progress towards cover renews this owner. Small alternating
-        # displacements must not buy another eight seconds at the same jam.
-        progressed = goal_distance + (2.0 if attempt['fallback'] else 0.08) <= attempt['distance']
-        if progressed:
-            attempt.update(position=tuple(position), distance=goal_distance,
-                           age=0.0, fallback=False)
-        attempt['age'] += max(0.0, float(state.get('dt', 0.0)))
-        if attempt['age'] >= 8.0:
-            attempt['fallback'] = True
-        evidence = dict(goal=attempt['goal'], distance=goal_distance,
-                        best_distance=attempt['distance'], age=attempt['age'],
-                        phase='fallback' if attempt['fallback'] else 'active')
-        state['_withdrawal_evidence'] = evidence
-        if attempt['fallback']:
-            return None
-        yaw = float(state.get('yaw', 0.0))
-        travel_yaw = math.atan2(dx, dz)
-        # atan2 is the rear travel heading; the desired hull faces opposite it.
-        face_yaw = travel_yaw + math.pi
-        error = (face_yaw - yaw + math.pi) % (2.0 * math.pi) - math.pi
-        if abs(error) > math.pi / 3.0:
-            evidence['phase'] = 'orientation_handoff'
-            return None
-        length = float(state.get('half_length', 3.5))
-        width = float(state.get('half_width', 1.7))
-        reach = min(distance, length * 1.6)
-        clear = True
-        blocker = None
-        pose_clear = state.get('pose_clear')
-        body = self.driver.collision_body(state)
-        for fraction in (0.0, 0.25, 0.5, 0.75, 1.0):
-            sample_yaw = yaw + error * fraction
-            clear = clear and self.driver._clear(
-                direction_clear, sample_yaw + math.pi, reach)
-            blocker = blocker or self.driver._reverse_blocked_by_vehicle(
-                position, sample_yaw, state.get('neighbours', ()), length, width, body=body)
-            try:
-                if pose_clear is not None:
-                    clear = clear and bool(pose_clear(sample_yaw))
-            except Exception:
-                clear = False
-        if not clear or blocker is not None:
-            # The rear-only owner has no admitted move. Let the normal driver
-            # prove another exit now, rather than freezing its progress clock.
-            attempt['fallback'] = True
-            evidence.update(phase='rear_refused', reverse_blocked_by=blocker,
-                            world_clear=clear)
-            return None
-        # Reverse steering has the opposite input sign. Align gently before
-        # backing rather than turning the chassis around toward the waypoint.
-        braking_distance = max(0.0, float(state.get('stopping_distance') or 0.0))
-        stopping = (float(state.get('speed', 0.0)) < -0.05 and
-                    distance <= max(WAYPOINT_ARRIVAL_RADIUS, braking_distance))
-        return {'throttle': 0.0 if stopping else -1.0,
-                'turn': 0.0 if stopping else -max(-0.5, min(0.5, error / 0.58)),
-                'withdrawal_aim': goal_distance <= 30.0 and exposed,
-                'target_yaw': face_yaw, 'recovery_mode': 'reverse_withdraw'}
-
     @observed('driver.order')
     def _drive_order(self, bot_id, state, position, strategic,
                      direction_clear):
@@ -646,13 +546,12 @@ class BotAdapter(object):
 
     def _drive_order_controls(self, bot_id, state, position, strategic,
                                        direction_clear):
-        # Navigation waits, withdrawal and contact plans do not execute drive.
+        # Navigation waits and contact plans do not execute drive.
         # Their receipts must not reuse the previous drive call's distances.
         self.driver.states.get(bot_id, {}).pop('arrival_trace', None)
         self.driver.states.get(bot_id, {}).pop('pedal_observation', None)
         state.pop('_contact_escape_evidence', None)
         state.pop('_wreck_push_evidence', None)
-        state.pop('_withdrawal_evidence', None)
         aim_position = strategic.get('aim_position')
         move_position = strategic.get('move_position')
         face_position = strategic.get('face_position')
@@ -686,7 +585,7 @@ class BotAdapter(object):
             if escape is not None:
                 self._contact_escape_evidence(state, escape, 'parking_cancelled')
         combat_hold = (strategic.get('target_id') is not None and
-            strategic.get('combat_mode') in ('engage', 'support_hold', 'cover_hold') and
+            strategic.get('combat_mode') == 'engage' and
             strategic.get('throttle_override') == 0.0)
         combat_hold = combat_hold or bool(strategic.get('capture_area') and
             strategic.get('throttle_override') == 0.0)
@@ -728,21 +627,6 @@ class BotAdapter(object):
         if contact_plan is not None:
             throttle_override = None
             stop_at_target = False
-        flank_key = (tuple(move_position), strategic.get('target_id'))
-        flank_arrival = self._flank_arrivals.get(bot_id)
-        if (strategic.get('combat_mode') != 'flank' or contact_plan is not None or
-                (flank_arrival is not None and (
-                    flank_arrival['key'] != flank_key or
-                    math.hypot(position[0]-flank_arrival['position'][0],
-                               position[2]-flank_arrival['position'][2]) >
-                    max(WAYPOINT_ARRIVAL_RADIUS, float(state.get('half_length', 3.5)))))):
-            self._flank_arrivals.pop(bot_id, None)
-            flank_arrival = None
-        if flank_arrival is not None:
-            # A completed flank point becomes a firing hold. Track-pivot
-            # movement while facing the enemy cannot restart the finished leg.
-            # A changed order, real displacement or contact releases ownership.
-            throttle_override = 0.0
         movement_intent = not (
             throttle_override is not None and
             float(throttle_override) <= 0.0)
@@ -757,10 +641,6 @@ class BotAdapter(object):
             WAYPOINT_ARRIVAL_RADIUS)
         if mechanical_hold:
             movement_intent = False
-        if strategic.get('combat_mode') not in (
-                'withdraw', 'low_health_retreat', 'magazine_reload_retreat', 'under_fire_withdraw',
-                'crossfire_withdraw'):
-            self._withdrawal_attempts.pop(bot_id, None)
         requested_dx = float(move_position[0]) - float(position[0])
         requested_dz = float(move_position[2]) - float(position[2])
         target_dx = float(target[0]) - float(position[0])
@@ -798,45 +678,36 @@ class BotAdapter(object):
                 recovery_allowed=bool(state.get('navigation_recovery_allowed')),
                 body=self.driver.collision_body(state))
         else:
-            local = self._reverse_withdrawal(
-                state, strategic, position, target, move_position, direction_clear)
-            if local is None:
-                local = self.driver.drive(
-                    bot_id, int(state['slot']), position,
-                    float(state.get('yaw', 0.0)),
-                    float(state.get('speed', 0.0)), float(state.get('dt', 0.0)),
-                    target, state.get('neighbours', ()), direction_clear,
-                    body=self.driver.collision_body(state),
-                    velocity=state.get('velocity'),
-                    half_length=float(state.get('half_length', 3.5)),
-                    half_width=float(state.get('half_width', 1.7)),
-                    movement_intent=movement_intent,
-                    stopping_distance=state.get('stopping_distance'),
-                    stop_at_target=stop_at_target,
-                    decision_horizon=float(state.get('decision_horizon', 0.0)),
-                    progress_target=state.get('navigation_progress_target', move_position),
-                    turn_speed_limit=state.get('turn_speed_limit'),
-                    pose_clear=state.get('pose_clear'),
-                    rotation_refused=bool(state.get('native_rotation_refused')),
-                    recovery_goal=move_position,
-                    progress_identity=(('empty_ammo', strategic.get('route_id'), strategic.get('route_index'))
-                        if strategic.get('empty_ammo') else bot_tactics.route_motion_identity(strategic) or
-                        (('combat', strategic.get('target_kind'), strategic['target_id'])
-                        if strategic.get('target_id') is not None and
-                        not strategic.get('parking_phase') and strategic.get('combat_mode') not in
-                        ('base_defense', 'artillery_deploy', 'artillery_relocate') else None)),
-                    arrival_radius=strategic.get('arrival_radius') if stop_at_target else None)
+            local = self.driver.drive(
+                bot_id, int(state['slot']), position,
+                float(state.get('yaw', 0.0)),
+                float(state.get('speed', 0.0)), float(state.get('dt', 0.0)),
+                target, state.get('neighbours', ()), direction_clear,
+                body=self.driver.collision_body(state),
+                velocity=state.get('velocity'),
+                half_length=float(state.get('half_length', 3.5)),
+                half_width=float(state.get('half_width', 1.7)),
+                movement_intent=movement_intent,
+                stopping_distance=state.get('stopping_distance'),
+                stop_at_target=stop_at_target,
+                decision_horizon=float(state.get('decision_horizon', 0.0)),
+                progress_target=state.get('navigation_progress_target', move_position),
+                turn_speed_limit=state.get('turn_speed_limit'),
+                pose_clear=state.get('pose_clear'),
+                rotation_refused=bool(state.get('native_rotation_refused')),
+                recovery_goal=move_position,
+                progress_identity=(('empty_ammo', strategic.get('route_id'), strategic.get('route_index'))
+                    if strategic.get('empty_ammo') else bot_tactics.route_motion_identity(strategic) or
+                    (('combat', strategic.get('target_kind'), strategic['target_id'])
+                    if strategic.get('target_id') is not None and
+                    not strategic.get('parking_phase') and strategic.get('combat_mode') not in
+                    ('base_defense', 'artillery_deploy', 'artillery_relocate') else None)),
+                arrival_radius=strategic.get('arrival_radius') if stop_at_target else None)
         # Preserve the mature face-position intent which is separate from the
-        # gun target.  At a route/cover stop it gives armoured turreted tanks
+        # gun target.  At a route/firing stop it gives armoured turreted tanks
         # their stable 12-30 degree hull angle while the turret keeps tracking
         # ``aim_position``.  Local recovery directions still outrank it.
         recovery_mode = local.get('recovery_mode', 'drive')
-        if (strategic.get('combat_mode') == 'flank' and
-                contact_plan is None and recovery_mode == 'arrived' and
-                math.hypot(position[0]-move_position[0], position[2]-move_position[2]) <=
-                WAYPOINT_ARRIVAL_RADIUS and flank_arrival is None):
-            flank_arrival = dict(key=flank_key, position=position)
-            self._flank_arrivals[bot_id] = flank_arrival
         vehicle_blockage = bool(contact or state.get('_wreck_push_evidence') or
                                local.get('forward_blocked_by') or local.get('reverse_blocked_by'))
         # A realised native-world rotation refusal is also physical blockage,
@@ -885,7 +756,6 @@ class BotAdapter(object):
             'target_yaw': target_yaw,
             'recovery_mode': recovery_mode,
             'movement_intent': movement_intent,
-            'withdrawal_aim': bool(local.get('withdrawal_aim', False)),
         }
         # Evidence only: retain the driver's result before face intent and
         # the runtime's combat/traffic/track gates can overwrite it.
@@ -910,8 +780,7 @@ class BotAdapter(object):
                 dict(reason='non_drive_terminal', mode=local['recovery_mode'],
                      throttle=local['throttle'], turn=local['turn'],
                      brake=bool(local.get('brake', False)))),
-            hull_angle_degrees=strategic.get('hull_angle_degrees'),
-            flank_arrival=flank_arrival)
+            hull_angle_degrees=strategic.get('hull_angle_degrees'))
         if strategic.get('parking_phase') is not None:
             result['parking_phase'] = strategic['parking_phase']
         if strategic.get('spg_mode') is not None:
@@ -936,8 +805,6 @@ class BotAdapter(object):
             result['wreck_push'] = dict(state['_wreck_push_evidence'])
         if bot_id in self._wreck_last_terminal:
             result['wreck_push_last_terminal'] = dict(self._wreck_last_terminal[bot_id])
-        if state.get('_withdrawal_evidence') is not None:
-            result['withdrawal'] = dict(state['_withdrawal_evidence'])
         if state.get('navigation_progress_target') is not None:
             result['driver_progress_target'] = state['navigation_progress_target']
         difference = target_yaw - float(state.get('yaw', 0.0))

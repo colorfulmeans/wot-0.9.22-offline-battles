@@ -12,8 +12,6 @@ import time
 
 from gui.mods.offline_lan_0922 import water_surfaces
 
-from gui.mods.offline_lan_0922.player_control.copied.ai import tactical_geometry
-
 from gui.mods.offline_lan_0922.native_navigation_query import (
     NAVIGABLE_WATER_DEPTH, NAVIGATION_MAX_GRADE)
 
@@ -423,11 +421,6 @@ def _xyz(value):
         return (_number(getattr(value, 'x', 0.0)),
                 _number(getattr(value, 'y', 0.0)),
                 _number(getattr(value, 'z', 0.0)))
-
-def _distance_2d(first, second):
-    dx = float(first[0]) - float(second[0])
-    dz = float(first[2]) - float(second[2])
-    return math.sqrt(dx * dx + dz * dz)
 
 
 class CopiedBattleGeometry(object):
@@ -1261,9 +1254,6 @@ class CopiedBattleGeometry(object):
         except (KeyError, TypeError, ValueError, OverflowError):
             return None
 
-    def _cover_ground(self, x, z, hint_y):
-        return self._ground_y(x, z, hint_y)
-
     def _observed_vehicle_descriptor(self, target):
         kind = 'player' if target.get('kind') == 'human' else 'bot'
         network_id = target.get('network_id', target.get('id'))
@@ -1310,180 +1300,6 @@ class CopiedBattleGeometry(object):
                 for sample in samples)
         except Exception:
             return None
-
-    def _cover_surface_pose(self, source, point, descriptor, ground=None):
-        plane = self._sample_ground_plane(point, source.get('yaw', 0.0),
-                                          descriptor, ground_probe=ground)
-        if plane is None or math.degrees(math.atan(
-                plane['slope_tangent'])) > 24.0:
-            return None
-        pose = dict(source)
-        pose.update(position=(point[0], plane['center_y'], point[2]),
-                    pitch=plane['pitch'], roll=plane['roll'])
-        return pose
-
-    def _cover_gun_lane(self, pose, descriptor, target, clear):
-        """Worker-only Bot cover policy; player cover has its own proof path."""
-        from gui.mods.offline_lan_0922.player_control.copied.bot_runtime import BotRuntime
-        from gui.mods.offline_lan_0922.player_control.copied.ai.driver import gun_yaw_limits
-        target_descriptor = self._observed_vehicle_descriptor(target)
-        if target_descriptor is None:
-            return False
-        yaw = pose.get('yaw', 0.0)
-        origin, unused = shot_geometry.shot_origin_and_direction(
-            descriptor, pose['position'], yaw, pose.get('pitch', 0.0),
-            pose.get('roll', 0.0), pose.get('turret_yaw', 0.0),
-            pose.get('gun_pitch', 0.0))
-        for sample in shot_geometry.vehicle_aim_samples(target_descriptor)[:2]:
-            point = shot_geometry.vehicle_aim_point(sample, target)
-            direction = tuple(point[i] - origin[i] for i in range(3))
-            turret_yaw, pitch = shot_geometry.world_direction_to_local_gun_angles(
-                direction, yaw, pose.get('pitch', 0.0), pose.get('roll', 0.0))
-            limits = BotRuntime._effective_gun_pitch_limits(
-                pose, descriptor, turret_yaw)
-            yaw_min, yaw_max, unused = gun_yaw_limits(descriptor)
-            if (limits is None or not limits[0] <= pitch <= limits[1] or
-                    not yaw_min <= turret_yaw <= yaw_max):
-                continue
-            aimed_origin, unused = shot_geometry.shot_origin_and_direction(
-                descriptor, pose['position'], yaw, pose.get('pitch', 0.0),
-                pose.get('roll', 0.0), turret_yaw, pitch)
-            if clear(aimed_origin, point):
-                return True
-        return False
-
-    def _sample_bot_cover(self, source, target, route_position,
-                          ally_positions, segment_clear):
-        """Search cover with at most 40 direct native queries per job.
-
-        Rotate the candidate fan between normal staggered cover jobs. Geometry
-        is advisory: actual navigation, body support and final fire retain their
-        independent native proofs. Incomplete probes never produce a candidate.
-        """
-        if not callable(segment_clear) or self._bots is None:
-            return ()
-        current = _xyz(source)
-        own = dict(source, kind='bot', network_id=source['id'])
-        descriptor = self._observed_vehicle_descriptor(own)
-        if descriptor is None:
-            return ()
-        samples = tactical_geometry.body_samples(descriptor)
-        if not samples:
-            return ()
-        bbox = _field(_field(_field(descriptor, 'hull'), 'hitTester'), 'bbox')
-        width = float(bbox[1][0]) - float(bbox[0][0])
-        length = float(bbox[1][2]) - float(bbox[0][2])
-        if min(width, length) <= 0.0:
-            return ()
-        observed = []
-        for key, remembered in self._bots._visible_target_poses.items():
-            if (key[0] != source.get('team') or
-                    self._bots._team_spot_time_left(key, self._clock()) <= 0.0):
-                continue
-            value = dict(remembered, kind=key[1], network_id=key[2])
-            observed.append(((key[1], key[2]), value))
-        threats = tactical_geometry.relevant_threats(current, target, observed)
-        origins = []
-        for threat in threats:
-            origin = self._observed_gun_origin(threat)
-            if origin is None:
-                return ()
-            origins.append(origin)
-        record = self._records.get('bot:%d' % source['id'])
-        phase = record.get('cover_search_phase', 0)
-        record['cover_search_phase'] = phase + 1
-        offsets = tactical_geometry.search_offsets(width, length, phase)
-        # Budget includes vertical ground rays and water queries as well as
-        # exposure. Grid traversal retains its existing independent budget.
-        budget = tactical_geometry.RayBudget(self._tactical_ray_clear, 40)
-        ground_cache = {}
-        def ground_at(x, z, hint):
-            key = (x, z, hint)
-            if key not in ground_cache:
-                ground_cache[key] = budget.call(self._cover_ground, x, z, hint)
-            return ground_cache[key]
-        target_position = _xyz(target.get('position', target))
-        dx, dz = (current[0] - target_position[0],
-                  current[2] - target_position[2])
-        distance = math.hypot(dx, dz)
-        if distance < 2.0:
-            return ()
-        away = (dx / distance, dz / distance)
-        right = (away[1], -away[0])
-        route = _xyz(route_position)
-        route_dx, route_dz = route[0] - current[0], route[2] - current[2]
-        route_length = math.hypot(route_dx, route_dz)
-        candidates = []
-        # Ground/path work is bounded too, even when every point has no ground.
-        for backward, lateral in offsets[:4]:
-            try:
-                point = (current[0] + away[0] * backward + right[0] * lateral,
-                         current[1],
-                         current[2] + away[1] * backward + right[1] * lateral)
-                ground = ground_at(point[0], point[2], point[1])
-                if ground is None:
-                    continue
-                point = (point[0], ground, point[2])
-                water_depth = budget.call(self._water_depth, point)
-                if (water_depth > NAVIGABLE_WATER_DEPTH or
-                        not segment_clear(current, point)):
-                    continue
-                pose = self._cover_surface_pose(source, point, descriptor, ground_at)
-                if pose is None:
-                    continue
-                try:
-                    hidden = tactical_geometry.exposure(samples, pose, origins,
-                                                        budget.clear)
-                    if hidden is None or hidden > 0.5:
-                        continue
-                    side = -1.0 if phase % 2 else 1.0
-                    peek = (point[0] + right[0] * width * 1.5 * side,
-                            point[1],
-                            point[2] + right[1] * width * 1.5 * side)
-                    peek_ground = ground_at(peek[0], peek[2], peek[1])
-                    if peek_ground is None:
-                        continue
-                    peek = (peek[0], peek_ground, peek[2])
-                    if (budget.call(self._water_depth, peek) > NAVIGABLE_WATER_DEPTH or
-                            not segment_clear(point, peek) or
-                            not segment_clear(peek, point)):
-                        continue
-                    peek_pose = self._cover_surface_pose(source, peek, descriptor, ground_at)
-                    if peek_pose is None or not self._cover_gun_lane(
-                            peek_pose, descriptor, target, budget.clear):
-                        continue
-                    exposed = tactical_geometry.exposure(samples, peek_pose,
-                                                         origins, budget.clear)
-                    midpoint = tuple((current[i] + point[i]) * 0.5 for i in range(3))
-                    mid_pose = dict(pose, position=midpoint)
-                    approach = tactical_geometry.exposure(samples[:2], mid_pose,
-                                                          origins, budget.clear)
-                except tactical_geometry.ProbeBudgetExhausted:
-                    break
-                move_dx, move_dz = point[0] - current[0], point[2] - current[2]
-                travel = math.hypot(move_dx, move_dz)
-                alignment = 0.5
-                if travel > 0.1 and route_length > 0.1:
-                    alignment = max(0.0, min(1.0, 0.5 + 0.5 * (
-                        move_dx * route_dx + move_dz * route_dz) /
-                        (travel * route_length)))
-                nearby = sum(1 for ally in (ally_positions or ())
-                             if 0.5 < _distance_2d(point, ally) < 13.0)
-                candidates.append({
-                    'id': '%s:%d:%d:%d' % (source['id'],
-                        int(round(point[0] / 4.0)), int(round(point[2] / 4.0)), side),
-                    'position': point, 'peek_position': peek,
-                    'travel_distance': travel, 'route_alignment': alignment,
-                    'enemy_occlusion': 1.0 - hidden,
-                    'exposure': (hidden + exposed + approach) / 3.0,
-                    'slope': math.degrees(max(abs(pose['pitch']), abs(pose['roll']))),
-                    'water': water_depth,
-                    'ally_congestion': min(1.0, nearby / 3.0),
-                    'peek_feasible': True, 'escape_feasible': True,
-                })
-            except tactical_geometry.ProbeBudgetExhausted:
-                break
-        return tuple(candidates)
 
     def _local_body_pose(self):
         return self._local_pose_matrix or self._local_matrix

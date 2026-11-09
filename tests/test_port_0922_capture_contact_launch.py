@@ -13,7 +13,7 @@ from gui.mods.offline_lan_0922 import tank_collision
 
 
 class CaptureReloadTests(unittest.TestCase):
-    def test_canonical_membership_holds_empty_magazine_then_releases(self):
+    def test_canonical_membership_preserves_capture_without_reload_retreat(self):
         h = server_fixture
         planner = h.BotPlanner()
         route = h._route('capture', [(0, 0, False), (0, 450, False)])
@@ -30,12 +30,13 @@ class CaptureReloadTests(unittest.TestCase):
         for now in (1., 4., 10., 25.):
             planner.report_contacts([contact], planner.known_targets([state], players), now)
             order = planner.build_orders(manifest, [state], players, now, defense)['orders'][0]
-            self.assertEqual('magazine_reload_hold', order['combat_mode'])
+            self.assertEqual('engage', order['combat_mode'])
             self.assertEqual(0., order['throttle_override'])
             self.assertEqual(7, order['target_id'])
             self.assertFalse(order['fire_allowed'])
-            self.assertTrue(order['tactical_evidence']['withdrawal']['active_capture'])
-            self.assertNotIn(3, planner._retreat_states)
+            self.assertEqual([3], planner._base_defense[1]['capture_protection']['protected'])
+            self.assertNotIn('withdrawal', order['tactical_evidence'])
+            self.assertFalse(hasattr(planner, '_retreat_states'))
         # A completed reload returns to combat without needing to leave capture.
         state.update(clip=4, reload_time=0.)
         planner.report_contacts([contact], planner.known_targets([state], players), 28.)
@@ -47,21 +48,22 @@ class CaptureReloadTests(unittest.TestCase):
         state.update(z=380., clip=0, reload_time=27.)
         out = planner.build_orders(manifest,[state],players,31.,defense)['orders'][0]
         self.assertEqual('base_defense', out['combat_mode'])
-        self.assertFalse(out['tactical_evidence']['withdrawal']['active_capture'])
+        self.assertEqual([], planner._base_defense[1]['capture_protection']['protected'])
+        self.assertNotIn('withdrawal', out['tactical_evidence'])
 
-    def test_reload_guard_is_membership_not_route_label_or_old_points(self):
+    def test_reload_uses_normal_engagement_without_a_retreat_guard(self):
         h=server_fixture; p=h.BotPlanner()
         bot=h._bot(3,1,0,h._route('capture',[(0,0,False),(0,450,False)]),'heavyTank')
         bot['state']=h._weapon_state(h._state(3,1,0,440),clip=0,clip_size=4,reload_time=27.,fire_seq=18)
         focus=dict(id=7,target_kind='human',visible=True,shootable_by_bot_ids=[3],position=dict(x=0.,y=0.,z=460.))
-        order=p._order_for(bot,0,1,focus,[focus],1.,active_capture=False)
-        self.assertIn(order['combat_mode'], ('magazine_reload_retreat','magazine_reload_hold'))
-        self.assertFalse(order['tactical_evidence']['withdrawal']['active_capture'])
-        self.assertIn(3,p._retreat_states)
-        held=p._order_for(bot,0,1,focus,[focus],2.,active_capture=True)
-        self.assertEqual('magazine_reload_hold',held['combat_mode'])
-        self.assertNotIn(3,p._retreat_states)
-        self.assertEqual('active_capture_reload',held['tactical_evidence']['withdrawal']['released'])
+        for now in (1., 2., 30.):
+            order=p._order_for(bot,0,1,focus,[focus],now)
+            self.assertEqual('engage',order['combat_mode'])
+            self.assertEqual(dict(x=0.,y=0.,z=440.),order['move_position'])
+            self.assertEqual(0.,order['throttle_override'])
+            self.assertFalse(order['fire_allowed'])
+            self.assertNotIn('withdrawal',order['tactical_evidence'])
+        self.assertFalse(hasattr(p,'_retreat_states'))
 
 
 class MausPhysicalCorridorTests(unittest.TestCase):
@@ -118,7 +120,7 @@ class TortoiseHandoffTests(unittest.TestCase):
         rt.battle_start(self.f.start)
         point=(10.,0.,-100.)
         rt._apply_orders(dict(bot_order_revision=1,bot_orders=[dict(id=11,team=2,
-            combat_mode='cover_hold',target_kind='human',target_id=2,
+            combat_mode='engage',target_kind='human',target_id=2,
             move_position=(0.,0.,0.),aim_position=point,face_position=point,
             fire_range=500.,fire_allowed=False,throttle_override=0.)]))
         player=h._admit_player(dict(id=2,team=1,alive=True,x=10.,y=0.,z=-100.))
@@ -148,7 +150,7 @@ class TortoiseHandoffTests(unittest.TestCase):
             _rear_aim_episode=dict(identity=('bot',8),target_id=8,fire_seq=8,start=1.),
             _rear_contact_refusal=dict(identity=('bot',8),position=(-3.158,-7.225,41.474),yaw=2.057431014,fraction=0.))
         target=dict(kind='bot',id=8,alive=True,position=(1.,-7.225,160.))
-        order=dict(combat_mode='cover_hold',target_id=8,target_kind='bot',fire_allowed=False,
+        order=dict(combat_mode='engage',target_id=8,target_kind='bot',fire_allowed=False,
             move_position=(-3.158,-7.225,41.474),throttle_override=0.)
         out=rt._rear_laying_order(state,order,{8:target},2.)
         self.assertNotIn('_rear_aim_episode',state)
@@ -158,11 +160,11 @@ class TortoiseHandoffTests(unittest.TestCase):
         for backend in (None,(1.,0.,1)):
             with mock.patch.object(driver.native_math,'call',return_value=backend) as native:
                 self.assertEqual((0.,0.,False),driver.combat_hull_aim(state['yaw'],bearing,-.349,.349,
-                    0.,0.,'arrived',True,combat_mode='cover_hold',movement_intent=False,allow_rear_start=False))
+                    0.,0.,'arrived',True,combat_mode='engage',movement_intent=False,allow_rear_start=False))
                 native.assert_not_called()
                 self.assertEqual((0.,0.,False),driver._reference_combat_hull_aim(
                     state['yaw'],bearing,-.349,.349,0.,0.,'arrived',True,
-                    combat_mode='cover_hold',movement_intent=False,allow_rear_start=False))
+                    combat_mode='engage',movement_intent=False,allow_rear_start=False))
         rt._gun_angle_order(state,out,{8:target},2.,lambda *args:True)
         moved=rt._gun_angle_order(state,out,{8:target},4.,lambda *args:True)
         self.assertIn(moved['combat_mode'],('gun_angle_adjust','withdraw'))
@@ -171,9 +173,9 @@ class TortoiseHandoffTests(unittest.TestCase):
         self.assertEqual(8,moved['target_id'])
         # Neither the cooldown nor contact receipt suppresses normal forward aim.
         self.assertTrue(driver.combat_hull_aim(0.,.5,-.349,.349,0.,0.,'arrived',True,
-            combat_mode='cover_hold',movement_intent=False,allow_rear_start=False)[2])
+            combat_mode='engage',movement_intent=False,allow_rear_start=False)[2])
         self.assertTrue(driver.combat_hull_aim(0.,2.,-.349,.349,0.,0.,'arrived',True,
-            combat_mode='cover_hold',movement_intent=False,allow_rear_start=True)[2])
+            combat_mode='engage',movement_intent=False,allow_rear_start=True)[2])
 
 
     def test_pivot_handoff_cleans_up_on_completion_failure_target_and_priority_change(self):
@@ -184,7 +186,7 @@ class TortoiseHandoffTests(unittest.TestCase):
                     profile={'class_tag':'AT-SPG'},_gun_angle_pivot_refusal=('bot',8))
                 target=dict(kind='bot',id=8,alive=True,position=(10.,0.,-100.))
                 targets={8:target,9:dict(target,id=9)}
-                order=dict(target_id=8,target_kind='bot',combat_mode='cover_hold',
+                order=dict(target_id=8,target_kind='bot',combat_mode='engage',
                     move_position=(0.,0.,0.),aim_position=target['position'],
                     face_position=target['position'],throttle_override=0.)
                 rt._gun_yaw_limits[23]=(-.349,.349,True)

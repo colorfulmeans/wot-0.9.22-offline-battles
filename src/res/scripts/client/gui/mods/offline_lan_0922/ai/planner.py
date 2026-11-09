@@ -20,7 +20,6 @@ from gui.mods.offline_lan_0922.bot_tactics import (
 CONTACT_MEMORY_SECONDS = 7.0
 TARGET_HYSTERESIS_BONUS = 18.0
 DISCOVERED_ARTILLERY_PRIORITY_BONUS = 48.0
-LOCAL_FORCE_RADIUS = 185.0
 BATTLE_TIER_RADIUS = 2
 MATCH_CLASSES = ('heavyTank', 'mediumTank', 'AT-SPG', 'lightTank', 'SPG')
 CLASS_ROUTE_AFFINITY_WEIGHT = 42.0
@@ -505,15 +504,16 @@ def make_personality(seed):
 	rng = random.Random(int(seed))
 	traits = {}
 	for name in ('aggression', 'caution', 'teamwork', 'patience',
-	             'initiative', 'adaptability', 'jiggle'):
+	             'initiative', 'adaptability'):
 		# Keep extreme personalities rare while preserving visible variation.
 		traits[name] = 0.18 + rng.random() * 0.64
 	traits['aggression'] = max(0.05, min(0.95,
 		traits['aggression'] + (0.5 - traits['caution']) * 0.22))
 	traits['caution'] = max(0.05, min(0.95,
 		traits['caution'] + (0.5 - traits['aggression']) * 0.12))
+	# Preserve route-assignment draws when a combat-only trait is retired.
+	rng.random()
 	traits['route_jitter'] = rng.uniform(-4.0, 4.0)
-	traits['hold_jitter'] = rng.uniform(-1.5, 1.5)
 	return traits
 
 
@@ -793,7 +793,6 @@ class BattleDirector(object):
 			'target_id': None,
 			'last_order': None,
 			'position': None,
-			'health_fraction': 1.0,
 		}
 		agent['route'] = self._assign_route(agent)
 		self.agents[bot_id] = agent
@@ -949,37 +948,6 @@ class BattleDirector(object):
 			count = 3
 		return count
 
-	def _local_force_balance(self, agent, position, target_position, now):
-		allies = 1
-		for other in self.agents.values():
-			if other.get('id') == agent.get('id') or other.get('team') != agent.get('team'):
-				continue
-			other_position = other.get('position')
-			if (other_position is not None and
-			        _distance_2d(other_position, position) <= LOCAL_FORCE_RADIUS):
-				allies += max(0.25, _number(other.get('health_fraction', 1.0), 1.0))
-		enemies = 0.0
-		for contact in self._known_contacts(agent['team'], now):
-			if _distance_2d(contact['position'], target_position) <= LOCAL_FORCE_RADIUS:
-				enemies += max(0.3, contact['health'] / max(contact['max_health'], 1.0))
-		return allies - enemies
-
-	def _flank_position(self, agent, position, target_position):
-		"""Return a deterministic lateral pressure point around the target."""
-		dx = position[0] - target_position[0]
-		dz = position[2] - target_position[2]
-		length = math.sqrt(dx * dx + dz * dz)
-		if length < 0.1:
-			return tuple(position)
-		dx /= length
-		dz /= length
-		side = -1.0 if (agent['seed'] & 1) else 1.0
-		forward = agent['profile']['desired_range'] * 0.72
-		lateral = min(95.0, agent['profile']['desired_range'] * 0.38)
-		return (target_position[0] + dx * forward + dz * lateral * side,
-		        position[1],
-		        target_position[2] + dz * forward - dx * lateral * side)
-
 	def _choose_contact(self, agent, position, hull_yaw, now):
 		contacts = self._known_contacts(agent['team'], now)
 		if not contacts:
@@ -1099,17 +1067,6 @@ class BattleDirector(object):
 		world = (float(waypoint[0]), float(position[1]), float(waypoint[1]))
 		return world
 
-	def _fallback_position(self, agent, position):
-		"""Return the previous route anchor, usually behind the current corner."""
-		route = agent.get('route')
-		waypoints = route.get('waypoints', ()) if route is not None else ()
-		if not waypoints:
-			return tuple(position)
-		index = max(0, min(int(agent.get('waypoint_index', 0)) - 1,
-		                   len(waypoints) - 1))
-		waypoint = waypoints[index]
-		return (float(waypoint[0]), float(position[1]), float(waypoint[1]))
-
 	def _route_anchor(self, agent, position):
 		"""Return the strategic anchor immediately before the current waypoint."""
 		route = agent.get('route')
@@ -1162,8 +1119,6 @@ class BattleDirector(object):
 	              now):
 		agent = self.agents[int(bot_id)]
 		agent['position'] = tuple(position)
-		agent['health_fraction'] = (
-			_number(health, 1.0) / max(_number(max_health, 1.0), 1.0))
 		contact = self._choose_contact(agent, position, hull_yaw, now)
 		route_position = self._route_position(
 			agent, position, now, speed, hull_yaw)
@@ -1188,14 +1143,10 @@ class BattleDirector(object):
 			'personality': personality,
 			'profile': profile,
 			'shell_index': 0,
-			'force_balance': 0.0,
 		}
 		if contact is not None:
 			distance = _distance_2d(position, contact['position'])
 			contact['distance'] = distance
-			force_balance = self._local_force_balance(
-				agent, position, contact['position'], now)
-			order['force_balance'] = force_balance
 			order['target_id'] = contact['id']
 			order['aim_position'] = contact['position']
 			order['face_position'] = self._angled_face_position(
@@ -1207,48 +1158,23 @@ class BattleDirector(object):
 			order['shell_index'] = select_shell_index(profile, contact, personality)
 			if contact.get('visible'):
 				order['combat_mode'] = 'engage'
-				close_ratio = 0.52 + personality['aggression'] * 0.12
-				far_ratio = 1.02 + personality['caution'] * 0.28
-				if (force_balance < -0.65 and
-				        personality['caution'] + 0.18 > personality['aggression'] and
-				        profile['dominant_role'] != 'brawler'):
-					order['move_position'] = self._fallback_position(agent, position)
-					order['combat_mode'] = 'withdraw'
-				elif distance > profile['desired_range'] * far_ratio:
-					if order.get('route_id'):
+				if distance > profile['fire_range']:
+					order['fire_allowed'] = False
+					if agent.get('route'):
 						order['combat_mode'] = 'advance'
 					else:
 						order['move_position'] = contact['position']
 						order['combat_mode'] = 'advance_contact'
-				elif distance < profile['desired_range'] * close_ratio:
-					# Use the route as a known-safe fallback instead of reversing into
-					# arbitrary geometry. Brawlers with high aggression are less eager.
-					if profile['dominant_role'] != 'brawler' or personality['caution'] > 0.62:
-						order['move_position'] = self._fallback_position(agent, position)
-						order['combat_mode'] = 'withdraw'
-					else:
-						order['move_position'] = tuple(position)
-				elif (profile['roles'].get('flanker', 0.0) >= 0.68 and
-				      distance < profile['fire_range'] * 1.15 and
-				      force_balance >= -0.35 and personality['initiative'] > 0.38):
-					order['move_position'] = self._flank_position(
-						agent, position, contact['position'])
-					order['combat_mode'] = 'flank'
 				else:
+					# A valid firing position owns aim/reload. Neither health,
+					# nearby force counts nor preferred range creates movement.
 					order['move_position'] = tuple(position)
-				# Do not manufacture a periodic forward/back manoeuvre in open
-				# ground. Peeking belongs to the geometry-backed cover adapter;
-				# without confirmed cover this order holds, aims and fires.
+					order['throttle_override'] = 0.0
 			else:
 				# Last-known positions inform movement but never authorize a shot.
 				order['combat_mode'] = 'investigate'
 				if personality['initiative'] + personality['aggression'] > 1.05:
 					order['move_position'] = contact['position']
-		current_fraction = _number(health, 1.0) / max(_number(max_health, 1.0), 1.0)
-		if current_fraction < 0.20 + personality['caution'] * 0.18:
-			order['move_position'] = self._fallback_position(agent, position)
-			order['throttle_override'] = None
-			order['combat_mode'] = 'withdraw'
 		agent['last_order'] = order
 		return order
 
@@ -1261,8 +1187,8 @@ def route_summary(director, bot_id):
 	personality = agent['personality']
 	route = agent.get('route')
 	return ('route=%s role=%s aggression=%.2f caution=%.2f teamwork=%.2f '
-	        'patience=%.2f initiative=%.2f jiggle=%.2f' % (
+	        'patience=%.2f initiative=%.2f' % (
 			route.get('id') if route else 'direct', profile['dominant_role'],
 			personality['aggression'], personality['caution'],
 			personality['teamwork'], personality['patience'],
-			personality['initiative'], personality['jiggle']))
+			personality['initiative']))

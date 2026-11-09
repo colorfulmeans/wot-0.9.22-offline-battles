@@ -5,7 +5,7 @@ NEXT/CURRENT/R are never replaced with test reload logic: FullPlayerRuntime
 calls BattleRuntime.change_vehicle_setting, which owns the real GunState and
 _LANInputSender checkpoint. Direct intent tests isolate that consumer boundary.
 The global-failure/unknown cases retain NativeAttackEvaluator and AttackPolicy;
-the withdrawal check also executes the complete copied retreat state machine.
+qualified loading must not depend on a retired tactical retreat transaction.
 These tests do not establish Windows native or BigWorld physics acceptance.
 """
 import copy
@@ -17,7 +17,6 @@ import test_player_limited_traverse as fixtures
 from gui.mods.offline_lan_0922.battle_runtime import _LANInputSender
 from gui.mods.offline_lan_0922.gun_mechanics import GunState
 from gui.mods.offline_lan_0922.player_control import attack_policy
-from gui.mods.offline_lan_0922.player_control.copied import server_bot_ai
 
 
 class FullShellSettingsTests(unittest.TestCase):
@@ -66,12 +65,7 @@ class FullShellSettingsTests(unittest.TestCase):
 
     @staticmethod
     def move_from_previous_route_point(scene):
-        """Supply an observed pose ahead of the original spawn route point.
-
-        The unchanged planner already owns a proved route anchor at spawn.
-        A non-arrived retreat test must actually be away from that anchor;
-        an arbitrary -24 movement argument cannot replace route history.
-        """
+        """Supply an observed pose ahead of the original spawn route point."""
         point = (0., 0., 12.)
         scene.battle._local_position = point
         if hasattr(scene, 'set_hull'):
@@ -140,20 +134,8 @@ class FullShellSettingsTests(unittest.TestCase):
                                 self.assertEqual(1, preaim[0])
                         self.assertFalse(scene.control.last_order['fire_allowed'])
                     if gun.reload_time == 0. and preaim is not None and len(scene.launches()) == 1:
-                        if scene.runtime.combat_stop.active:
-                            self.assertEqual(preaim, policy.decision['candidate']['key'])
-                        else:
-                            # The native reload clock may finish before the
-                            # original one-hertz planner hands its retreat
-                            # hold back to combat. The new policy cannot
-                            # manufacture that handoff to preserve a preaim.
-                            task = scene.runtime.combat_stop.task_order
-                            self.assertEqual('magazine_reload_retreat', task['combat_mode'])
-                            self.assertEqual('magazine_reload_hold', task['tactical_phase'])
-                            self.assertEqual('movement_lease',
-                                task['tactical_evidence']['selection']['outcome'])
-                            self.assertIsNone(policy.decision['candidate'])
-                            self.assertFalse(scene.control.last_order['fire_allowed'])
+                        self.assertTrue(scene.runtime.combat_stop.active)
+                        self.assertEqual(preaim, policy.decision['candidate']['key'])
                     if preaim is not None and len(scene.launches()) == 2:
                         self.assertTrue(scene.runtime.combat_stop.active)
                         self.assertEqual(preaim, policy.decision['candidate']['key'])
@@ -678,11 +660,12 @@ class FullShellSettingsTests(unittest.TestCase):
         self.assertFalse(scene.setting_calls)
         self.assertFalse(scene.launches())
 
-    def test_real_global_failure_plan_waits_for_copied_retreat_attempt_before_early_reload(self):
+    def test_real_global_failure_plan_applies_qualified_reload_without_a_retreat_attempt(self):
         scene = self.scene()
         self.move_from_previous_route_point(scene)
         gun = scene.battle._gun_state
         gun.clip = 3
+        before = list(gun.ammo)
         for index, piercing in enumerate((1., 1000.)):
             gun.shots[index].piercingPower = (piercing, piercing)
             scene.battle.client.effective_params['gun']['shots'][index]['source_shot'][
@@ -710,39 +693,25 @@ class FullShellSettingsTests(unittest.TestCase):
         self.assertEqual(1, decision['shell_index'])
         self.assertEqual('passed', decision['candidate']['armor'])
         self.assertTrue(scene.world_queries)
-        # A supplied, non-arrived route anchor is the only tactical seam in
-        # this withdrawal test. Endpoint freezing/progress/timeout and input
-        # settlement are the copied production planner and native consumer.
-        order = dict(id=scene.runtime.actor_id, combat_mode='advance',
-            target_id=scene.target.id, target_kind='bot',
-            move_position=(0., 0., -24.), face_position=(0., 0., 40.),
-            fire_allowed=False, shell_index=0)
-        began = scene.now
-        moving = scene.runtime._reload_order(order, began)
-        self.assertEqual('magazine_reload_retreat', moving['combat_mode'])
-        self.assertEqual('withdraw', moving['tactical_phase'])
-        self.assertFalse(scene.runtime._reload_retreat['ready'])
-        scene.runtime._apply_shell_intent()
-        self.assertFalse(scene.setting_calls)
-        scene.step(server_bot_ai.RETREAT_PROGRESS_TIMEOUT_SECONDS - .01)
-        scene.runtime._reload_order(order, scene.now)
-        scene.runtime._apply_shell_intent()
-        self.assertFalse(scene.setting_calls)
-        self.assertEqual((0, 3, 0.), (gun.shot_index, gun.clip, gun.reload_time))
-        scene.step(.02)
-        held = scene.runtime._reload_order(order, scene.now)
-        self.assertEqual('magazine_reload_hold', held['tactical_phase'])
-        self.assertEqual('copied_retreat_attempt_complete', scene.runtime._reload_retreat['reason'])
+        # Eight seconds of genuine no-penetration search still qualify this
+        # transaction. Once qualified, native loading is immediate: neither
+        # an old retreat endpoint nor its progress timeout is a prerequisite.
+        self.assertFalse(hasattr(scene.runtime, '_reload_order'))
+        self.assertFalse(hasattr(scene.runtime, '_reload_retreat'))
+        task_before = copy.deepcopy(scene.runtime.combat_stop.task_order)
         scene.runtime._apply_shell_intent()
         self.assertEqual([(scene.settings.CURRENT_SHELLS, 102)], scene.setting_calls)
         self.assertEqual((1, 0, None), (gun.shot_index, gun.clip, gun.pending_index))
         self.assertGreater(gun.reload_time, 0.)
+        self.assertEqual(task_before, scene.runtime.combat_stop.task_order)
+        self.assertEqual(before, gun.ammo)
+        self.assertFalse(scene.launches())
         deadline = gun.reload_time
         scene.runtime._apply_shell_intent()
         self.assertEqual(1, len(scene.setting_calls))
         self.assertEqual(deadline, gun.reload_time)
 
-    def test_complete_loop_carries_real_evidence_and_retreat_receipt_into_native_reload(self):
+    def test_complete_loop_carries_real_evidence_into_native_reload_without_retreat(self):
         scene = self.scene()
         gun = scene.battle._gun_state
         gun.clip = 3
@@ -758,7 +727,7 @@ class FullShellSettingsTests(unittest.TestCase):
             if code in (scene.settings.CURRENT_SHELLS, scene.settings.RELOAD_PARTIAL_CLIP):
                 accepted.append(dict(now=scene.now,
                     decision=copy.deepcopy(scene.runtime.attack_policy.decision),
-                    retreat=copy.deepcopy(scene.runtime._reload_retreat)))
+                    mode=scene.runtime.combat_stop.task_order.get('combat_mode')))
             return settings(code, value)
 
         scene.battle.change_vehicle_setting = observe_setting
@@ -781,14 +750,15 @@ class FullShellSettingsTests(unittest.TestCase):
         self.assertEqual('reload_clip', receipt['decision']['action'])
         self.assertTrue(receipt['decision']['early_reload'])
         self.assertEqual('passed', receipt['decision']['candidate']['armor'])
-        self.assertTrue(receipt['retreat']['ready'])
-        self.assertIn(receipt['retreat']['reason'],
-            ('copied_cover_attempt_complete', 'copied_retreat_attempt_complete'))
+        self.assertNotIn(receipt['mode'],
+            ('magazine_reload_retreat', 'withdraw', 'take_cover', 'cover_return'))
+        self.assertFalse(hasattr(scene.runtime, '_reload_order'))
+        self.assertFalse(hasattr(scene.runtime, '_reload_retreat'))
         self.assertEqual((1, 0, None), (gun.shot_index, gun.clip, gun.pending_index))
         self.assertGreater(gun.reload_time, 0.)
         self.assertFalse(scene.launches())
 
-    def test_no_verified_shot_and_no_he_yields_to_copied_withdrawal(self):
+    def test_no_verified_shot_and_no_he_yields_to_existing_task_without_withdrawal(self):
         scene = self.scene(clip=1, burst=1)
         gun = scene.battle._gun_state
         before = list(gun.ammo)
@@ -802,13 +772,19 @@ class FullShellSettingsTests(unittest.TestCase):
             policy = scene.runtime.attack_policy
             if started is None:
                 started = policy.search_started
-            if row['order'].get('combat_mode') == 'withdraw':
+            if policy.decision.get('action') == 'navigate':
                 break
         else:
-            self.fail('The expired search never reached withdrawal: %r' % scene.trace[-3:])
+            self.fail('The expired search never returned to navigation: %r' % scene.trace[-3:])
         self.assertIsNotNone(started)
         self.assertGreaterEqual(scene.now - started, attack_policy.SEARCH_SECONDS)
         self.assertEqual('no_he_or_verified_penetration', policy.decision['reason'])
+        self.assertFalse(hasattr(scene.runtime, '_unusable_ammo_retreat'))
+        order = copy.deepcopy(row['order'])
+        unchanged = copy.deepcopy(order)
+        self.assertIs(order, scene.runtime._move_order(order, scene.now))
+        self.assertEqual(unchanged, order)
+        self.assertNotIn(order.get('combat_mode'), ('withdraw', 'magazine_reload_retreat'))
         self.assertEqual(before, gun.ammo)
         self.assertFalse(scene.launches())
 

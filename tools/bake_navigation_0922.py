@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Inspect strict navigation-bake inputs from the pinned WoT 0.9.22 client.
 
-This #1513 input adapter uses the repository's pinned navigation-baseline
-snapshot for graph construction and validation. It reads the packed resources:
+This #1513 input adapter uses the repository's integrity-pinned physical
+navigation baker for graph construction and validation. Its obsolete tactical
+route sources and sketch projector have been removed. It reads the resources:
 
 * arena definitions and destructibles from ``scripts.pkg``;
 * terrain height blocks from ``*.cdata_processed``; and
@@ -40,7 +41,7 @@ GAME_VERSION = '0.9.22.0.1-cn-1513'
 VENDOR_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'vendor')
 NAVIGATION_BASELINE_COMMIT = 'f5b0173c296cd36753a5866ba5e6f2119e3edb25'
 NAVIGATION_BAKER_SHA256 = (
-    '7ea6081f8d3814679d9064838102470950bfa7a7f5b9528d8165af91bdf94727')
+    'fbcf8976691565b6654c6c1116f556f6e68acee929a69ffd2e3e3d896f26558c')
 NAVIGATION_BASELINE_ROOT = os.path.join(
     VENDOR_ROOT, 'navigation_baseline_f5b0173')
 NAVIGATION_BAKER = os.path.join(
@@ -49,16 +50,6 @@ NAVIGATION_BASELINE_SHA256 = {
     'tools/bake_navigation.py': NAVIGATION_BAKER_SHA256,
     'tools/build_navmesh_probe.py': (
         'f3ad40738c5b162afdb017c01e0af8adfea54774f92ead71f2f638993af9a3af'),
-    'scripts/client/gui/mods/offhangar/bot_ai_maps.py': (
-        '13abd89f40a33e01a347df00c4447ebde09457c0c09f8efc92391d9684a9e016'),
-    'scripts/client/gui/mods/offhangar/bot_ai_maps_extra.py': (
-        'efee5742e227298fd47156bc3a02d62f2cf47e75f2df82311b5975a58e0fec86'),
-    'scripts/client/gui/mods/offhangar/bot_ai_maps_group_a.py': (
-        'dc03f590c79a606d84b365af4ce292d3bbb7b3c46ab514d39ff991b2b1151244'),
-    'scripts/client/gui/mods/offhangar/bot_ai_maps_group_b.py': (
-        'ec6db32b412885581791ad8ad888cb2df55ca6489a8eddc9dfb6a4a4ec663f4a'),
-    'scripts/client/gui/mods/offhangar/bot_ai_maps_group_c.py': (
-        'f6b71578f032a0fa1e442ebf7fc241a23d76171c8ea72cbde5ca728591e4d9e0'),
 }
 
 # Ordinary #1513 navigable water is not a navigation hazard.  The 0.8.2
@@ -445,11 +436,12 @@ def require_safe_bake(client_root, map_name):
 
 
 def _legacy_baker():
-    """Load the exact pinned graph/raster implementation.
+    """Load the integrity-pinned graph/raster implementation.
 
     The target adapter deliberately supplies only #1513 resource readers.  All
     clearance, grade, reversible-link and base-connectivity invariants remain
-    commit f5b0173's pinned code rather than following a mutable worktree.
+    from commit f5b0173. Its former route registry and sketch projector are
+    absent; the owner-reviewed Default is the only source of tactical points.
     """
     for relative_path, expected_digest in NAVIGATION_BASELINE_SHA256.items():
         path = os.path.join(
@@ -668,14 +660,12 @@ def _target_tactical_config(legacy, map_name, bases):
 def publish_default_routes(graph):
     """Publish exact reviewed coordinates after baking physical geometry."""
     from gui.mods.offline_lan_0922 import bot_tactics, bot_tactics_runtime
+    from gui.mods.offline_lan_0922.ai.maps import default_route_catalog
     name = graph['map']
     profile = bot_tactics.default_map(name)
     shared = bot_tactics.shared_route_points(profile)
-    if not any(graph['routes'].values()):
-        from gui.mods.offline_lan_0922.ai.maps import get_tactical_map
-        graph['routes'] = dict((str(team), [dict(row) for row in rows])
-                               for team, rows in get_tactical_map(name)['routes'].items())
-    keys = {(int(team), row['id']) for team, rows in graph['routes'].items()
+    routes = default_route_catalog(name)
+    keys = {(int(team), row['id']) for team, rows in routes.items()
             for row in rows}
     if keys != set(shared):
         raise UnsafeBakeInputError('Default and baked route IDs differ for %s' % name)
@@ -687,10 +677,7 @@ def publish_default_routes(graph):
         if error:
             raise UnsafeBakeInputError('%s team %s route %s: %s' %
                                        (name, row['team'], bot_tactics.default_route_id(row), error))
-    for team, rows in graph['routes'].items():
-        for row in rows:
-            row['waypoints'] = [list(point[:2])+[bool(point[2])]
-                                for point in shared[(int(team), row['id'])]]
+    graph['routes'] = routes
     graph['validation']['authored_default_route_segments'] = sum(
         len(points)-1 for points in shared.values())
     return graph
@@ -1973,114 +1960,6 @@ def validate_downhill_spawn_ingress(graph, record, legacy):
     }
 
 
-def expand_stationary_routes(graph, routes, bases, legacy):
-    """Turn a tactical hold anchor into a graph-connected locomotion route.
-
-    Himmelsdorf's mature ``rear_guard`` annotation is intentionally one point:
-    it describes an artillery hold, not the drive from spawn.  A baked route is
-    a different contract and must contain that drive.  Join the team's safe
-    spawn anchor to the projected hold over validated graph links instead of
-    shipping a one-point route or weakening the release gate.
-    """
-    for team in (1, 2):
-        team_routes = routes.get(str(team), ())
-        for route in team_routes:
-            waypoints = route.get('waypoints') or ()
-            if len(waypoints) != 1:
-                continue
-            start, unused_start_offset = legacy._nearest_node(
-                graph, bases[team - 1])
-            goal, unused_goal_offset = legacy._nearest_node(
-                graph, waypoints[0])
-            if start is None or goal is None:
-                raise ValueError(
-                    'stationary route has no retained navigation node')
-            if start == goal:
-                mask = int(graph['links'][start])
-                x_index = start % graph['width']
-                z_index = start // graph['width']
-                goal = None
-                for direction_index, (dx, dz) in enumerate(legacy.DIRECTIONS):
-                    if not mask & (1 << direction_index):
-                        continue
-                    nx, nz = x_index + dx, z_index + dz
-                    if (0 <= nx < graph['width'] and
-                            0 <= nz < graph['height']):
-                        goal = nz * graph['width'] + nx
-                        break
-                if goal is None:
-                    raise ValueError(
-                        'stationary route spawn anchor has no connected edge')
-            path, unused_distance = legacy._graph_path(graph, start, goal)
-            if len(path) < 2:
-                raise ValueError(
-                    'stationary route cannot connect its spawn and hold nodes')
-            hold_nodes = set([goal]) if bool(waypoints[0][2]) else set()
-            route['waypoints'] = legacy._sample_route_path(
-                graph, path, hold_nodes, 16, set((start, goal)))
-            if len(route['waypoints']) < 2:
-                raise ValueError('stationary route expansion is incomplete')
-    return routes
-
-
-def canonicalize_reversible_routes(graph, routes):
-    """Emit one canonical polyline for each ordinary two-way corridor.
-
-    The tactical source already describes the same macro lane in opposite
-    directions.  Independent shortest-path tie breaking can nevertheless
-    sample two slightly different polylines, which makes a reversible road
-    look like two designs in the review render.  Keep the team-one result and
-    reverse it for team two after both searches have independently succeeded.
-    Local routes such as Himmelsdorf's rear guard have different endpoints and
-    deliberately remain team-specific.
-    """
-    team_one = routes.get('1', ()) or ()
-    team_two = routes.get('2', ()) or ()
-    team_two_by_id = dict((route.get('id'), route) for route in team_two)
-    if len(team_two_by_id) != len(team_two):
-        raise UnsafeBakeInputError(
-            'team two tactical route ids are not unique')
-    fallback_keys = set((graph.get('bake') or {}).get(
-        'soft_route_fallbacks') or ())
-    canonical = []
-    for first in team_one:
-        route_id = first.get('id')
-        second = team_two_by_id.get(route_id)
-        if second is None:
-            raise UnsafeBakeInputError(
-                'reversible tactical route is missing team two: %s' %
-                route_id)
-        first_points = first.get('waypoints') or ()
-        second_points = second.get('waypoints') or ()
-        if len(first_points) < 2 or len(second_points) < 2:
-            continue
-        inverse_endpoints = (
-            tuple(first_points[0][:2]) == tuple(second_points[-1][:2]) and
-            tuple(first_points[-1][:2]) == tuple(second_points[0][:2]))
-        if not inverse_endpoints:
-            # A local hold route starts at each team's own spawn and terminates
-            # at a different nearby defensive position.  It is not a through
-            # corridor and must not be mirrored across the map.
-            continue
-        for key in ('capacity', 'risk', 'role_weights'):
-            if first.get(key) != second.get(key):
-                raise UnsafeBakeInputError(
-                    'reversible tactical metadata differs for %s' % route_id)
-        first_fallback = '1:%s' % route_id in fallback_keys
-        second_fallback = '2:%s' % route_id in fallback_keys
-        if first_fallback != second_fallback:
-            raise UnsafeBakeInputError(
-                'reversible tactical fallback differs for %s' % route_id)
-        second['waypoints'] = [list(point)
-                               for point in reversed(first_points)]
-        canonical.append(str(route_id))
-    bake = graph.get('bake')
-    if not isinstance(bake, dict):
-        raise UnsafeBakeInputError('navigation graph has no bake metadata')
-    bake['canonical_reversible_routes'] = sorted(canonical)
-    return routes
-
-
 SPAWN_SLOTS_PER_TEAM = 15
 # This is the pinned retail-like formation law: a wide, shallow line
 # deployed toward the map interior.  The former five-column, three-row block
@@ -2851,7 +2730,6 @@ def bake_map_graph(client_root, map_name, output=None, cell_size=4.0, existing_g
             original_terrain, original_obstacles = legacy.Terrain, legacy.ObstacleField
             original_segment_clear = legacy._segment_clear
             original_validate = legacy.validate_graph
-            original_bake_routes = legacy.bake_tactical_routes
             original_retain = legacy.retain_base_component
             legacy.Terrain, legacy.ObstacleField = (lambda unused_resources, unused_map: terrain), (lambda unused_resources, unused_map, soft_models=None: obstacles)
             if map_name in ('04_himmelsdorf', '86_himmelsdorf_winter') and float(cell_size) == 2.0:
@@ -2892,10 +2770,8 @@ def bake_map_graph(client_root, map_name, output=None, cell_size=4.0, existing_g
                 adjusted['bases'] = tuple(anchors)
                 adjusted['anchors'] = tuple(anchors) + tuple(config.get('anchors', ()))
                 return adjusted
-            # The legacy projector expands sparse tactical sketches. Build
-            # terrain first, then validate and publish the exact authored lanes
-            # against the final graph, including ingress and local meshes.
-            legacy.bake_tactical_routes = lambda graph, unused_config: {'1': [], '2': []}
+            # Build terrain first, then validate and publish the exact authored
+            # lanes against the final graph, including ingress/local meshes.
             def physical_validation(graph, anchors):
                 return original_validate(graph, dict(config, bases=anchors,
                                                      anchors=anchors, routes=()))
@@ -2976,7 +2852,6 @@ def bake_map_graph(client_root, map_name, output=None, cell_size=4.0, existing_g
             legacy.Terrain, legacy.ObstacleField = original_terrain, original_obstacles
             legacy._segment_clear = original_segment_clear
             legacy.validate_graph = original_validate
-            legacy.bake_tactical_routes = original_bake_routes
             legacy.retain_base_component = original_retain
         graph['bake']['source'] = '0.9.22 placed BSMI/BSMO colliders with per-model BSP material mapping'
         graph['bake']['navigation_collision_policy'] = NAVIGATION_COLLISION_POLICY

@@ -147,7 +147,7 @@ class RuntimeReceiptTests(unittest.TestCase):
 
     def test_order_evidence_freezes_input_points_without_changing_the_order(self):
         from gui.mods.offline_lan_0922.bot_runtime import _order_evidence
-        order=dict(combat_mode='withdraw',move_position=dict(x=1.,y=2.,z=3.),
+        order=dict(combat_mode='engage',move_position=dict(x=1.,y=2.,z=3.),
                    face_position=[4.,5.,6.],throttle_override=0.)
         saved=copy.deepcopy(order)
         receipt=_order_evidence(order)
@@ -159,12 +159,12 @@ class RuntimeReceiptTests(unittest.TestCase):
 
     def test_server_order_transformations_survive_cached_execution(self):
         from unittest import mock
-        self.runtime._server_orders[11] = dict(combat_mode='withdraw',
+        self.runtime._server_orders[11] = dict(combat_mode='advance_contact',
             move_position=(10.,0.,20.), fire_allowed=False,
             tactical_evidence=dict(at=500.,selection=dict(outcome='no_local_lane')))
         def hold(state, order, targets, now, clear):
             return dict(order, move_position=(state['x'],state['y'],state['z']),
-                        throttle_override=0., combat_mode='under_fire_withdraw')
+                        throttle_override=0., combat_mode='engage')
         with mock.patch.object(self.runtime,'_rear_laying_order',side_effect=lambda s,o,t,n:o), \
                 mock.patch.object(self.runtime,'_artillery_position_order',side_effect=lambda s,o,t,n:o), \
                 mock.patch.object(self.runtime,'_gun_angle_order',side_effect=hold):
@@ -176,11 +176,12 @@ class RuntimeReceiptTests(unittest.TestCase):
         self.assertEqual(1.,current['sampled_at'])
         self.assertEqual(['server_live_target','rear_laying','artillery_position','gun_angle'],
                          [stage['stage'] for stage in current['stages']])
-        self.assertEqual('withdraw',current['stages'][0]['order']['combat_mode'])
+        self.assertEqual('advance_contact',current['stages'][0]['order']['combat_mode'])
         self.assertEqual(0.,current['final_order']['throttle_override'])
+        self.assertEqual('engage',current['final_order']['combat_mode'])
         self.assertEqual(500.,current['server_selection']['at'])
         self.assertEqual('no_local_lane',current['server_selection']['selection']['outcome'])
-        self.assertEqual('withdraw',current['received_order']['combat_mode'])
+        self.assertEqual('advance_contact',current['received_order']['combat_mode'])
 
     def test_refresh_creates_new_identity_without_mutating_old_witness(self):
         self.runtime.update(.04, 1.)
@@ -393,9 +394,12 @@ class LeaseAndEntryReceiptTests(unittest.TestCase):
         self.assertEqual('server_monotonic_seconds',evidence['clock_basis'])
         self.assertEqual(order['combat_mode'],evidence['final']['combat_mode'])
         self.assertEqual(order['fire_allowed'],evidence['final']['fire_allowed'])
-        self.assertIn('retreat_before',evidence)
-        self.assertIn('retreat_after',evidence)
-        self.assertEqual('empty_magazine_only',evidence['withdrawal']['reason'])
+        self.assertNotIn('retreat_before',evidence)
+        self.assertNotIn('retreat_after',evidence)
+        self.assertNotIn('withdrawal',evidence)
+        self.assertNotIn('firing_hold',evidence)
+        self.assertFalse(hasattr(p,'_retreat_states'))
+        self.assertFalse(hasattr(p,'_firing_holds'))
         p.reset(4)
         self.assertEqual({},p._target_decisions)
 

@@ -95,8 +95,8 @@ class AttackModeIntentTests(unittest.TestCase):
                          (decision['action'], decision['early_reload']))
         authority = scene.policy.reload_authority
         self.assertIsNotNone(authority)
-        scene.frame['combat_signature'] = ('cover_movement', False)
-        scene.frame['pose'] = ('moving_to_cover', 1)
+        scene.frame['combat_signature'] = ('route_movement', False)
+        scene.frame['pose'] = ('moving_on_route', 1)
         scene.value(1, armor='unknown', line='pending')
         decision = scene.tick(.1, background=False)
         self.assertIs(authority, scene.policy.reload_authority)
@@ -301,13 +301,13 @@ class NativeHydraulicMagazineRulesTests(unittest.TestCase):
             scene.fixture.now += .11
         self.fail('native enabled-mode magazine review did not complete: %r' % policy.status())
 
-    def test_actual_enabled_nonhe_partial_clip_failure_retires_to_navigation_without_eight_seconds(self):
+    def test_actual_enabled_nonhe_partial_clip_failure_reloads_in_place_without_eight_seconds(self):
         scene = self.scene()
         runtime, gun = scene.runtime, scene.runtime.gun
         gun.shots[0].piercingPower = (0., 0.)
         # The remaining shell descriptor is genuinely incomplete. This must
         # not keep a proved-useless finite-traverse cassette in combat until
-        # a replacement is ready; it may retreat and retain normal loading.
+        # a replacement is ready; normal partial loading remains available.
         gun.shots[1].speed = None
         before = tuple(gun.ammo)
         decision = self.review_until(scene, lambda row:
@@ -323,11 +323,16 @@ class NativeHydraulicMagazineRulesTests(unittest.TestCase):
         order = dict(combat_mode='engage', target_id=scene.target.id,
             target_kind='bot', move_position=(0., 0., 0.),
             face_position=scene.target.position, fire_allowed=False)
-        retreat = runtime._reload_order(order, scene.now)
-        self.assertEqual('magazine_reload_retreat', retreat['combat_mode'])
-        self.assertTrue(runtime.combat_stop.navigation_owns(retreat))
-        self.assertFalse(runtime.siege_desired(runtime.state, retreat, runtime._targets[0]))
+        self.assertFalse(hasattr(runtime, '_reload_order'))
+        self.assertFalse(hasattr(runtime, '_reload_retreat'))
+        self.assertFalse(runtime.combat_stop.navigation_owns(order))
+        self.assertTrue(runtime.siege_desired(runtime.state, order, runtime._targets[0]))
         self.assertEqual((0, 2, before), (gun.shot_index, gun.clip, tuple(gun.ammo)))
+        runtime._apply_shell_intent()
+        self.assertEqual((0, 0, before), (gun.shot_index, gun.clip, tuple(gun.ammo)))
+        self.assertGreater(gun.reload_time, 0.)
+        self.assertIsNone(runtime.attack_policy.reload_authority)
+        self.assertEqual(siege_mechanics.ENABLED, scene.entity.siegeState)
         self.assertFalse(scene.launches())
 
     def test_actual_enabled_he_partial_clip_fallback_keeps_verified_ap_for_next_clip(self):

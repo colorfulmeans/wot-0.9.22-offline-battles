@@ -100,60 +100,19 @@ class CompiledSpace0922Test(unittest.TestCase):
             with self.assertRaises(baker.UnsafeBakeInputError):
                 baker.ctf_base_radii(invalid, graph['objective_bases'])
 
-    def test_ordinary_routes_use_one_canonical_reversible_polyline(self):
-        graph = {'bake': {'soft_route_fallbacks': []}}
-        routes = {
-            '1': [
-                {'id': 'through', 'capacity': 5, 'risk': 0.6,
-                 'role_weights': {'scout': 1.0},
-                 'waypoints': [[0.0, 0.0, False],
-                               [4.0, 4.0, True],
-                               [8.0, 8.0, False]]},
-                {'id': 'rear_guard', 'capacity': 1, 'risk': 0.1,
-                 'role_weights': {'artillery': 1.0},
-                 'waypoints': [[0.0, 0.0, False],
-                               [-4.0, 0.0, True]]},
-            ],
-            '2': [
-                {'id': 'through', 'capacity': 5, 'risk': 0.6,
-                 'role_weights': {'scout': 1.0},
-                 'waypoints': [[8.0, 8.0, False],
-                               [8.0, 4.0, True],
-                               [0.0, 0.0, False]]},
-                {'id': 'rear_guard', 'capacity': 1, 'risk': 0.1,
-                 'role_weights': {'artillery': 1.0},
-                 'waypoints': [[8.0, 8.0, False],
-                               [12.0, 8.0, True]]},
-            ],
-        }
+    def test_vendor_engine_cannot_restore_retired_route_sources(self):
+        legacy = baker._legacy_baker()
+        self.assertEqual({}, legacy.MAPS)
+        for name in ('TACTICAL_MAPS', '_load_tactical_maps',
+                     '_oriented_route_points', '_sample_route_path',
+                     '_corridor_graph_path', 'bake_tactical_routes', 'main'):
+            self.assertFalse(hasattr(legacy, name), name)
+        self.assertEqual([], list(Path(baker.NAVIGATION_BASELINE_ROOT).rglob(
+            'bot_ai_maps*.py')))
+        with self.assertRaises(KeyError):
+            legacy.bake_graph(None, '04_himmelsdorf')
 
-        result = baker.canonicalize_reversible_routes(graph, routes)
-
-        self.assertEqual(
-            [[8.0, 8.0, False], [4.0, 4.0, True],
-             [0.0, 0.0, False]],
-            result['2'][0]['waypoints'])
-        self.assertEqual(
-            [[8.0, 8.0, False], [12.0, 8.0, True]],
-            result['2'][1]['waypoints'])
-        self.assertEqual(
-            ['through'], graph['bake']['canonical_reversible_routes'])
-
-    def test_directional_fallback_mismatch_is_rejected(self):
-        graph = {'bake': {'soft_route_fallbacks': ['1:through']}}
-        route = {'id': 'through', 'capacity': 1, 'risk': 0.5,
-                 'role_weights': {},
-                 'waypoints': [[0.0, 0.0, False],
-                               [4.0, 4.0, False]]}
-        reverse = dict(route)
-        reverse['waypoints'] = list(reversed(route['waypoints']))
-        with self.assertRaisesRegex(
-                baker.UnsafeBakeInputError,
-                'reversible tactical fallback differs'):
-            baker.canonicalize_reversible_routes(
-                graph, {'1': [route], '2': [reverse]})
-
-    def test_final_validation_rejects_a_canonical_reverse_on_one_way_links(self):
+    def test_final_validation_rejects_authored_routes_on_one_way_links(self):
         legacy = baker._legacy_baker()
         graph = {
             'cell_size': 4.0,
@@ -181,8 +140,9 @@ class CompiledSpace0922Test(unittest.TestCase):
         second['waypoints'] = list(reversed(first['waypoints']))
         routes = {'1': [first], '2': [second]}
 
-        graph['routes'] = baker.canonicalize_reversible_routes(
-            graph, routes)
+        # Authored polylines remain exact. The physical validator still rejects
+        # a route whose direction is not supported by the sampled graph.
+        graph['routes'] = routes
 
         with self.assertRaisesRegex(
                 ValueError, 'route segment is disconnected'):
@@ -190,7 +150,7 @@ class CompiledSpace0922Test(unittest.TestCase):
                 graph, {'bases': ((0.0, 0.0), (8.0, 0.0)),
                         'routes': (), 'anchors': ()})
 
-    def test_navigation_baker_uses_neutral_pinned_baseline(self):
+    def test_navigation_baker_pins_retained_engine_without_old_route_data(self):
         path = Path(baker.NAVIGATION_BAKER)
         self.assertTrue(path.is_file())
         self.assertEqual(
@@ -202,7 +162,9 @@ class CompiledSpace0922Test(unittest.TestCase):
         self.assertEqual(
             'f5b0173c296cd36753a5866ba5e6f2119e3edb25',
             baker.NAVIGATION_BASELINE_COMMIT)
-        self.assertEqual(7, len(baker.NAVIGATION_BASELINE_SHA256))
+        self.assertEqual({'tools/bake_navigation.py',
+                          'tools/build_navmesh_probe.py'},
+                         set(baker.NAVIGATION_BASELINE_SHA256))
         baseline_root = Path(baker.NAVIGATION_BASELINE_ROOT)
         self.assertEqual('navigation_baseline_f5b0173', baseline_root.name)
         self.assertEqual(

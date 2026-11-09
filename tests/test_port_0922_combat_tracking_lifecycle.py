@@ -1,4 +1,4 @@
-"""Tracking, launch admission and magazine retreat have separate lifetimes."""
+"""Tracking and launch admission outlive loading without tactical retreat."""
 import unittest
 import test_port_0922_server_bot_ai as fixtures
 
@@ -43,7 +43,7 @@ class CombatTrackingLifecycleTests(unittest.TestCase):
             self.assertEqual(2, order['target_id'])
             self.assertIsNone(order['throttle_override'])
             self.assertFalse(order['fire_allowed'])
-            self.assertNotIn(11, self.planner._firing_holds)
+            self.assertFalse(hasattr(self.planner, '_firing_holds'))
         clear = self.order(21., self.contact)
         self.assertEqual('engage', clear['combat_mode'])
         self.assertTrue(clear['fire_allowed'])
@@ -56,7 +56,7 @@ class CombatTrackingLifecycleTests(unittest.TestCase):
         self.assertEqual('advance_contact', order['combat_mode'])
         self.assertEqual(2, order['target_id'])
         self.assertFalse(order['fire_allowed'])
-        self.assertNotIn(11, self.planner._firing_holds)
+        self.assertFalse(hasattr(self.planner, '_firing_holds'))
 
     def test_dead_hidden_expired_and_out_of_range_contacts_release_tracking(self):
         for reason in ('dead', 'hidden', 'expired', 'range'):
@@ -87,48 +87,70 @@ class CombatTrackingLifecycleTests(unittest.TestCase):
         self.assertEqual(2, order['target_id'])
         self.assertTrue(order['fire_allowed'])
         self.assertNotIn(order['combat_mode'], ('under_fire_withdraw', 'crossfire_withdraw', 'withdraw'))
-        self.assertFalse(order['tactical_evidence']['withdraw_after_hit'])
+        self.assertNotIn('withdraw_after_hit', order['tactical_evidence'])
 
-    def test_magazine_finishes_then_withdraws_reload_and_reengages(self):
+    def test_magazine_finishes_then_loads_in_place_and_reengages(self):
         self.fx.states[0] = _weapon_state(self.fx.states[0], clip=2, clip_size=4,
             fire_seq=2)
         self.fx.states[0]['health'] = 200
         loaded = self.order()
         self.assertTrue(loaded['fire_allowed'])
-        self.assertNotEqual('low_health_retreat', loaded['combat_mode'])
-        self.assertEqual('empty_magazine_only',loaded['tactical_evidence']['withdrawal']['reason'])
+        self.assertEqual('engage', loaded['combat_mode'])
+        self.assertNotIn('withdrawal', loaded['tactical_evidence'])
         self.fx.states[0].update(clip=1, reload_time=2., fire_seq=3)
         intershot = self.order(1.5)
-        self.assertNotIn(intershot['combat_mode'], ('low_health_retreat', 'magazine_reload_retreat'))
+        self.assertEqual('engage', intershot['combat_mode'])
+        self.assertEqual(0., intershot['throttle_override'])
+        self.assertEqual(loaded['move_position'], intershot['move_position'])
         self.assertEqual(2, intershot['target_id'])
+        self.assertFalse(intershot['fire_allowed'])
         self.fx.states[0].update(clip=0, reload_time=30., fire_seq=4)
         empty = self.order(2.)
-        self.assertEqual('magazine_reload_retreat', empty['combat_mode'])
+        self.assertEqual('engage', empty['combat_mode'])
+        self.assertEqual(0., empty['throttle_override'])
+        self.assertEqual(loaded['move_position'], empty['move_position'])
         self.assertEqual(2, empty['target_id'])
         self.assertFalse(empty['fire_allowed'])
-        self.fx.states[0].update(empty['move_position'])
         hold = self.order(3.)
-        self.assertEqual('magazine_reload_hold', hold['tactical_phase'])
+        self.assertEqual('engage', hold['combat_mode'])
         self.assertEqual(0., hold['throttle_override'])
+        self.assertEqual(loaded['move_position'], hold['move_position'])
+        self.assertFalse(hold['fire_allowed'])
         self.fx.states[0].update(clip=4, reload_time=0.)
         ready = self.order(4., self.contact)
-        self.assertNotIn(ready['combat_mode'], ('low_health_retreat', 'magazine_reload_retreat'))
+        self.assertEqual('engage', ready['combat_mode'])
         self.assertTrue(ready['fire_allowed'])
-        self.assertNotIn(11, self.planner._retreat_states)
+        self.assertFalse(hasattr(self.planner, '_retreat_states'))
 
     def test_initial_magazine_loading_does_not_create_a_retreat(self):
         self.fx.states[0] = _weapon_state(self.fx.states[0], clip=0, clip_size=4,
             fire_seq=0, reload_time=30.)
-        self.assertNotEqual('magazine_reload_retreat', self.order()['combat_mode'])
+        order = self.order()
+        self.assertEqual('engage', order['combat_mode'])
+        self.assertEqual(0., order['throttle_override'])
+        self.assertFalse(order['fire_allowed'])
+        self.assertFalse(hasattr(self.planner, '_retreat_states'))
 
-    def test_magazine_reload_releases_when_ammunition_exhausted_or_target_gone(self):
-        self.fx.states[0] = _weapon_state(self.fx.states[0], clip=0, clip_size=4,
-            fire_seq=4, reload_time=30.)
-        self.assertEqual('magazine_reload_retreat', self.order()['combat_mode'])
-        self.fx.states[0]['ammo_remaining'] = [0]
-        order = self.order(2.)
-        self.assertNotEqual('magazine_reload_retreat', order['combat_mode'])
-        self.assertNotIn(11, self.planner._retreat_states)
+    def test_loading_releases_combat_when_ammunition_exhausted_or_target_gone(self):
+        for cause in ('ammunition_exhausted', 'target_gone'):
+            with self.subTest(cause=cause):
+                self.setUp()
+                self.fx.states[0] = _weapon_state(self.fx.states[0], clip=0, clip_size=4,
+                    fire_seq=4, reload_time=30.)
+                self.assertEqual('engage', self.order()['combat_mode'])
+                if cause == 'ammunition_exhausted':
+                    self.fx.states[0]['ammo_remaining'] = [0]
+                else:
+                    self.players[0]['alive'] = False
+                order = self.order(2.)
+                self.assertNotEqual('engage', order['combat_mode'])
+                self.assertNotIn(order['combat_mode'], ('magazine_reload_retreat', 'withdraw'))
+                self.assertFalse(order['fire_allowed'])
+                self.assertFalse(hasattr(self.planner, '_retreat_states'))
+                if cause == 'ammunition_exhausted':
+                    self.assertTrue(order['empty_ammo'])
+                else:
+                    self.assertIsNone(order['target_id'])
 
 
 if __name__ == '__main__':

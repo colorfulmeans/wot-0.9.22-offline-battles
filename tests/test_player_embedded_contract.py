@@ -209,8 +209,7 @@ class EmbeddedIndependentRuntimeTests(unittest.TestCase):
         names = ('copied.ai.navigation', 'copied.ai.local_height',
                  'copied.ai.traffic', 'copied.bot_tactics',
                  'copied.spg_route_recovery', 'copied.server_bot_ai',
-                 'copied.battle_geometry', 'copied.ai.cover',
-                 'copied.ai.tactical_geometry', 'copied._compat',
+                 'copied.battle_geometry', 'copied._compat',
                  'trigger_admission', 'full_runtime')
         self.modules = dict((name, importlib.import_module(
             'gui.mods.offline_lan_0922.player_control.' + name)) for name in names)
@@ -466,17 +465,6 @@ class EmbeddedIndependentRuntimeTests(unittest.TestCase):
         planner = planner_module.BotPlanner()
         self.assertEqual(u'\u8def\u7ebf', planner._task_family(dict(id=u'\u8def\u7ebf'), 1))
         self.assertEqual(u'\u547d\u4ee4', compat.text(u'\u547d\u4ee4'))
-        for x, expected in ((4., 0), (12., 2), (20., 2)):
-            planner = planner_module.BotPlanner()
-            planner._affordances[1] = dict(target=('bot', 9), reported_at=0.,
-                candidates=[dict(id='native-cover', position=(x, 0., 0.),
-                    peek_position=(x, 0., 1.), travel_distance=x, route_alignment=1.,
-                    enemy_occlusion=1., exposure=0., slope=0., water=0.,
-                    ally_congestion=0., peek_feasible=True, escape_feasible=True)])
-            selected = planner._cover_candidate(dict(id=1, state=dict(x=0., z=0.)),
-                dict(id=9, target_kind='bot'), dict(caution=.5, patience=.5, aggression=.5), 0.)
-            self.assertIsNotNone(selected)
-            self.assertEqual(set(((expected, 0),)), planner._cover_reservations)
 
     def test_fire_candidate_random_draw_and_flight_limit_execute_on_python27(self):
         module = self.modules['trigger_admission']
@@ -491,62 +479,18 @@ class EmbeddedIndependentRuntimeTests(unittest.TestCase):
         self.assertEqual(((), ()), module.TriggerAdmission._launch_path(
             (0., 0., 0.), (0., 0., 0.), 0., 25.))
 
-    def test_real_cover_search_uses_native_angles_body_samples_and_rank_on_python27(self):
-        import math
-        class Record(object):
-            def __init__(self, **values):
-                self.__dict__.update(values)
-        descriptor = dict(chassis=dict(hullPosition=(0., 0., 0.)),
-            hull=dict(hitTester=dict(bbox=((-1., 0., -2.), (1., 1.4, 2.))),
-                      turretPositions=((0., 1.4, 0.),)),
-            turret=dict(hitTester=dict(bbox=((-0.7, 0., -1.), (.7, 1., 1.))),
-                        gunPosition=(0., .3, 0.)),
-            gun=dict(turretYawLimits=None, staticTurretYaw=None,
-                     pitchLimits=dict(minPitch=((0., -.5), (2.*math.pi, -.5)),
-                                      maxPitch=((0., .5), (2.*math.pi, .5)))))
-        target = Record(id=9, typeDescriptor=descriptor, isStarted=True)
-        own = Record(id=77, typeDescriptor=descriptor, isStarted=True)
-        entities = {9: target, 77: own}
+    def test_retired_cover_modules_and_runtime_entrances_are_absent_on_python27(self):
         geometry = self.modules['copied.battle_geometry'].CopiedBattleGeometry()
-        geometry._records = {'bot:77': dict(engine_id=77, ready=True),
-                             'bot:9': dict(engine_id=9, ready=True)}
-        geometry._server_entity = entities.get
-        observed = dict(id=9, kind='bot', network_id=9, position=(0., 0., 40.),
-                        x=0., y=0., z=40., yaw=0., pitch=0., roll=0.,
-                        turret_yaw=.2, gun_pitch=-.1)
-        geometry._bots = Record(_visible_target_poses={(1, 'bot', 9): observed},
-                                _team_spot_time_left=lambda *args: 10.)
-        geometry._clock = lambda: 0.
-        state = dict(id=77, team=1, x=0., y=0., z=0., position=(0., 0., 0.),
-                     yaw=0., pitch=0., roll=0., turret_yaw=.1, gun_pitch=.05)
-        rays, queries = [], []
-        def ray(start, end):
-            rays.append((start, end))
-            queries.append('ray')
-            return end[2] >= -4. if start[2] > 30. else True
-        def ground(*args):
-            queries.append('ground')
-            return 0.
-        def water(*args):
-            queries.append('water')
-            return 0.
-        geometry._cover_ground, geometry._water_depth = ground, water
-        geometry._tactical_ray_clear = ray
-        candidates = ()
-        for index in range(20):
-            del queries[:]
-            candidates = geometry._sample_bot_cover(state, observed, (0., 0., 30.),
-                                                     (), lambda *args: True)
-            self.assertLessEqual(len(queries), 40)
-            if candidates:
-                break
-        self.assertTrue(candidates)
-        result = self.modules['copied.ai.cover'].score_candidates(candidates)[0]
-        self.assertEqual(4, len(self.modules['copied.ai.tactical_geometry'].body_samples(descriptor)))
-        self.assertIn('enemy_occlusion', result['breakdown'])
-        self.assertTrue(result['peek_feasible'])
-        self.assertEqual((.2, -.1), (observed['turret_yaw'], observed['gun_pitch']))
-        self.assertTrue(any(abs(first[1]-1.7) < 1.e-9 for first, unused in rays))
+        planner = self.modules['copied.server_bot_ai'].BotPlanner()
+        for name in ('_sample_bot_cover', '_cover_ground', '_cover_surface_pose',
+                     '_cover_gun_lane', '_cover_slope'):
+            self.assertFalse(hasattr(geometry, name), name)
+        for name in ('_cover_candidate', '_cover_states', '_cover_reservations',
+                     '_affordances', '_retreat_states'):
+            self.assertFalse(hasattr(planner, name), name)
+        for root in (os.path.dirname(BASE), os.path.join(BASE, 'copied')):
+            for name in ('cover.py', 'tactical_geometry.py'):
+                self.assertFalse(os.path.exists(os.path.join(root, 'ai', name)))
 
 
 if __name__ == '__main__':

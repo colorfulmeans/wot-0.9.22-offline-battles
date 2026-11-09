@@ -32,8 +32,7 @@ def handoff(runtime, state, order):
     adapter = getattr(runtime, 'adapter', None)
     driver = getattr(adapter, 'driver', None)
     getattr(driver, 'states', {}).pop(state['id'], None)
-    for name in ('_withdrawal_attempts', '_contact_escapes', '_flank_arrivals'):
-        getattr(adapter, name, {}).pop(state['id'], None)
+    getattr(adapter, '_contact_escapes', {}).pop(state['id'], None)
     # These are unlaunched planning intents, not projectile ledgers.
     cancel = getattr(runtime, '_cancel_artillery_intent', None)
     if callable(cancel):

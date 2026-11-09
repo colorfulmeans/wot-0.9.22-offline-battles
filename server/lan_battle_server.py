@@ -269,7 +269,7 @@ TEAM_COMMAND_COOLDOWN_TICKS = int(10 * TICK_HZ)
 TEAM_GUARD_TRAVEL_TICKS = int(90 * TICK_HZ)
 TEAM_GUARD_SAFE_TICKS = int(30 * TICK_HZ)
 TEAM_COMMAND_MOVEMENT = frozenset((
-    "ATTACK", "BACKTOBASE", "HELPME", "HELPMEEX", "FOLLOWME", "TURNBACK",
+    "ATTACK", "BACKTOBASE", "HELPME", "HELPMEEX", "FOLLOWME",
     "ATTENTIONTOCELL",
 ))
 # A radio call asks nearby teammates to respond.  This is a product response
@@ -292,7 +292,7 @@ TEAM_COMMAND_ALLY_TARGETS = frozenset((
 ))
 TEAM_COMMAND_CELL_TARGETS = frozenset(("ATTENTIONTOCELL",))
 TEAM_COMMAND_PURE_BROADCAST = frozenset((
-    "POSITIVE", "NEGATIVE", "SPG_AIM_AREA", "RELOADINGGUN",
+    "POSITIVE", "NEGATIVE", "TURNBACK", "SPG_AIM_AREA", "RELOADINGGUN",
     "RELOADING_CASSETE", "RELOADING_READY", "RELOADING_READY_CASSETE",
     "RELOADING_UNAVAILABLE",
 ))
@@ -5671,9 +5671,7 @@ class BattleState:
                 return True
             if not self._combat_accepting():
                 return False
-            if (not isinstance(message.get("contacts"), (list, tuple)) or
-                    ("affordances" in message and
-                     not isinstance(message.get("affordances"), (list, tuple)))):
+            if not isinstance(message.get("contacts"), (list, tuple)):
                 return False
             players = [
                 self._public_player(p, include_outfits=False)
@@ -5966,8 +5964,6 @@ class BattleState:
             valid_hidden = any(
                 self._valid_hidden_observation(contact, known_targets)
                 for contact in contacts)
-            accepted_affordances = self.bot_planner.report_affordances(
-                message.get("affordances"), known_bots, known_targets, now)
             self._replace_bot_spotted(direct_bot_spots)
             self._replace_player_spotted(direct_player_spots)
             self.player_mission_view_ranges = mission_ranges or {}
@@ -5990,7 +5986,7 @@ class BattleState:
             # worker dispatcher can advance its liveness fence without noisy
             # false rejection logs.
             return bool(
-                accepted_contacts > 0 or accepted_affordances > 0 or
+                accepted_contacts > 0 or
                 valid_hidden or stale_observation)
 
     def _replace_bot_spotted(self, direct_spots):
@@ -6210,11 +6206,8 @@ class BattleState:
         if (current_order or {}).get('route_attempt', {}).get('phase') not in (None, 'normal', 'complete'):
             return False
         if (combat_mode in (
-                "magazine_reload_retreat", "magazine_reload_hold", "engage", "flank", "advance_contact", "take_cover", "cover_hold", "cover_peek", "cover_return", "support_hold",
-                "route_transfer", "recovery_return", "base_defense",
-                "low_health_retreat", "low_health_defend",
-                "under_fire_withdraw", "under_fire_hold",
-                "crossfire_withdraw", "crossfire_hold") or
+                "engage", "advance_contact",
+                "route_transfer", "recovery_return", "base_defense") or
                 (combat_mode == "base_defense" and
                  command != "BACKTOBASE")):
             return False

@@ -11,7 +11,7 @@ double clamp(double value,double low,double high) {
     return std::max(low,std::min(high,value));
 }
 std::array<double,3> aim(const double *v,int mode,bool has_target,bool engage,
-                       bool movement,bool withdrawal,bool allow_rear) {
+                       bool movement,bool allow_rear) {
     // v: hull, target, minimum, maximum, turn, throttle, retained rear turn.
     if(!has_target || mode==1)return {{v[4],v[5],0.}};
     const bool limited=!(v[2]<=-pi+.1 && v[3]>=pi-.1);
@@ -24,14 +24,6 @@ std::array<double,3> aim(const double *v,int mode,bool has_target,bool engage,
         if(v[6]!=0. && std::abs(relative)>pi*.5 && d*v[6]<0.)
             d+=std::copysign(2.*pi,v[6]);
         return {{clamp(d/.58,-1.,1.),0.,1.}};
-    }
-    if(mode==2) {
-        const double center=(v[2]+v[3])*.5;
-        if(withdrawal && v[5]<0. && std::abs(relative-center)<=.35 && limited) {
-            if(v[2]+.02<=relative && relative<=v[3]-.02)return {{0.,v[5],0.}};
-            return {{-clamp((relative-center)/.58,-.5,.5),v[5],1.}};
-        }
-        return {{v[4],v[5],0.}};
     }
     if((movement && !engage) || !limited)return {{v[4],v[5],0.}};
     if(v[2]+margin<=relative && relative<=v[3]-margin)
@@ -129,12 +121,14 @@ PyObject *WOT_CDECL driver_aim(PyObject *,PyObject *args) {
         }
         require_sequence(a[2],op==0?6:0,true);int flags[6]={};
         for(Py_ssize_t i=0;i<size(a[2]);++i)flags[i]=index_value(items(a[2])[i]);
-        if(flags[0]<0 || flags[0]>2)throw Unsupported();
+        // Keep the reviewed call width. The retired tactical-mode slot is
+        // reserved zero; there is no executable retreat branch behind it.
+        if(flags[0]<0 || flags[0]>1 || flags[4]!=0)throw Unsupported();
         for(int i=1;i<6;++i)if(flags[i]<0 || flags[i]>1)throw Unsupported();
         const auto result=profile.run([&] {
             using namespace driver_aim_law;
             if(op==0)return aim(v,flags[0],flags[1]!=0,flags[2]!=0,
-                                flags[3]!=0,flags[4]!=0,flags[5]!=0);
+                                flags[3]!=0,flags[5]!=0);
             if(op==1)return std::array<double,3>{{
                 (v[3]!=0. && std::abs(v[0])>pi*.5 && !(v[1]<=v[0] && v[0]<=v[2]))?
                     (v[3]>0.?v[2]:v[1]):clamp(v[0],v[1],v[2]),0.,0.}};

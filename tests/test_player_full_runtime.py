@@ -510,7 +510,7 @@ class FullRuntimeTests(unittest.TestCase):
         protection = self.runtime.planner._base_defense[1]['capture_protection']
         self.assertIn(self.runtime.actor_id, protection['protected'])
         self.assertNotIn(self.runtime.actor_id, self.runtime.planner._base_defense[1]['responders'])
-        self.assertNotIn(self.runtime.actor_id, self.runtime.planner._retreat_states)
+        self.assertFalse(hasattr(self.runtime.planner, '_retreat_states'))
         self.assertEqual(0., self.battle._sender.forward)
         self.assertNotEqual('base_defense', result['order']['combat_mode'])
 

@@ -34,9 +34,9 @@ COPY_PREFIX = PREFIX + ".player_control.copied"
 # new implementation. The native wrappers contain late calls back into Bot
 # laws, so they must be copied even though their C++ primitives remain shared.
 CLIENT_MODULES = (
-    "bot_runtime", "ai", "ai.adapter", "ai.cover", "ai.driver",
+    "bot_runtime", "ai", "ai.adapter", "ai.driver",
     "ai.local_height", "ai.maps", "ai.navigation", "ai.planner",
-    "ai.tactical_geometry", "ai.traffic", "bot_tactics",
+    "ai.traffic", "bot_tactics",
     "bot_tactics_runtime", "bot_gunnery", "bot_fittings", "hull_aiming",
     "spg_positions", "spg_route_travel", "spg_route_recovery", "spg_modes",
     "empty_ammo", "capture_orders", "initial_allocation", "route_network",
@@ -62,13 +62,14 @@ PROTOCOL_TARGET = COPY_PREFIX + ".protocol_primitives"
 GEOMETRY_SEEDS = (
     "_bot_visibility", "_bot_aim_context", "_bot_aim_point",
     "_bot_aim_damage_score", "_bot_firing_lane", "_bot_incoming_lane",
-    "_sample_bot_cover", "_bot_friendly_firing_lane",
+    "_bot_friendly_firing_lane",
     "_bot_direct_launch_origin", "_bot_artillery_planning_origin",
     "_bot_artillery_aim_samples", "_bot_artillery_status",
     "_bot_ballistic_solution", "_bot_artillery_launch",
     "_bot_artillery_friendly_lane", "_bot_artillery_cancel",
     "_artillery_arc_probe", "_probe_bot_local_motion", "_resolve_bot_rotation",
     "_direction_world_receipt", "_direction_probe", "_turret_motion_is_clear",
+    "_sample_ground_plane",
     "_navigation_height_columns", "_navigation_surface_observation",
     "_navigation_obstacle",
 )

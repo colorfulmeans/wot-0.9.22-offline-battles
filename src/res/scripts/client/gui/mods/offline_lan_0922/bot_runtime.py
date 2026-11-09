@@ -93,7 +93,6 @@ ARTILLERY_TOTAL_PROOF_SECONDS = 120.0
 # queue moves its intended aim point farther than a conservative half-width.
 # This gate must never inspect or compensate the random projectile endpoint.
 ARTILLERY_AIM_STALENESS_METRES = 1.5
-COVER_JOBS_PER_OBSERVATION = 3
 HUMAN_TARGET_ID_BASE = 1000000
 # The pinned client evaluates spotting at roughly six hertz. Keep the full
 # camouflage/LOS calculation on that fixed authority cadence; intervening
@@ -204,10 +203,6 @@ SHOT_LANE_QUERY_DISTANCE = 585.0
 # pitch-valid curved-world probe.  Keep its query envelope at map scale without
 # making every ordinary tank spend native rays beyond the server's 560 m lease.
 SPG_SHOT_LANE_QUERY_DISTANCE = 2500.0
-# Cover fans share the one-second global-tactics cadence but remain phased
-# through its first half. Visibility reports continue independently.
-COVER_REFRESH_SECONDS = TACTICAL_REFRESH_SECONDS
-COVER_JOB_WINDOW_SECONDS = COVER_REFRESH_SECONDS * 0.5
 DECISION_SECONDS = 0.150
 # Distance tiers for planner and suspension sampling.  Physical integration is
 # globally capped by PUBLICATION_SECONDS; MatrixAnimation interpolates the
@@ -2095,7 +2090,6 @@ class BotRuntime(object):
                  physics_ground_limit_probe=None,
                  suspension_ground_probe=None,
                  obstacle_probe=None, bounds=None, arena_bounds=None,
-                 cover_probe=None,
                  native_motion=False, baked_graph=None, probe_clock=None,
                  motion_resolver=None, motion_report=None,
                  world_receipt_probe=None, probe_timing_seconds=0.0,
@@ -2202,7 +2196,6 @@ class BotRuntime(object):
         self.navigator = (TerrainNavigator(
             ground_probe, obstacle_probe, bounds, 18.0)
             if callable(ground_probe) else None)
-        self.cover_probe = cover_probe
         self.native_motion = bool(native_motion)
         self.motion_resolver = motion_resolver
         self.motion_report = motion_report
@@ -2344,12 +2337,8 @@ class BotRuntime(object):
         self._order_revision = -1
         self._next_observation = 0.0
         self._next_shot_lane_refresh = 0.0
-        self._next_cover_refresh = 0.0
         self._next_publication = 0.0
         self._pending_ram_reports = []
-        self._cover_cursor = 0
-        self._cover_queue = []
-        self._cover_results = []
         self._decision_cache = {}
         self._motion_probe_cache = {}
         self._traffic_stopping_cache = {}
@@ -2367,8 +2356,8 @@ class BotRuntime(object):
         self._server_tick = -1
         # These monotonic, pull-only totals are diagnostic data.  They never
         # enter a LAN payload or feed a scheduler/cache decision.
-        self._probe_totals = [0, 0, 0, 0, 0]
-        self._probe_duration_totals = [0.0, 0.0, 0.0, 0.0, 0.0]
+        self._probe_totals = [0] * len(PROBE_KINDS)
+        self._probe_duration_totals = [0.0] * len(PROBE_KINDS)
         self._alive_bot_ticks = 0
         self._decision_counts = {}
         self._native_simulation = None
@@ -2627,7 +2616,7 @@ class BotRuntime(object):
                          maximum_distance=None, corridor_half_width=None,
                          native_capability=None, body_pose=None):
         """Return one canonical direction sample for planning and physics."""
-        self._probe_totals[4] += 1
+        self._probe_totals[3] += 1
         probe_started = self._probe_started()
         try:
             if native_capability is None:
@@ -2650,7 +2639,7 @@ class BotRuntime(object):
             return {'clear': False, 'collision': True,
                     'water': False, 'slope': 0.0, 'probe_failed': True}
         finally:
-            self._probe_finished(4, probe_started)
+            self._probe_finished(3, probe_started)
         return result
 
     def _begin_world_receipt_frame(self):
@@ -2768,7 +2757,7 @@ class BotRuntime(object):
         """Run one measured exact receipt without changing queue ownership."""
         if not callable(self.world_receipt_probe):
             return None
-        self._probe_totals[4] += 1
+        self._probe_totals[3] += 1
         probe_started = self._probe_started()
         try:
             result = self.world_receipt_probe(
@@ -2778,7 +2767,7 @@ class BotRuntime(object):
             # authoritative per-frame world sweep and never grants movement.
             return None
         finally:
-            self._probe_finished(4, probe_started)
+            self._probe_finished(3, probe_started)
         return result
 
     def prewarm_world_receipts(self, now):
@@ -3910,15 +3899,11 @@ class BotRuntime(object):
             self._order_revision = -1
             self._next_observation = 0.0
             self._next_shot_lane_refresh = 0.0
-            self._next_cover_refresh = 0.0
             self._next_publication = 0.0
             self._pending_ram_reports = []
             self._pending_launches = []
             self._pending_launch_keys = {}
             self._pending_launch_by_bot = {}
-            self._cover_cursor = 0
-            self._cover_queue = []
-            self._cover_results = []
             self._decision_cache = {}
             self._motion_probe_cache = {}
             self._traffic_stopping_cache = {}
@@ -3994,11 +3979,8 @@ class BotRuntime(object):
             self._human_ram_cooldowns = {}
             self._ram_contacts = frozenset()
             self._gunnery_holds = {}
-            self._cover_queue = []
-            self._cover_results = []
             self._next_observation = 0.0
             self._next_shot_lane_refresh = 0.0
-            self._next_cover_refresh = 0.0
             self._next_publication = 0.0
             # The new owner has no decision cache. Its first physical slice
             # must refresh even when carried time or a burst makes it short.
@@ -5271,10 +5253,6 @@ class BotRuntime(object):
                         order[name] = int(order[name])
                     except (TypeError, ValueError, OverflowError):
                         return False
-            if order.get('cover_id') is not None:
-                cover_id = order['cover_id']
-                if not isinstance(cover_id, _STRING_TYPES) or len(cover_id) > 80:
-                    return False
             accepted[bot_id] = order
         previous = self._server_orders
         changed_ids = set(previous).union(accepted)
@@ -7122,14 +7100,14 @@ class BotRuntime(object):
     def _suspension_ground_value(
             self, x, z, minimum_y, maximum_y, flat_maximum_y=None):
         """Run and time one travel-bounded native suspension ray."""
-        self._probe_totals[3] += 1
+        self._probe_totals[2] += 1
         probe_started = self._probe_started()
         try:
             probe = self._suspension_ground_probe or self._wreck_ground_probe
             return probe(
                 x, z, minimum_y, maximum_y, flat_maximum_y)
         finally:
-            self._probe_finished(3, probe_started)
+            self._probe_finished(2, probe_started)
 
     def _suspension_ground_samples(self, state, params,
                                    probe_height=None,
@@ -7373,7 +7351,7 @@ class BotRuntime(object):
 
     def _ground_probe_at(self, x, z, hint, maximum_y=None, receipt=None, evidence=None):
         """Run one accounted physics ground column."""
-        self._probe_totals[3] += 1
+        self._probe_totals[2] += 1
         probe_started = self._probe_started()
         if evidence is not None:
             evidence.append(None)
@@ -7410,7 +7388,7 @@ class BotRuntime(object):
                 receipt.update(outcome='query_exception', error_type=type(error).__name__)
             raise
         finally:
-            self._probe_finished(3, probe_started)
+            self._probe_finished(2, probe_started)
 
     def _straddled_terrain_support(self, state, position, follow_gap):
         """Return chassis-end support when the centre column drops away.
@@ -7963,7 +7941,6 @@ class BotRuntime(object):
             'contact_escape': command.get('contact_escape'),
             'wreck_push': command.get('wreck_push'),
             'wreck_push_last_terminal': command.get('wreck_push_last_terminal'),
-            'withdrawal': command.get('withdrawal'),
             'driver_progress_target': command.get('driver_progress_target'),
             'decision': {key: command.get(key) for key in (
                 'combat_mode', 'recovery_mode', 'movement_intent',
@@ -9000,7 +8977,7 @@ class BotRuntime(object):
                         descriptor, step, now, commit_enabled,
                         motion_yaw=motion_yaw)
                 finally:
-                    self._probe_finished(4, probe_started)
+                    self._probe_finished(3, probe_started)
         finally:
             if had_movement_dir:
                 state['movement_dir'] = movement_dir
@@ -9253,13 +9230,13 @@ class BotRuntime(object):
             sample_x = start_x + delta_x * fraction
             sample_z = start_z + delta_z * fraction
             sample_hint = start_y + rise * fraction
-            self._probe_totals[3] += 1
+            self._probe_totals[2] += 1
             probe_started = self._probe_started()
             try:
                 support = self._physics_ground_probe(
                     sample_x, sample_z, sample_hint)
             finally:
-                self._probe_finished(3, probe_started)
+                self._probe_finished(2, probe_started)
             if support is None:
                 return False
             support = float(support)
@@ -9340,13 +9317,13 @@ class BotRuntime(object):
             # ten springs and twelve pseudo contacts are still sampled only
             # once below, even when their numerical solver takes substeps.
             position = _position(state)
-            self._probe_totals[3] += 1
+            self._probe_totals[2] += 1
             probe_started = self._probe_started()
             try:
                 initial_ground = self._physics_ground_probe(
                     position[0], position[2], position[1])
             finally:
-                self._probe_finished(3, probe_started)
+                self._probe_finished(2, probe_started)
             if initial_ground is not None:
                 state['y'] = float(initial_ground)
                 state['vertical_speed'] = 0.0
@@ -15044,8 +15021,7 @@ class BotRuntime(object):
     def _mark_friendly_reposition(
             self, state, command, target, launch, verdict, now):
         """Move laterally through the existing safe driver after a blocked shot."""
-        if command.get('combat_mode') in (
-                'base_defense', 'low_health_retreat', 'magazine_reload_retreat', 'withdraw'):
+        if command.get('combat_mode') == 'base_defense':
             return False
         try:
             bot_id = int(state['id'])
@@ -15707,8 +15683,7 @@ class BotRuntime(object):
         if (target is None or int(state.get('clip_size', 1)) <= 1 or
                 int(state.get('clip', 0)) <= 0 or
                 (state.get('profile') or {}).get('class_tag') == 'SPG' or
-                command.get('combat_mode') not in
-                ('engage', 'support_hold', 'cover_hold', 'cover_peek') or
+                command.get('combat_mode') != 'engage' or
                 abs(_number(state.get('speed'))) > 0.5 or
                 abs(_number(command.get('throttle'))) > 0.01):
             previous = state.pop('_magazine_followup', None)
@@ -15832,7 +15807,7 @@ class BotRuntime(object):
                 order.get('movement_intent', True) and
                 _distance(position, _point(order.get('move_position'), position)) > 1.5 and
                 not order.get('parking_phase') and order.get('combat_mode') not in
-                ('base_defense', 'support_hold', 'cover_hold', 'hold',
+                ('base_defense', 'hold',
                  'artillery_deploy', 'artillery_relocate')):
             lease = dict(start=now, origin=position, goal=tuple(order['move_position']),
                          fire_seq=int(state.get('fire_seq', 0)),
@@ -15856,7 +15831,7 @@ class BotRuntime(object):
             travel = _distance(position, lease['origin'])
             goal_distance = _distance(position, goal) if 'goal' in lease else None
             priority_hold = bool(order.get('parking_phase') or order.get('combat_mode') in
-                ('base_defense', 'support_hold', 'cover_hold', 'hold',
+                ('base_defense', 'hold',
                  'artillery_deploy', 'artillery_relocate'))
             completed = (travel >= 2.0 * float(state.get('half_length', 3.5)) + 1.5 or
                 (goal_distance is not None and goal_distance <= 1.5) or fired or priority_hold)
@@ -15913,7 +15888,7 @@ class BotRuntime(object):
                 'fired' if fired else 'contact_blocked' if blocked else 'expired'))
             if not changed and not fired and (expired or blocked):
                 # A physically denied pivot needs the existing bounded firing
-                # position recovery, including stationary cover holds.
+                # position recovery, including stationary firing holds.
                 state['_gun_angle_pivot_refusal'] = episode['identity']
             state.pop('_rear_aim_episode', None)
             state.pop('_rear_hull_aim', None)
@@ -15994,7 +15969,7 @@ class BotRuntime(object):
         blocked_contact = (speed_basis == 'realised_player_contact' and abs(approach_speed) <= 1.0)
         eligible = (not order.get('empty_ammo') and (state.get('profile') or {}).get('class_tag') != 'SPG' and
                     not order.get('parking_phase') and
-                    (order.get('combat_mode') in ('engage', 'support_hold', 'cover_hold', 'hold') or
+                    (order.get('combat_mode') in ('engage', 'hold') or
                      (order.get('combat_mode') == 'advance_contact' and blocked_contact)))
         position = _position(state)
         receipt = dict(sampled_at=now, eligible=eligible, speed=state.get('speed'),
@@ -16041,7 +16016,7 @@ class BotRuntime(object):
                     reason='target_missing' if target is None else 'mechanical_refusal_cleared')
             state.pop('_gun_angle_adjustment', None)
             return order
-        # Do not interrupt an existing approach, retreat or cover move.
+        # Do not interrupt an existing movement owner.
         goal = _point(order.get('move_position'), position)
         marker = state.get('_gun_angle_adjustment')
         stationary_hold = order.get('throttle_override') == 0.0
@@ -16101,7 +16076,7 @@ class BotRuntime(object):
             cached = self._decision_cache.get(state['id'])
             executed = cached[3] if cached is not None else {}
             if (marker.get('alignment_goal') is None and now > marker['selected_at'] and
-                    executed.get('combat_mode') in ('withdraw', 'gun_angle_adjust') and
+                    executed.get('combat_mode') == 'gun_angle_adjust' and
                     executed.get('target_yaw') is not None):
                 # The checked destination can require a local driver turn.
                 # Freeze that first real steering goal once; changing local
@@ -16141,7 +16116,7 @@ class BotRuntime(object):
                 return self._gun_angle_combat_order(state, order, arrived=not stalled)
             receipt['reason'] = 'checked_mechanical_relocation'
             result.update(move_position=destination,
-                          combat_mode='withdraw' if marker['reverse'] else 'gun_angle_adjust',
+                          combat_mode='gun_angle_adjust',
                           throttle_override=1.0)
             return result
         if elapsed < 6.0 and not marker['selected']:
@@ -16179,8 +16154,7 @@ class BotRuntime(object):
                 next_target=selected_id, marker=dict(marker))
             self._clear_friendly_reposition(bot_id)
             return None, False
-        if order.get('combat_mode') in (
-                'base_defense', 'low_health_retreat', 'magazine_reload_retreat', 'withdraw'):
+        if order.get('combat_mode') == 'base_defense':
             state['_friendly_reposition_event'] = dict(at=now, outcome='priority_handoff',
                 next_owner=order.get('combat_mode'), marker=dict(marker))
             self._clear_friendly_reposition(bot_id)
@@ -16856,20 +16830,6 @@ class BotRuntime(object):
              self._publish_control_this_step,
              self._control_evaluation_time) = previous
 
-    def _cover_job_current(self, job, now):
-        unused_ready, bot_id, source, target, unused_route, unused_allies = job
-        current_source = self.states.get(int(bot_id))
-        target_key = (source.get('team'), target.get('kind', 'human'),
-                      int(target.get('network_id', 0)))
-        remembered = self._visible_target_poses.get(target_key)
-        current = bool(
-            current_source is not None and
-            current_source.get('alive', True) and
-            current_source.get('team') == source.get('team') and
-            remembered is not None and
-            self._team_spot_time_left(target_key, now) > 0.0)
-        return current, current_source, remembered
-
     def _planning_local_sweep(self, state, position, sample_yaw, distance, now):
         probe = self.local_sweep_probe
         if not callable(probe) or state.get('airborne'):
@@ -16956,26 +16916,18 @@ class BotRuntime(object):
         live_probe_targets = {}
         processed_bot_ids = set()
         # Spotting is latency-sensitive presentation state. Full-roster firing
-        # lanes and cover fans only guide the one-hertz server planner, so they
+        # lanes only guide the one-hertz server planner, so they
         # run on independent clocks and can never delay this observation.
         observation_due = refresh_control and now >= self._next_observation
         collect_observation = publish and observation_due
         shot_lane_refresh_time = self._next_shot_lane_refresh
         shot_lane_refresh_due = now >= shot_lane_refresh_time
-        cover_reserved = bool(
-            refresh_control and self._cover_queue and
-            now + 1e-9 >= self._cover_queue[0][0] and
-            self._cover_job_current(self._cover_queue[0], now)[0])
         refresh_shot_lanes = (
             refresh_control and
-            not cover_reserved and
             (shot_lane_refresh_due or
              (shot_lane_refresh_time > 0.0 and
               now + SHOT_LANE_REFRESH_SECONDS + 1e-9 >=
               shot_lane_refresh_time)))
-        collect_cover_jobs = bool(
-            refresh_control and publish and not self._cover_queue and
-            now >= self._next_cover_refresh)
         final_shot_lane_budget = [MAX_SHOT_LANE_PAIRS_PER_FRAME]
         supplemental_shot_lane_budget = [
             (MAX_WORKER_SHOT_LANE_PAIRS_PER_FRAME
@@ -17012,7 +16964,6 @@ class BotRuntime(object):
             append_observations(
                 players, now, observation_entries, team_visibility,
                 visibility_tick)
-        cover_jobs = []
         # Consume before drive integration; ACK retries at the final contact
         # pass are no-ops. Incoming momentum must affect this slice's drive.
         if not self.native_motion:
@@ -17828,7 +17779,6 @@ class BotRuntime(object):
                 not command.get('parking_phase'),
                 combat_mode=command.get('combat_mode'),
                 movement_intent=command.get('movement_intent', True),
-                withdrawal_aim=command.get('withdrawal_aim', False),
                 rear_turn=rear_turn, allow_rear_start=allow_rear_start)
             rear_relative = _angle_delta(hull_aim_yaw, state['yaw'])
             if (hull_aiming and unused_limited and
@@ -17961,7 +17911,7 @@ class BotRuntime(object):
                     command.get('recovery_probe_distance'),
                     ai_driver.recovery_probe_distance(state.get('half_length', 3.5))))
             elif (travel_sign < 0.0 and reactive_horizon is not None and
-                    command.get('recovery_mode') in ('reverse_turn', 'reverse_withdraw')):
+                    command.get('recovery_mode') == 'reverse_turn'):
                 # Recovery is intentionally a short backing manoeuvre. A wall
                 # beyond that escape edge must not veto clear space at the rear.
                 maximum_probe_distance = reactive_horizon
@@ -18572,7 +18522,7 @@ class BotRuntime(object):
                                 state['id'], position, state['yaw'], speed,
                                 descriptor, step, now)
                         finally:
-                            self._probe_finished(4, probe_started)
+                            self._probe_finished(3, probe_started)
                     if motion_status not in (
                             'clear', 'crushed', 'soft', 'cap_crushed',
                             'hard'):
@@ -18829,21 +18779,6 @@ class BotRuntime(object):
                 except Exception:
                     # Diagnostic serialization must never cost a shot.
                     pass
-            if diagnostic is not None:
-                diagnostic.phase('bot.cover_prepare')
-            mode = command.get('combat_mode')
-            if (collect_cover_jobs and
-                    target is not None and target.get('visible') and
-                    callable(self.cover_probe) and
-                    (mode in ('take_cover', 'cover_hold', 'cover_peek',
-                              'cover_return', 'under_fire_withdraw',
-                              'low_health_retreat', 'magazine_reload_retreat', 'crossfire_withdraw') or
-                     (command.get('fire_allowed') and mode in (
-                         'engage', 'advance_contact', 'jiggle_forward',
-                         'jiggle_back')))):
-                cover_jobs.append((state['id'], _copy_runtime_state(state),
-                                   dict(target),
-                                   command.get('move_position', position)))
             _clear_critical_parts_tick_cache(state)
             motion = self._native_motion_for(state['id'])
             if motion is not None:
@@ -18875,75 +18810,18 @@ class BotRuntime(object):
                 now, shot_lane_refresh_time, shot_lane_pending_pairs,
                 shot_lane_refresh_due)
         else:
-            # Cover work can temporarily own the supplemental window. Retain
-            # the last observed pair depth and let its due age advance without
-            # rebuilding the roster solely for diagnostics.
+            # Retain the last observed pair depth and let its due age advance
+            # without rebuilding the roster solely for diagnostics.
             self._update_shot_lane_debt_diagnostics(
                 now, shot_lane_refresh_time,
                 self._shot_lane_pending_pairs, shot_lane_refresh_due)
             if self._combat_diagnostics is not None:
                 self._combat_diagnostics.queue_state(
-                    now, None, selected_lane_priorities,
-                    cover_blocked=cover_reserved)
+                    now, None, selected_lane_priorities)
         if (shot_lane_refresh_due and refresh_shot_lanes and
                 shot_lanes_ready):
             self._next_shot_lane_refresh = (
                 now + SHOT_LANE_REFRESH_SECONDS)
-        completed_affordances = ()
-        if collect_observation:
-            completed_affordances = tuple(self._cover_results)
-            self._cover_results = []
-        cover_jobs.sort(key=lambda value: value[0])
-        if collect_cover_jobs:
-            self._next_cover_refresh = now + COVER_REFRESH_SECONDS
-        if collect_cover_jobs and cover_jobs:
-            cursor = self._cover_cursor % len(cover_jobs)
-            ordered = cover_jobs[cursor:] + cover_jobs[:cursor]
-            count = min(COVER_JOBS_PER_OBSERVATION, len(ordered))
-            self._cover_cursor = (cursor + count) % len(cover_jobs)
-            ally_positions = dict((team, [
-                _position(value) for value in self.states.values()
-                if value.get('alive') and value.get('team') == team])
-                for team in (1, 2))
-            window_start = now
-            for index, value in enumerate(ordered[:count]):
-                bot_id, source, target, route = value
-                ready_at = window_start + (
-                    COVER_JOB_WINDOW_SECONDS * float(index) /
-                    float(count))
-                self._cover_queue.append((
-                    ready_at, bot_id, source, target, route,
-                    tuple(ally_positions.get(source.get('team'), ()))))
-        if refresh_control and self._cover_queue:
-            ready_at, bot_id, source, target, route, allies = \
-                self._cover_queue[0]
-            if now + 1e-9 >= ready_at:
-                current, current_source, remembered = self._cover_job_current(
-                    self._cover_queue.pop(0), now)
-                if current:
-                    source = _copy_runtime_state(current_source)
-                    target = dict(target)
-                    target.update(remembered)
-                try:
-                    self._probe_totals[2] += 1
-                    probe_started = self._probe_started()
-                    try:
-                        candidates = (self.cover_probe(
-                            source, target, route, allies,
-                            (self.navigator.grid.segment_clear
-                             if self.navigator is not None else None))
-                                      if current else ())
-                    finally:
-                        self._probe_finished(2, probe_started)
-                except Exception:
-                    candidates = ()
-                if candidates:
-                    self._cover_results.append({
-                        'bot_id': int(bot_id),
-                        'target_id': int(target.get('network_id')),
-                        'target_kind': target.get('kind', 'human'),
-                        'candidates': list(candidates),
-                    })
         ordered_states = self._ordered_states()
         if residual is not None:
             residual.residual_checkpoint('advisory')
@@ -19217,7 +19095,6 @@ class BotRuntime(object):
                     if actor[0] == 'human'],
                 'player_vision_ranges': visibility_tick.get(
                     'player_vision_ranges', []),
-                'affordances': list(completed_affordances),
             })
         return outgoing
 

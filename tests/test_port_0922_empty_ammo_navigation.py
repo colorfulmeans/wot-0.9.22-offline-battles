@@ -39,13 +39,14 @@ class InventoryProofTests(unittest.TestCase):
 
     def test_local_handoff_once_preserves_projectile_ledger_and_new_recovery(self):
         state = dict(id=11, _rear_motion_lease={}, _authored_spg_travel={'kind':'defense'})
-        adapter = SimpleNamespace(driver=SimpleNamespace(states={11:{'paused':True}}), _withdrawal_attempts={11:{}})
+        adapter = SimpleNamespace(driver=SimpleNamespace(states={11:{'paused':True}}), _contact_escapes={11:{}})
         cancel = mock.Mock()
         runtime = SimpleNamespace(adapter=adapter, _cancel_artillery_intent=cancel,
                                   _launched_projectiles={42:'in-flight'})
         empty_ammo.handoff(runtime, state, {'empty_ammo':True})
         self.assertNotIn('_rear_motion_lease', state)
         self.assertNotIn('_authored_spg_travel', state)
+        self.assertNotIn(11, adapter._contact_escapes)
         adapter.driver.states[11] = {'recovery':'new'}
         empty_ammo.handoff(runtime, state, {'empty_ammo':True})
         self.assertEqual({'recovery':'new'}, adapter.driver.states[11])
@@ -73,13 +74,12 @@ class EmptyTravelTests(unittest.TestCase):
         p._travel_tasks[11] = dict(kind='guard', route=self.route)
         p._previous_combat.add(11)
         p._previous_player[11] = dict(id='old')
-        p._retreat_states[11] = dict(moving_mode='magazine_reload_retreat')
         order = self.tick()
         self.assertTrue(order['empty_ammo'])
         self.assertNotIn(11,p._travel_tasks)
         self.assertNotIn(11,p._previous_combat)
         self.assertNotIn(11,p._previous_player)
-        self.assertNotIn(11,p._retreat_states)
+        self.assertFalse(hasattr(p,'_retreat_states'))
         self.state.update(z=150,route_wreck_blocked=True)
         self.tick(2); self.tick(23)
         self.assertIn(11,p._route_recoveries)
