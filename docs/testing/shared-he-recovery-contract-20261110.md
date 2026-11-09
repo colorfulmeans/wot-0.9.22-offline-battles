@@ -13,6 +13,10 @@ claim in source documentation.
 - The user extends protected current HE from magazines to every current HE
   round, including an already started native load. CURRENT fires penetration
   or a legal HE fallback; independently evaluated NEXT chooses the later load.
+- Loaded HE does not enter the global eight-second penetration search. Without
+  a legal current contact it awaits valid evidence or uses a separately
+  justified finite physical recovery; an unavailable HE contact is not a
+  reason to launch another penetration-search policy.
 - Ordinary HE retains one penetration sample per eligible enemy. The reviewed
   full-domain HE identities are unchanged. Fallback ranking still excludes
   barrel/track-only contacts and accepts a legal zero-damage contact.
@@ -31,9 +35,14 @@ claim in source documentation.
   complete enemy point groups receive fair turns. This retains the existing
   48 atomic, two foreground, two background and time budgets; the remaining
   same-slice work can compare the qualified enemy's HE contacts. One unknown
-  point still prevents that enemy's fallback qualification. This is not a
-  claim that every large, continuously changing global negative domain can
-  close within one slice.
+  point still prevents that enemy's fallback qualification. A global domain
+  can remain unclosed across many frames when relevant poses keep changing
+  and a complete fresh domain cannot fit the existing candidate, time, world
+  or armour-query budgets. More than 48 points is one such boundary, not a
+  safe/unsafe dividing line; fewer points can exhaust the time budget. The
+  dependent eight-second search and NEXT HE fallback are not guaranteed to
+  become eligible. Independently proved positive NEXT penetration candidates
+  remain usable; current-HE fairness does not solve general global closure.
 - A current, fully proved stationary-pose plan can qualify ordinary HE's
   single-point failure for the corresponding physical recovery. It is not
   stored as an actual-pose failure and cannot authorize firing from the old
@@ -46,6 +55,9 @@ claim in source documentation.
   observes alternatives before a known obstruction can request physical
   recovery; explicitly unavailable geometry is not an endless veto against a
   separately observed physical blocker.
+- The finite termination contract applies to an admitted physical phase, not
+  every unknown geometry query. It is not a guarantee that all waiting or
+  native-game stalls have been eliminated.
 - A confirmed wreck or landed-turret collision carries a physical-blocker
   receipt instead of a bare false lane result. Foreground envelope candidates
   still require the original native component collision. Exceptions and
@@ -107,6 +119,25 @@ wreck scenario must demonstrate a real finite recovery, failed-phase release
 to its authored route, and four HE shots with three actual reloads and the
 correct remaining ammunition after the blocker is removed. Changing its
 expectation to indefinite waiting is not an acceptable repair.
+
+The first frozen candidate, `3e2806e8`, passed the local full suite but failed
+the worker-handoff setup in CI run `42705392898`. The new physical-admission
+gate incorrectly required every current-shell alternative to be fresh at
+once. A deterministic actual-worker scene reproduced the failure with only
+27 CURRENT AP points: real evaluations charged 1.5 ms each exhausted the
+unchanged eight-millisecond atomic slice while other actors kept changing
+pose. Extending the original 200-callback bound or zeroing its real clocks
+would conceal that production liveness regression.
+
+The follow-up separates completed physical-inspection coverage from exact
+launch evidence. A still-current known blocker is required for movement;
+completed observations do not enter armour-failure certificates, NEXT or
+launch permission. New identities and domains must be inspected, and genuine
+task, load, shot or recovered-aim boundaries retire the appropriate inspection.
+The original handoff cases keep their real clocks and 200-callback bound.
+Additional actual-native slow-query cases retain unknown, vanished-blocker
+and freshly executable alternative controls. Work quotas and time limits
+are unchanged. This does not solve general moving global negative closure.
 
 Stale evidence, live-target identity, manual mission, native friendly-fire,
 actual ammo debit, route resumption, target death and burst-tail protections

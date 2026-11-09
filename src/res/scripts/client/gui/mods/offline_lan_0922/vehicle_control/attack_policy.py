@@ -212,6 +212,7 @@ class AttackPolicy(object):
         self.rows = {}
         self._admission_blocks = {}
         self._lay_recovery = None
+        self._physical_review = None
         self.selected = None
         self._current_he_execution = None
         self.trigger = None
@@ -434,16 +435,81 @@ class AttackPolicy(object):
         return (row.get('line') in ('friendly_blocked', 'world_blocked', 'enemy_blocked', 'vehicle_blocked') or
                 row.get('mechanical') in ('hull_laying', 'mechanical_limited'))
 
-    def _physical_review_pending(self, shell_index):
-        """Observe stationary alternatives before moving for a blocked ray."""
-        for job in self._jobs(shell_index=shell_index):
-            row = self._current(job, require_line=True)
-            if row is None or row.get('stationary_progress'):
-                return True
-            # A terminal unavailable alternative cannot veto a separately
-            # observed obstruction forever. It remains unknown to armour
-            # closure; only the known blocker admits physical recovery.
-        return False
+    def _physical_review_source(self, shell):
+        return (self.frame['identity'], self.frame.get('weapon_identity'),
+                self.frame['position'], int(shell['index']), shell.get('signature'))
+
+    @staticmethod
+    def _physical_review_cause(row):
+        obstacle = row.get('blocker') or {}
+        identity = tuple((name, obstacle.get(name)) for name in
+            ('actor_key', 'kind', 'vehicle_id', 'blocker_kind', 'blocker_id', 'blocker_team'))
+        if not any(value is not None for unused, value in identity):
+            identity += (('point', obstacle.get('point')),)
+        return row['target_key'], row.get('line'), identity
+
+    def _record_physical_review(self, job, row):
+        review = self._physical_review
+        if (review is None or
+                self._physical_review_source(job[1]) != review['source']):
+            return
+        if job[0] == review['anchor'] and row is not None:
+            clear = row.get('line') == 'clear' and row.get('mechanical') == 'reachable'
+            blocked = row.get('line') in ('friendly_blocked', 'world_blocked',
+                                           'enemy_blocked', 'vehicle_blocked')
+            if (self._he_observation_identity(job) != review['anchor_identity'] or clear or
+                    blocked and self._physical_review_cause(row) != review['cause']):
+                self._physical_review = None
+                return
+        # The existing observation-completion check also rejects projected
+        # pending work. A terminal unavailable observation means only that
+        # this point was inspected, never that its armour failed.
+        if job[4] == 'penetration' and self._he_observed(row):
+            review['observed'][job[0]] = self._he_observation_identity(job)
+
+    def _physical_review_pending(self, shell_index, blocker):
+        """Finish one inspection pass, not a simultaneous firing snapshot.
+
+        Other vehicles may keep laying their guns while a known obstruction
+        prevents this gun from firing. Requiring all their point receipts to
+        remain exact at once makes physical recovery depend on machine speed.
+        Only coverage survives pose changes; every launch and global armour
+        certificate still uses _current and its original exact fences.
+        """
+        fresh = self.current_row(blocker, require_line=True)
+        if (self._frame_invalid or fresh is None or not (
+                fresh.get('line') in ('friendly_blocked', 'world_blocked',
+                                      'enemy_blocked', 'vehicle_blocked') or
+                fresh.get('mechanical') in ('hull_laying', 'mechanical_limited'))):
+            return True
+        shell = next(row for row in self.frame['shells'] if row['index'] == shell_index)
+        source = self._physical_review_source(shell)
+        review = self._physical_review
+        if review is not None and review['source'] == source:
+            anchor = next((job for job in self._jobs(review['anchor'][3], shell_index)
+                           if job[0] == review['anchor']), None)
+            if anchor is None or self._he_observation_identity(anchor) != review['anchor_identity']:
+                self._physical_review = None
+            else:
+                self._record_physical_review(anchor, self._current(anchor, require_line=True))
+        review = self._physical_review
+        if review is None or review['source'] != source:
+            anchor = next(job for job in self._jobs(fresh['mode'], shell_index)
+                          if job[0] == fresh['key'])
+            review = self._physical_review = dict(source=source,
+                cause=self._physical_review_cause(fresh), anchor=fresh['key'],
+                anchor_identity=self._he_observation_identity(anchor), observed={})
+        # Which blocked sample was fresh this frame is scheduling, not a new
+        # task. Only an observed change of the anchored obstruction, or its
+        # departure from the domain, retires this inspection episode.
+        jobs = self._jobs(shell_index=shell_index)
+        identities = dict((job[0], self._he_observation_identity(job)) for job in jobs)
+        for key in list(review['observed']):
+            if review['observed'][key] != identities.get(key):
+                review['observed'].pop(key, None)
+        for job in jobs:
+            self._record_physical_review(job, self._current(job, require_line=True))
+        return any(job[0] not in review['observed'] for job in jobs)
 
     def _evaluate(self, job, now, channel, ranked_recheck=False):
         key, shell, target, sample, mode = job
@@ -494,6 +560,7 @@ class AttackPolicy(object):
                 else:
                     observation['expected_damage'] = damage
         self.rows[key] = row
+        self._record_physical_review(job, row)
         if (mode == 'penetration' and
                 ammunition_validation.shell_mode(shell) == ammunition_validation.SINGLE_POINT and
                 row['armor'] == 'failed' and row['line'] == 'clear' and
@@ -1236,6 +1303,7 @@ class AttackPolicy(object):
     def load_started(self, shell_index, plan=None):
         self.selected = None
         self._current_he_execution = None
+        self._physical_review = None
         self.reload_authority = None
         self.loading_plan = (plan if plan is not None and
                              plan['shell_index'] == shell_index else None)
@@ -1354,6 +1422,11 @@ class AttackPolicy(object):
         if (action == 'aim' and candidate is not None and
                 not self._executable_current(candidate, candidate.get('mode', 'penetration'))):
             action, reason, candidate = 'wait', 'current_shot_navigation_owned', None
+        if (action in ('aim', 'navigate', 'unchanged', 'switch_shell', 'reload_clip',
+                       'trigger_active', 'search_penetration') or reason == 'no_relevant_enemy'):
+            # A recovered shot or another task ends this obstruction's
+            # inspection pass. Waiting for the same native work does not.
+            self._physical_review = None
         row = dict(action=action, reason=reason, candidate=candidate,
                    next_shell=self.next_shell,
                    phase=('preaiming' if action == 'preaim' or action == 'aim' and
@@ -1489,6 +1562,7 @@ class AttackPolicy(object):
                 break
         if not fence(self.frame):
             self.rows.clear()
+            self._physical_review = None
             self.selected = None
             self._frame_invalid = True
             self._atomic_receipt.update(status='pose_changed', evaluations=self._used['atomic'])
@@ -1717,10 +1791,10 @@ class AttackPolicy(object):
             # do not grant a shot which the current command cannot consume.
             return self._choose('wait', 'current_shot_navigation_owned')
         observed_current = self._rows_for('penetration', loaded, fresh_line=True)
-        if (any(row.get('line') in ('friendly_blocked', 'world_blocked',
-                                   'enemy_blocked', 'vehicle_blocked')
-                for row in observed_current) and
-                self._physical_review_pending(loaded)):
+        physical_blocker = next((row for row in observed_current if row.get('line') in (
+            'friendly_blocked', 'world_blocked', 'enemy_blocked', 'vehicle_blocked')), None)
+        if (physical_blocker is not None and
+                self._physical_review_pending(loaded, physical_blocker)):
             return self._recover_incomplete(now, 'stationary_alternatives_pending', observed_current)
         valid_pen = [row for row in self._rows_for('penetration', loaded, fresh_line=True)
                      if row.get('armor') == 'passed' and self._needs_firing_position(row)]
@@ -1881,7 +1955,7 @@ class AttackPolicy(object):
         blocked = next((row for row in rows if self._needs_firing_position(row) and
                         isinstance(row.get('solution'), dict)), None)
         if blocked is not None:
-            if loaded_he and self._physical_review_pending(loaded):
+            if loaded_he and self._physical_review_pending(loaded, blocked):
                 return self._recover_incomplete(now, 'stationary_alternatives_pending', rows)
             return self._choose('firing_position', 'he_fallback_obstructed', blocked)
         return self._recover_incomplete(now, 'he_contact_evidence_incomplete', rows)
@@ -2022,6 +2096,7 @@ class AttackPolicy(object):
         # inputs. Only the physical group's first/final commit bounds its lock.
         if int(event.get('burst_index', 0)) == 0:
             self._current_he_execution = None
+            self._physical_review = None
             self.trigger = (pending.get('player_control') or {}).get('candidate')
             if self.trigger is None:
                 self.trigger = self.decision.get('candidate')

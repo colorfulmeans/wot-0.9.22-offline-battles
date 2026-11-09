@@ -27,8 +27,17 @@ The existing movement receipt starts the elapsed search clock. Roster or
 proof refreshes within the same physical task do not renew that clock, and
 none of those refreshes preserves a stale firing permission. Incomplete
 queries, missing geometry, physical line blockage and mechanical limits are
-not negative armour certificates. Current HE does not start this search before
-using an available legal fallback contact.
+not negative armour certificates. Loaded HE does not enter this global search:
+it uses a legal penetration/fallback contact, waits for current evidence, or
+performs a separately justified finite physical recovery.
+
+Current full-HE fairness does not solve general moving global-domain closure.
+Continuously changing relevant poses and the existing candidate, time, world
+and armour-query budgets can prevent the complete negative domain from closing
+across many frames. More than 48 points is one example, not a safety threshold;
+smaller domains can also exceed the time budget. The dependent eight-second
+search and NEXT HE fallback therefore are not guaranteed to become eligible;
+independently proved positive NEXT penetration candidates remain usable.
 
 Physical line/mechanical recovery remains a separate, finite phase of the
 same shared combat task. It is not a second proactive pursuit policy. The
@@ -38,6 +47,18 @@ capture processing must not replace that owner merely because combat motion
 passes into a base circle. Explicit user travel, capture, hold and cancellation
 keep their original priority, and normal route completion still works after
 combat releases its receipt.
+Finite termination applies to an admitted physical phase, not every unknown
+geometry query; it is not a claim that all native-game waiting has disappeared.
+
+CI on the first candidate `3e2806e8` exposed a new physical-admission liveness
+regression: even 27 current-shell points could never be fresh simultaneously
+when real query costs exhausted the unchanged atomic time slice. The repair
+keeps completed inspection coverage separately from exact native launch and
+negative-armour evidence. A fresh real blocker remains mandatory. Genuine
+task/load/shot/recovered-aim boundaries retire inspection progress; unknown
+queries do not acquire movement merely by aging. The original worker cases
+retain their real clocks and 200-callback limit, with added deterministic
+slow-native and stale/unknown/fresh-alternative controls.
 
 An actual first-contact vehicle refusal keeps the native entity identity and
 team separate from the network actor identity. Enemy obstruction is reviewed
