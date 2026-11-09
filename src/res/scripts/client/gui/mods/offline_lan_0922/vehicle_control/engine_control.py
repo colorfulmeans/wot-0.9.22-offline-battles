@@ -4,12 +4,14 @@ from __future__ import print_function
 
 import math
 
+from .planning import SharedOrderPlanning
+
 
 def _angle(value):
     return (float(value) + math.pi) % (2. * math.pi) - math.pi
 
 
-class SharedEngineControl(object):
+class SharedEngineControl(SharedOrderPlanning):
     def _clear_actor_controls(self):
         """Retire per-actor decisions, never the native physical trigger tail."""
         for control in tuple(getattr(self, '_actor_controls', {}).values()):

@@ -15,6 +15,7 @@ from ..gun_mechanics import _field
 from .attack_policy import AttackPolicy
 from .combat_control import CombatControl
 from .combat_stop import CombatStop
+from .mission_control import MissionControl
 from .native_aim import hydraulic_body
 from .siege_planning import ActualSiegeAim
 
@@ -151,7 +152,7 @@ class _BotAimObservation(object):
                       command.get('aim_position'))
 
 
-class BotControlBinding(CombatControl):
+class BotControlBinding(MissionControl, CombatControl):
     """One decision state, bound to one actor in the real worker runtime."""
 
     actor_kind = 'bot'
@@ -175,8 +176,7 @@ class BotControlBinding(CombatControl):
         self._identity = self._binding()
         self._gun_observation = None
         self._targets = ()
-        self._mission = None
-        self._implicit_retry = None
+        self._init_mission_state()
         self._last_order = {}
         self._last_navigation = {}
         self._last_fire_failure = None
@@ -200,6 +200,7 @@ class BotControlBinding(CombatControl):
         self.trigger_admission = None
         self._first_edge_pending = False
         self._support_blocked = False
+        self._mission_support_known = False
         self._after_native_at = None
         self._availability = 'not_observed'
         self.weapon = _BotAimObservation(self)
@@ -341,6 +342,7 @@ class BotControlBinding(CombatControl):
 
     def record_support(self, blocked):
         self._support_blocked = bool(blocked)
+        self._mission_support_known = True
 
     def trigger_active(self):
         trigger = self.engine._burst_states.get(self.actor_id)
@@ -399,18 +401,60 @@ class BotControlBinding(CombatControl):
         return bool(self.active and not self.closed and
                     (token is None or token == self.generation) and
                     self._binding() == self._identity and state is not None and
-                    state.get('alive', False) and not self.engine.finished)
+                    state.get('alive', False) and not self.engine.finished and
+                    self._implicit_retry is None)
 
     def pose_stamp(self):
         return self.source_pose()
 
-    def _mission_brakes(self):
-        # BOT missions already arrive as shared strategic orders. A player
-        # input adapter's stopped-command lease must never affect this actor.
-        return False
+    def _mission_ready(self):
+        state = self.state
+        return bool(self.active and not self.closed and
+                    self._binding() == self._identity and state is not None and
+                    state.get('alive', False) and not self.engine.finished and
+                    self.source_entity() is not None)
 
-    def _mission_guard_order(self, order, now):
-        return order
+    def _mission_unavailable_reason(self):
+        return 'native_actor_unavailable'
+
+    def _mission_bounds(self):
+        return self._defense_context().get('arena_bounds')
+
+    def _mission_manifest(self):
+        return self.engine.control_manifest
+
+    def _defense_context(self):
+        return self.engine.control_defense_context()
+
+    def _mission_battle_result(self):
+        return self._defense_context().get('battle_result')
+
+    def _mission_motion(self):
+        if not self._mission_support_known:
+            return None
+        state = self.state
+        try:
+            return dict(speed=state['speed'],
+                turn_speed=self.engine._turn_speeds[self.actor_id],
+                pitch=state['pitch'], roll=state['roll'],
+                pitch_speed=state['suspension_pitch_velocity'],
+                roll_speed=state['suspension_roll_velocity'],
+                vertical_speed=state['vertical_speed'],
+                lateral_speed=(state['air_lateral_x'], state['air_lateral_z']),
+                position=(state['x'], state['y'], state['z']), yaw=state['yaw'],
+                airborne=state['airborne'], support_rise_blocked=self._support_blocked,
+                overturn_level=state['_overturn_level'])
+        except (KeyError, TypeError):
+            return None
+
+    def _release_mission_inputs(self):
+        # The worker keeps executing physics and accepted native burst tails.
+        # Only this actor's automatic input proposal is retired.
+        self.weapon.target = self.weapon.point = self.weapon.solution = None
+        self._last_order = self.guard_mission_controls(self._last_order)
+
+    def _acquire_mission_inputs(self):
+        return self._mission_ready()
 
     def _native_ammo(self):
         ammo = self.engine._ammo_states.get(self.actor_id)
@@ -511,7 +555,8 @@ class BotControlBinding(CombatControl):
         self.now = float(now)
         if not self._live():
             self._targets = ()
-            self._availability = 'native_actor_unavailable'
+            self._availability = ('mission_retry' if self._implicit_retry is not None
+                                  else 'native_actor_unavailable')
             return False
         values = targets.values() if isinstance(targets, dict) else targets or ()
         visible = []
@@ -541,11 +586,18 @@ class BotControlBinding(CombatControl):
         return available
 
     def refine_order(self, order, targets, now):
-        if not self.observe(now, targets):
+        self.now = float(now)
+        if not self._advance_mission_retry(now):
+            self._availability = 'native_actor_unavailable'
             self.combat_stop.reset()
             return dict(order, fire_allowed=False, aim_position=None,
-                        control_pending=self._availability)
-        return self._accept_combat_order(dict(order), now)
+                move_position=self.state['position'], throttle_override=0.,
+                control_pending=self._availability)
+        if not self.observe(now, targets):
+            self.combat_stop.reset()
+            return self._mission_guard_order(dict(order, fire_allowed=False,
+                aim_position=None, control_pending=self._availability), now)
+        return self._accept_task_order(dict(order), now)
 
     def after_control(self, command, target, now):
         self.now = float(now)
@@ -561,13 +613,18 @@ class BotControlBinding(CombatControl):
 
     def after_native_update(self, now):
         self.now = float(now)
-        if self._after_native_at == self.now or not self._live():
+        if self._after_native_at == self.now:
             return
         self._after_native_at = self.now
+        if not self._advance_mission_retry(now) or not self._live():
+            return
         self._publish_weapon()
         artillery = (self.state.get('profile') or {}).get('class_tag') == 'SPG'
         if self.combat_stop.active or artillery:
             self._apply_shell_intent()
+        self._observe_mission(now)
+        if not self._live():
+            return
         if self.combat_stop.active and not self.combat_stop.waiting_for_siege():
             self.attack_policy.background(self.now)
             self._apply_next_shell()
@@ -711,6 +768,7 @@ class BotControlBinding(CombatControl):
         if self.closed:
             return
         self._release_next_shell('control_released', required=False)
+        self._cancel_mission('control_released')
         self.active, self.closed = False, True
         self.control_generation += 1
         self.attack_policy.reset()
@@ -728,4 +786,4 @@ class BotControlBinding(CombatControl):
             availability=self._availability, attack=self.attack_policy.status(),
             combat_stop=dict(self.combat_stop.receipt),
             shell=dict(self._shell_receipt or {}),
-            navigation=dict(self._last_navigation))
+            navigation=dict(self._last_navigation), mission=self.mission_status())

@@ -145,8 +145,6 @@ class GreatWallGateTests(unittest.TestCase):
                                       if getattr(self, 'authoritative', False)
                                       else _recorded_scene_profile(module)),
                                   'bot_authority_id': 1, 'bots': _bots()})[0]
-        if not getattr(self,'authoritative',False):
-            for agent in runtime.adapter.director.agents.values():agent.pop('route_entry_fixed',None)
         planner=BotPlanner();planner.tactics=runtime._bot_tactics;planner.tactics_map=MAP_NAME
         opposed = [bot_id for bot_id, state in runtime.states.items()
                    if int(state.get('team', 0)) == 2 and

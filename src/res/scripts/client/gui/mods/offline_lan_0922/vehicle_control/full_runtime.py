@@ -26,14 +26,14 @@ from .attack_policy import (
 from .. import bot_runtime as shared_runtime
 from .. import spg_positions
 from .. import bot_tactics
-from .. import capture_orders
 from ..ai import driver as shared_driver
 from ..ai import traffic as shared_traffic
 from ..artillery_controller import ArtilleryController
 from .geometry import SharedBattleGeometry
 from .strategy import BotPlanner
 from .native_aim import NATIVE_ANGLE_TOLERANCE
-from .settling import HaltObservation
+from .settling import foreground_motion
+from .mission_control import MissionControl
 from .combat_stop import CombatStop, MECHANICAL_STALL_SECONDS
 from .siege_planning import ActualSiegeAim
 from .combat_control import CombatControl, _point, _angle, _distance, _field
@@ -853,7 +853,7 @@ class _PlayerBehaviorEngine(shared_runtime.BotRuntime):
         return bool(accepted)
 
 
-class FullPlayerRuntime(CombatControl):
+class FullPlayerRuntime(MissionControl, CombatControl):
     """One complete local planner and one native input owner per human tank."""
     def __init__(self, battle, controller=None):
         self.owner = self.battle = battle
@@ -877,8 +877,7 @@ class FullPlayerRuntime(CombatControl):
         self._last_order = {}
         self._last_navigation = {}
         self._last_fire_failure = None
-        self._mission = None
-        self._mission_sequence = 0
+        self._init_mission_state()
         self._move_episode = None
         self._move_retry = None
         self._requested_shell = None
@@ -902,9 +901,6 @@ class FullPlayerRuntime(CombatControl):
         self._traffic_inputs = {}
         self._team_shooter_observations = {}
         self._native_hull_laying = None
-        self._mission_halt = HaltObservation()
-        self._implicit_retry = None
-        self._implicit_failures = 0
         self._strategic_result = None
         self._strategic_due = 0.
         self._strategic_contact_signature = None
@@ -1110,10 +1106,7 @@ class FullPlayerRuntime(CombatControl):
         self.active = True
         self._strategic_due = 0.
         self._profile_window = None
-        if (mission is None and self._mission is not None and
-                self._mission['status'] != 'running' and not self._mission.get('holding')):
-            # A new activation does not inherit a retired command's hold.
-            self._mission = None
+        self._start_mission_lifecycle(mission)
         if 'fire' in self.features and not self.weapon.bind():
             return False
         if not self.active or self.generation != token or self._binding() != self._identity:
@@ -1150,13 +1143,9 @@ class FullPlayerRuntime(CombatControl):
             self._siege_pending = None
         self._move_episode = None
         self._native_hull_laying = None
-        self._implicit_retry = None
+        self._cancel_mission(reason)
         self._strategic_due = 0.
         self._profile_window = None
-        if self._mission is not None and self._mission['status'] == 'running':
-            self._mission.update(status='cancelled', phase='cancelled', reason=reason)
-        if self._mission is not None:
-            self._mission['holding'] = False
         return True
 
     def close(self):
@@ -1290,7 +1279,7 @@ class FullPlayerRuntime(CombatControl):
                 peers[row['id']] = row
                 entity = self.target_entity(row)
                 self.engine._descriptors[row['id']] = entity.typeDescriptor
-                agent = self.engine.adapter.director.register_profile(
+                agent = self.engine.adapter.roster.register_profile(
                     row['id'], row['team'], row['profile'], row.get('name', 'Bot'))
                 # Published canonical route metadata outranks a local lottery;
                 # absent peer route stays unknown to the spatial planner.
@@ -1677,9 +1666,7 @@ class FullPlayerRuntime(CombatControl):
         order = next((dict(value) for value in orders if int(value.get('id', 0)) == self.actor_id), None)
         if order is None:
             raise RuntimeError('complete_local_planner_returned_no_player_order')
-        order = self._mission_order(order, now)
-        self._observe_mission(now)
-        order = self._accept_combat_order(order, now)
+        order = self._accept_task_order(order, now)
         self.engine._apply_orders(dict(bot_orders=[order], bot_order_revision=int(result.get('revision', 0))))
         return order
 
@@ -1804,33 +1791,42 @@ class FullPlayerRuntime(CombatControl):
     def _team_orders(self, now):
         snapshot = getattr(self.owner, '_last_snapshot', None) or {}
         rows = snapshot.get('team_commands') or snapshot.get('team_orders') or ()
-        result = []
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            # Canonical orders addressed to real Bots remain context. A player
-            # mission below is bound to our private actor identity explicitly.
-            result.append(dict(row))
-        mission = self._mission
-        if mission is not None and mission['status'] == 'running':
-            names = dict(attack='ATTACK', return_base='BACKTOBASE', hold_position='STOP')
-            command = names.get(mission['action'])
-            if command is not None and 'position' not in mission['payload']:
-                result.append(dict(command_id=mission['id'], command=command,
-                    team=self.state['team'], recipient_bot_ids=[self.actor_id],
-                    issued_tick=int(mission['started'] * 1000.),
-                    expires_tick=int(mission['deadline'] * 1000.)))
+        return self.mission_team_orders(rows)
+
+    def _mission_ready(self):
+        return self.engine is not None or self.attach()
+
+    def _mission_unavailable_reason(self):
+        return 'player_unavailable'
+
+    def _mission_bounds(self):
+        return getattr(self.owner, '_arena_bounds', None)
+
+    def _mission_manifest(self):
+        return self._manifest
+
+    def _mission_motion(self):
+        return foreground_motion(self.owner)
+
+    def _mission_battle_result(self):
+        result = getattr(self.owner, '_battle_result', None)
+        if result is None:
+            result = (getattr(self.owner, '_last_snapshot', None) or {}).get('battle_result')
         return result
+
+    def _release_mission_inputs(self):
+        self.weapon.close()
+        self._neutral_drive()
+
+    def _acquire_mission_inputs(self):
+        return self.weapon.bind()
 
 
     def _send_drive(self):
         if not self.active or 'drive' not in self.features:
             return
-        if self._implicit_retry is not None:
-            self._neutral_drive()
-            return
         sender = self.owner._sender
-        command = self._last_order
+        command = self.guard_mission_controls(self._last_order)
         sender.forward = float(command.get('throttle', 0.))
         sender.turn = float(command.get('turn', 0.))
         sender.handbrake = bool(command.get('brake', False))
@@ -1905,11 +1901,8 @@ class FullPlayerRuntime(CombatControl):
         if not self.state['alive']:
             self.stop('actor_destroyed')
             return self.status()
-        if self._implicit_retry is not None and now >= self._implicit_retry['at']:
-            self._implicit_retry = None
-            self._mission = None
-            if 'fire' in self.features and not self.weapon.bind():
-                return self.status()
+        if not self._advance_mission_retry(now):
+            return self.status()
         marker = self._profile_stage(stages, marker, 'player_attack')
         self._planner_order(now)
         marker = self._profile_stage(stages, marker, 'player_strategy')
@@ -2164,267 +2157,6 @@ class FullPlayerRuntime(CombatControl):
 
     def fire_rejected(self, reason, *unused_args):
         self._last_fire_failure = str(reason)
-
-    def mission_preflight(self, kind, payload=None):
-        from .commands import MISSIONS
-        if kind not in MISSIONS:
-            return 'unknown_mission'
-        payload = payload or {}
-        raw = payload.get('position')
-        if raw is None and 'x' in payload and 'z' in payload:
-            raw = (payload['x'], payload.get('y', 0.), payload['z'])
-        if raw is not None:
-            try:
-                point = _point(raw)
-                if any(math.isnan(value) or math.isinf(value) for value in point):
-                    return 'invalid_destination'
-            except (ValueError, TypeError, IndexError, KeyError, AttributeError):
-                return 'invalid_destination'
-            bounds = getattr(self.owner, '_arena_bounds', None)
-            if bounds is not None and (point[0] < bounds[0] or point[0] > bounds[2] or
-                                       point[2] < bounds[1] or point[2] > bounds[3]):
-                return 'destination_outside_arena'
-        try:
-            radius = float(payload.get('radius', 2.))
-            timeout = float(payload.get('timeout', 600.))
-            if any(math.isnan(value) or math.isinf(value) or value <= 0.
-                   for value in (radius, timeout)):
-                return 'invalid_mission_parameters'
-        except (ValueError, TypeError, OverflowError):
-            return 'invalid_mission_parameters'
-        return None
-
-    def set_mission(self, kind, payload=None):
-        reason = self.mission_preflight(kind, payload)
-        if reason is not None:
-            return dict(status='rejected', reason=reason)
-        if self.engine is None and not self.attach():
-            return dict(status='failed', reason='player_unavailable')
-        from .commands import MISSIONS
-        if kind not in MISSIONS:
-            return dict(status='rejected', reason='unknown_mission')
-        payload = dict(payload or {})
-        self._mission_sequence += 1
-        self._strategic_due = 0.
-        self._mission = dict(id=payload.get('command_id', 'player-mission-%d' % self._mission_sequence),
-            action=kind, status='running', phase='travelling', reason=None, explicit=True,
-            started=float(payload.get('requested_at', self.now)),
-            deadline=float(payload.get('requested_at', self.now)) + float(payload.get('timeout', 600.)),
-            payload=payload, progress=0., holding=False)
-        self._mission_halt = HaltObservation()
-        self._implicit_retry = None
-        self._implicit_failures = 0
-        self._move_episode = None
-        if (kind in ('return_base', 'defend_base', 'capture_base') or
-                'position' in payload or 'x' in payload and 'z' in payload):
-            self.combat_stop.mission_handoff(self.now)
-        self.combat_stop.reset()
-        self._siege_aim_candidate = None
-        self.siege_aim.reset()
-        self.engine._clear_friendly_reposition(self.actor_id)
-        self.state.pop('_gun_angle_adjustment', None)
-        if kind == 'hold_position' and not ('position' in payload or 'x' in payload and 'z' in payload):
-            self._mission['hold_point'] = tuple(self.state['position'])
-        if 'position' in payload:
-            self._mission['destination'] = _point(payload['position'])
-        self._mission['radius'] = float(payload.get('radius', 2.))
-        self.engine._decision_cache.pop(self.actor_id, None)
-        return self.mission_status()
-
-    def _mission_order(self, order, now):
-        mission = self._mission
-        if mission is None and order.get('combat_mode') == 'base_capture' and self._implicit_retry is None:
-            self._mission_sequence += 1
-            mission = self._mission = dict(id='auto-capture-%d' % self._mission_sequence,
-                action='capture_base', explicit=False, payload={}, status='running',
-                phase='capture_travel', reason='copied_route_capture_handoff',
-                progress=0., holding=False, started=now, deadline=now + 600.)
-        if mission is None or mission['status'] != 'running' and not mission.get('holding'):
-            return order
-        payload, kind = mission['payload'], mission['action']
-        empty = bool(self.gun.ammo) and not any(int(value) > 0 for value in self.gun.ammo)
-        if empty and kind == 'attack':
-            kind = mission['action'] = 'capture_base'
-            mission.update(phase='capture_travel', reason='ammunition_exhausted', holding=False)
-            mission.pop('destination', None)
-        defense = self._defense_context()
-        if kind == 'capture_base':
-            target = self.planner._capture_target(defense, self.state['team'])
-            if target is None:
-                mission.update(status='failed', phase='failed', reason='capture_circle_unavailable')
-                self._retire_implicit(now)
-                return order
-            mission.update(capture_area=target, destination=_point(target['point']))
-            inside = capture_orders.inside(self.state, target) and not self.state.get('airborne', False)
-            if inside:
-                mission['capture_started'] = True
-            # Preserve the full copied emergency-defence handoff for an
-            # implicit approach until this player actually starts capturing.
-            if (not mission['explicit'] and not mission.get('capture_started') and
-                    order.get('combat_mode') == 'base_defense'):
-                mission['phase'] = 'defending'
-                return order
-            result = dict(order)
-            self.planner._apply_base_capture_order(result, self._planner_bot(), target)
-            result['capture_area'] = target
-            return capture_orders.constrain(result, self.state)
-        destination = None
-        if 'position' in payload:
-            destination = _point(payload['position'])
-        elif 'x' in payload and 'z' in payload:
-            destination = (float(payload['x']), self.state['y'], float(payload['z']))
-        if kind in ('return_base', 'defend_base'):
-            bases = (defense.get('capture_bases') or {}).get(str(self.state['team'])) or ()
-            if not bases:
-                mission.update(status='failed', phase='failed', reason='home_circle_unavailable')
-                return order
-            destination = _point(bases[0])
-            if kind == 'defend_base':
-                mission['radius'] = float(bases[0]['radius'])
-        if kind == 'hold_position':
-            destination = destination or tuple(mission.setdefault('hold_point', self.state['position']))
-        if destination is not None:
-            result = dict(order, move_position=destination, face_position=destination,
-                          throttle_override=None, combat_mode='team_' + kind,
-                          parking_phase=None, route_join=False)
-            mission['destination'] = destination
-            distance = _distance(self.state['position'], destination)
-            radius = mission.get('radius', 2.)
-            if distance <= radius:
-                result.update(move_position=destination, throttle_override=0.,
-                              combat_mode='engage' if result.get('target_id') is not None else 'hold')
-            mission.setdefault('initial_distance', distance)
-            return result
-        if kind == 'attack' and order.get('combat_mode') == 'base_capture':
-            mission.update(action='capture_base', phase='capture_travel',
-                           reason='copied_route_capture_handoff')
-            return self._mission_order(order, now)
-        return order
-
-    def _planner_bot(self):
-        return next((bot for bot in self.planner._alive_bots(
-            self._manifest, list(self.engine.states.values()), self.planner.tactics)
-            if bot['id'] == self.actor_id), None)
-
-    def _mission_guard_order(self, order, now):
-        """External mission ownership constrains goals, never drive physics."""
-        mission = self._mission
-        if mission is None:
-            return order
-        if mission['status'] in ('failed', 'cancelled'):
-            return dict(order, move_position=tuple(self.state['position']),
-                        throttle_override=0., fire_allowed=False, combat_mode='hold')
-        if mission['action'] == 'capture_base' and mission.get('capture_area'):
-            if not mission['explicit'] and mission['phase'] == 'defending' and not mission.get('capture_started'):
-                return order
-            return capture_orders.constrain(dict(order, capture_area=mission['capture_area']), self.state)
-        if mission['action'] in ('attack', 'return_base', 'hold_position', 'defend_base') and mission.get('destination'):
-            destination = mission['destination']
-            inside = _distance(self.state['position'], destination) <= mission.get('radius', 2.)
-            if not inside:
-                return dict(order, move_position=destination, throttle_override=None,
-                            combat_mode='team_' + mission['action'], parking_phase=None,
-                            route_join=False)
-            if mission['action'] != 'defend_base' or mission.get('holding'):
-                return dict(order, move_position=destination, throttle_override=0.,
-                            combat_mode='engage' if order.get('target_id') is not None else 'hold')
-        return order
-
-    def _mission_brakes(self):
-        mission = self._mission
-        return bool(mission is not None and
-            (mission['status'] in ('failed', 'cancelled') or
-             mission.get('phase') == 'arriving'))
-
-
-    def _observe_mission(self, now):
-        mission = self._mission
-        if mission is None or mission['status'] != 'running':
-            return
-        if now >= mission['deadline']:
-            mission.update(status='failed', phase='failed', reason='deadline')
-            self._retire_implicit(now)
-            return
-        result = getattr(self.owner, '_battle_result', None)
-        if result is None:
-            result = (getattr(self.owner, '_last_snapshot', None) or {}).get('battle_result')
-        if isinstance(result, dict):
-            self.finish_battle(result, now)
-            return
-        destination = mission.get('destination')
-        if mission['action'] == 'capture_base' and mission.get('capture_area'):
-            inside = (capture_orders.inside(self.state, mission['capture_area']) and
-                      not self.state.get('airborne', False))
-            if mission['phase'] != 'defending' or mission.get('capture_started'):
-                mission['phase'] = 'capturing' if inside else 'capture_travel'
-            if inside:
-                mission['capture_started'] = True
-            native = (self._defense_context().get('states') or {}).get(str(3 - self.state['team'])) or {}
-            mission['progress'] = max(0., min(1., float(native.get('points', 0.)) / 100.))
-            mission['holding'] = inside
-            return
-        if destination is None:
-            mission['phase'] = 'attacking' if self._last_order.get('target_id') is not None else 'travelling'
-            return
-        distance = _distance(self.state['position'], destination)
-        initial = max(float(mission.get('initial_distance', distance)), mission.get('radius', 2.))
-        mission['progress'] = max(0., min(1., 1. - distance / initial))
-        if distance > mission.get('radius', 2.):
-            self._mission_halt = HaltObservation()
-            mission['phase'], mission['holding'] = 'travelling', False
-            return
-        mission['phase'] = 'arriving'
-        if self._mission_halt.observe(self.owner, now):
-            if mission['action'] in ('return_base', 'hold_position', 'attack'):
-                mission.update(status='completed', phase='holding',
-                    reason='supported_stopped_arrival', holding=True, progress=1.)
-            elif mission['action'] == 'defend_base':
-                mission.update(phase='defending', holding=True, progress=1.)
-
-    def _retire_implicit(self, now):
-        mission = self._mission
-        if mission is None or mission['explicit'] or mission['status'] not in ('failed', 'cancelled'):
-            return False
-        if self._implicit_retry is not None:
-            return True
-        self._implicit_failures += 1
-        self._implicit_retry = dict(at=now + min(30., 5. * self._implicit_failures),
-                                   failures=self._implicit_failures)
-        self._move_episode = None
-        self.engine._clear_friendly_reposition(self.actor_id)
-        self.weapon.close()
-        self._neutral_drive()
-        return True
-
-    def mission_status(self):
-        mission = self._mission
-        if mission is None:
-            return dict(id=None, action=None, status='idle', phase='idle', progress=0., holding=False)
-        result = dict((key, mission[key]) for key in ('id', 'action', 'status', 'phase',
-                    'reason', 'explicit', 'progress', 'holding', 'destination') if key in mission)
-        if mission.get('destination') is not None:
-            point = mission['destination']
-            result['goal'] = (point[0], point[2])
-        if self._implicit_retry is not None:
-            result['retry_at'] = self._implicit_retry['at']
-        return result
-
-    def finish_battle(self, result, now):
-        mission = self._mission
-        if mission is not None and mission['status'] == 'running':
-            captured = (mission['action'] == 'capture_base' and mission.get('capture_started') and
-                        result.get('reason') == 'base captured' and
-                        int(result.get('winner', 0)) == int(self.state['team']) and
-                        int(result.get('base_team', 0)) == 3 - int(self.state['team']))
-            mission.update(status='completed' if captured else 'cancelled',
-                phase='captured' if captured else 'cancelled',
-                reason='base_captured' if captured else 'battle_finished_before_objective',
-                holding=False)
-        return self.mission_status()
-
-
-
-
 
     def status(self):
         state = self.state or {}

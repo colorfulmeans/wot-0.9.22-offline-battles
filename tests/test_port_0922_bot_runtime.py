@@ -146,19 +146,15 @@ class _StaticGridLifecycle(object):
         pass
 
 
-class _Director(object):
+class _Roster(object):
     def __init__(self): self.registered = []
     def register_profile(self, *args): self.registered.append(args)
 
 class _Adapter(object):
     def __init__(self, *unused):
-        self.director = _Director(); self.calls = []; self.server_orders = []
-    def register(self, *args): self.director.registered.append(args)
-    def plan_order(self, state):
-        target_id = state['contacts'][0]['id'] if state.get('contacts') else None
-        return dict(target_id=target_id, fire_allowed=True, shell_index=2,
-                    fire_range=500.0)
-    def decide(self, state, clear):
+        self.roster = _Roster(); self.calls = []; self.server_orders = []
+    def register(self, *args): self.roster.registered.append(args)
+    def fixture_controls(self, state, clear):
         self.calls.append((state, clear(state['yaw'])))
         target_id = (state['contacts'][0]['id']
                      if state.get('contacts') else None)
@@ -167,7 +163,7 @@ class _Adapter(object):
                 'fire_range': 500.0}
     def decide_with_order(self, state, strategic, clear):
         self.server_orders.append(dict(strategic))
-        command = self.decide(state, clear)
+        command = self.fixture_controls(state, clear)
         command.update({
             'target_id': strategic.get('target_id'),
             'fire_allowed': bool(strategic.get('fire_allowed')),
@@ -182,16 +178,13 @@ class _FixedAdapter(_Adapter):
         super().__init__()
         self.command = dict(command)
 
-    def decide(self, state, clear):
+    def fixture_controls(self, state, clear):
         self.calls.append((state, clear(state['yaw'])))
-        return dict(self.command)
-
-    def plan_order(self, state):
         return dict(self.command)
 
     def decide_with_order(self, state, strategic, clear):
         self.server_orders.append(dict(strategic))
-        return self.decide(state, clear)
+        return self.fixture_controls(state, clear)
 
 
 class _Strict1513Component(object):
@@ -3034,7 +3027,7 @@ class BotRuntimeTests(unittest.TestCase):
         runtime.battle_start(self.start)
         self.assertTrue(runtime.prewarm_world_receipts(1.0))
         self.assertEqual(1, len(direction_calls))
-        runtime.adapter.decide = (
+        runtime.adapter.fixture_controls = (
             lambda unused_state, unused_clear: dict(command))
 
         # A server/native pose correction between countdown and battle start
@@ -3113,7 +3106,7 @@ class BotRuntimeTests(unittest.TestCase):
         for index in range(29):
             self.assertTrue(runtime.prewarm_world_receipts(
                 1.0 + index / 24.0))
-        runtime.adapter.decide = lambda unused_state, unused_clear: dict(
+        runtime.adapter.fixture_controls = lambda unused_state, unused_clear: dict(
             command)
         for state in runtime.states.values():
             yaw = state['yaw']
@@ -3184,7 +3177,7 @@ class BotRuntimeTests(unittest.TestCase):
                 self.assertTrue(clear(candidate))
             return dict(command)
 
-        adapter.decide = decide
+        adapter.fixture_controls = decide
         runtime.update(.04, 1.0)
 
         # This synthetic graph lacks the shipped static-corridor contract, so
@@ -3270,7 +3263,7 @@ class BotRuntimeTests(unittest.TestCase):
                 self.assertTrue(clear(candidate))
             return dict(command)
 
-        adapter.decide = decide
+        adapter.fixture_controls = decide
         runtime.update(.04, 1.0)
 
         self.assertEqual(7, len(graph_calls))
@@ -3484,7 +3477,7 @@ class BotRuntimeTests(unittest.TestCase):
         verdicts = []
 
         class WaypointAdapter(_FixedAdapter):
-            def decide(self, state, clear):
+            def fixture_controls(self, state, clear):
                 state['navigation_probe_distance'] = 5.0
                 verdicts.append((clear(state['yaw']),
                                  clear(state['yaw'], 12.0)))
@@ -3664,8 +3657,8 @@ class BotRuntimeTests(unittest.TestCase):
         }
 
         class MixedAdapter(_FixedAdapter):
-            def decide(self, state, clear):
-                result = _FixedAdapter.decide(self, state, clear)
+            def fixture_controls(self, state, clear):
+                result = _FixedAdapter.fixture_controls(self, state, clear)
                 if state['id'] == 11:
                     result['throttle'] = 0.0
                 return result
@@ -3999,7 +3992,7 @@ class BotRuntimeTests(unittest.TestCase):
             physics_ground_probe=lambda *unused: 0.0,
             spawn_resolver=_spawn_resolver, baked_graph=_graph())
         runtime.battle_start(self.start)
-        runtime.adapter.decide = lambda unused_state, unused_clear: dict(
+        runtime.adapter.fixture_controls = lambda unused_state, unused_clear: dict(
             command)
 
         runtime.update(.04, 1.0)
@@ -4051,7 +4044,7 @@ class BotRuntimeTests(unittest.TestCase):
              'name': 'Soft-%d' % index}
             for index in range(5)]
         runtime.battle_start(dict(self.start, bots=roster))
-        runtime.adapter.decide = lambda unused_state, unused_clear: dict(
+        runtime.adapter.fixture_controls = lambda unused_state, unused_clear: dict(
             command)
 
         runtime.update(.04, 1.0)
@@ -5385,7 +5378,7 @@ class BotRuntimeTests(unittest.TestCase):
         command.update(throttle=1.0, movement_intent=True,
                        move_position=(0.0, 0.0, 10.0),
                        combat_mode='advance', recovery_mode='drive')
-        runtime.adapter.decide = lambda *unused: dict(command)
+        runtime.adapter.fixture_controls = lambda *unused: dict(command)
         runtime.direction_probe = lambda *unused: {
             'clear': True, 'collision': False, 'slope': 0.375}
         state['speed'] = 4.0
@@ -6650,7 +6643,7 @@ class BotRuntimeTests(unittest.TestCase):
         yaw = 0.641
 
         class TrafficAdapter(_Adapter):
-            def decide(adapter_self, state, clear):
+            def fixture_controls(adapter_self, state, clear):
                 adapter_self.calls.append((state, clear(state['yaw'])))
                 moving = state['id'] == 23
                 heading = yaw if moving else state['yaw']
@@ -7736,7 +7729,7 @@ class BotRuntimeTests(unittest.TestCase):
             runtime = self._drive_runtime(
                 lambda *unused: {'clear': True, 'collision': False, 'slope': 0.0})
             command = dict(self._stationary_command(), brake=brake)
-            runtime.adapter.decide = lambda *unused: dict(command)
+            runtime.adapter.fixture_controls = lambda *unused: dict(command)
             runtime.update(0.1, 1.1)
             states[brake] = runtime.states[11]
             # An explicit brake changes acceleration, not the body's current
@@ -7761,7 +7754,7 @@ class BotRuntimeTests(unittest.TestCase):
                     state['profile']['class_tag'] = 'SPG'
                     command = dict(self._stationary_command(),
                                    throttle=1.0, brake=False, fire_allowed=True)
-                    runtime.adapter.decide = lambda *unused: dict(command)
+                    runtime.adapter.fixture_controls = lambda *unused: dict(command)
                     runtime._active_artillery_intent = lambda *unused: None
                     runtime._active_artillery_reproof = lambda *unused: {}
                     runtime._refresh_control_this_step = True
@@ -7785,7 +7778,7 @@ class BotRuntimeTests(unittest.TestCase):
                 command=dict(self._stationary_command(),combat_mode=mode,spg_mode='sortie',
                     move_position=(0.,0.,400.),face_position=(0.,0.,400.),
                     throttle=1.,brake=False,movement_intent=True,fire_allowed=True)
-                runtime.adapter.decide=lambda *a:dict(command)
+                runtime.adapter.fixture_controls=lambda *a:dict(command)
                 runtime._active_artillery_intent=lambda *a:None
                 runtime._active_artillery_reproof=lambda *a:dict(
                     hold_solution=dict(aim_position=(100.,2.,0.)))
@@ -8068,10 +8061,10 @@ class BotRuntimeTests(unittest.TestCase):
         planning = [False]
 
         class TrackedAdapter(_FixedAdapter):
-            def decide(self, *args, **kwargs):
+            def fixture_controls(self, *args, **kwargs):
                 planning[0] = True
                 try:
-                    return super(TrackedAdapter, self).decide(*args, **kwargs)
+                    return super(TrackedAdapter, self).fixture_controls(*args, **kwargs)
                 finally:
                     planning[0] = False
 
@@ -8498,7 +8491,7 @@ class BotRuntimeTests(unittest.TestCase):
                     spawn_resolver=_spawn_resolver, baked_graph=_graph())
                 runtime.battle_start(dict(self.start, bots=roster))
                 # This case measures authority cadence, not planner fallback.
-                runtime.adapter.decide = (
+                runtime.adapter.fixture_controls = (
                     lambda unused_state, unused_clear: dict(command))
                 previous = None
                 changed = 0
@@ -8562,7 +8555,7 @@ class BotRuntimeTests(unittest.TestCase):
         calls = []
 
         class HoldAdapter(_FixedAdapter):
-            def decide(self, state, unused_clear):
+            def fixture_controls(self, state, unused_clear):
                 self.calls.append(state['id'])
                 return dict(self.command)
 
@@ -8619,7 +8612,7 @@ class BotRuntimeTests(unittest.TestCase):
         calls = []
 
         class HoldAdapter(_FixedAdapter):
-            def decide(self, state, unused_clear):
+            def fixture_controls(self, state, unused_clear):
                 self.calls.append(state['id'])
                 return dict(self.command)
 
@@ -8696,7 +8689,7 @@ class BotRuntimeTests(unittest.TestCase):
         calls = []
 
         class HoldAdapter(_FixedAdapter):
-            def decide(self, state, unused_clear):
+            def fixture_controls(self, state, unused_clear):
                 self.calls.append(state['id'])
                 return dict(self.command)
 
@@ -8762,7 +8755,7 @@ class BotRuntimeTests(unittest.TestCase):
         lane_calls = []
 
         class HoldAdapter(_FixedAdapter):
-            def decide(self, state, unused_clear):
+            def fixture_controls(self, state, unused_clear):
                 self.calls.append(state['id'])
                 return dict(self.command)
 
@@ -9418,7 +9411,7 @@ class BotRuntimeTests(unittest.TestCase):
             spawn_resolver=_spawn_resolver, native_motion=True,
             baked_graph=_graph())
         runtime.battle_start(self.start)
-        runtime.adapter.decide = lambda unused_state, unused_clear: dict(
+        runtime.adapter.fixture_controls = lambda unused_state, unused_clear: dict(
             command)
 
         runtime.update(.04, 1.0)
@@ -9592,7 +9585,7 @@ class BotRuntimeTests(unittest.TestCase):
         # Isolate the continuous-motion seam from LocalDriver's decision
         # probes; an intentional hold returns before direction_clear in the
         # production adapter.
-        runtime.adapter.decide = lambda unused_state, unused_clear: dict(command)
+        runtime.adapter.fixture_controls = lambda unused_state, unused_clear: dict(command)
 
         self.assertTrue(all(
             not state['grounded_once'] for state in runtime.states.values()))
@@ -15311,7 +15304,7 @@ class BotRuntimeTests(unittest.TestCase):
                     movement_intent=True, target_yaw=0.,
                     recovery_probe_distance=2.,
                     recovery_mode='short_reverse_escape' if sign < 0 else 'short_forward_escape')
-                runtime.adapter.decide = lambda *unused: dict(command)
+                runtime.adapter.fixture_controls = lambda *unused: dict(command)
                 grid = runtime.navigator.grid
                 # A fatal patch is beyond the admitted 2 m escape, within the
                 # old four-metre execution lookahead. The actual short step
@@ -15397,7 +15390,7 @@ class BotRuntimeTests(unittest.TestCase):
                                 clear(math.pi * 0.5, 4.0)))
             return self._stationary_command()
 
-        runtime.adapter.decide = decide
+        runtime.adapter.fixture_controls = decide
         runtime.update(0.04, 1.0)
         self.assertEqual([(True, False)], checked)
 
@@ -17634,14 +17627,14 @@ class BotRuntimeTests(unittest.TestCase):
         state['_motion_stall_log'] = (
             (state['x'], state['y'], state['z']), 0.0)
         state['_gun_angle_rejected']={('bot',2):8.0}
-        original_decide = self.runtime.adapter.decide
+        original_decide = self.runtime.adapter.fixture_controls
 
         def decide(*args):
             command = original_decide(*args)
             command.update(throttle=1.0,turn=-0.4, fire_allowed=False)
             return command
 
-        self.runtime.adapter.decide = decide
+        self.runtime.adapter.fixture_controls = decide
 
         def brake(body, command, neighbours, now, distance, step):
             return dict(command, throttle=0.0, turn=0.0, brake=True,
@@ -17666,14 +17659,14 @@ class BotRuntimeTests(unittest.TestCase):
         state = self.runtime.states[11]
         state['_motion_stall_log'] = (
             (state['x'], state['y'], state['z']), 0.0)
-        original_decide = self.runtime.adapter.decide
+        original_decide = self.runtime.adapter.fixture_controls
 
         def decide(*args):
             command = original_decide(*args)
             command.update(throttle=1.0,turn=-0.4, fire_allowed=False)
             return command
 
-        self.runtime.adapter.decide = decide
+        self.runtime.adapter.fixture_controls = decide
 
         def brake(body, command, neighbours, now, distance, step):
             return dict(command, throttle=0.0, turn=0.0, brake=True,
@@ -17701,14 +17694,14 @@ class BotRuntimeTests(unittest.TestCase):
         self.runtime.battle_start(self.start)
         state = self.runtime.states[11]
         state['_motion_stall_log'] = ((state['x'], state['y'], state['z']), 0.0)
-        original_decide = self.runtime.adapter.decide
+        original_decide = self.runtime.adapter.fixture_controls
 
         def decide(*args):
             command = original_decide(*args)
             command.update(throttle=1.0, turn=-.4, fire_allowed=False)
             return command
 
-        self.runtime.adapter.decide = decide
+        self.runtime.adapter.fixture_controls = decide
         output = io.StringIO()
         with redirect_stdout(output), mock.patch.object(
                 self.runtime, '_rotation_fraction_for', return_value=0.0), mock.patch.object(
@@ -17821,7 +17814,7 @@ class BotRuntimeTests(unittest.TestCase):
                     physics_ground_probe=lambda *unused: 0.0,
                     spawn_resolver=_spawn_resolver, baked_graph=_graph())
                 runtime.battle_start(self.start)
-                runtime.adapter.decide = (
+                runtime.adapter.fixture_controls = (
                     lambda unused_state, unused_clear: dict(command))
                 state = runtime.states[11]
                 start_z = state['z']
@@ -18108,6 +18101,13 @@ class BotRuntimeTests(unittest.TestCase):
             {'id': 11, 'team': 1, 'slot': 0, 'name': 'A'},
             {'id': 12, 'team': 2, 'slot': 0, 'name': 'B'},
         ]))
+        # This contract counts the observation/lane-service pass only.
+        # Explicit neutral shared orders keep unrelated approach-laying
+        # cache reads out of it now that absent orders use the real planner.
+        runtime._server_orders = dict((actor, dict(id=actor,
+            combat_mode='hold', target_id=None, fire_allowed=False,
+            move_position=(0., 0., 0.), face_position=(0., 0., 0.)))
+            for actor in (11, 12))
         key_calls = []
         original_key = runtime._shot_los_key
 
@@ -18521,7 +18521,7 @@ class BotRuntimeTests(unittest.TestCase):
                 route = dict(id='radio_test_lane',
                     waypoints=((0.0, 0.0, False), (4.0, 0.0, False)))
                 state['route'] = route
-                runtime.adapter.director.agents[11]['route'] = route
+                runtime.adapter.roster.agents[11]['route'] = route
                 manifest[0]['route'] = dict(id=route['id'], waypoints=[
                     dict(x=p[0], y=0.0, z=p[1], hold=p[2]) for p in route['waypoints']])
                 state.update(
@@ -20727,7 +20727,7 @@ class BotRuntimeTests(unittest.TestCase):
         lane_calls = []
 
         class HoldAdapter(_FixedAdapter):
-            def decide(self, state, unused_clear):
+            def fixture_controls(self, state, unused_clear):
                 self.calls.append(state['id'])
                 return dict(self.command)
 
@@ -22056,7 +22056,7 @@ class BotRuntimeTests(unittest.TestCase):
         for native_clear in (False, True, None):
             observed = []
             class PoseAdapter(_FixedAdapter):
-                def decide(self, state, clear):
+                def fixture_controls(self, state, clear):
                     observed.append(state['pose_clear'](.5))
                     return dict(self.command)
             proof = mock.Mock(return_value=None if native_clear is None else dict(clear=native_clear, proved=True,

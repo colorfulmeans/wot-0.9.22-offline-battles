@@ -14,7 +14,9 @@ def main():
     parser.add_argument('--check', action='store_true', help='Run source and integration contracts')
     parser.parse_args()
     sys.path.insert(0, str(ROOT / 'tests'))
-    suite = unittest.defaultTestLoader.loadTestsFromName('test_shared_vehicle_control')
+    suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromName(name)
+        for name in ('test_shared_vehicle_control', 'test_shared_mission_control',
+                     'test_shared_order_planning'))
     captured = io.StringIO()
     with contextlib.redirect_stdout(captured):
         result = unittest.TextTestRunner(verbosity=1).run(suite)

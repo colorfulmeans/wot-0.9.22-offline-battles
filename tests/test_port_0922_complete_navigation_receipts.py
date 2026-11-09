@@ -241,7 +241,7 @@ class RuntimeReceiptTests(unittest.TestCase):
         self.assertEqual(list(range(43, 91)), [r['query_index'] for r in receipt['queries']])
 
     def test_no_probe_and_same_callback_hold_are_explicit(self):
-        self.fixture.adapters[0].decide = lambda *args: dict(throttle=0., turn=0., fire_allowed=False)
+        self.fixture.adapters[0].fixture_controls = lambda *args: dict(throttle=0., turn=0., fire_allowed=False)
         self.runtime.update(.04, 1.)
         receipt = self.runtime._decision_cache[11][3]['planning_receipt']
         self.assertEqual(0, receipt['query_count'])
@@ -268,7 +268,7 @@ class RuntimeReceiptTests(unittest.TestCase):
                 def decide(state, clear):
                     clear(state['yaw'], distance)
                     return dict(throttle=0., turn=0., fire_allowed=False)
-                self.runtime.adapter.decide = decide
+                self.runtime.adapter.fixture_controls = decide
                 self.runtime.update(.04, float(index + 1))
                 receipt = self.runtime._decision_cache[11][3]['planning_receipt']
                 self.assertEqual(expected, receipt['queries'][0]['reason'])

@@ -92,7 +92,7 @@ class DefaultRouteTests(unittest.TestCase):
         self.assertEqual(expected,route['waypoints'])
         runtime.adapter_factory=module.BotAdapter
         adapter=runtime._new_adapter('31_airfield',5)
-        assigned=[adapter.director.register_profile(i,1,dict(class_tag='mediumTank',
+        assigned=[adapter.roster.register_profile(i,1,dict(class_tag='mediumTank',
                   roles={'flanker':1.0},vehicle_name='test'))['route'] for i in range(11,25)]
         edited=[r for r in assigned if r is not None and r['id']==route['id']]
         self.assertTrue(edited)
@@ -144,9 +144,9 @@ class DefaultRouteTests(unittest.TestCase):
         runtime._bot_tactics=config.canonical(profile)
         runtime.adapter=runtime._new_adapter('31_airfield',5)
         for actor,tag in ((11,'heavyTank'),(12,'mediumTank')):
-            assigned=runtime.adapter.director.register_profile(actor,1,dict(class_tag=tag,
+            assigned=runtime.adapter.roster.register_profile(actor,1,dict(class_tag=tag,
                 roles={'frontline':1.0},vehicle_name='test'))
-            source=next(r for r in runtime.adapter.director.map_data['routes'][1] if r['id']==edit['id'])
+            source=next(r for r in runtime.adapter.roster.map_data['routes'][1] if r['id']==edit['id'])
             runtime.states[actor]=dict(id=actor,team=1,slot=actor-11,profile={'class_tag':tag},route=source)
         runtime._prepare_user_routes(dict(map='31_airfield'),False)
         self.assertEqual(config.default_route_id(edit),runtime.states[11]['route']['id'])

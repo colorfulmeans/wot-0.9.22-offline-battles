@@ -1,8 +1,8 @@
-"""Plain-data adapter between a battle runtime and the pure bot planner.
+"""Physical local-driver adapter for an already selected shared order.
 
 The adapter deliberately does not inspect BigWorld entities.  A caller sends
-JSON-like dictionaries and receives a JSON-safe order: a route/goal, a local
-movement command, and optional fire intent.  The caller remains responsible
+JSON-like dictionaries and receives local movement commands. It never selects
+a contact or generates a strategic order. The caller remains responsible
 for visibility, collision probes, and applying commands to any client entity.
 """
 
@@ -14,7 +14,7 @@ import math
 from gui.mods.offline_lan_0922.ai.driver import (
     LocalDriver, WAYPOINT_ARRIVAL_RADIUS, recovery_probe_distance,
 )
-from gui.mods.offline_lan_0922.ai.planner import BattleDirector
+from gui.mods.offline_lan_0922.vehicle_control.roster import BattleRoster
 
 
 def _position(value, fallback=(0.0, 0.0, 0.0)):
@@ -26,22 +26,13 @@ def _position(value, fallback=(0.0, 0.0, 0.0)):
         return fallback
 
 
-def _contact(value):
-    if not isinstance(value, dict):
-        return None
-    result = dict(value)
-    result['position'] = _position(value.get('position'))
-    result['visible'] = bool(value.get('visible', False))
-    return result
-
-
 class BotAdapter(object):
-    """Owns pure planner/driver state for one map and battle seed."""
+    """Owns initial roster data and per-actor physical driver state."""
 
     def __init__(self, map_name, battle_seed, bases=None, bounds=None,
                  navigation_target=None, baked_routes=None):
-        self.director = BattleDirector(map_name, battle_seed, bases, bounds,
-                                      baked_routes=baked_routes)
+        self.roster = BattleRoster(map_name, battle_seed, bases, bounds,
+                                   baked_routes=baked_routes)
         self.driver = LocalDriver()
         self.navigation_target = navigation_target
         self._contact_peers = {}
@@ -52,11 +43,11 @@ class BotAdapter(object):
         self._wreck_last_terminal = {}
 
     def register(self, bot_id, team, descriptor, display_name='Bot'):
-        return self.director.register(bot_id, team, descriptor, display_name)
+        return self.roster.register(bot_id, team, descriptor, display_name)
 
     def forget(self, bot_id):
         self.driver.forget(bot_id)
-        self.director.agents.pop(int(bot_id), None)
+        self.roster.agents.pop(int(bot_id), None)
         self._contact_peers.pop(int(bot_id), None)
         self._contact_attempts.pop(int(bot_id), None)
         self._contact_escapes.pop(int(bot_id), None)
@@ -477,41 +468,6 @@ class BotAdapter(object):
                   position[2]+forward[1]*reach)
         return target, dict(throttle=1.0, turn=turn, target_yaw=heading,
                             recovery_mode='wreck_push', recovery_probe_distance=reach)
-
-    def decide(self, state, direction_clear):
-        """Return a deterministic, serializable command for one bot.
-
-        ``state`` needs ``id``, ``slot``, ``position``, ``yaw``, ``speed``,
-        ``dt``, ``now`` and optionally ``health``, ``max_health``, ``contacts``
-        and ``neighbours``.  ``direction_clear(yaw)`` is the sole runtime probe.
-        """
-        strategic=self.plan_order(state)
-        return self._drive_order(int(state.get('id', 0)), state,
-                                 _position(state.get('position')),
-                                 strategic, direction_clear)
-
-    def plan_order(self,state):
-        """Select a local macro order before class-specific travel ownership."""
-        state = state if isinstance(state, dict) else {}
-        bot_id = int(state.get('id', 0))
-        position = _position(state.get('position'))
-        speed = float(state['speed'])
-        contacts = [_contact(item) for item in state.get('contacts', ())]
-        contacts = [item for item in contacts if item is not None]
-        team = self.director.agents[bot_id]['team']
-        now = float(state.get('now', 0.0))
-        for contact in contacts:
-            self.director.update_contact(
-                team, contact.get('id', 0), contact.get('team', 0),
-                contact['position'], contact.get('health', 1.0),
-                contact.get('max_health', 1.0), contact.get('class_tag'),
-                contact['visible'], now, contact.get('armor', 0.0),
-                contact.get('speed', 0.0))
-        strategic = self.director.order_for(
-            bot_id, position, float(state.get('yaw', 0.0)),
-            speed,
-            state.get('health', 1.0), state.get('max_health', 1.0), now)
-        return strategic
 
     def decide_with_order(self, state, strategic, direction_clear):
         """Apply a server macro order through the same local terrain driver."""

@@ -67,9 +67,9 @@ class InitialStateTests(unittest.TestCase):
                              scene.runtime._initial_allocation_seed)
             self.assertEqual(
                 {actor: agent['route'] for actor, agent in
-                 scenes[0].runtime.adapter.director.agents.items()},
+                 scenes[0].runtime.adapter.roster.agents.items()},
                 {actor: agent['route'] for actor, agent in
-                 scene.runtime.adapter.director.agents.items()})
+                 scene.runtime.adapter.roster.agents.items()})
 
     def test_bootstrap_scope_preserves_stdlib_and_other_random_operations(self):
         case = self

@@ -11,9 +11,11 @@ import unittest
 from test_port_0922_server_bot_ai import (
     BotPlanner, _bot, _contact, _profile, _route, _state,
 )
-from gui.mods.offline_lan_0922.ai.planner import (
-    BattleDirector, make_personality,
-)
+from gui.mods.offline_lan_0922.ai.planner import make_personality
+from gui.mods.offline_lan_0922.ai import planner as setup_data
+from gui.mods.offline_lan_0922.vehicle_control.roster import BattleRoster
+from gui.mods.offline_lan_0922.ai.adapter import BotAdapter
+from test_port_0922_ai import shared_plan_and_drive
 
 
 class RetiredTacticalEntryPointTests(unittest.TestCase):
@@ -37,11 +39,19 @@ class RetiredTacticalEntryPointTests(unittest.TestCase):
                 with self.subTest(name=name):
                     self.assertFalse(hasattr(planner, name))
 
-    def test_local_director_has_no_withdraw_flank_or_force_balance_helpers(self):
-        director = BattleDirector('04_himmelsdorf', 'retired-tactics')
-        for name in ('_fallback_position', '_flank_position',
-                     '_local_force_balance'):
-            self.assertFalse(hasattr(director, name), name)
+    def test_roster_cannot_restore_a_runtime_decision_or_fallback(self):
+        self.assertFalse(hasattr(setup_data, 'BattleDirector'))
+        roster = BattleRoster('04_himmelsdorf', 'retired-tactics')
+        for name in ('order_for', 'update_contact', '_choose_contact',
+                     '_route_position', '_known_contacts', 'contacts',
+                     '_fallback_position', '_flank_position', '_local_force_balance'):
+            self.assertFalse(hasattr(roster, name), name)
+        actor = roster.register_profile(11, 1, _profile('mediumTank'), 'Bot')
+        for name in ('waypoint_index', 'target_id', 'last_order', 'position'):
+            self.assertNotIn(name, actor)
+        adapter = BotAdapter('04_himmelsdorf', 'retired-tactics')
+        self.assertFalse(hasattr(adapter, 'plan_order'))
+        self.assertFalse(hasattr(adapter, 'decide'))
 
     def test_removing_jiggle_does_not_reshuffle_authored_route_allocations(self):
         for seed in range(30):
@@ -90,54 +100,46 @@ class CurrentShootingPositionTests(unittest.TestCase):
                             self.assertEqual(2, order['target_id'])
                             self.assertEqual(ready, order['fire_allowed'])
 
-    def test_local_director_stays_when_outnumbered_damaged_or_too_close(self):
+    def test_shared_planner_and_driver_stay_when_outnumbered_damaged_or_too_close(self):
         profile = _profile('mediumTank', {'flanker': 1.0, 'support': 1.0})
         profile.update(desired_range=180.0, fire_range=450.0)
         for health in (1000, 200, 1):
             for distance in (3.0, 150.0, 410.0):
                 with self.subTest(health=health, distance=distance):
-                    director = BattleDirector('04_himmelsdorf', 45)
-                    agent = director.register_profile(11, 1, profile, 'Bot')
-                    agent['personality'].update(caution=0.95, aggression=0.05,
-                                                initiative=0.95)
-                    position = (45.0, 0.0, -180.0)
-                    for target_id in (2, 3, 4, 5):
-                        director.update_contact(1, target_id, 2,
-                            (45.0+target_id-2, 0.0, -180.0+distance),
-                            1000, 1000, 'mediumTank', True, 1.0)
-                    order = director.order_for(
-                        11, position, 0.0, 0.0, health, 1000, 1.0)
+                    adapter = BotAdapter('04_himmelsdorf', 45)
+                    actor = adapter.roster.register_profile(11, 1, profile, 'Bot')
+                    state = dict(_state(11, 1, 45., -180.), health=health)
+                    contacts = [_contact(identity, 45.+identity-2,
+                        -180.+distance, [11]) for identity in (2, 3, 4, 5)]
+                    order, command = shared_plan_and_drive(
+                        adapter, BotPlanner(), actor, state, contacts=contacts)
                     self.assertEqual('engage', order['combat_mode'])
-                    self.assertEqual(position, order['move_position'])
-                    self.assertEqual(0.0, order['throttle_override'])
+                    self.assertEqual((45., 0., -180.), command['move_position'])
+                    self.assertEqual(0., command['throttle'])
                     self.assertTrue(order['fire_allowed'])
-                    self.assertNotIn('force_balance', order)
+                    self.assertEqual(2, command['target_id'])
+                    self.assertNotIn('force_balance', command)
 
     def test_actual_range_limit_still_requires_approach(self):
         route = _route('authored', [(45, -240, False), (45, 300, False)])
         bot = _bot(11, 1, 0, route, 'mediumTank')
         bot['profile'].update(desired_range=180.0, fire_range=340.0)
         state = _state(11, 1, 45.0, -180.0)
-        bot['state'] = state
-        # 355 m is outside the 340 m gun range, but inside the unchanged
-        # local director's 360 m contact-selection envelope for this profile.
-        focus = dict(target_kind='human', id=2,
-            position=dict(x=45.0, y=0.0, z=175.0), visible=True,
-            shootable_by_bot_ids=[11], health=1000, max_health=1000)
-        server_order = BotPlanner()._order_for(bot, 0, 1, focus, [focus], 1.0)
-        self.assertEqual('advance', server_order['combat_mode'])
-        self.assertEqual(dict(x=45.0, y=0.0, z=300.0),
-                         server_order['move_position'])
-        self.assertFalse(server_order['fire_allowed'])
-        self.assertEqual(1.0, server_order['throttle_override'])
-        director = BattleDirector('04_himmelsdorf', 45)
-        director.register_profile(11, 1, bot['profile'], 'Bot')
-        director.update_contact(1, 2, 2, (45.0, 0.0, 175.0),
-                                1000, 1000, 'mediumTank', True, 1.0)
-        local_order = director.order_for(
-            11, (45.0, 0.0, -180.0), 0.0, 0.0, 1000, 1000, 1.0)
-        self.assertEqual('advance', local_order['combat_mode'])
-        self.assertFalse(local_order['fire_allowed'])
+        # The actual 355-m distance exceeds this vehicle's 340-m fire range.
+        # Runtime planning now has one implementation; no deleted director
+        # contact envelope is part of the expected behavior.
+        adapter = BotAdapter('04_himmelsdorf', 45)
+        actor = adapter.roster.register_profile(11, 1, bot['profile'], 'Bot')
+        actor['route'] = route
+        order, command = shared_plan_and_drive(adapter, BotPlanner(), actor,
+            state, contacts=[_contact(2, 45., 175., [11])])
+        self.assertEqual('advance', order['combat_mode'])
+        self.assertEqual(dict(x=45., y=0., z=300.), order['move_position'])
+        self.assertFalse(order['fire_allowed'])
+        self.assertEqual(1., order['throttle_override'])
+        self.assertEqual('advance', command['combat_mode'])
+        self.assertGreater(command['throttle'], 0.)
+        self.assertFalse(command['fire_allowed'])
 
     def test_current_blocked_lane_still_hands_off_to_position_recovery(self):
         route = _route('authored', [(0, -100, False), (0, 500, False)])

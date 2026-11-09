@@ -125,11 +125,11 @@ class BotRotationDriveTests(unittest.TestCase):
         self.assertTrue(all(not grid.hull_pose_clear(position, i*math.pi/18.,
                         state['half_length'], state['half_width']) for i in range(36)))
         observed = []
-        decide = runtime.adapter.decide
+        decide = runtime.adapter.fixture_controls
         def capture_pose(candidate, clear):
             observed.append(candidate['pose_clear'](candidate['yaw']-.1))
             return decide(candidate, clear)
-        runtime.adapter.decide = capture_pose
+        runtime.adapter.fixture_controls = capture_pose
         old_yaw = state['yaw']
         runtime.update(.1, 1.)
         self.assertEqual([True], observed)

@@ -3,7 +3,7 @@ import copy
 import unittest
 from unittest import mock
 from gui.mods.offline_lan_0922 import bot_tactics as config, bot_tactics_runtime as planning
-from gui.mods.offline_lan_0922.ai.planner import BattleDirector
+from gui.mods.offline_lan_0922.vehicle_control.roster import BattleRoster
 from bot_tactics_store import graph_data
 
 
@@ -35,15 +35,15 @@ class RoutePriorityTests(unittest.TestCase):
         doc['maps']['31_airfield']['default_routes']=[edit(north,'lightTank',9),edit(central,'heavyTank',9)]
         routes,status=planning.default_routes(config.canonical(doc),'31_airfield',graph)
         self.assertTrue(all(v=='baked_route_connected' for v in status.values()))
-        director=BattleDirector('31_airfield',123,baked_routes=routes)
-        preferred=next(r for r in director._routes_for(1) if r['id']==north['id'])
+        roster=BattleRoster('31_airfield',123,baked_routes=routes)
+        preferred=next(r for r in roster._routes_for(1) if r['id']==north['id'])
         # Capacity is per vehicle class, not the parent route's total.
         for i in range(3):
-            agent=director.register_profile(i+1,1,dict(class_tag='lightTank',roles={'brawler':1.0},vehicle_name='test'))
+            agent=roster.register_profile(i+1,1,dict(class_tag='lightTank',roles={'brawler':1.0},vehicle_name='test'))
             self.assertEqual(north['id'],agent['route']['id'])
-        agent=director.register_profile(100,1,dict(class_tag='lightTank',roles={'brawler':1.0},vehicle_name='test'))
+        agent=roster.register_profile(100,1,dict(class_tag='lightTank',roles={'brawler':1.0},vehicle_name='test'))
         self.assertNotEqual(north['id'],agent['route']['id'])
-        heavy=BattleDirector('31_airfield',123,baked_routes=routes)
+        heavy=BattleRoster('31_airfield',123,baked_routes=routes)
         self.assertEqual(central['id'],heavy.register_profile(1,1,dict(class_tag='heavyTank',roles={'scout':1.0},vehicle_name='test'))['route']['id'])
         self.assertEqual(original,graph)
         self.assertEqual(1,len([r for r in routes['1'] if r['id']==north['id']]))
@@ -53,8 +53,8 @@ class RoutePriorityTests(unittest.TestCase):
         for priority,expected in ((4,False),(6,True)):
             doc['maps']['31_airfield']['default_routes']=[edit(central,'lightTank',priority)]
             routes,unused=planning.default_routes(config.canonical(doc),'31_airfield',graph)
-            director=BattleDirector('31_airfield',123,baked_routes=routes)
-            chosen=director.register_profile(1,1,dict(class_tag='lightTank',roles={'scout':1.0}))['route']
+            roster=BattleRoster('31_airfield',123,baked_routes=routes)
+            chosen=roster.register_profile(1,1,dict(class_tag='lightTank',roles={'scout':1.0}))['route']
             self.assertEqual(expected,chosen['id'] in (central['id'],'class_lt_'+central['id']))
 
     def test_custom_default_five_matches_a_current_baked_route_and_four_does_not(self):
@@ -109,9 +109,9 @@ class RoutePriorityTests(unittest.TestCase):
         for route in graph['routes']['1']:
             item=edit(route,'all',0);item.pop('priority');item['disabled']=True;entry['default_routes'].append(item)
         clean=config.canonical(doc);routes,_=planning.default_routes(clean,'31_airfield',graph)
-        director=BattleDirector('31_airfield',123,baked_routes=routes)
-        self.assertEqual((),director._routes_for(1))
-        self.assertIsNone(director.register_profile(1,1,dict(class_tag='heavyTank',roles={}))['route'])
+        roster=BattleRoster('31_airfield',123,baked_routes=routes)
+        self.assertEqual((),roster._routes_for(1))
+        self.assertIsNone(roster.register_profile(1,1,dict(class_tag='heavyTank',roles={}))['route'])
         self.assertEqual(original,graph)
         bad=copy.deepcopy(doc);bad['maps']['31_airfield']['default_routes'][0]['disabled']=1
         with self.assertRaises(config.TacticsError):config.canonical(bad)

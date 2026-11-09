@@ -2079,6 +2079,7 @@ class BotRuntime(SharedEngineControl):
         self._control_factory = control_factory
         self._actor_controls = {}
         self._control_launch_proofs = {}
+        self._reset_control_planning()
         self._navigation_height_columns = navigation_height_columns
         self._navigation_surface_probe = navigation_surface_probe
         self._navigation_surface_queue = []
@@ -3762,6 +3763,7 @@ class BotRuntime(SharedEngineControl):
         round_id = message.get('round_id')
         if round_id != self.round_id:
             self._clear_actor_controls()
+            self._reset_control_planning(round_id)
             if self.navigator is not None:
                 self.navigator.invalidate_native_planning()
                 self.navigator.bot_states.clear()
@@ -3866,6 +3868,7 @@ class BotRuntime(SharedEngineControl):
             self._prewarm_receipt_cursor = 0
             self._combat_sync = {}
             self._server_tick = -1
+        self._observe_control_context(message)
         self._apply_orders(message)
         if message.get('battle_result') is not None:
             self.finished = True
@@ -4060,14 +4063,14 @@ class BotRuntime(SharedEngineControl):
             self._turn_speeds[bot_id] = 0.0
             if (self.bot_descriptor_resolver is None and
                     isinstance(raw.get('profile'), dict)):
-                self.adapter.director.register_profile(bot_id, raw.get('team', 1),
+                self.adapter.roster.register_profile(bot_id, raw.get('team', 1),
                                                        raw['profile'], raw.get('name', 'Bot'))
             else:
                 self.adapter.register(bot_id, raw.get('team', 1), descriptor,
                                       raw.get('name', 'Bot'))
             spawn, spawn_yaw = self._spawn(
                 int(raw.get('team', 1)), int(raw.get('slot', 0)))
-            agents = getattr(self.adapter.director, 'agents', {})
+            agents = getattr(self.adapter.roster, 'agents', {})
             agent = agents.get(bot_id, {})
             profile = agent.get('profile', {})
             if 'ammo_ratios' in values:
@@ -4233,6 +4236,9 @@ class BotRuntime(SharedEngineControl):
         self._ensure_native_simulation()
         bots = [self._manifest_entry(state)
                 for state in self._ordered_states()]
+        self.control_manifest = tuple(copy.deepcopy(bots))
+        self.control_planner.tactics_map = self._navigation_map_name
+        self._control_plan = None
         player_collision_profiles = (
             self._player_collision_manifest(message.get('players'))
             if message.get('human_ram_timeline') else None)
@@ -4264,23 +4270,21 @@ class BotRuntime(SharedEngineControl):
             outcomes = dict((actor, 'restored') for actor in plans)
         elif message.get('battle_mode', 'regular') == 'regular':
             self._initial_allocation_seed = random.SystemRandom().getrandbits(64)
-            catalog = (getattr(self.adapter.director, 'map_data', None) or {}).get('routes', {})
+            catalog = (getattr(self.adapter.roster, 'map_data', None) or {}).get('routes', {})
             plans, outcomes, usage = bot_tactics_runtime.assign_initial_routes(
                 self._bot_tactics, name, self.baked_graph, states, catalog,
                 self._initial_allocation_seed)
-            # Discard the director's provisional role/load-balanced occupancy.
-            self.adapter.director.route_usage = dict((key, value) for key, value in usage.items()
+            # Publish the actual initial allocation, not setup occupancy.
+            self.adapter.roster.route_usage = dict((key, value) for key, value in usage.items()
                                                      if not key[1].startswith('spg:'))
         else:
             plans, outcomes = {}, {}
         for actor, status in sorted(outcomes.items()):
             if actor in plans:
                 self.states[actor]['route'] = plans[actor]
-                agent = getattr(self.adapter.director, 'agents', {}).get(actor)
+                agent = getattr(self.adapter.roster, 'agents', {}).get(actor)
                 if agent is not None:
                     agent['route'] = plans[actor]
-                    if not restoring:
-                        agent['route_entry_fixed']=True;agent['route_started']=False
             sys.stdout.write('[Offline LAN 0.9.22] BOT TACTICS route bot=%d map=%s status=%s id=%s\n' % (
                 actor, name, status, (plans.get(actor) or {}).get('id', 'auto_navigation')))
 
@@ -4320,7 +4324,7 @@ class BotRuntime(SharedEngineControl):
             manual, manual_outcomes = bot_tactics_runtime.assign_manual_positions(
                 self._bot_tactics, map_name, self.baked_graph, states, mode,
                 allocation_seed=getattr(self, '_initial_allocation_seed', None),
-                paired_routes=(getattr(self.adapter.director, 'map_data', None) or {}).get('routes', {}))
+                paired_routes=(getattr(self.adapter.roster, 'map_data', None) or {}).get('routes', {}))
             for actor in manual_outcomes:
                 plans.pop(actor, None)
             plans.update(manual)
@@ -5078,6 +5082,7 @@ class BotRuntime(SharedEngineControl):
         resolver after the local AI tick that fired the shot.
         """
         message = message if isinstance(message, dict) else {}
+        self._observe_control_context(message)
         self._apply_orders(message)
         if message.get('battle_result') is not None:
             self.finished = True
@@ -17329,9 +17334,9 @@ class BotRuntime(SharedEngineControl):
                     'turn_speed_limit': (physics_params.get('rotSpd')
                                          if physics_params is not None else None),
                 }
+                if server_order is None:
+                    server_order = self._shared_control_order(state, contacts, players, now)
                 if worker_control is not None:
-                    if server_order is None:
-                        server_order = self.adapter.plan_order(decision_state)
                     server_order = worker_control.refine_order(server_order, contacts, now)
                 reposition_order, reposition_expired = \
                     self._friendly_reposition_order(state, targets, now)
@@ -17393,23 +17398,7 @@ class BotRuntime(SharedEngineControl):
                             source='server_order', received_order=received_order,
                             server_selection=server_order.get('tactical_evidence'))
                 else:
-                    if diagnostic is not None:
-                        diagnostic.count('decision_local_planner')
-                    if (state.get('profile') or {}).get('class_tag') == 'SPG':
-                        strategic = self.adapter.plan_order(decision_state)
-                        strategic = spg_route_travel.apply(self,state,strategic,now)
-                        strategic = self._artillery_position_order(state,strategic,targets,now)
-                        command = timed_call(self._combat_diagnostics,'bot.planner_driver',
-                            self.adapter.decide_with_order,decision_state,strategic,sample_clear)
-                    else:
-                        command = timed_call(
-                            self._combat_diagnostics, 'bot.planner_driver',
-                            self.adapter.decide,
-                            decision_state, sample_clear)
-                    if record_orders:
-                        command['order_evidence'] = dict(sampled_at=now,
-                            source='local_planner', final_order=_order_evidence(command),
-                            reason='server_order_or_order_adapter_unavailable')
+                    raise RuntimeError('shared_order_driver_unavailable')
                 if command.pop('navigation_replan', False):
                     self.navigator.request_replan(state['id'], position, now)
                 self._report_blocked_planner(
@@ -17752,6 +17741,10 @@ class BotRuntime(SharedEngineControl):
             self._record_traffic_pivot(state, command, safety, target, hull_aiming, now)
             throttle, turn = safety['throttle'], safety['turn']
             state['traffic_braking'] = safety.get('traffic_mode') == 'vehicle_brake'
+            if worker_control is not None:
+                command = worker_control.guard_mission_controls(
+                    dict(command, throttle=throttle, turn=turn))
+                throttle, turn = command['throttle'], command['turn']
             if siege_motion_locked:
                 state['_motion_control_gates'].append('siege_transition')
                 # Stock Siege transitions immobilize the hull for the whole
