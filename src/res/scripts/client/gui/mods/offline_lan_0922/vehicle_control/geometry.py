@@ -88,7 +88,12 @@ BOT_WATER_ESCAPE_DEEPEN_EPSILON = 0.10
 GROUND_PLANE_EPSILON = 0.35
 
 _PROFILE_CLOCK = getattr(time, 'perf_counter', None)
+if not callable(_PROFILE_CLOCK):
+    # The pinned Windows client embeds CPython 2.7, which uses time.clock.
+    _PROFILE_CLOCK = time.clock
 
+# Resolve the shared clock before any consumer imports either handle.
+# Support profiling remains independent of a replaced frame-timing handle.
 _SUPPORT_PROFILE_CLOCK = _PROFILE_CLOCK
 
 def _number(value, default=0.0):

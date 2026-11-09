@@ -4,6 +4,7 @@ Load the exact helper sources without requiring stock #1513 GUI packages.
 This is interpreter/logic evidence, not a native-client acceptance run.
 """
 from __future__ import print_function
+import collections
 import os
 import importlib
 import sys
@@ -151,7 +152,7 @@ class EmbeddedForegroundContractTests(unittest.TestCase):
 
 
 class EmbeddedSharedImportOrderTests(unittest.TestCase):
-    """Cold imports must work in both directions in the embedded interpreter."""
+    """Cold imports and their support consumers must run in Python 2.7."""
 
     def setUp(self):
         self.saved_gui = dict((name, module) for name, module in sys.modules.items()
@@ -224,6 +225,87 @@ class EmbeddedSharedImportOrderTests(unittest.TestCase):
 
     def test_shared_combat_imports_before_physical_runtime(self):
         self.check_live_types('vehicle_control.combat_control')
+
+    def check_profiled_support_solve(self, kind):
+        prefix = 'gui.mods.offline_lan_0922.'
+        battle_module = importlib.import_module(prefix + 'battle_runtime')
+        geometry = importlib.import_module(prefix + 'vehicle_control.geometry')
+        battle = battle_module.BattleRuntime()
+        physical_reads = []
+
+        def physical_clock():
+            physical_reads.append(73.125)
+            return 73.125
+
+        battle._clock = physical_clock
+        battle._stack_candidates = lambda actor: iter(())
+        point = collections.namedtuple('SupportPoint', 'x y z')
+        start, end = point(0., 2., 0.), point(0., -2., 0.)
+        ground = (point(0., 0., 0.), point(0., 1., 0.))
+        probes = []
+
+        def terrain_probe(ray_start, ray_end, ground_filter):
+            probes.append((ray_start, ray_end, ground_filter))
+            return ground
+
+        battle._collide_static_down = terrain_probe
+        outer = dict(outer_solve=True)
+        battle._stack_context = outer
+        actor = dict(id=11, kind=kind, x=0., y=0., z=0.,
+                     _stack_carrier=['bot', 12])
+        # Do not supply or patch a profiling clock. The real cold-imported
+        # BattleRuntime and shared geometry must resolve the Python 2 clock.
+        previous = battle._stack_support_context(actor)
+        try:
+            self.assertIs(outer, previous)
+            self.assertNotIn('_stack_carrier', actor)
+            battle._stack_context['physics_dt'] = .125
+            battle._stack_context['purpose'] = kind + '_vertical'
+            batch = battle._stack_context['queries']
+            for unused in range(2):
+                self.assertIs(ground, battle._collide_down(start, end, None))
+            self.assertEqual([(start, end, None)], probes)
+            self.assertEqual(1, batch.calls['candidate_select'])
+            self.assertEqual(1, batch.calls['terrain'])
+            self.assertEqual(1, batch.calls['terrain_cache_hit'])
+            self.assertEqual(2, batch.calls['roof_stage'])
+            self.assertIs(geometry._SUPPORT_PROFILE_CLOCK, batch.clock)
+            self.assertIs(geometry._PROFILE_CLOCK, batch.clock)
+            self.assertIs(battle_module._PROFILE_CLOCK, batch.clock)
+            self.assertIsNot(physical_clock, batch.clock)
+        finally:
+            battle._finish_stack_support_context(previous)
+        self.assertIs(outer, battle._stack_context)
+        profile = battle._support_profiles[(kind, 11)]
+        self.assertEqual(.125, profile['physics_dt'])
+        self.assertEqual(73.125, profile['at'])
+        self.assertEqual(1, profile['calls']['context_' + kind + '_vertical'])
+        self.assertGreaterEqual(profile['ms']['context_total'], 0.)
+        self.assertTrue(physical_reads)
+        self.assertEqual(set([73.125]), set(physical_reads))
+
+    def test_player_support_solve_runs_with_the_embedded_profile_clock(self):
+        self.check_profiled_support_solve('player')
+
+    def test_bot_support_solve_runs_with_the_embedded_profile_clock(self):
+        self.check_profiled_support_solve('bot')
+
+    def test_shared_geometry_lazily_opens_a_support_solve_on_python27(self):
+        geometry = importlib.import_module(
+            'gui.mods.offline_lan_0922.vehicle_control.geometry')
+        owner = geometry.SharedBattleGeometry()
+        actor = dict(id=11, kind='bot', x=0., y=0., z=0.)
+        owner._stack_context = dict(actor=actor, candidates=[], hits=[])
+        point = collections.namedtuple('SupportPoint', 'x y z')
+        start, end = point(0., 2., 0.), point(0., -2., 0.)
+        ground = (point(0., 0., 0.), point(0., 1., 0.))
+        self.assertNotIn('queries', owner._stack_context)
+        self.assertIs(ground, owner._stack_ground_hit(start, end, ground))
+        batch = owner._stack_context['queries']
+        self.assertEqual(1, batch.calls['roof_stage'])
+        self.assertGreaterEqual(batch.milliseconds['roof_stage'], 0.)
+        self.assertIs(geometry._PROFILE_CLOCK, batch.clock)
+        self.assertIs(geometry._SUPPORT_PROFILE_CLOCK, batch.clock)
 
 
 class EmbeddedSharedRuntimeTests(unittest.TestCase):

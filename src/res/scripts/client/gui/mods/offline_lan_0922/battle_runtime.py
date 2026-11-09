@@ -326,10 +326,6 @@ def _monotonic_time():
 # every realistic redelivery without growing for the whole round.
 EVENT_ID_MEMORY = 8192
 
-if not callable(_PROFILE_CLOCK):
-    _PROFILE_CLOCK = time.clock
-# Independent handle for support profiling; frame timing keeps its own seam.
-
 
 class _RecentIdSet(object):
     """Membership test over the most recent ids only.

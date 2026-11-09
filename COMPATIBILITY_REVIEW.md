@@ -1,3 +1,58 @@
+# November 10: repair the shared support clock at the Python 2.7 boundary
+
+Native report `wot-error-report-20261110-012126-21ccf2af9d47.zip` rejects
+the start-of-battle acceptance of `3d926588`. Both installed and bundled
+payloads identify `colorfulmeans-42658367924-1`, version 1.1.1, on the exact
+Chinese HD #1513 client. The prior passing CI and bytecode checks did not
+exercise this support-query consumer under the embedded interpreter contract.
+
+After the ten-second countdown, the visible client requests `vo_start_battle`
+at 01:21:16.337 UTC+8. Both clients then fail inside
+`BattleRuntime._stack_support_context -> SupportQueries.__init__ -> clock()`
+with `TypeError: 'NoneType' object is not callable`. The visible path enters
+from `_drive_local_step/_update_vertical_motion`; the worker enters from
+`BotRuntime._update_once/_update_vertical_motion`. Their original tracebacks
+are retained while deferred lobby cleanup completes. The server records
+`worker_disconnected` and terminates the round after the worker failure; the
+later `battle_in_progress` retry rejection is a consequence, not its cause.
+
+The shared geometry extraction separated the profiling-clock assignment from
+its Python 2 compatibility branch. `geometry._PROFILE_CLOCK` and its support
+alias were assigned `None` because Python 2.7 has no `time.perf_counter`.
+The remaining fallback in `battle_runtime` rebound only that module's frame
+clock, leaving the already imported support handle and shared geometry handle
+unusable. The older copied geometry already contained this omission; promoting
+it to the common source exposed both physical owners to the defect.
+
+Clock selection now completes in the shared geometry module before either
+handle is imported: use `perf_counter` when callable, otherwise the existing
+Windows Python 2 `time.clock` contract. The late local fallback is removed.
+Support profiling retains its separate handle, while simulation time, physics
+dt, exact-query cache lifetime and the current motion owners are unchanged.
+The module-initialization audit found no second split conditional assignment
+among the remaining shared geometry/engine globals.
+
+The embedded contract gate now cold-imports and executes the real player/Bot
+support context, terrain cache, roof stage, context completion and independent
+shared-geometry lazy context without supplying a replacement profiling clock.
+All three new cases first reproduced the exact `NoneType` failure under real
+CPython 2.7.18 on the rejected source. The normal Python 3 support suite also
+covers the diagnostic/physical clock separation. CI already executes this
+embedded contract file with actual Python 2.7 before building the client.
+
+After the correction, the three new Python 2.7 cases pass, the complete
+embedded contract file passes all 25 cases under both real 2.7.18 and Python 3,
+and the support-query file passes all 13 cases. All 262 client modules compile
+under 2.7.18. These execution checks cover the missing consumer boundary;
+compilation or successful module import alone would still miss the failure.
+
+The report's audible burst is retained as an observation. The traced start
+voice is one parent/child call pair, not two announcements, and there is no
+recorded repeated battle-entry/music-restart loop. Audio diagnostics report
+no captured sound errors but do not record PCM output or all native playback;
+they cannot establish the cause or absence of the audible burst. Corrected
+Windows battle startup and the reported sound still require a new play test.
+
 # November 9: audit correction and completed shared-control call graph
 
 The earlier shared-control completion claim below was too broad at `be5bf798`.

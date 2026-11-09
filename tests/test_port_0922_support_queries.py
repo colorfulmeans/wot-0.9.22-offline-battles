@@ -177,6 +177,53 @@ class SupportReuseTests(unittest.TestCase):
             self.assertEqual(2,prepare.call_count)
         battle._finish_stack_support_context(previous)
 
+    def test_lazy_roof_contexts_keep_contacts_and_physics_time(self):
+        # Exercise both lazy constructors with the real module clock. Only
+        # the native collision seam supplies fixture evidence.
+        for kind, entry in (('player', '_stack_ground_hit'),
+                            ('bot', '_stack_ground_hit_impl')):
+            battle = engine.BattleRuntime(engine._runtime())
+            battle._clock = mock.Mock(return_value=9.5)
+            state = dict(id=12, x=0., y=0., z=0., yaw=0.,
+                         collision_shape=(1.5, 3., 0., 2.))
+            entity = types.SimpleNamespace(typeDescriptor=engine._Descriptor())
+            actor = dict(id=1, kind=kind, x=0., y=2., z=0.,
+                         yaw=0., pitch=0., roll=0.)
+            previous = dict(outer_solve=True)
+            battle._stack_context = dict(
+                actor=actor, candidates=[(('bot', 12), state, entity)],
+                hits=[], physics_dt=.125, purpose=kind + '_vertical')
+            evidence = types.SimpleNamespace(
+                collision=types.SimpleNamespace(dist=.1,
+                                                compName='vehicleHull'),
+                worldNormal=engine._Vector(0., 1., 0.))
+            try:
+                self.assertNotIn('queries', battle._stack_context)
+                with mock.patch.object(
+                        shared_geometry, '_collide_vehicle_evidence_at_matrix',
+                        return_value=[evidence]) as query:
+                    hit = getattr(battle, entry)(
+                        engine._Vector(0., 2.1, 0.),
+                        engine._Vector(0., 1.9, 0.), None)
+                self.assertIsNotNone(hit)
+                self.assertAlmostEqual(2., hit[0].y)
+                self.assertEqual(['bot', 12], actor['_stack_carrier'])
+                self.assertEqual(1, query.call_count)
+                batch = battle._stack_context['queries']
+                self.assertIs(shared_geometry._SUPPORT_PROFILE_CLOCK,
+                              batch.clock)
+                self.assertIsNot(battle._clock, batch.clock)
+                self.assertEqual(1, batch.calls['matrix_prepare'])
+                self.assertEqual(1, batch.calls['roof'])
+                self.assertEqual(1, len(battle._stack_context['hits']))
+            finally:
+                battle._finish_stack_support_context(previous)
+            self.assertIs(previous, battle._stack_context)
+            profile = battle._support_profiles[(kind, 1)]
+            self.assertEqual(.125, profile['physics_dt'])
+            self.assertEqual(9.5, profile['at'])
+            self.assertGreaterEqual(profile['ms']['context_total'], 0.)
+
     def test_profile_emits_split_costs_counts_and_simulated_time(self):
         battle=engine.BattleRuntime(engine._runtime())
         battle.client=types.SimpleNamespace(round_id=7,authority_epoch=1)
