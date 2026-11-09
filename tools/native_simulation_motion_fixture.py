@@ -37,6 +37,9 @@ def _graph(map_name='01_karelia', waypoint_count=2):
         'game_version': '0.9.22.0.1-cn-1513', 'map': map_name,
         'cell_size': 4.0, 'origin': (0.0, 0.0), 'bounds': (0, 0, 8, 0),
         'width': 3, 'height': 1, 'heights_mm': (0, 0, 0),
+        # Link bits 3 and 4 represent west/east in the eight-direction schema.
+        'directions': ((-1, -1), (0, -1), (1, -1), (-1, 0),
+                       (1, 0), (-1, 1), (0, 1), (1, 1)),
         'links': (1 << 4, (1 << 3) | (1 << 4), 1 << 3),
         'hazards': (0, 0, 0),
         'spawn_anchors': ((0.0, 0.0), (8.0, 0.0)),
