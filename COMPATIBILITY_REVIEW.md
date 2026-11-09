@@ -22,6 +22,24 @@ actor evidence and clocks remain private. Foreground review and real trigger
 proof are not replaced or weakened to meet that quota. Analytic multi-actor
 workload measurements are not Windows BigWorld FPS acceptance.
 
+The final audit also found CURRENT HE reranking could steal a completed,
+still-executable comparison before its first launch. The common policy now
+retains only that same selected intention until real invalidity or first commit;
+it revalidates current geometry and preserves exact native admission. Initial
+full-domain damage comparison, genuine zero-HP contact, physical burst tails and
+the next trigger's new comparison are unchanged. Old HE/HESH tests now place
+next-trigger reranking after an actual commit instead of requiring a premature
+switch. New player/worker production-path tests cover both phases and reentry.
+
+The November 10 continuation found that this qualified execution still used
+a whole-domain fence: moving only an unrelated competitor inside a native
+query could clear the current intention. Execution now fences the selected
+row's source, target and affected lane; initial and next-trigger ranking still
+fence their complete comparison domains. Synchronous source/selected-target
+changes or a friend entering the current ray still reject the shot. The cache
+continuity regressions now exercise changed rankings across committed triggers,
+retaining their original no-repeated-penetration-probe assertions.
+
 The proposed restoration of `no_local_lane` exclusion and a two-second yield
 was wrong and fully withdrawn before commit. Do not restore those filters.
 See `docs/testing/shared-control-audit-completion-20261109.md` and the current

@@ -244,7 +244,7 @@ class NativeCacheContinuityTests(native_fire.AutomaticFireScene):
 
 
 class OrdinaryHEContinuityTests(unittest.TestCase):
-    def test_fallback_retargeting_does_not_repeat_completed_stationary_trials(self):
+    def test_next_trigger_retargeting_does_not_repeat_completed_stationary_trials(self):
         scene = Observations(targets=2, points=1, he_validation='single_point')
         scene.frame.update(loaded=2, ammo=(0, 0, 10))
         selected = set()
@@ -254,11 +254,27 @@ class OrdinaryHEContinuityTests(unittest.TestCase):
             scene.he(50. if tick % 2 == 0 else 100., target=1)
             scene.he(100. if tick % 2 == 0 else 50., target=2)
             scene.prime('he_fallback', 2)
-            decision = scene.tick(tick * .1)
+            decision = scene.tick(tick * .2)
             self.assertEqual('aim', decision['action'])
             self.assertEqual('he_fallback', decision['candidate']['mode'])
+            self.assertEqual(('bot', 2 if tick % 2 == 0 else 1),
+                             decision['candidate']['target_key'])
+            self.assertEqual(100., decision['candidate']['expected_damage'])
             selected.add(decision['candidate']['target_key'])
             self.assertIsNone(scene.policy.search_started)
+            # A changed ranking cannot take this already-qualified trigger.
+            # The next physical commit opens another complete comparison.
+            scene.he(100. if tick % 2 == 0 else 50., target=1)
+            scene.he(50. if tick % 2 == 0 else 100., target=2)
+            scene.prime('he_fallback', 2)
+            current = scene.tick(tick * .2 + .05)
+            self.assertEqual(('aim', decision['candidate']['key']),
+                             (current['action'], current['candidate']['key']))
+            scene.policy.shot_committed(dict(burst_index=0, burst_count=1),
+                dict(player_control=dict(candidate=current['candidate'])))
+            # GunState's completed single-shot/load observation. Real native
+            # commits and debits are covered by shared_current_he_execution.
+            scene.frame['ammo'] = (0, 0, 9 - tick)
         self.assertEqual({('bot', 1), ('bot', 2)}, selected)
         probes = [call for call in scene.calls if call[2] == 2 and call[-1] == 'penetration']
         self.assertTrue(probes)
@@ -266,7 +282,7 @@ class OrdinaryHEContinuityTests(unittest.TestCase):
             self.assertLessEqual(sum(call[3] == target for call in probes), 1,
                 'fallback intent must not erase a completed same-target trial')
 
-    def test_fallback_sample_ranking_does_not_reopen_same_target_trial(self):
+    def test_next_trigger_sample_ranking_does_not_reopen_same_target_trial(self):
         scene = Observations(targets=1, points=3, he_validation='single_point')
         scene.frame.update(loaded=2, ammo=(0, 0, 10))
         samples = set()
@@ -274,9 +290,21 @@ class OrdinaryHEContinuityTests(unittest.TestCase):
             scene.he(50. if tick % 2 == 0 else 100., sample=1)
             scene.he(100. if tick % 2 == 0 else 50., sample=2)
             scene.prime('he_fallback', 2)
-            decision = scene.tick(tick * .1)
+            decision = scene.tick(tick * .2)
+            self.assertEqual('aim', decision['action'])
             self.assertEqual('he_fallback', decision['candidate']['mode'])
+            self.assertEqual(2 if tick % 2 == 0 else 1, decision['candidate']['sample'])
+            self.assertEqual(100., decision['candidate']['expected_damage'])
             samples.add(decision['candidate']['sample'])
+            scene.he(100. if tick % 2 == 0 else 50., sample=1)
+            scene.he(50. if tick % 2 == 0 else 100., sample=2)
+            scene.prime('he_fallback', 2)
+            current = scene.tick(tick * .2 + .05)
+            self.assertEqual(('aim', decision['candidate']['key']),
+                             (current['action'], current['candidate']['key']))
+            scene.policy.shot_committed(dict(burst_index=0, burst_count=1),
+                dict(player_control=dict(candidate=current['candidate'])))
+            scene.frame['ammo'] = (0, 0, 9 - tick)
         self.assertEqual({1, 2}, samples)
         probes = [call for call in scene.calls if call[2] == 2 and call[-1] == 'penetration']
         self.assertEqual(1, len(probes))

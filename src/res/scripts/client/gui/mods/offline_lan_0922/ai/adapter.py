@@ -659,10 +659,10 @@ class BotAdapter(object):
                     not strategic.get('parking_phase') and strategic.get('combat_mode') not in
                     ('base_defense', 'artillery_deploy', 'artillery_relocate') else None)),
                 arrival_radius=strategic.get('arrival_radius') if stop_at_target else None)
-        # Preserve the mature face-position intent which is separate from the
-        # gun target.  At a route/firing stop it gives armoured turreted tanks
-        # their stable 12-30 degree hull angle while the turret keeps tracking
-        # ``aim_position``.  Local recovery directions still outrank it.
+        # Consume the admitted face-position intent separately from the gun's
+        # aim_position. An arrived vehicle may turn toward that supplied point;
+        # this driver adds no tactical hull-angle offset. Local recovery
+        # directions still outrank the arrived-facing adjustment below.
         recovery_mode = local.get('recovery_mode', 'drive')
         vehicle_blockage = bool(contact or state.get('_wreck_push_evidence') or
                                local.get('forward_blocked_by') or local.get('reverse_blocked_by'))

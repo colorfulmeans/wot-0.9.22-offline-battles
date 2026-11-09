@@ -1247,23 +1247,41 @@ class IndependentAmmoTraverseTests(unittest.TestCase):
                         self.assertFalse(scene.policy.fallback)
                         self.assertIsNone(scene.policy.search_started)
 
-    def test_he_fallback_phase_does_not_turn_expired_negative_proof_into_permission(self):
+    def test_he_current_execution_survives_pending_but_next_trigger_requires_new_negative_proof(self):
         scene = Observations(clips=6, targets=1, points=2)
         scene.frame['loaded'] = 2
         scene.he(0.)
         scene.prime()
         scene.prime('he_fallback')
-        self.assertEqual('aim', scene.tick(0.)['action'])
+        first = scene.tick(0.)
+        self.assertEqual('aim', first['action'])
         scene.frame['pose'] = ('source', 1)
         scene.value(2, sample=1, armor='unknown', line='pending')
         scene.prime('he_fallback')
-        pending = scene.tick(.1)
+        current = scene.tick(.1)
+        # Another point's newly incomplete penetration proof cannot revoke
+        # this still-valid HESH contact before its first physical trigger.
+        self.assertEqual(('aim', first['candidate']['key']),
+                         (current['action'], current['candidate']['key']))
+        self.assertEqual(('source', 1), current['candidate']['pose_stamp'][1])
+        self.assertTrue(scene.policy._executable_current(
+            scene.policy.current_row(current['candidate']), 'he_fallback'))
+        self.assertEqual(0., current['candidate']['expected_damage'])
+        self.assertFalse(scene.policy._all_failed((2,)))
+        self.assertIsNone(scene.policy.search_started)
+        self.assertIsNone(scene.policy.search_authority)
+        # Once the physical first/final edge commits, a new trigger must
+        # establish its own complete HESH penetration/fallback boundary.
+        scene.policy.shot_committed(dict(burst_index=0, burst_count=1),
+                                   dict(player_control=dict(candidate=current['candidate'])))
+        scene.frame.update(clip=5, ammo=(30, 30, 29))
+        pending = scene.tick(.2)
         self.assertNotEqual('aim', pending['action'])
         self.assertNotEqual('search_penetration', pending['action'])
         self.assertTrue(scene.policy.fallback)
         scene.value(2, sample=1)
         scene.prime(index=2)
-        ready = scene.tick(.2)
+        ready = scene.tick(.3)
         self.assertEqual(('aim', 'he_fallback'),
                          (ready['action'], ready['candidate']['mode']))
         self.assertIsNone(scene.policy.search_started)

@@ -68,6 +68,35 @@ Separate concurrent cases establish these boundaries:
   validation rejects only that actor's commit, with no debit. Other actors
   continue firing. The exact native pose fence remains in effect.
 
+### Atomic time fixtures and the eight-second logic test
+
+The private eight-second-clock test controls only actor11's atomic elapsed-time
+source. It holds that virtual clock steady while the real native evaluator
+closes the complete domain: three enemies with nine AP points each, plus the
+ordinary HE trial unless that real single-point trial has already failed.
+The test requires every remaining domain point to have an actual clear,
+reachable negative armor proof, with no unobserved, projected or pending row.
+The production 8 ms limit and the candidate/world/armor count limits are not
+changed. The subsequent search deadline still uses the real simulation clock
+and lasts the full eight seconds. All five peers retain their ordinary wall
+clocks, native triggers and ammunition accounting.
+
+A paired concurrent test calls actor11's original native evaluator first, then
+advances only that actor's virtual atomic clock by 9 ms. Actual world and
+component queries must have occurred. The unchanged 8 ms limit must leave the
+partially reviewed domain incomplete with `atomic_frame_budget_exhausted`, no
+eight-second search start and no ammunition debit, while peers keep firing.
+That unresolved condition is checked across more than eight simulation seconds.
+
+This distinction addresses a test precondition exposed by the historical
+`ace51653` full-suite CI run: a 28-candidate atomic review completed 15
+candidates in 8.726 ms, correctly remained pending, and therefore could not
+start the eight-second clock that the old test expected. A parallel host's
+throughput is not a deterministic prerequisite for testing that clock's state
+isolation. This is a test-fixture correction, not a production performance fix.
+`shared_multi_bot_scene.py` and both 29-actor benchmark schedules retain the
+actual wall clock; their measured deadlines and pending states are unchanged.
+
 ## Report regression and the discovered final-pose gap
 
 The reduced player regression records report SHA256
@@ -196,7 +225,7 @@ CI should gate exact candidate counts, fairness, source-scoped proof and
 ammunition accounting. It should retain wall/CPU results for comparison, while
 leaving unstable machine-speed thresholds out of pass/fail decisions.
 
-## Final integrated-source verification
+## Previous integrated-source verification (ace51653, intermediate)
 
 After the friendly-reposition target handoff and remaining production changes
 were integrated, both schedules were measured again with the same 29-actor,
@@ -205,17 +234,18 @@ were integrated, both schedules were measured again with the same 29-actor,
 with fixture SHA256
 `84687c5718217cf0a4d469f8e469e224ec7e4e093ba368b2a4f31fb6f28be591`.
 The runtime source was unchanged from start to finish in each run. This is the
-final integrated working-tree content measured before its repository commit;
-the earlier table intentionally retains the intermediate A/B history.
+integrated working-tree content measured before the `ace51653` repository
+commit. It predates the subsequent current-HE intent-preservation correction
+and is retained as an intermediate result, alongside the earlier A/B history.
 
-| Final measured case | Mean wall ms/callback | Mean CPU ms/callback | Wall p95 ms | Actual launches |
+| Ace intermediate measured case | Mean wall ms/callback | Mean CPU ms/callback | Wall p95 ms | Actual launches |
 | --- | ---: | ---: | ---: | ---: |
-| Final, 20 Hz, no enemies | 28.002 | 27.943 | 35.278 | 0 |
-| Final, 20 Hz, engagement | 287.576 | 287.491 | 380.146 | 42 AP, 5 HE |
-| Final, real 10 Hz branch, no enemies | 28.833 | 28.821 | 38.888 | 0 |
-| Final, real 10 Hz branch, engagement | 227.973 | 227.880 | 278.742 | 70 AP, 2 HE |
+| Ace, 20 Hz, no enemies | 28.002 | 27.943 | 35.278 | 0 |
+| Ace, 20 Hz, engagement | 287.576 | 287.491 | 380.146 | 42 AP, 5 HE |
+| Ace, real 10 Hz branch, no enemies | 28.833 | 28.821 | 38.888 | 0 |
+| Ace, real 10 Hz branch, engagement | 227.973 | 227.880 | 278.742 | 70 AP, 2 HE |
 
-| Final engagement work in 60 measured callbacks | Final 20 Hz | Final 10 Hz |
+| Ace engagement work in 60 measured callbacks | Ace 20 Hz | Ace 10 Hz |
 | --- | ---: | ---: |
 | Candidate evaluations | 2,226 | 2,489 |
 | Background candidates | 480 | 480 |
@@ -228,18 +258,18 @@ the earlier table intentionally retains the intermediate A/B history.
 | Actors receiving background service | 29 | 29 |
 | Maximum atomic actors/callback | 1 | 1 |
 
-Including warmup, final 20 Hz committed 66 launches from 24 actors; final 10 Hz
+Including warmup, ace 20 Hz committed 66 launches from 24 actors; ace 10 Hz
 committed 100 from 21 actors. Exact ammo accounting and all candidate/fairness
-gates passed. The final same-input 20 Hz engagement mean is about 21.5% below
+gates passed. The ace same-input 20 Hz engagement mean is about 21.5% below
 the original before run; its no-enemy mean is about 5.2 ms higher. The prior
-31.4% value describes the intermediate measurement, not this final result.
+31.4% value describes the earlier intermediate measurement, not this ace result.
 The varying absolute timings reinforce the use of exact work counts and
 correctness as CI gates, without claiming a stable game-FPS result.
 
-The final JSON/log basenames are `multi-bot-combat-final-stress20` and
+The historical JSON/log basenames are `multi-bot-combat-final-stress20` and
 `multi-bot-combat-final-worker10`. They include individual actor ammunition,
 targets/refusals, source identities and the complete per-channel query counts.
-The final 10 Hz report completed at 2026-11-09 15:40:23 UTC.
+The historical 10 Hz report completed at 2026-11-09 15:40:23 UTC.
 
 The full-suite HE ranking test was also updated to match the budget contract.
 A test which explicitly sets `background_budget = 0` now first verifies that
@@ -251,3 +281,67 @@ service and completes all eight alternate-shell proof rows, selecting the
 highest observed HE damage. Both cases retain the complete comparison and
 do not require atomic passes or a relaxed failure criterion. The HE ranking
 file now runs 21 passing tests.
+
+## HE-corrected source verification
+
+After the current-HE intent-preservation correction, the two 29-actor schedules
+were run sequentially again in an agreed quiet CPU window, with 10 warmup and
+60 measured callbacks each. Runtime SHA256 is
+`acbefb3060ed968656c0381578b39134b9c42cd2cd7add7a8a6bc0ec227874bb`
+across 261 files, measured on `74989811` plus the pending production correction.
+Both reports have identical before/after source identities, and the unchanged
+fixture SHA256 is
+`84687c5718217cf0a4d469f8e469e224ec7e4e093ba368b2a4f31fb6f28be591`.
+These benchmark processes use actual wall clocks for every actor; the controlled
+atomic clocks described in the unit-test section are not installed here.
+
+| HE-corrected measured case | Mean wall ms/callback | Mean CPU ms/callback | Wall p95 ms | Actual launches |
+| --- | ---: | ---: | ---: | ---: |
+| 20 Hz, no enemies | 26.961 | 26.952 | 34.721 | 0 |
+| 20 Hz, engagement | 255.416 | 255.379 | 310.762 | 42 AP, 5 HE |
+| Real 10 Hz branch, no enemies | 29.959 | 29.923 | 40.591 | 0 |
+| Real 10 Hz branch, engagement | 249.158 | 248.876 | 348.367 | 70 AP, 2 HE |
+
+| Engagement work in 60 measured callbacks | HE-corrected 20 Hz | HE-corrected 10 Hz |
+| --- | ---: | ---: |
+| Candidate evaluations | 2,222 | 2,481 |
+| Peak candidate evaluations/callback | 47 | 57 |
+| Foreground candidates | 1,717 | 1,935 |
+| Background candidates | 480 | 480 |
+| Peak background candidates/callback | 8 | 8 |
+| Atomic candidates | 25 | 66 |
+| Armor collision batches | 1,698 | 1,930 |
+| World queries | 2,602 | 2,751 |
+| Peak world queries/callback | 62 | 81 |
+| Component `localHitTest` calls | 218,064 | 192,920 |
+| Peak component calls/callback | 4,924 | 4,408 |
+| HE blast evaluations | 1,165 | 1,050 |
+| Peak HE blast evaluations/callback | 26 | 24 |
+| Of component calls, HE blast-surface calls | 199,308 | 172,840 |
+| Peak HE blast-surface component calls/callback | 4,592 | 4,148 |
+| HE blast-surface world calls in the analytic fixture | 0 | 0 |
+| Maximum consecutive background-wait callbacks | 7 | 7 |
+| Actors receiving background service | 29 | 29 |
+| Maximum atomic actors/callback | 1 | 1 |
+
+Both no-enemy cases have zero combat candidates, armor batches, world/component
+queries and launches. The engagement cases retain the original per-actor caps
+and pass exact native launch/ammunition accounting. Including warmup, 20 Hz
+committed 66 launches from 24 actors, and 10 Hz committed 100 from 21 actors.
+The finite windows do not establish that all 29 actors fired. Every actor's
+remaining ammunition, current target/refusal, route and individual query counts
+remain available in the JSON.
+
+The same-input 20 Hz engagement mean is about 30.2% below the original before
+sample; the no-enemy mean is about 4.1 ms higher. The 10 Hz engagement mean is
+higher than the preceding ace sample despite slightly fewer measured queries.
+These single-host results describe analytic Python work with real wall-time
+deadlines, not isolated causal measurements of the last patch or a supported
+BigWorld FPS target. The exact background limit is eight candidates, not eight
+HE rays or component queries; the much larger component counts above preserve
+that distinction.
+
+The new basenames are `multi-bot-combat-he-final-stress20` and
+`multi-bot-combat-he-final-worker10`, each with JSON and log output. They do not
+overwrite the ace measurements. The reports completed at 2026-11-09 16:18:39 UTC
+and 16:19:08 UTC, respectively, before the quiet CPU window was released.

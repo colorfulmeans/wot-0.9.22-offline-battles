@@ -14,7 +14,7 @@ from gui.mods.offline_lan_0922.projectile_wire import round_scalar
 from gui.mods.offline_lan_0922.vehicle_control.evaluation_budget import BACKGROUND_CANDIDATES_PER_FRAME
 from gui.mods.offline_lan_0922.vehicle_control.attack_policy import (
     ATOMIC_ARMOUR_BATCHES, ATOMIC_CANDIDATES, ATOMIC_WORLD_QUERIES,
-    BACKGROUND_CANDIDATES, FOREGROUND_CANDIDATES, SEARCH_SECONDS,
+    ATOMIC_WALL_SECONDS, BACKGROUND_CANDIDATES, FOREGROUND_CANDIDATES, SEARCH_SECONDS,
     WORLD_CHORDS_PER_FRONTIER)
 
 
@@ -31,6 +31,21 @@ class SharedMultiBotCombatTests(unittest.TestCase):
         scene.setUp()
         self.addCleanup(scene.doCleanups)
         return scene.configure_workers(6, diverse=diverse)
+
+    def low_penetration_worker(self, scene):
+        # Actor11 owns a real low-penetration AP load. Remove the empty
+        # alternate kinetic slot from its observed stock; do not set any
+        # policy outcome or failure timer. Other actors retain 300 mm AP.
+        for shot in scene.descriptors['11'].gun.shots:
+            shot.piercingPower = (1., 1.)
+        ammo = scene.engine._ammo_states[11]
+        ammo.restore(dict(ammo_remaining=[24, 0, 12], shell_index=0,
+                          next_shell_index=0, ammo_reload_pending=False))
+        ammo.publish(scene.engine.states[11])
+        scene.initial_ammo[11] = (24, 0, 12)
+        binding = scene.engine._control_for(scene.engine.states[11])
+        self.assertEqual(ATOMIC_WALL_SECONDS, binding.attack_policy.atomic_time_budget)
+        return binding
 
     def assert_private_state_and_real_debits(self, scene, minimum_each=0):
         bindings = list(scene.engine._actor_controls.values())
@@ -125,25 +140,40 @@ class SharedMultiBotCombatTests(unittest.TestCase):
     def test_eight_second_failure_clock_is_private_while_five_peers_keep_firing(self):
         with contextlib.redirect_stdout(DiagnosticSink()):
             scene = self.scene(diverse=False)
-            # Actor11 owns a real low-penetration AP load. Remove the empty
-            # alternate kinetic slot from its observed stock; do not set any
-            # policy outcome or failure timer. Other actors retain 300 mm AP.
-            for shot in scene.descriptors['11'].gun.shots:
-                shot.piercingPower = (1., 1.)
-            ammo = scene.engine._ammo_states[11]
-            ammo.restore(dict(ammo_remaining=[24, 0, 12], shell_index=0,
-                              next_shell_index=0, ammo_reload_pending=False))
-            ammo.publish(scene.engine.states[11])
-            scene.initial_ammo[11] = (24, 0, 12)
+            failing = self.low_penetration_worker(scene)
+            # This test establishes a complete native failure certificate,
+            # then tests the separate eight-second simulation clock. Host CPU
+            # contention must not decide whether its precondition is reached.
+            # Only actor11's atomic wall clock is controlled; the real native
+            # evaluations and all candidate/world/armor caps stay in force.
+            # The paired test below advances the same clock past its deadline.
+            atomic_now = [0.]
+            failing.attack_policy.atomic_clock = lambda: atomic_now[0]
             start = None
             for unused in range(500):
                 frame = scene.step()
-                failing = scene.engine._actor_controls[11]
                 if failing.attack_policy.search_started is not None:
                     start = failing.attack_policy.search_started
                     break
             self.assertIsNotNone(start, failing.attack_policy.status())
             self.assertEqual('all_failed', failing.attack_policy.status()['atomic']['status'])
+            domain = failing.attack_policy._failure_domain((0, 2))
+            self.assertTrue(domain['all_failed'], domain)
+            self.assertEqual(domain['total'], domain['failed'], domain)
+            self.assertEqual(0, sum(domain[name] for name in (
+                'unobserved', 'geometry_pending', 'armor_pending', 'excluded',
+                'projected_failed', 'projected_passed', 'passed')), domain)
+            ap_jobs = failing.attack_policy._jobs(shell_index=0)
+            self.assertEqual(27, len(ap_jobs))  # Three enemies, nine real points each.
+            self.assertEqual({('bot', 14), ('bot', 15), ('bot', 16)},
+                             {job[0][1] for job in ap_jobs})
+            self.assertEqual(27 + (0 if failing.attack_policy._single_point_failed(2) else 1),
+                             domain['total'])
+            self.assertGreater(scene.counts[(11, 'atomic', 'component')], 0)
+            self.assertGreater(scene.counts[(11, 'atomic', 'world')], 0)
+            for actor in (12, 13, 14, 15, 16):
+                self.assertIsNot(failing.attack_policy.atomic_clock,
+                    scene.engine._actor_controls[actor].attack_policy.atomic_clock)
             peer_shots_before = collections.Counter(event['id'] for event in scene.launches_observed)
             deadline = start + SEARCH_SECONDS
             for unused in range(180):
@@ -163,6 +193,59 @@ class SharedMultiBotCombatTests(unittest.TestCase):
         self.assertGreater(sum(peer_shots_after[a]-peer_shots_before[a] for a in (12, 13, 14, 15, 16)), 10)
         self.assertEqual((24, 0, 12), tuple(failing.gun.ammo))
         self.assertFalse(any(event['id'] == 11 for event in scene.launches_observed))
+        self.assert_budget_receipts(scene)
+
+    def test_atomic_deadline_keeps_partial_native_failure_pending_while_peers_fire(self):
+        with contextlib.redirect_stdout(DiagnosticSink()):
+            scene = self.scene(diverse=False)
+            failing = self.low_penetration_worker(scene)
+            policy = failing.attack_policy
+            atomic_now = [0.]
+            policy.atomic_clock = lambda: atomic_now[0]
+            native_evaluate = policy.evaluator.evaluate
+            slow_evaluations = []
+
+            def slow_native_evaluation(*args, **kwargs):
+                # Run the original native evaluator and its instrumentation
+                # first. Only its observed elapsed time is synthetic: one
+                # completed candidate costs 9 ms against the unchanged 8 ms.
+                result = native_evaluate(*args, **kwargs)
+                channel = args[6] if len(args) > 6 else kwargs['channel']
+                if channel == 'atomic':
+                    atomic_now[0] += ATOMIC_WALL_SECONDS + .001
+                    slow_evaluations.append((scene.now, result.get('line'), result.get('armor')))
+                return result
+
+            policy.evaluator.evaluate = slow_native_evaluation
+            timed_out = []
+            for unused in range(180):
+                scene.step()
+                status = policy.status()
+                self.assertIsNone(policy.search_started, status)
+                self.assertFalse(any(domain['all_failed'] for domain in
+                                     status['failure_domains']), status)
+                receipt = status['atomic']
+                if receipt.get('reason') == 'atomic_frame_budget_exhausted':
+                    self.assertEqual('incomplete', receipt['status'])
+                    self.assertGreater(receipt['evaluations'], 0)
+                    self.assertLess(receipt['evaluations'], receipt['candidates'])
+                    self.assertGreaterEqual(receipt['elapsed_ms'], 8.)
+                    self.assertEqual('global_snapshot_budget_pending', status['reason'])
+                    timed_out.append(receipt['observed_at'])
+                for actor in (12, 13, 14, 15, 16):
+                    self.assertIsNone(scene.engine._actor_controls[actor].attack_policy.search_started)
+                    self.assertIsNot(policy.atomic_clock,
+                        scene.engine._actor_controls[actor].attack_policy.atomic_clock)
+        self.assertTrue(slow_evaluations)
+        self.assertTrue(timed_out)
+        self.assertGreater(scene.now - timed_out[0], SEARCH_SECONDS)
+        self.assertGreater(scene.counts[(11, 'atomic', 'world')], 0)
+        self.assertGreater(scene.counts[(11, 'atomic', 'component')], 0)
+        self.assertEqual(ATOMIC_WALL_SECONDS, policy.atomic_time_budget)
+        self.assertEqual(scene.initial_ammo[11], tuple(failing.gun.ammo))
+        self.assertFalse(any(event['id'] == 11 for event in scene.launches_observed))
+        self.assertGreater(len(scene.launches_observed), 10)
+        self.assert_private_state_and_real_debits(scene)
         self.assert_budget_receipts(scene)
 
     def test_one_workers_unresolved_native_wall_does_not_create_team_armour_failure(self):

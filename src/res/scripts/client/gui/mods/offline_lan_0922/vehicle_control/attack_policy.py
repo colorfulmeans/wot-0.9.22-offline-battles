@@ -215,6 +215,7 @@ class AttackPolicy(object):
         self._lay_recovery = None
         self._native_lane_wait = None
         self.selected = None
+        self._current_he_execution = None
         self.trigger = None
         self.foreground_cursor = 0
         self.he_cursor = 0
@@ -727,6 +728,74 @@ class AttackPolicy(object):
         return (self.frame['identity'], shell.get('signature'),
                 target.get('sample_identity'), target.get('samples'))
 
+    def _choose_current_he(self, reason, candidate):
+        """Qualify a completed comparison's actual, uncommitted aim only."""
+        decision = self._choose('aim', reason, candidate)
+        if decision['action'] == 'aim':
+            job = next((job for job in self._jobs('he_fallback', self.frame['loaded'])
+                        if job[0] == self.selected), None)
+            if job is not None:
+                # This is execution phase/identity, never a firing row or
+                # damage hint. It cannot select or revive a different key.
+                self._current_he_execution = (job[0], self._he_observation_identity(job))
+        return decision
+
+    def _continue_current_he(self, now):
+        """Reprove the current HE point until its first physical commit.
+
+        A new competitor or NEXT plan cannot restart the comparison while
+        its winner is still being laid. Every pose, line and mechanical
+        proof is nevertheless current; real failure uses normal recovery.
+        """
+        execution = self._current_he_execution
+        if execution is None:
+            return None
+        key, identity = execution
+        job = next((job for job in self._jobs('he_fallback', self.frame['loaded'])
+                    if job[0] == key), None)
+        if (self.selected != key or job is None or
+                self._he_observation_identity(job) != identity or
+                self.frame['clip'] <= 0 and not self.frame.get('reloading')):
+            self._current_he_execution = None
+            return None
+        row = self._current(job, require_line=True)
+        if not self._he_observed(row) and self._used['foreground'] < self.foreground_budget:
+            self._evaluate(job, now, 'foreground')
+            row = self._current(job, require_line=True)
+        # Ranking has already finished for this trigger. Fence its current
+        # source, selected target and line, not unrelated competitors which
+        # may move during a native query. With no row to scope, keep the
+        # conservative observation fence; it cannot grant a firing proof.
+        fence = getattr(self.evaluator, 'fence_next', None)
+        if row is not None and callable(fence):
+            valid = fence(self.frame, (row,), False)
+        else:
+            fence = getattr(self.evaluator, 'fence', None)
+            valid = callable(fence) and fence(self.frame)
+        if not valid:
+            self.rows.clear()
+            self.selected = None
+            self._current_he_execution = None
+            self._frame_invalid = True
+            return self._recover_incomplete(now, 'current_he_observation_changed')
+        if self._he_observed(row) and self._executable_current(row, 'he_fallback'):
+            self._end_search()
+            self.fallback = True
+            reason = ('current_he_clip_fallback' if int(self.frame.get('clip_size', 1)) > 1
+                      else 'he_fallback_contact')
+            return self._choose('aim', reason, row)
+        if not self._he_observed(row):
+            # Unfinished native work grants no shot. The existing incomplete
+            # evidence recovery eventually retires this execution phase.
+            return self._recover_incomplete(now, 'current_he_evidence_pending',
+                                            (row,) if row is not None else ())
+        self._current_he_execution = None
+        self._collect_current_he_observations((job,), self._current_he_observations,
+                                             self._current_he_deferred)
+        if row is not None and self._needs_firing_position(row):
+            return self._choose('firing_position', 'he_fallback_obstructed', row)
+        return None
+
     def _collect_current_he_observations(self, jobs, observations, deferred=None):
         for job in jobs:
             row = self._current(job, require_line=True)
@@ -1107,6 +1176,7 @@ class AttackPolicy(object):
 
     def load_started(self, shell_index, plan=None):
         self.selected = None
+        self._current_he_execution = None
         self._native_lane_wait = None
         self.reload_authority = None
         self.loading_plan = (plan if plan is not None and
@@ -1260,6 +1330,10 @@ class AttackPolicy(object):
             self.selected = candidate['key']
         elif action not in ('trigger_active', 'wait'):
             self.selected = None
+        if (self._current_he_execution is not None and
+                (self._current_he_execution[0] != self.selected or
+                 action not in ('aim', 'preaim', 'wait'))):
+            self._current_he_execution = None
         if action == 'aim' or reason == 'no_relevant_enemy':
             self._evidence_wait_since = None
         if (reason == 'no_relevant_enemy' or action not in ('aim', 'preaim', 'wait')
@@ -1386,6 +1460,7 @@ class AttackPolicy(object):
             trial_history = self._single_point_history
             he_observations = self._current_he_observations
             he_deferred = self._current_he_deferred
+            he_execution = self._current_he_execution
             he_cursor = self.he_cursor
             self.reset()
             self.reload_authority = authority
@@ -1400,6 +1475,7 @@ class AttackPolicy(object):
                 self._single_point_history = trial_history
                 self._current_he_observations = he_observations
                 self._current_he_deferred = he_deferred
+                self._current_he_execution = he_execution
                 self.he_cursor = he_cursor
         self._identity = identity
         self._weapon_identity = weapon_identity
@@ -1447,6 +1523,7 @@ class AttackPolicy(object):
                     self.rows[key]['line'] = 'pending'
         if self.selected is not None and self.selected not in valid_keys:
             self.selected = None
+            self._current_he_execution = None
         loaded = int(frame['loaded'])
         if self.loading_plan is not None and self.loading_plan['shell_index'] != loaded:
             self.loading_plan = None
@@ -1463,6 +1540,7 @@ class AttackPolicy(object):
             # different loaded shell requires its own point and proof.
             if self.selected is not None and self.selected[0] != loaded:
                 self.selected = None
+                self._current_he_execution = None
         self._magazine = magazine
         authority = self.reload_authority
         if (authority is not None and (authority['identity'] != weapon_identity or
@@ -1515,6 +1593,9 @@ class AttackPolicy(object):
             if now < retry_at and not frame.get('reloading'):
                 return self._choose('firing_position', 'native_lane_stalled')
             self._native_lane_wait = None
+        continuing_he = self._continue_current_he(now)
+        if continuing_he is not None:
+            return continuing_he
         current = self._frontier(now)
         current_load = frame['ammo'][loaded] > 0 and (frame['clip'] > 0 or frame.get('reloading'))
         if current_load and self._single_point_failed(loaded):
@@ -1786,13 +1867,13 @@ class AttackPolicy(object):
         runnable = (self._best_current_he(loaded, consumable=True) if loaded_he else None)
         if is_magazine and current is not None:
             if self._executable(current, 'he_fallback'):
-                return self._choose('aim', 'current_he_clip_fallback', runnable or current)
+                return self._choose_current_he('current_he_clip_fallback', runnable or current)
             return self._choose('firing_position', 'current_he_clip_fallback_after_stationary_turn',
                                 current)
         if best is not None:
             if best['shell_index'] == loaded:
                 if self._executable(best, 'he_fallback'):
-                    return self._choose('aim', 'he_fallback_contact', runnable or best)
+                    return self._choose_current_he('he_fallback_contact', runnable or best)
                 return self._choose('firing_position', 'he_fallback_after_stationary_turn', best)
             if is_magazine:
                 self._grant_early_reload(now, 'he_fallback_plan')
@@ -1939,14 +2020,24 @@ class AttackPolicy(object):
         if reason in ('auto_pose_changed', 'auto_target_pose_changed',
                        'auto_source_pose_changed', 'auto_shell_changed'):
             self.rows.pop(row['key'], None)
-        if self.selected == candidate.get('key'):
+        execution = self._current_he_execution
+        # The real barrel can still be laying toward a valid HE point.
+        # This refusal spends nothing and keeps only that intention; the
+        # next attempt still needs fresh geometry and full native admission.
+        laying_current_he = (reason == 'auto_gun_laying' and execution is not None and
+                             execution[0] == self.selected == candidate.get('key') and
+                             self._he_observed(row) and
+                             self._executable_current(row, 'he_fallback'))
+        if self.selected == candidate.get('key') and not laying_current_he:
             self.selected = None
+            self._current_he_execution = None
 
     def shot_committed(self, event, pending):
         # Hit, miss, zero damage and penetration results are deliberately not
         # inputs. Only the physical group's first/final commit bounds its lock.
         if int(event.get('burst_index', 0)) == 0:
             self._native_lane_wait = None
+            self._current_he_execution = None
             self.trigger = (pending.get('player_control') or {}).get('candidate')
             if self.trigger is None:
                 self.trigger = self.decision.get('candidate')

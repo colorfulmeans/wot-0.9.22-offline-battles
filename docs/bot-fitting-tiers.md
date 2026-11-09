@@ -1,7 +1,10 @@
 # Bot fitting tiers (#1513)
 
-The resolved Bot skill label selects a discrete native fitting. Continuous
-reaction, aim and tactical ratings remain unchanged. Each tactics field can independently override its inherited difficulty preset.
+The resolved Bot skill label selects a discrete native fitting. The shared
+controller applies no additional rating-based reaction delay, aiming error or
+tactical capability gate; actual crew and vehicle parameters still determine
+physical performance. Each tactics field can independently override its
+inherited difficulty preset.
 A coupled crew preset owns both level and skills. Player ammunition keeps its
 native defaults; newly created unlocked garages initialize elite devices and
 their directive, with directive auto-resupply enabled. Existing saved fittings

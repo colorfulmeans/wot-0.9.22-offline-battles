@@ -155,6 +155,60 @@ Deferred work creates neither false negative evidence nor a fake eight-second
 clock. `shared-combat-concurrency-20261109.md` records actual measurements and
 their limits; eight candidates does not mean eight primitive HE surface queries.
 
+## Final audit correction: an admitted HE comparison owns its first trigger
+
+The two-phase checkpoint `ace51653` still had one native-policy preemption
+path which the previous suite did not reject. In the actual foreground fixture,
+target 14 had already won the complete HE comparison and reached an executable
+11 HP aim. Adding a farther 37 HP target before the first physical launch made
+the policy abandon target 14 even though its current point remained executable.
+The macro hint stayed 14 throughout: this was a second conflict inside CURRENT
+HE ranking, not a reason to restore macro target tracking or add a turn timer.
+
+The same `AttackPolicy` now records a completed comparison's current execution
+identity only after obtaining an actual executable HE aim. This identity must
+still equal `selected`; it cannot select another target or revive a cleared
+selection. Continuation revalidates the same point against current source,
+target, shell, entity, sample layout, line and mechanical facts, and repeats the
+selected row's source/target/lane fence after native queries. No damage row or pose proof is retained
+as permission. Newly observed targets remain available to background and the
+next comparison, without preempting a still-valid first-trigger execution.
+
+Actual invalidity, recovery, a changed physical identity and manual loading
+retire that phase. A real `auto_gun_laying` refusal alone may retain the same
+qualified intention, but still rejects that firing attempt without an ammo
+debit; the existing mechanical-stall recovery remains active. The first physical
+commit clears the phase, active burst tails cannot recreate it, and the next
+trigger must complete the current comparison again. Initial highest-damage
+comparison, legitimate 0 HP contact, physical tails and exact admission gates
+are unchanged.
+
+The original thirteen production-path regressions execute player and worker control,
+real first commits, manual load observation, current pose refresh, entity and
+collider replacement, friendly/world blocks, mechanical limits, native query
+reentry, zero-damage contact and multi-round tails. The focused twelve-file
+group passed 320 cases. Two old HE-ranking tests and one full-validation HESH
+test now distinguish the uncommitted current trigger from the next trigger:
+their complete-domain, pending, identity and highest-damage assertions remain,
+with an explicit physical commit and ammunition observation at the boundary.
+These focused results do not replace final-tree full CI or package checks.
+
+The November 10 continuation adds a fourteenth execution regression. While the
+selected point performs a real native query, an unrelated off-line competitor
+moves. The previous whole-domain fence wrongly cleared the still-valid current
+intention; the existing row-scoped fence now preserves it through an actual
+first launch. A paired reentry test continues to reject source/selected-target
+movement and a friendly vehicle entering the current lane. Initial ranking,
+the next trigger's complete comparison and final native admission are unchanged.
+
+The first resumed full suite also found two cache-continuity tests still
+requiring target/sample reranking before a physical commit. They now first
+prove that changed damage ranking cannot preempt the uncommitted current
+trigger, then observe a committed shot and its ammunition update before the
+next complete comparison. Their exact highest-damage, changed-target/sample
+and no-repeated-single-point-trial assertions are retained. Both corrected
+cases pass together with the other ten cache/geometry continuity tests.
+
 ## Migrated verification contracts
 
 The full suite is rerun against the new source, not made green by retaining old
@@ -174,6 +228,18 @@ receipts rather than requiring a later stale-pose reason, while preserving all
 committed tails and no-next-trigger/no-extra-debit assertions. Budget tests
 explicitly separate a deferred NEXT comparison from actual zero-damage evidence
 and exercise fair service on the following callback.
+
+The intermediate `ace51653` remote full suite passed 510 of 511 client files,
+but the private eight-second-clock fixture failed when a real 8 ms atomic
+deadline ended its 28-candidate negative review after 15 evaluations. The
+policy correctly remained pending; no full launcher artifact was produced
+because the downstream jobs were skipped. The corrected logic test controls
+only that actor's elapsed-time source while still requiring all real native
+negative proofs. A paired real-query test advances that clock past the unchanged
+deadline and requires incomplete evidence, no search clock and no debit while
+peers continue firing. All five concurrent tests pass locally. Production caps,
+the benchmark's real clock and all native evaluation paths are unchanged.
+This is a verification-contract correction, not a claimed performance repair.
 
 ## Completion record
 

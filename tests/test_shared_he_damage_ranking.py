@@ -514,10 +514,16 @@ class SharedCurrentHEObservationTests(unittest.TestCase):
         self.assertIsNone(scene.policy.next_shell)
         self.assertIsNone(scene.policy.next_plan)
 
-    def test_new_target_samples_are_observed_before_old_current_hint_can_fire(self):
-        scene = self.scene(targets=2)
+    def test_next_trigger_observes_new_target_samples_before_old_current_hint_can_fire(self):
+        scene = self.scene(targets=2, clips=6)
         first = self.tick(scene, 0.)
         self.assert_current_aim(scene, first, 2, 0, 82.)
+        # The completed current comparison owns this uncommitted trigger.
+        # A physical commit opens the next comparison, whose new domain
+        # still has to be completely observed before another aim is valid.
+        scene.policy.shot_committed(dict(burst_index=0, burst_count=1),
+                                   dict(player_control=dict(candidate=first['candidate'])))
+        scene.frame.update(clip=5, ammo=(0, 0, 59))
         target = copy.deepcopy(scene.frame['targets'][-1])
         target.update(key=('bot', 3), pose=('enemy', 3, 0), samples=(0, 1, 2),
                       sample_identity=('entity', 3, 'layout', 1))
@@ -537,12 +543,16 @@ class SharedCurrentHEObservationTests(unittest.TestCase):
                 break
         self.assert_current_aim(scene, decision, 3, 2, 302.)
 
-    def test_entity_or_sample_identity_change_cannot_inherit_current_hint(self):
+    def test_next_trigger_entity_or_sample_identity_change_cannot_inherit_current_hint(self):
         for change in ('entity', 'sample_identity', 'sample_layout'):
             with self.subTest(change=change):
-                scene = self.scene()
+                scene = self.scene(clips=6)
                 scene.he(200., target=3)
-                self.assert_current_aim(scene, self.tick(scene, 0.), 3, 0, 200.)
+                first = self.tick(scene, 0.)
+                self.assert_current_aim(scene, first, 3, 0, 200.)
+                scene.policy.shot_committed(dict(burst_index=0, burst_count=1),
+                    dict(player_control=dict(candidate=first['candidate'])))
+                scene.frame.update(clip=5, ammo=(0, 0, 59))
                 target = scene.frame['targets'][1]
                 if change == 'entity':
                     target['sample_identity'] = ('replacement_entity', 2, 'layout', 1)

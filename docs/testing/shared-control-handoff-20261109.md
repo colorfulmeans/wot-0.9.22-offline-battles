@@ -30,6 +30,17 @@ world/armor queries, re-ranking or weakened pose fence are introduced by that
 refresh. Actual center/scattered-path/armor/HE proof and native ammo debit remain
 inside the original common transaction.
 
+A completed HE comparison which already produced an executable aim also owns
+its uncommitted first-trigger intention. A new, higher-damage contact or NEXT
+result cannot preempt it while that same current point remains valid. Every
+continuation still revalidates actual geometry and the selected point's source,
+target and affected-lane fence; unrelated competitors cannot cancel execution
+by moving inside a native callback. Full-domain fences remain on initial and
+next-trigger ranking. The phase stores identity, not proof. Death, true blocking, mechanical/identity
+changes, loading and recovery retire it. The first real commit clears it, burst
+tails cannot recreate it, and the next trigger completes a new comparison.
+Initial full-domain ranking is never replaced by first-contact firing.
+
 The common `EvaluationBudget` holds only scheduling tokens, not actor state:
 per outer physical-control callback, background work has eight candidate slots
 in total (at most two per actor) and a maximum of one actor starts an atomic
@@ -49,7 +60,9 @@ be known or asserted merely by committing this source document.
 - Repository: `colorfulmeans/wot-0.9.22-offline-battles`.
 - Earlier partial migration base: `ddf411763e677cc99cf5938aa281d29d579ef9e6`.
 - This continuation's audit base: `be5bf7981d9685ed7c5e211ccbd8f4d18756ee10`.
-- Local integration branch: `fix/shared-control-phase1` (both phases integrated).
+- Earlier integration branch: `fix/shared-control-phase1` (both phases integrated).
+- November 10 continuation: `fix/pr119-shared-control-resume`, based on the
+  two already-pushed phases and the recovered `4e9f5f6c` correction.
 - Review/delivery branch: `fix/elite-premium-ammo-reviewed-guns`, PR #119.
 - The delivered implementation is the commit containing this handoff. The final
   response and PR record its exact pushed SHA and CI/artifact identity.
