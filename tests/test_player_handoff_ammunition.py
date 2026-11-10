@@ -49,10 +49,16 @@ class HandoffAmmunitionTests(unittest.TestCase):
         # a candidate in the very first capture callback cannot assume it.
         scene.tick()
         self.assertEqual((0., 0.), (scene.battle._sender.forward, scene.battle._sender.turn))
-        self.enemy(scene, 5, (45., 0., 85.), 10000.)
         self.enemy(scene, 2, (65., 0., 85.), 30.)
         scene.set_he(piercing=1.)
+        self.assertEqual({2: True}, scene.sample_original_lanes())
+        scene.runtime._strategic_due = 0.
+        scene.runtime._planner_order(scene.now)
+        self.assertEqual(('bot', 2), scene.runtime.attack_policy.ordered.target)
+        self.assertFalse(scene.launches())
+        self.enemy(scene, 5, (45., 0., 85.), 10000.)
         self.assertEqual({5: True, 2: True}, scene.sample_original_lanes())
+        scene.runtime._strategic_due = 0.
         gun, policy = scene.battle._gun_state, scene.runtime.attack_policy
         initial_ammo = tuple(gun.ammo)
         queued_plan = None
@@ -61,16 +67,15 @@ class HandoffAmmunitionTests(unittest.TestCase):
             self.assertFalse(hasattr(policy, 'search_started'))
             self.assertEqual(0, gun.shot_index)
             if policy.next_plan is not None and not scene.launches():
-                self.assertEqual((1, 'penetration'),
-                                 (policy.next_shell, policy.next_plan['mode']))
-                self.assertTrue(policy._plannable(
-                    policy.current_row(policy.next_plan, require_line=True)))
+                self.assertEqual((1, 'he_finished_lowest_penetration'),
+                                 (policy.next_shell, policy.next_status))
+                self.assertIsNone(policy.next_plan['key'])
                 if gun.pending_index == 1:
                     queued_plan = copy.deepcopy(policy.next_plan)
             if scene.launches():
                 break
         self.assertEqual(1, len(scene.launches()), scene.runtime.status())
-        self.assertEqual('current_he_clip_fallback', policy.decision['reason'])
+        self.assertEqual('current_he_fallback_contact', policy.decision['reason'])
         self.assertIsNone(scene.runtime.combat_stop.task_order['target_id'])
         self.assertEqual(5, scene.runtime.combat_stop.task_order['initial_target_hint']['target_id'])
         self.assertEqual(2, scene.runtime.weapon.target['network_id'])
@@ -78,9 +83,8 @@ class HandoffAmmunitionTests(unittest.TestCase):
         # The current HE contact and the next AP load have independent plans.
         self.assertEqual((0, 'he_fallback'),
             (policy.decision['candidate']['shell_index'], policy.decision['candidate']['mode']))
-        self.assertIsNotNone(queued_plan, 'a real verified NEXT plan must be queued before this trigger')
-        self.assertEqual((1, 'penetration'),
-                         (queued_plan['shell_index'], queued_plan['mode']))
+        self.assertIsNotNone(queued_plan, 'the inventory NEXT must be queued before this trigger')
+        self.assertEqual(1, queued_plan['shell_index'])
         self.assertEqual(1, gun.pending_index)
         # A source/point recheck may put the current NEXT proof back in the
         # pending state. The already queued gun setting and accepted burst
@@ -107,19 +111,17 @@ class HandoffAmmunitionTests(unittest.TestCase):
         self.assertEqual(3, scene.control.shot_commits)
         self.assertIsNone(scene.battle._local_player_burst)
 
-    def test_role_range_cannot_filter_higher_he_damage_from_current_execution(self):
+    def test_role_range_cannot_filter_the_nearest_current_he_target(self):
         scene = self.scene(player_id=2)
-        # The old test called the profile's 340 m heuristic a real gun range
-        # and required that macro A reject the better HE target B. Both are
-        # within the mounted shell's 500 m reach: that is precisely the old
-        # selector/new aiming conflict this migration removes.
+        # Both targets are outside the role's 340 m heuristic but inside the
+        # mounted shell's 500 m reach. Only the nearest is reviewed for HE.
         self.enemy(scene, 5, (0., 0., 341.), 40.)
         self.enemy(scene, 2, (40., 0., 361.), 10.)
         scene.set_he(piercing=1.)
         self.assertEqual({5: True, 2: True}, scene.sample_original_lanes())
         gun, policy = scene.battle._gun_state, scene.runtime.attack_policy
         initial_ammo = tuple(gun.ammo)
-        saw_ranked_current = False
+        saw_current = False
         saw_next_plan = False
         # Drive the real bounded CURRENT comparison and actual trigger. No
         # planner output, navigation receipt or firing gate is replaced.
@@ -135,34 +137,26 @@ class HandoffAmmunitionTests(unittest.TestCase):
             candidate = policy.decision.get('candidate')
             if (candidate is not None and candidate['mode'] == 'he_fallback' and
                     not scene.launches()):
-                saw_ranked_current = True
+                saw_current = True
                 self.assertTrue(scene.runtime.combat_stop.stop_allowed)
-                self.assertEqual(2, candidate['target']['network_id'])
+                self.assertEqual(5, candidate['target']['network_id'])
                 self.assertIsNotNone(policy.current_row(candidate))
-                self.assertEqual(candidate['key'],
-                    policy._best_current_he(0, consumable=True)['key'])
-                other_rows = [row for row in
-                    policy._rows_for('he_fallback', 0, fresh_line=True)
-                    if row['target']['network_id'] == 5 and
-                    row.get('expected_damage') is not None]
-                self.assertTrue(other_rows)
-                self.assertGreater(candidate['expected_damage'],
-                    max(row['expected_damage'] for row in other_rows))
+                self.assertEqual({('bot', 5)}, {row['target_key'] for row in policy.rows.values()})
                 self.assertTrue(scene.runtime.attack_candidate_consumable(candidate))
                 self.assertEqual((True, 'reachable', 'clear'),
                                  (candidate['contact'], candidate['mechanical'], candidate['line']))
-                self.assertEqual((2, 500.),
+                self.assertEqual((5, 500.),
                     (scene.applied_order()['target_id'], scene.applied_order()['fire_range']))
             if policy.next_plan is not None:
                 saw_next_plan = True
-                self.assertEqual((1, 'penetration'),
-                                 (policy.next_shell, policy.next_plan['mode']))
+                self.assertEqual((1, 'he_finished_lowest_penetration'),
+                                 (policy.next_shell, policy.next_status))
             if scene.launches():
                 break
-        self.assertTrue(saw_ranked_current, policy.status())
+        self.assertTrue(saw_current, policy.status())
         self.assertTrue(saw_next_plan, 'NEXT completes independently of the first CURRENT result')
         self.assertEqual(1, len(scene.launches()), scene.runtime.status())
-        self.assertEqual(2, scene.runtime.weapon.target['network_id'])
+        self.assertEqual(5, scene.runtime.weapon.target['network_id'])
         self.assertEqual([0], [row['shell_index'] for row in scene.launches()])
         self.assertEqual((initial_ammo[0] - 1, initial_ammo[1]), tuple(gun.ammo))
         self.assertEqual(2, gun.clip)

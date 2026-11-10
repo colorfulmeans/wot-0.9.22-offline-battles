@@ -77,15 +77,10 @@ class ReloadAuthorityLifecycleTests(unittest.TestCase):
             self.assertEqual('reload_clip', decision['action'])
             policy.background(scene.now)
             self.assertEqual(before, gun.ammo)
-        # The replacement still needs its own current-pose native proof.
-        for unused in range(40):
-            scene.step(.11)
-            decision = policy.update(scene.now)
-            if decision.get('candidate') is not None:
-                break
-            policy.background(scene.now)
-        else:
-            self.fail('replacement never regained native proof: %r' % policy.status())
+        # The mounted shell qualified the early reload. Replacement point
+        # review starts only after the native gun mounts the new shell.
+        self.assertIsNone(decision['candidate'])
+        self.assertFalse(policy._rows_for('penetration', 1, fresh_line=True))
         self.assertEqual(qualified_at, policy.reload_authority['qualified_at'])
         self.assertFalse(hasattr(scene.runtime, '_reload_order'))
         self.assertFalse(hasattr(scene.runtime, '_reload_retreat'))
@@ -94,8 +89,8 @@ class ReloadAuthorityLifecycleTests(unittest.TestCase):
         self.assertEqual(1, len(observed))
         receipt = observed[0]
         self.assertEqual(applied_at, receipt['now'])
-        self.assertEqual('current_shell_all_armour_failed', receipt['decision']['reason'])
-        self.assertEqual('passed', receipt['decision']['candidate']['armor'])
+        self.assertEqual('ordered_penetration_exhausted', receipt['decision']['reason'])
+        self.assertEqual(1, receipt['decision']['shell_index'])
         self.assertEqual(before, gun.ammo)
         self.assertEqual((1, 0), (gun.shot_index, gun.clip))
         self.assertGreater(gun.reload_time, 0.)
@@ -105,6 +100,8 @@ class ReloadAuthorityLifecycleTests(unittest.TestCase):
     def test_pending_replacement_clears_old_ai_queue_before_same_shell_partial_reload(self):
         scene = self.limited_scene()
         runtime, gun = scene.runtime, scene.battle._gun_state
+        # Retain the native queue-consumer regression for ranked reloads.
+        runtime.attack_policy = attack_policy.AttackPolicy(runtime, atomic_time_budget=.25)
         self.qualify(scene)
         # Finish the independent background ranking through real geometry.
         for unused in range(40):
@@ -176,7 +173,7 @@ class ReloadAuthorityLifecycleTests(unittest.TestCase):
         self.assertIsNone(policy.reload_authority)
         self.assertFalse(scene.launches())
 
-    def test_last_stocked_ap_shot_loads_ranked_he_fallback_without_current_fallback_phase(self):
+    def test_last_stocked_ap_shot_loads_penetration_reserve_before_he(self):
         scene = self.scene(clip=1, burst=1, third=True)
         runtime, gun = scene.runtime, scene.battle._gun_state
         gun.ammo[0] = gun.clip = 1
@@ -196,13 +193,13 @@ class ReloadAuthorityLifecycleTests(unittest.TestCase):
             policy.background(scene.now)
             self.assertEqual('aim', decision['action'])
             self.assertFalse(policy.fallback)
-            if policy.next_status == 'verified_he_fallback':
+            if policy.next_status == 'mounted_stock_exhausted':
                 break
-        self.assertEqual((2, 'verified_he_fallback'),
+        self.assertEqual((1, 'mounted_stock_exhausted'),
                          (policy.next_shell, policy.next_status))
-        self.assertTrue(policy._all_failed((1, 2)))
+        self.assertFalse(policy._rows_for('penetration', 1, fresh_line=True))
         runtime._apply_next_shell()
-        self.assertEqual(2, gun.pending_index)
+        self.assertEqual(1, gun.pending_index)
         scene.rotator_enabled = True
         for unused in range(100):
             scene.battle._advance_local_gun_to(scene.entity, scene.now)
@@ -210,11 +207,16 @@ class ReloadAuthorityLifecycleTests(unittest.TestCase):
             if scene.launches():
                 break
         self.assertEqual([0], [shot['shell_index'] for shot in scene.launches()])
-        self.assertEqual((2, 0, None), (gun.shot_index, gun.clip, gun.pending_index))
+        self.assertEqual((1, 0, None), (gun.shot_index, gun.clip, gun.pending_index))
         self.assertEqual(0, gun.ammo[0])
         self.assertGreater(gun.reload_time, 0.)
-        self.assertEqual((2, 'he_fallback'),
-            (policy.loading_plan['shell_index'], policy.loading_plan['mode']))
+        self.assertEqual(1, policy.loading_plan['shell_index'])
+        for unused in range(220):
+            scene.battle._advance_local_gun_to(scene.entity, scene.now)
+            scene.tick()
+            if len(scene.launches()) > 1:
+                break
+        self.assertEqual([0, 2], [shot['shell_index'] for shot in scene.launches()])
         self.assertFalse(hasattr(policy, 'search_started'))
 
 

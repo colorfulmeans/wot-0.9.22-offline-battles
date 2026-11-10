@@ -270,7 +270,8 @@ class SharedTargetExecutionOwnershipTests(unittest.TestCase):
         self.assertTrue(policy.rows)
         self.assertFalse(any(policy._executable_current(row) for row in policy.rows.values()))
         self.assertEqual(original_ammo, scene.battle._gun_state.ammo)
-        self.assertEqual('firing_position', policy.decision['action'])
+        self.assertEqual(('navigate', 'ordered_no_clear_lane'),
+                         (policy.decision['action'], policy.decision['reason']))
         self.assertFalse(scene.runtime.combat_stop.combat_owned)
         self.assertFalse(scene.runtime.combat_stop.stop_allowed)
         self.assertEqual('route', scene.original_order()['combat_mode'])

@@ -2286,7 +2286,8 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
         if suspended is not None:
             # Only the native shared owner can publish this receipt. Reuse
             # its original route task while combat changes the physical pose.
-            # In particular, do not consume gates crossed during recovery.
+            # Recovery must not consume intermediate gates. Physical arrival
+            # at the assigned terminal is recorded separately from ownership.
             route_id = suspended.get('route_id') or ''
             index = _integer(suspended.get('route_index'))
             position = _point(suspended['move_position'])
@@ -2294,6 +2295,17 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
             join = bool(suspended.get('route_join'))
             state = self._route_states.get(bot['id'])
             if state is not None:
+                route = self._task_route(bot)
+                points = route.get('waypoints') or ()
+                pose = bot['state']
+                if (points and route_id == route.get('id') == state.get('route_id') and
+                        index == state.get('index') == len(points) - 1 and
+                        position == _point(points[-1]) and pose.get('world_pose') and
+                        not pose.get('airborne') and not pose.get('route_wreck_blocked') and
+                        math.hypot(position['x'] - _number(pose.get('x')),
+                                   position['z'] - _number(pose.get('z'))) <=
+                        self._route_arrival_radius(route, bot['team'])):
+                    state.setdefault('terminal_crossing', dict(point=position, at=now))
                 state.pop('arrival_previous_pose', None)
                 state['progress_receipt'] = dict(at=now, route_id=route_id,
                     previous_index=state.get('index'), selected_index=index,

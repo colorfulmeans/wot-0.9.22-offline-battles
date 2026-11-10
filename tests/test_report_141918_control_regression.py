@@ -333,17 +333,21 @@ class Report141918ControlRegressionTests(unittest.TestCase):
                 for row in scene.trace))
 
     def test_initial_tracker_cannot_reclaim_valid_he_execution_on_lane_and_health_changes(self):
-        # The report distinguishes macro target from AttackPolicy target.
-        # Here initial nearest actor1 is an analytically impenetrable IS-7;
-        # the physically proved HE contact on actor14 must own execution.
+        # A nearer IS-7 appears after actor14 owns the HE point. The original
+        # macro hint can change without replacing the current gun target.
         with contextlib.redirect_stdout(io.StringIO()):
-            scene = self.scene(((1, (-34., .25, -110.), 10000.),))
-            self.assertEqual({1: True, 14: True}, scene.sample_original_lanes())
+            scene = self.scene()
+            self.assertEqual({14: True}, scene.sample_original_lanes())
             for unused in range(120):
                 row = scene.step_control()
                 if row['policy']['action'] == 'aim' and row['policy']['target'] == ('bot', 14):
                     break
             self.assertEqual(('bot', 14), row['policy']['target'], row['policy'])
+            other = scene.eligible_enemy(1, armor=10000.)
+            scene.pose(other, (-34., .25, -110.))
+            self.assertEqual({1: True, 14: True}, scene.sample_original_lanes())
+            scene.runtime._strategic_due = 0.
+            row = scene.step_control()
             self.assertEqual(dict(target_kind='bot', target_id=1),
                              row['original']['initial_target_hint'])
             self.assertIsNone(row['original']['target_id'])

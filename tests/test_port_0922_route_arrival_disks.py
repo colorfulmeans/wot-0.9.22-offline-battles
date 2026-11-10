@@ -56,6 +56,23 @@ class RouteArrivalDiskTests(unittest.TestCase):
         self.assertEqual(0., second['throttle_override'])
         self.assertEqual(second['move_position'], second['face_position'])
 
+    def test_owned_combat_records_actual_terminal_without_reclaiming_motion(self):
+        import test_port_0922_terminal_route_handoff as terminal
+        helper = terminal.TerminalRouteHandoffTests()
+        scene = helper.scene((2., -230.))
+        scene[3].clear()
+        first = helper.order(scene, now=1., contact=False)
+        pose = scene[2][0]
+        pose.update(z=-245., _combat_movement_owner=dict(owned=True, task_order=first))
+        paused = helper.order(scene, now=2., contact=False)
+        self.assertEqual('paused_by_combat_owner', paused['route_assignment']['progress']['outcome'])
+        self.assertEqual(2., scene[0]._route_states[17]['terminal_crossing']['at'])
+        pose.pop('_combat_movement_owner')
+        pose['z'] = -270.
+        resumed = helper.order(scene, now=3., contact=False)
+        self.assertEqual(('hold', 0., -270.), (resumed['combat_mode'],
+                         resumed['throttle_override'], resumed['move_position']['z']))
+
     def test_duplicate_or_stale_samples_cannot_create_terminal_crossing(self):
         for second_time, crossed in ((1., False), (2., True), (4., False)):
             planner = BotPlanner()

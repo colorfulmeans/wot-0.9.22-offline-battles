@@ -132,6 +132,7 @@ class LiveReportLivenessTests(unittest.TestCase):
                           if len(call.args) > 1 and isinstance(call.args[1], dict)}
                 self.assertEqual(enabled == '1', 'auto_fire_gate' in stages)
                 self.assertEqual(enabled == '1', 'auto_native_trigger' in stages)
+                self.assertEqual(enabled == '1', 'ordered_attack' in stages)
                 scene.doCleanups()
 
     def test_loaded_he_commits_with_source_jitter_and_fourteen_blocked_enemies(self):
@@ -183,8 +184,9 @@ class LiveReportLivenessTests(unittest.TestCase):
                 self.assertTrue(scene.launches(), policy.status())
                 self.assertEqual(1, len(scene.launches()))
                 self.assertEqual([(('bot', 50), 'he_fallback', 0)], commits)
-                self.assertGreater(policy.proof_revocations['source'], 0,
-                                   'the test must exercise exact physical proof invalidation')
+                self.assertEqual(0, policy.proof_revocations['source'],
+                                 'numerical settling must preserve the one-point planning cache')
+                self.assertEqual({('bot', 50)}, {target for _, _, target in queries})
                 self.assertTrue(any(channel == 'foreground' and mode == 'he_fallback'
                                     for channel, mode, unused_target in queries))
                 self.assertEqual(initial_ammo[0] - 1, scene.battle._gun_state.ammo[0])
@@ -241,6 +243,21 @@ class StableRouteAttackTests(unittest.TestCase):
         for step in range(50):
             self.assertEqual('route', scene.apply(step * .125)['combat_mode'])
         self.assertEqual(0, scene.owner._episode)
+
+    def test_no_he_cooldown_overlaps_a_fresh_five_second_route_confirmation(self):
+        scene = self.scene()
+        for step in range(41):
+            scene.apply(step * .125)
+        self.assertTrue(scene.owner.combat_owned)
+        scene.decide('navigate', candidate=False, reason='ordered_no_he')
+        self.assertEqual('route', scene.apply(5.125)['combat_mode'])
+        self.assertEqual(10.125, scene.owner.cooldown_until)
+        scene.decide('firing_position')
+        for step in range(40):
+            self.assertEqual('route', scene.apply(5.25 + step * .125)['combat_mode'])
+            self.assertEqual(1, scene.owner._episode)
+        self.assertEqual('engage', scene.apply(10.25)['combat_mode'])
+        self.assertEqual(2, scene.owner._episode)
 
     def test_moving_limited_vehicle_qualifies_proved_ap_or_ordinary_he_lay(self):
         for he in (False, True):

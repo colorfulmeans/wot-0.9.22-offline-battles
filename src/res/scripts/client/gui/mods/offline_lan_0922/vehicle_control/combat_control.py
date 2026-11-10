@@ -42,6 +42,7 @@ class CombatControl(object):
         trace_combat = combat_detail_enabled()
         if (not self._live() or self._mission_brakes() or
                 'fire' not in self.features or not state.get('gun_aligned') or
+                self.now < self.combat_stop.cooldown_until or
                 not self._siege_fire_ready()):
             if trace_combat:
                 combat_detail(self, 'auto_trigger_context', self.actor_id, self.now,
@@ -554,7 +555,8 @@ class CombatControl(object):
         policy, gun = self.attack_policy, self.gun
         frame = policy.frame
         loaded = int(gun.shot_index)
-        if (frame is not None and frame['loaded'] == loaded and frame['ammo'] == tuple(gun.ammo)
+        if (policy.ordered is None and frame is not None and frame['loaded'] == loaded and
+                frame['ammo'] == tuple(gun.ammo)
                 and 0 < min(gun.clip, gun.ammo[loaded]) <= gun.burst_count
                 and gun.reload_time > 0.
                 and self._manual_shell is None):
@@ -650,7 +652,8 @@ class CombatControl(object):
         if applied and gun.shot_index != loaded_before:
             policy.load_started(int(gun.shot_index), plan)
         self._record_shell('queue', 'NEXT_SHELLS', index, applied,
-                           'ranked_plan' if applied else 'native_setting_refused',
+                           (reason if policy.ordered is not None else 'ranked_plan')
+                           if applied else 'native_setting_refused',
                            force=at_trigger, plan=plan)
         return plan if applied else None
 

@@ -1102,7 +1102,7 @@ class FullPlayerRuntime(MissionControl, CombatControl):
         self.planner.tactics = self.engine._bot_tactics
         self.planner.tactics_map = self.engine._navigation_map_name
         self.planner._travel_graph_cache[self.planner.tactics_map] = spg_positions._Graph(graph, graph['bounds'])
-        self.attack_policy = AttackPolicy(self)
+        self.attack_policy = AttackPolicy(self, ordered=not self.siege_capable())
         self._observe(self.now)
         return True
 

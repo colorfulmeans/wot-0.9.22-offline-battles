@@ -83,6 +83,7 @@ class CombatStop(object):
         self._physical_recovery = None
         self._failed_recovery = None
         self._route_confirmation = None
+        self.cooldown_until = float('-inf')
         self._route_attack = False
         self._last_attackable_at = None
         state = getattr(self.runtime, 'state', None)
@@ -382,7 +383,7 @@ class CombatStop(object):
         failed = self._failed_recovery
         if failed is None or proposal.get('key') != failed['key']:
             return True
-        if failed['reason'] == 'native_pivot_blocked':
+        if failed['reason'] in ('native_pivot_blocked', 'ordered_no_he'):
             # A real sustained reopening can be useful, after a completely
             # new confirmation interval. A single clear frame cannot reenter.
             return True
@@ -413,12 +414,14 @@ class CombatStop(object):
             if (attackable is None and self._route_attackable(proposal) and
                     self._route_lay_can_retry(proposal)):
                 attackable = proposal
-            if not self._confirmed_route_attack(attackable, now):
+            if not self._confirmed_route_attack(attackable, now) or now < self.cooldown_until:
                 return order
             target = attackable['target']
             self._retire_physical_recovery('confirmed_route_attack', now)
         elif not self.combat_owned:
             self._route_confirmation = None
+            if now < self.cooldown_until:
+                return order
             if target is None and mode_target is not None:
                 target = mode_target
             if verified_shot is not None:
@@ -560,6 +563,8 @@ class CombatStop(object):
 
     def _release_to_route(self, order, now, reason):
         """Return actual motion ownership and preserve the failed geometry."""
+        if reason == 'ordered_no_he':
+            self.cooldown_until = now + ROUTE_ATTACK_CONFIRM_SECONDS
         phase = self._physical_recovery or {}
         failed_target = phase.get('target') or self._intent_target
         target = next((row for row in self.targets if _key(row) == failed_target), None)

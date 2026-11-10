@@ -120,7 +120,7 @@ class EvaluationBudgetControlIntegrationTests(unittest.TestCase):
             scene.tick(.2)
         self.assertEqual(1, len(opened))
         self.assertEqual({scene.runtime.actor_id}, budget.alive)
-        self.assertEqual(2, budget.receipt()['background_used'])
+        self.assertEqual(0, budget.receipt()['background_used'])
         self.assertGreater(scene.runtime.attack_policy.evaluator.cache_observations['armour_batches'], 0)
 
 

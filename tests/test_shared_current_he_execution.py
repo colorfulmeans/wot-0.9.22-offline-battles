@@ -33,11 +33,15 @@ class SharedCurrentHEExecutionTests(unittest.TestCase):
         silence.__enter__()
         self.addCleanup(silence.__exit__, None, None, None)
 
-    def scene(self, armor=30., burst=1, limited=False):
+    def scene(self, armor=30., burst=1, limited=False, ranked=False):
         scene = CurrentHEScene()
         scene.setUp()
         self.addCleanup(scene.doCleanups)
         scene.configure(clip=6, burst=burst, limited=limited)
+        if ranked:
+            # Exercise the ranked policy still used by worker actors through
+            # the same native observation fixture.
+            scene.runtime.attack_policy = AttackPolicy(scene.runtime)
         # Isolate the downstream consumer from authored-route confirmation.
         scene.runtime.combat_stop._route_requires_confirmation = lambda order: False
         scene.set_he(piercing=1.)
@@ -99,8 +103,8 @@ class SharedCurrentHEExecutionTests(unittest.TestCase):
         self.assertLessEqual(policy._used['foreground'], policy.foreground_budget)
         self.assertFalse(hasattr(policy, 'search_started'))
 
-    def test_first_ordinary_he_comparison_observes_one_point_per_enemy_and_selects_damage(self):
-        scene = self.scene()
+    def test_ranked_worker_policy_selects_damage_across_current_he_enemies(self):
+        scene = self.scene(ranked=True)
         self.add_better(scene)
         candidate = self.acquire(scene, target=2)
         self.assertEqual(37., candidate['expected_damage'])
@@ -109,7 +113,7 @@ class SharedCurrentHEExecutionTests(unittest.TestCase):
         self.assertFalse(scene.launches())
 
     def test_expensive_second_he_contact_cannot_lock_a_lower_damage_first_target(self):
-        scene = self.scene()
+        scene = self.scene(ranked=True)
         self.add_better(scene)
         policy = scene.runtime.attack_policy
         clock = [0.]
@@ -137,7 +141,7 @@ class SharedCurrentHEExecutionTests(unittest.TestCase):
         self.assertEqual(37., candidate['expected_damage'])
 
     def test_atomic_budget_after_first_contact_cannot_skip_an_unvisited_he_enemy(self):
-        scene = self.scene()
+        scene = self.scene(ranked=True)
         self.add_better(scene)
         policy = scene.runtime.attack_policy
         clock = [0.]
@@ -161,25 +165,23 @@ class SharedCurrentHEExecutionTests(unittest.TestCase):
         candidate = self.acquire(scene, target=2)
         self.assertEqual(37., candidate['expected_damage'])
 
-    def test_new_higher_damage_target_and_verified_next_cannot_preempt_current_he(self):
+    def test_new_higher_damage_target_cannot_preempt_or_expand_current_he(self):
         for armor, damage in ((30., 11.), (60., 0.)):
             with self.subTest(current_damage=damage):
                 scene = self.scene(armor=armor)
                 first = self.acquire(scene)
                 self.assertEqual(damage, first['expected_damage'])
                 self.add_better(scene)
-                next_target = None
                 for unused in range(25):
                     scene.observe_control()
                     self.assert_current(scene, first['key'])
                     self.assertIsNone(scene.original_order()['target_id'])
                     self.assertEqual(14, scene.original_order()['initial_target_hint']['target_id'])
                     self.assertEqual({2, 14}, {row['network_id'] for row in scene.runtime.combat_targets()})
-                    plan, unused_reason = scene.runtime.attack_policy.next_at_edge()
-                    if plan is not None:
-                        next_target = plan['target_key']
+                    policy = scene.runtime.attack_policy
+                    self.assertIsNone(policy.next_at_edge()[0])
+                    self.assertEqual({('bot', 14)}, {row['target_key'] for row in policy.rows.values()})
                     self.assertFalse(scene.launches())
-                self.assertEqual(('bot', 2), next_target)
                 for unused in range(15):
                     scene.tick(.1)
                     if scene.launches():
@@ -200,7 +202,7 @@ class SharedCurrentHEExecutionTests(unittest.TestCase):
         self.assertEqual(22., current['target']['position'][0])
         self.assertFalse(scene.launches())
 
-    def test_dead_current_target_releases_execution_for_the_new_full_comparison(self):
+    def test_dead_current_target_requires_a_new_single_point(self):
         scene = self.scene()
         self.acquire(scene)
         self.add_better(scene)
@@ -235,7 +237,7 @@ class SharedCurrentHEExecutionTests(unittest.TestCase):
         self.assertEqual([True], callbacks)
         self.assertFalse(policy._frame_invalid)
         self.assert_current(scene, first['key'])
-        self.assertIsNotNone(policy._current_he_execution)
+        self.assertEqual(first['sample'], policy.ordered.he_sample)
         self.assertNotEqual(first['pose_stamp'], policy.decision['candidate']['pose_stamp'])
         self.assertFalse(scene.launches())
         for unused in range(15):
@@ -385,11 +387,12 @@ class SharedCurrentHEExecutionTests(unittest.TestCase):
                     for name in ('chassis', 'hull', 'turret', 'gun'):
                         getattr(scene.initial.typeDescriptor, name).materials[0].armor = 60.
                 scene.sample_original_lanes()
-                candidate = self.acquire(scene, target=2)
-                self.assertNotEqual(first['key'], candidate['key'])
-                self.assertEqual(37., candidate['expected_damage'])
+                candidate = self.acquire(scene)
+                self.assertNotEqual(first['pose_stamp'], candidate['pose_stamp'])
+                self.assertEqual(first['key'], candidate['key'])
+                self.assertEqual(0., candidate['expected_damage'])
 
-    def test_real_first_commit_and_burst_tail_then_next_trigger_start_a_full_new_comparison(self):
+    def test_real_first_commit_and_burst_tail_keep_current_target_through_the_clip(self):
         scene = self.scene(burst=3)
         first = self.acquire(scene)
         self.add_better(scene)
@@ -425,11 +428,10 @@ class SharedCurrentHEExecutionTests(unittest.TestCase):
             scene.observe_control()
             decision = scene.runtime.attack_policy.decision
             candidate = decision.get('candidate') or {}
-            if decision['action'] == 'aim' and candidate.get('target_key') == ('bot', 2):
+            if decision['action'] == 'aim':
                 break
-        self.assertEqual(('bot', 2), candidate.get('target_key'))
-        self.assertEqual(37., candidate['expected_damage'])
-        self.assertEqual(0, scene.runtime.attack_policy.he_comparison['pending'])
+        self.assertEqual(first['key'], candidate.get('key'))
+        self.assertEqual(first['expected_damage'], candidate['expected_damage'])
         self.assertEqual(3, len(scene.launches()))
 
     def test_worker_uses_same_current_he_owner_through_real_native_first_commit(self):

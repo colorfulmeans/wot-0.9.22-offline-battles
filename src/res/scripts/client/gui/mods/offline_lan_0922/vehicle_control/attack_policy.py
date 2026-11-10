@@ -11,6 +11,7 @@ import math
 
 from .actor_observation import observation
 from .evaluation_budget import EvaluationBudget
+from .ordered_attack import OrderedAttack
 import time
 
 from .. import ballistics, combat_rules, gun_pitch_limits, shot_geometry
@@ -122,6 +123,15 @@ def _planning_pose(pose):
     # pivot moves. Body rotation, pivot and descriptor fence its proof. The
     # raw physics position is independent of the native shot transform.
     return pose[1:3] + pose[4:6]
+
+
+def _same_native_planning_pose(previous, current):
+    # Stabilised matrices report numerical settling even at zero displacement.
+    # This is a planning cache anchor only. Native launch uses the raw pose.
+    return (previous is not None and previous[2:] == current[2:] and
+            all(abs(old - new) <= 1.e-6
+                for before, after in zip(previous[:2], current[:2])
+                for old, new in zip(before, after)))
 
 
 def _proof_motion_details(row, stamp, frame):
@@ -259,8 +269,9 @@ class AttackPolicy(object):
     def __init__(self, runtime, evaluator=None,
                  foreground_budget=FOREGROUND_CANDIDATES,
                  background_budget=BACKGROUND_CANDIDATES,
-                 atomic_time_budget=ATOMIC_WALL_SECONDS):
+                 atomic_time_budget=ATOMIC_WALL_SECONDS, ordered=False):
         self.runtime = runtime
+        self._ordered_enabled = bool(ordered)
         self.evaluator = evaluator or NativeAttackEvaluator(runtime)
         self.foreground_budget = max(1, int(foreground_budget))
         self.background_budget = max(1, int(background_budget))
@@ -270,6 +281,7 @@ class AttackPolicy(object):
 
     def reset(self):
         self.frame = None
+        self.ordered = OrderedAttack() if self._ordered_enabled else None
         self.rows = {}
         self._next_rows = {}
         self._admission_blocks = {}
@@ -348,7 +360,7 @@ class AttackPolicy(object):
         A different target or changed target geometry gets a new attempt;
         actual HE contact and every launch still require current geometry.
         """
-        if ammunition_validation.shell_mode(shell) != ammunition_validation.SINGLE_POINT:
+        if self.ordered is not None or ammunition_validation.shell_mode(shell) != ammunition_validation.SINGLE_POINT:
             return None
         targets = self.frame.get('targets', ())
         if not targets:
@@ -384,7 +396,7 @@ class AttackPolicy(object):
 
     def _single_point_failed(self, index):
         shell = next((row for row in self.frame['shells'] if row['index'] == index), None)
-        if (shell is None or ammunition_validation.shell_mode(shell) !=
+        if (self.ordered is not None or shell is None or ammunition_validation.shell_mode(shell) !=
                 ammunition_validation.SINGLE_POINT):
             return False
         targets = self.frame.get('targets', ())
@@ -507,6 +519,23 @@ class AttackPolicy(object):
         return (previous == stamp or (blocked['reason'] in NATIVE_LINE_RETRY_REASONS and
                 previous[0] == stamp[0] and previous[2:] == stamp[2:]))
 
+    def _front_geometry(self, key):
+        target = next((row for row in self.frame['targets'] if row['key'] == key), None)
+        if target is None:
+            return None
+        geometry = _ranking_geometry(self.frame, target)
+        return geometry if geometry is not None else (target.get('pose'), target.get('velocity'))
+
+    def _ordered_front_block(self, block, key):
+        front = block['blocker'].get('actor_key')
+        if self.ordered is None or block['reason'] != 'auto_front_vehicle' or not front:
+            return None
+        before = block.get('front_geometry')
+        after = (self._front_geometry(key[1]), self._front_geometry(tuple(front)))
+        return (before is not None and None not in after and all(
+            old == new or old is not None and len(old) == len(new) == 4 and
+            _same_ranking_geometry(old, new) for old, new in zip(before, after)))
+
     @classmethod
     def _needs_firing_position(cls, row):
         planned = cls._planned_evidence(row)
@@ -624,10 +653,12 @@ class AttackPolicy(object):
         if previous is not None and row['line_stamp'] != previous['line_stamp']:
             self.proof_revocations['lane_rechecks'] += 1
         blocked = self._admission_blocks.get(key)
-        if (blocked is not None and self._matching_admission_block(blocked, row['pose_stamp']) and
+        front_current = self._ordered_front_block(blocked, key) if blocked is not None else None
+        if (blocked is not None and (front_current if front_current is not None else
+                self._matching_admission_block(blocked, row['pose_stamp'])) and
                 blocked['line_stamp'] == row['line_stamp']):
             # A previous front vehicle is only a retry hint from a new pose.
-            line = blocked['line'] if blocked['pose_stamp'] == row['pose_stamp'] else 'unknown'
+            line = blocked['line'] if front_current or blocked['pose_stamp'] == row['pose_stamp'] else 'unknown'
             if line != 'unknown' or row['line'] not in ('friendly_blocked', 'world_blocked', 'enemy_blocked', 'vehicle_blocked'):
                 row.update(line=line, reason=blocked['reason'], blocker=blocked['blocker'])
         # A new friendly obstruction cannot erase a still-valid plate proof.
@@ -1340,6 +1371,11 @@ class AttackPolicy(object):
         return groups
 
     def next_at_edge(self, native_fence=True, queued=None):
+        if self.ordered is not None and self.frame is not None and not self.frame.get('artillery'):
+            if self._frame_invalid:
+                return None, 'observation_changed'
+            index, reason = self.ordered.next_load(self.frame)
+            return (dict(shell_index=index, key=None) if index is not None else None), reason
         plan = self.next_plan
         current = self.current_row(plan)
         if plan is None:
@@ -1657,6 +1693,29 @@ class AttackPolicy(object):
             return False
         return True
 
+    def _ordered_point_slice(self, jobs, now):
+        """Complete more of the current target within the existing native budget."""
+        if (not jobs or not self.frame.get('ordered') or
+                now < self._atomic_at + ATOMIC_CLOSE_INTERVAL or not self.atomic_time_budget or
+                not self._optional_work_budget(now).atomic(self._work_actor())):
+            return
+        self._atomic_at = now
+        self._used['atomic'] = 0
+        started = self.atomic_clock()
+        deadline = started + self.atomic_time_budget
+        self.evaluator.atomic_deadline, self.evaluator.atomic_clock = deadline, self.atomic_clock
+        if not self.evaluator.begin_atomic(self.frame, jobs, now):
+            return
+        try:
+            for job in jobs:
+                if self.atomic_clock() >= deadline or self._used['atomic'] >= ATOMIC_CANDIDATES:
+                    break
+                yield self._evaluate(job, now, 'atomic')
+        finally:
+            self._atomic_receipt = dict(self.evaluator.atomic_receipt,
+                status='ordered_target_review', evaluations=self._used['atomic'],
+                elapsed_ms=(self.atomic_clock() - started) * 1000.)
+
     def _grant_early_reload(self, now, reason):
         # Qualification survives physical movement. The next clip's point
         # proof does not: every changed pose still requires its own review.
@@ -1884,6 +1943,9 @@ class AttackPolicy(object):
             authority = self.reload_authority if same_weapon else None
             magazine = self._magazine if same_weapon else None
             selected = self.selected if same_weapon else None
+            ordered = self.ordered
+            front_blocks = {key: block for key, block in self._admission_blocks.items()
+                            if block.get('front_geometry')} if same_geometry_identity and ordered else {}
             atomic_at = self._atomic_at
             next_edge_at = self._next_edge_at
             trials = self._single_point_trials
@@ -1897,6 +1959,9 @@ class AttackPolicy(object):
             self.reload_authority = authority
             self._magazine = magazine
             self.selected = selected
+            if same_weapon and ordered is not None:
+                self.ordered = ordered
+                self._admission_blocks = front_blocks
             if same_weapon:
                 # A siege/descriptor transition changes every geometric
                 # proof, not an already qualified fallback or laying task.
@@ -1959,9 +2024,12 @@ class AttackPolicy(object):
                 self._next_rows.pop(key, None)
         for key in list(self._admission_blocks):
             blocked = self._admission_blocks[key]
-            if (key not in valid_keys or not self._matching_admission_block(blocked, stamps[key]) or
-                    blocked['line_stamp'] != self._line_stamp(frame, blocked.get('line_region')) or
-                    now >= blocked.get('retry_at', float('inf'))):
+            front_current = self._ordered_front_block(blocked, key)
+            valid = (front_current if front_current is not None else key in valid_keys and
+                     self._matching_admission_block(blocked, stamps[key]) and
+                     now < blocked.get('retry_at', float('inf')))
+            if (key not in valid_keys or not valid or
+                    blocked['line_stamp'] != self._line_stamp(frame, blocked.get('line_region'))):
                 self._admission_blocks.pop(key, None)
                 if key in self.rows:
                     self.rows[key]['line'] = 'pending'
@@ -2001,6 +2069,29 @@ class AttackPolicy(object):
             self._current_he_observations.clear()
             self._current_he_deferred.clear()
             return self._choose('navigate', 'ammunition_exhausted')
+        if frame.get('targets') and self._lay_recovery is not None:
+            refused, retry_at = self._lay_recovery
+            if now < retry_at:
+                candidate = self.current_row(refused)
+                if candidate is not None:
+                    candidate = dict(candidate, mechanical='mechanical_limited',
+                                     reason='native_lay_stalled')
+                return self._choose('firing_position', 'native_lay_stalled', candidate)
+            self._lay_recovery = None
+        if self.ordered is not None:
+            result = self.ordered.update(self, now)
+            if combat_detail_enabled():
+                runtime = self.runtime
+                combat_detail(runtime, 'ordered_attack', runtime.actor_id, now, result['reason'],
+                    lambda: dict(target=self.ordered.target, sample=self.ordered.sample,
+                        checked=len(self.ordered.covered), targets=tuple(self.ordered.order),
+                        loaded=loaded, clip=frame['clip'], proposed=result.get('shell_index'),
+                        candidate=(result.get('candidate') or {}).get('key'),
+                        points=tuple((row['sample'], row['mode'], row['line'], row['armor'],
+                                      row.get('reason'), (row.get('blocker') or {}).get('actor_key'))
+                                     for row in self.rows.values() if row['shell_index'] == loaded and
+                                     row['target_key'] == self.ordered.target)))
+            return result
         if not frame.get('targets'):
             self._current_he_observations.clear()
             self._current_he_deferred.clear()
@@ -2014,15 +2105,6 @@ class AttackPolicy(object):
                     'empty_clip' if empty_clip else 'current_ammunition_exhausted',
                     shell_index=planned, early_reload=False)
             return self._choose('wait', 'no_relevant_enemy')
-        if self._lay_recovery is not None:
-            refused, retry_at = self._lay_recovery
-            if now < retry_at:
-                candidate = self.current_row(refused)
-                if candidate is not None:
-                    candidate = dict(candidate, mechanical='mechanical_limited',
-                                     reason='native_lay_stalled')
-                return self._choose('firing_position', 'native_lay_stalled', candidate)
-            self._lay_recovery = None
         continuing_he = self._continue_current_he(now)
         if continuing_he is not None:
             return continuing_he
@@ -2293,6 +2375,11 @@ class AttackPolicy(object):
         if (self.frame is None or self.frame.get('artillery') or self._frame_invalid or
                 self._background_at == now):
             return self.next_shell
+        if self.ordered is not None:
+            self._background_at = now
+            self.next_plan, self.next_status = self.next_at_edge()
+            self.next_shell = (self.next_plan or {}).get('shell_index')
+            return self.next_shell
         allowance = self._optional_work_budget(now).background(
             self._work_actor(), self.background_budget)
         if not allowance:
@@ -2389,6 +2476,10 @@ class AttackPolicy(object):
             self._admission_blocks[row['key']] = dict(line=line, reason=reason,
                 blocker=dict(blocker or {}), pose_stamp=row['pose_stamp'],
                 line_stamp=row['line_stamp'], line_region=row.get('line_region'))
+            front = (blocker or {}).get('actor_key')
+            if self.ordered is not None and reason == 'auto_front_vehicle' and front:
+                self._admission_blocks[row['key']]['front_geometry'] = (
+                    self._front_geometry(row['target_key']), self._front_geometry(tuple(front)))
             if reason in NATIVE_LINE_RETRY_REASONS:
                 # A live front vehicle or unavailable native contact can
                 # clear before either of the planning stamps changes.
@@ -2474,6 +2565,8 @@ class AttackPolicy(object):
         return (self.decision.get('action') == 'wait' and
                 self.decision.get('reason') in ('stationary_domain_review_pending',
                                               'stationary_alternatives_pending',
+                                              'ordered_current_target_pending',
+                                              'ordered_he_point_wait',
                                               'he_damage_comparison_pending') and
                 self.frame is not None)
 
@@ -2767,10 +2860,16 @@ class NativeAttackEvaluator(object):
                 shot=None, signature=(index, 'descriptor_missing'), unavailable=True))
         scene = self._scene_stamp()
         planning_pose = _planning_pose(pose)
+        ordered = getattr(getattr(runtime, 'attack_policy', None), 'ordered', None) is not None
+        if ordered:
+            previous = getattr(self, '_planning_anchor', None)
+            if _same_native_planning_pose(previous, planning_pose):
+                planning_pose = previous
+            self._planning_anchor = planning_pose
         frame = dict(identity=identity,
             weapon_identity=tuple(observation(runtime).weapon_identity()),
             combat_signature=combat_signature,
-            source=source, pose=pose, planning_pose=planning_pose,
+            source=source, pose=pose, planning_pose=planning_pose, ordered=ordered,
             position=pose[0], body=body, origin=origin,
             descriptor=descriptor, entity=entity, loaded=int(gun.shot_index),
             ammo=tuple(gun.ammo), clip=int(gun.clip), clip_size=int(gun.clip_size),
@@ -3094,7 +3193,10 @@ class NativeAttackEvaluator(object):
                     if (row.get('scope') == 'excluded' and
                             not self.scope_current(frame, row.get('scope_proof'))):
                         return False
-            if (_planning_pose(native_source_pose(self.runtime)) != frame['planning_pose'] or
+            current_pose = _planning_pose(native_source_pose(self.runtime))
+            same_pose = (current_pose == frame['planning_pose'] or frame.get('ordered') and
+                         _same_native_planning_pose(frame['planning_pose'], current_pose))
+            if (not same_pose or
                     self.runtime.gun.shot_index != frame['loaded'] or
                     tuple(self.runtime.gun.ammo) != frame['ammo']):
                 return False
@@ -3472,7 +3574,8 @@ class NativeAttackEvaluator(object):
                 result['reason'] = 'native_armour_unknown'
                 return reported
             he_lay = (route_lay and job['armour']['penetration']['armor'] == 'failed' and
-                      ammunition_validation.shell_mode(shell) == ammunition_validation.SINGLE_POINT)
+                      (ammunition_validation.shell_mode(shell) == ammunition_validation.SINGLE_POINT or
+                       shell.get('is_he') and frame.get('ordered')))
             if mode == 'he_fallback' or he_lay:
                 blast_stamp = frame['scene'], frame['debris']
                 if job['he'] is None or job['he'][0] != blast_stamp:

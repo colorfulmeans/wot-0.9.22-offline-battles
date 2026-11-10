@@ -1771,8 +1771,8 @@ class NativeAtomicClosureTests(native_fire.AutomaticFireScene):
         for name in ('chassis', 'hull', 'turret', 'gun'):
             for material in getattr(self.target.typeDescriptor, name).materials.values():
                 material.armor = 10000.
-        policy = self.runtime.attack_policy
-        policy.reset()
+        # Global same-pose closure remains part of the ranked worker policy.
+        policy = self.runtime.attack_policy = AttackPolicy(self.runtime)
         policy.evaluator.jobs.clear()
         # These tests assert pose/physics correctness, not the scheduler's
         # wall time under parallel CI. Production keeps its separate 8ms cap;
@@ -1914,8 +1914,7 @@ class NativeAtomicClosureTests(native_fire.AutomaticFireScene):
             for name in ('chassis', 'hull', 'turret', 'gun'):
                 for material in getattr(target.typeDescriptor, name).materials.values():
                     material.armor = 10000.
-        policy = self.runtime.attack_policy
-        policy.reset()
+        policy = self.runtime.attack_policy = AttackPolicy(self.runtime)
         policy.atomic_time_budget = ATOMIC_WALL_SECONDS
         policy.evaluator.jobs.clear()
         policy.evaluator.predictions.clear()

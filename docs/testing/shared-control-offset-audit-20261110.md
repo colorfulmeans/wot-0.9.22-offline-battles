@@ -1,5 +1,43 @@
 # PR119 control-offset correction — November 10, 2026
 
+## Follow-up for the 02:25 AT7 report — mounted shell and same-target points
+
+`wot-error-report-20261111-022506-022abba6ab9f.zip` showed an admitted
+engagement with ten AP rounds remaining and no launch during a 46-second
+hold. Native first-trigger admission identified hostile actor 1 in front of
+actor 3 on several separate samples. A timer let the same blocked sample
+return to the front of the old global review even while the blocker remained.
+The report also showed a grounded final route-circle observation during
+combat ownership followed by a return to its centre on handoff.
+
+- The ordinary foreground gun opens a pass with its retained eligible target
+  or the existing nearest-visible ordering. Ties use nominal armour and the
+  existing stable actor key. It inspects the mounted penetration shell one
+  target at a time, skips obstructed samples and consumes the first current
+  executable point. A front contact is recorded against its obstructed sample
+  and geometry. Native first-trigger admission still checks the live barrel.
+- A completed mounted-shell pass qualifies the next stocked higher penetration
+  shell and permits a native whole-clip reload. Exhausting those roles selects
+  HE on the last target. Current HE uses one sample for penetration and its
+  contact fallback. A fired HE round or the last round of its clip queues the
+  lowest stocked penetration shell by inventory alone. The physical burst
+  and manual ammunition setting keep their existing ownership.
+- A no-HE release starts a five-second cooldown from the actual handoff. A
+  fresh continuous attackable observation can accumulate in parallel on the
+  original route. A grounded entry into the assigned terminal disc is recorded
+  while combat owns movement. Authored route data, intermediate arrival
+  checks, base occupancy and the underlying driver remain separate.
+- The ordered policy applies to ordinary player-controlled guns, including
+  fixed and limited traverse. Worker, artillery and native siege actuator
+  paths retain their existing policies. Analytic regressions cover exact
+  launch, native ammunition input, trigger tails, route inputs, and real
+  motion invalidation alongside negligible source settling.
+- The existing detailed-diagnostic checkbox enables `ordered_attack`
+  records with loaded shell, target order, completed count, selected sample,
+  proposed shell and the current target's point verdicts. These records help
+  separate missing native geometry, mechanical restrictions and obstructed
+  points in a fresh Windows battle.
+
 ## Follow-up for the 23:53 AT7 report — circle handoff and current shot
 
 The report `wot-error-report-20261110-235323-94c3a3f842a5.zip` identifies

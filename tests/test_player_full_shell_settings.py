@@ -177,7 +177,7 @@ class FullShellSettingsTests(unittest.TestCase):
         self.assertEqual([(scene.settings.CURRENT_SHELLS, 102)],
             [call for call in scene.setting_calls if call[0] == scene.settings.CURRENT_SHELLS])
 
-    def test_current_ordinary_he_finishes_loading_and_fires_before_verified_next_ap(self):
+    def test_current_ordinary_he_finishes_loading_and_fires_before_inventory_next_ap(self):
         scene = self.scene(clip=1, burst=1, third=True)
         runtime, gun = scene.runtime, scene.battle._gun_state
         he = gun.shots[2]
@@ -209,7 +209,8 @@ class FullShellSettingsTests(unittest.TestCase):
                                  ('switch_shell', 'reload_clip'))
                 if gun.reload_time > 0. and gun.pending_index == 0:
                     queued_while_loading = True
-                    self.assertEqual('passed', runtime.attack_policy.next_plan['armor'])
+                    self.assertEqual('he_finished_lowest_penetration', runtime.attack_policy.next_status)
+                    self.assertIsNone(runtime.attack_policy.next_plan['key'])
             elif len(launches) == 1:
                 self.assertEqual(2, launches[0]['shell_index'])
                 self.assertEqual(0, gun.shot_index)
@@ -226,7 +227,7 @@ class FullShellSettingsTests(unittest.TestCase):
         self.assertEqual([],
             [call for call in scene.setting_calls if call[0] == scene.settings.CURRENT_SHELLS])
 
-    def test_manual_current_ap_still_accepts_a_verified_he_for_the_very_next_load(self):
+    def test_manual_current_he_to_ap_finishes_and_fires_ap_twice(self):
         scene = self.scene(clip=1, burst=1, third=True)
         gun = scene.battle._gun_state
         he = gun.shots[2]
@@ -236,7 +237,8 @@ class FullShellSettingsTests(unittest.TestCase):
         source['shell'].update(kind='HIGH_EXPLOSIVE', explosionRadius=5.)
         source['piercingPower'] = he.piercingPower
         gun.reload = 1.5
-        self.assertTrue(gun.sync_shell_index(1, instant=True))
+        self.assertTrue(scene.runtime._shell_setting('CURRENT_SHELLS', 2))
+        self.assertGreater(gun.reload_time, 0.)
         self.assertTrue(scene.battle._sender.change_vehicle_setting(
             scene.entity.id, scene.settings.CURRENT_SHELLS, 101))
         self.assertEqual((0, None), (gun.shot_index, gun.pending_index))
@@ -246,15 +248,15 @@ class FullShellSettingsTests(unittest.TestCase):
             if scene.launches():
                 break
         self.assertEqual([0], [row['shell_index'] for row in scene.launches()])
-        self.assertEqual((2, 0, None), (gun.shot_index, gun.clip, gun.pending_index))
-        self.assertEqual(2, scene.runtime.attack_policy.loading_plan['shell_index'])
-        self.assertIn((scene.settings.NEXT_SHELLS, 103), scene.setting_calls)
+        self.assertEqual((0, 0, None), (gun.shot_index, gun.clip, gun.pending_index))
+        self.assertGreater(gun.reload_time, 0.)
+        self.assertNotIn((scene.settings.NEXT_SHELLS, 103), scene.setting_calls)
         for unused in range(100):
             self.tick_weapon(scene)
             if len(scene.launches()) == 2:
                 break
-        self.assertEqual([0, 2], [row['shell_index'] for row in scene.launches()])
-        self.assertEqual([19, 10, 9], gun.ammo)
+        self.assertEqual([0, 0], [row['shell_index'] for row in scene.launches()])
+        self.assertEqual([18, 10, 10], gun.ammo)
 
     def test_trigger_drops_an_expired_owned_next_plan_without_scanning(self):
         from test_player_rebuilt_attack_policy import Observations
@@ -715,7 +717,7 @@ class FullShellSettingsTests(unittest.TestCase):
         self.assertFalse(scene.setting_calls)
         self.assertFalse(scene.launches())
 
-    def test_real_verified_alternative_reloads_without_penetration_search_or_retreat(self):
+    def test_completed_current_sweep_reloads_higher_shell_without_retreat(self):
         scene = self.scene()
         self.move_from_previous_route_point(scene)
         gun = scene.battle._gun_state
@@ -741,9 +743,10 @@ class FullShellSettingsTests(unittest.TestCase):
                 break
         else:
             self.fail('real native evidence did not produce an early reload plan: %r' % policy.status())
-        self.assertEqual('current_shell_all_armour_failed', decision['reason'])
+        self.assertEqual('ordered_penetration_exhausted', decision['reason'])
         self.assertEqual(1, decision['shell_index'])
-        self.assertEqual('passed', decision['candidate']['armor'])
+        self.assertIsNone(decision['candidate'])
+        self.assertFalse(policy._rows_for('penetration', 1, fresh_line=True))
         self.assertTrue(scene.world_queries)
         # A verified alternate authorizes loading in place. Neither an
         # eight-second negative search nor a tactical retreat is prerequisite.
@@ -796,9 +799,9 @@ class FullShellSettingsTests(unittest.TestCase):
         self.assertEqual(1, len(accepted))
         receipt = accepted[0]
         self.assertEqual('reload_clip', receipt['decision']['action'])
-        self.assertEqual('current_shell_all_armour_failed', receipt['decision']['reason'])
+        self.assertEqual('ordered_penetration_exhausted', receipt['decision']['reason'])
         self.assertTrue(receipt['decision']['early_reload'])
-        self.assertEqual('passed', receipt['decision']['candidate']['armor'])
+        self.assertIsNone(receipt['decision']['candidate'])
         self.assertNotIn(receipt['mode'],
             ('magazine_reload_retreat', 'withdraw', 'take_cover', 'cover_return'))
         self.assertFalse(hasattr(scene.runtime, '_reload_order'))
@@ -825,7 +828,7 @@ class FullShellSettingsTests(unittest.TestCase):
         else:
             self.fail('Failed armour/absent HE did not release navigation: %r' % scene.trace[-3:])
         self.assertLess(scene.now - began, 8.)
-        self.assertEqual('no_he_or_verified_penetration', policy.decision['reason'])
+        self.assertEqual('ordered_no_he', policy.decision['reason'])
         self.assertFalse(scene.runtime.combat_stop.stop_allowed)
         self.assertFalse(hasattr(scene.runtime, '_unusable_ammo_retreat'))
         order = row['order']
