@@ -116,6 +116,44 @@ changes to those tests or the routes. The first errors are preserved in the
 local logs; they are not reported as a production navigation defect or hidden
 from the verification history.
 
+### First GitHub CI caught a real HE scheduling fault
+
+Run [42786557537](https://github.com/colorfulmeans/wot-0.9.22-offline-battles/actions/runs/42786557537)
+on head `e222f7b3` completed navigation, native geometry, Windows server/editor
+and BOT regression jobs successfully, but its 524-file client job found three
+failures in `test_shared_current_he_execution.py` (one failed test file;
+the other 523 passed). Its Windows launcher job was consequently skipped;
+**no Windows launcher artifact from that run is a valid delivery.**
+
+The CI runner's slower 8 ms native observation slice finished the lower-damage
+HE target 14 while the also-negative-armour target 2's higher-damage contact
+still had a real `atomic_frame_budget_exhausted` receipt. The policy published
+an irrevocable CURRENT aim lock on target 14 before the second comparator
+could obtain its fair callback. The outcome is reproducible locally with a
+virtual atomic clock that consumes precisely the original wall-clock budget.
+This is a genuine first-trigger ranking defect, not a missing fixture, CI
+network error, or reason to weaken the three existing expectations.
+
+The follow-up fix postpones **only that first lock** while a currently
+penetration-qualified competitor has an explicitly native-budget-exhausted
+HE comparison. Its unfinished query must receive an ordinary future slice;
+there is no replacement movement timer, extra quota or assumed damage.
+A competitor that truly returns `pending`, disappears, changes pose or lacks
+positive penetration-failure qualification must not hold an independently
+executable loaded HE hostage. Existing tests asserting those distinctions
+remain unchanged and pass. New
+`test_expensive_second_he_contact_cannot_lock_a_lower_damage_first_target`
+forces the budget-expiration schedule without sleeping or stubbing the actual
+evaluator. The 23-file shared-control test inventory passed after this fix;
+the exact CI Python 3.11.9 dependency set then passed the **entire 524/524**
+client file inventory: **10,667** methods, **10,658 passed, 9 skipped, 0
+failures**. The standalone 89/89 shared-owner checker also passed. Two fresh
+29-BOT worker10 native analytic schedules passed their original quota and
+ammunition constraints with respectively **100** and **101** launches and no
+background quota overruns; those variable wall-limited counts are not FPS.
+The fresh Windows Python 2.7 build and exact downloaded launcher remain
+separate CI gates.
+
 The GitHub Actions BOT group, full client suite, actual Python 2.7 compiler,
 Windows launcher packaging and user in-game regression remain separate final
 gates. Neither a host pass nor a future-path probe proves an actual game shot,

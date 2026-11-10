@@ -106,6 +106,34 @@ class SharedCurrentHEExecutionTests(unittest.TestCase):
         self.assertEqual(2, scene.runtime.attack_policy.he_comparison['total'])
         self.assertFalse(scene.launches())
 
+    def test_expensive_second_he_contact_cannot_lock_a_lower_damage_first_target(self):
+        scene = self.scene()
+        self.add_better(scene)
+        policy = scene.runtime.attack_policy
+        clock = [0.]
+        policy.atomic_clock = lambda: clock[0]
+        native_evaluate = policy._evaluate
+        delayed_once = [False]
+
+        def delayed_second_contact(job, now, channel):
+            # The real evaluator is retained. Simulate one native query
+            # exhausting its existing wall-clock slice, independent of how
+            # quickly the host machine executes the geometry fixture.
+            if (not delayed_once[0] and job[4] == 'he_fallback' and
+                    job[0][1] == ('bot', 2)):
+                clock[0] += policy.atomic_time_budget + .012
+                delayed_once[0] = True
+            return native_evaluate(job, now, channel)
+
+        policy._evaluate = delayed_second_contact
+        scene.observe_control()
+        self.assertTrue(delayed_once[0])
+        self.assertEqual(1, policy.he_comparison['pending'])
+        self.assertNotEqual('aim', policy.decision['action'],
+                            'a partial HE damage ranking cannot lock the first target')
+        candidate = self.acquire(scene, target=2)
+        self.assertEqual(37., candidate['expected_damage'])
+
     def test_new_higher_damage_target_and_verified_next_cannot_preempt_current_he(self):
         for armor, damage in ((30., 11.), (60., 0.)):
             with self.subTest(current_damage=damage):

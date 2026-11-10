@@ -1044,9 +1044,29 @@ class AttackPolicy(object):
             observed = len(observations)
         self.he_comparison = dict(total=len(jobs), observed=observed,
                                   pending=len(jobs) - observed)
-        return not self._frame_invalid and (observed == len(jobs) or
-            self._best_current_he(loaded, consumable=True,
-                                  observations=observations, deferred=deferred) is not None)
+        # A native budget receipt on a proved negative-penetration enemy is
+        # not a genuine missing contact.  Under a slow 8 ms atomic slice the
+        # first HE point can finish while the second merely runs out of work
+        # quota. Do not turn that scheduling result into an irrevocable first
+        # trigger lock before the pending point receives its next fair turn.
+        # Explicitly pending native queries, replaced/moving competitors and
+        # unqualified enemies must NOT hold an independently executable HE
+        # contact hostage; they cannot certify a higher damage score.
+        eligible = self._loaded_he_fallback_targets(loaded)
+        competing_budget = False
+        for job in jobs:
+            if job[0][1] not in eligible or job[0] in observations:
+                continue
+            row = self._current(job, require_line=True)
+            reason = (row or {}).get('reason') or ''
+            if (row is not None and row.get('review_pending') and
+                    reason.startswith('atomic_') and reason.endswith('_budget_exhausted')):
+                competing_budget = True
+                break
+        return (not self._frame_invalid and not competing_budget and
+            (observed == len(jobs) or
+             self._best_current_he(loaded, consumable=True,
+                                   observations=observations, deferred=deferred) is not None))
 
     def _atomic_he_compare(self, jobs, now):
         """Finish a moving HE domain within the same bounded atomic slice.
