@@ -100,8 +100,8 @@ class ActorBindingTests(unittest.TestCase):
         from gui.mods.offline_lan_0922.vehicle_control.combat_control import CombatControl
         from gui.mods.offline_lan_0922.vehicle_control.full_runtime import FullPlayerRuntime
         for name in ('_accept_combat_order', 'current_attack_candidate',
-                     'prepare_trigger_context', '_move_order', '_apply_next_shell',
-                     'attack_search_drive_available', '_siege_fire_ready',
+                     'prepare_trigger_context', 'point_recovery_probe', '_apply_next_shell',
+                     '_siege_fire_ready',
                      '_observe_loading_completion'):
             self.assertIs(getattr(type(self.binding), name), getattr(CombatControl, name))
             self.assertIs(getattr(FullPlayerRuntime, name), getattr(CombatControl, name))
@@ -110,7 +110,7 @@ class ActorBindingTests(unittest.TestCase):
         self.binding._last_order['test_actor'] = 11
         self.assertNotIn('test_actor', self.other._last_order)
 
-    def test_worker_search_movement_uses_common_navigation_and_mission_gate(self):
+    def test_worker_point_recovery_only_requests_movement_inside_original_gate(self):
         target = dict(kind='bot', id=12, network_id=12, team=1,
                       alive=True, visible=True, health=1000,
                       position=(12., 3., 20.))
@@ -120,25 +120,26 @@ class ActorBindingTests(unittest.TestCase):
                      initial_target_hint=dict(target_kind='bot', target_id=12))
         self.binding.combat_stop.accept(dict(route, combat_mode='hold',
                                              throttle_override=0.))
-        self.assertFalse(self.binding.attack_search_drive_available())
+        self.assertFalse(self.binding.combat_stop.can_request_movement)
         self.binding.combat_stop.accept(route)
         self.assertTrue(self.binding.combat_stop.can_request_movement)
         self.assertFalse(self.binding.combat_stop.stop_allowed)
         self.assertFalse(self.binding.combat_stop.combat_owned)
-        # Search may request movement before a proposal is committed. Making
-        # stop_allowed a prerequisite would deadlock that native admission.
-        self.assertTrue(self.binding.attack_search_drive_available())
+        # The shared point probe is available to worker and foreground, but
+        # only a checked proposal may acquire an actual movement task.
+        self.assertIsNotNone(self.binding.point_recovery_probe)
+        self.assertFalse(hasattr(self.binding, 'attack_search_drive_available'))
         self.binding._mission = dict(capture_started=True)
         self.binding.combat_stop.accept(route)
-        self.assertFalse(self.binding.attack_search_drive_available())
+        self.assertFalse(self.binding.combat_stop.can_request_movement)
         self.binding._mission = dict(explicit=True, destination=(20., 0., 20.))
         self.binding.combat_stop.accept(route)
-        self.assertFalse(self.binding.attack_search_drive_available())
+        self.assertFalse(self.binding.combat_stop.can_request_movement)
         self.binding._mission = None
         self.binding.combat_stop.accept(route)
-        self.assertTrue(self.binding.attack_search_drive_available())
+        self.assertTrue(self.binding.combat_stop.can_request_movement)
         self.binding._implicit_retry = dict(at=1.)
-        self.assertFalse(self.binding.attack_search_drive_available())
+        self.assertFalse(self.binding.combat_stop.stop_allowed)
 
     def test_shared_mode_gate_reads_worker_native_mode_not_observer_echo(self):
         from gui.mods.offline_lan_0922 import siege_mechanics

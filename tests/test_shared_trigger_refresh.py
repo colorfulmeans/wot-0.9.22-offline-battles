@@ -171,7 +171,7 @@ class FinalPoseTriggerTests(unittest.TestCase):
         policy, candidate = binding.attack_policy, fixture.candidate
         evaluator = policy.evaluator
         self.turn_worker(fixture, -1.e-12)
-        before = (policy.selected, policy.search_started, policy.search_authority,
+        before = (policy.selected, policy._move_episode, policy._physical_review,
                   policy.background_cursor, policy.next_shell, policy.next_plan,
                   policy.loading_plan, policy.frame)
         world_before = len(fixture.scene.world_queries)
@@ -184,8 +184,8 @@ class FinalPoseTriggerTests(unittest.TestCase):
         self.assertIsNotNone(context)
         self.assertEqual(binding.source_pose(), context['solution']['source_pose'])
         self.assertEqual(1, predict.call_count)
-        self.assertEqual(before, (policy.selected, policy.search_started,
-            policy.search_authority, policy.background_cursor, policy.next_shell,
+        self.assertEqual(before, (policy.selected, policy._move_episode,
+            policy._physical_review, policy.background_cursor, policy.next_shell,
             policy.next_plan, policy.loading_plan, policy.frame))
         self.assertIs(context['candidate'], candidate)
         self.assertEqual(world_before, len(fixture.scene.world_queries))

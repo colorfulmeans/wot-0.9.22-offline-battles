@@ -143,12 +143,19 @@ class CaptureFireHandoffTests(unittest.TestCase):
             scene.battle._advance_local_gun_to(scene.entity, scene.now)
             scene.tick()
             reasons.add(scene.runtime.attack_policy.decision['reason'])
-            self.assertIsNone(scene.runtime.attack_policy.search_started)
+            self.assertFalse(hasattr(scene.runtime.attack_policy, 'search_started'))
             if scene.launches():
                 break
-        self.assertIn('current_he_clip_fallback', reasons)
-        self.assertTrue(traces)
+        self.assertTrue(reasons.intersection(
+            ('current_he_clip_fallback', 'current_he_fallback_contact')))
         self.assertTrue(scene.launches(), scene.runtime.status())
+        # Current loaded HE may fire the first already usable original
+        # contact without waiting for an alternative's entire damage domain.
+        self.assertIn(scene.runtime.weapon.target['network_id'], (2, 5))
+        if not traces:
+            self.assertEqual(5, scene.runtime.weapon.target['network_id'])
+        self.assertEqual((0., 0.),
+                         (scene.battle._sender.forward, scene.battle._sender.turn))
         self.assertEqual(2, scene.battle._gun_state.clip)
         self.assertEqual(29, sum(scene.battle._gun_state.ammo))
         self.assertEqual(0, scene.launches()[0]['shell_index'])
@@ -164,8 +171,12 @@ class CaptureFireHandoffTests(unittest.TestCase):
         scene.runtime.set_mission('capture_base', {})
         traces = self.trace_handoffs(scene)
         self.run_until_shots(scene)
-        self.assertTrue(traces)
-        self.assertEqual('he_fallback_contact', scene.runtime.attack_policy.decision['reason'])
+        self.assertIn(scene.runtime.weapon.target['network_id'], (2, 5))
+        if not traces:
+            self.assertEqual(5, scene.runtime.weapon.target['network_id'])
+        self.assertIn(scene.runtime.attack_policy.decision['reason'],
+            ('he_fallback_contact', 'current_he_fallback_contact',
+             'current_he_clip_fallback'))
         self.assertEqual(29, sum(gun.ammo))
         self.assertEqual((0., 0.), (scene.battle._sender.forward, scene.battle._sender.turn))
 
@@ -219,8 +230,18 @@ class CaptureFireHandoffTests(unittest.TestCase):
                     runtime.stop('test_stop')
                 result, target = runtime.consume_gun_handoff(runtime.state, command, original_target,
                     scene.now if stop else scene.now + .1)
-                self.assertEqual(command, result)
-                self.assertIs(original_target, target)
+                if stop:
+                    self.assertEqual(command, result)
+                    self.assertIs(original_target, target)
+                else:
+                    # A cached physics slice may keep a valid gun target,
+                    # but an old frame can never donate a new firing edge.
+                    self.assertEqual(2, result['target_id'])
+                    self.assertEqual(2, target['network_id'])
+                    self.assertFalse(result['fire_allowed'])
+                    for field in ('move_position', 'face_position', 'throttle',
+                                  'turn', 'brake', 'combat_mode'):
+                        self.assertEqual(command.get(field), result.get(field))
                 self.assertFalse(scene.launches())
                 scene.doCleanups()
 
@@ -237,7 +258,7 @@ class CaptureFireHandoffTests(unittest.TestCase):
             self.assertIsNone(scene.runtime._gun_handoff)
             self.assertEqual((45., 0., 45.), scene.applied_order()['move_position'])
             self.assertEqual((0., 0.), (scene.battle._sender.forward, scene.battle._sender.turn))
-            self.assertIsNone(scene.runtime.attack_policy.search_started)
+            self.assertFalse(hasattr(scene.runtime.attack_policy, 'search_started'))
 
 
 if __name__ == '__main__':

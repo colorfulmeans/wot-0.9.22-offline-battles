@@ -66,19 +66,23 @@ class TrafficPivotHandoffTests(unittest.TestCase):
         self.runtime._decision_cache[27]=('same-owner',)
         self.handoff(safe,10.05)
         self.assertEqual(('same-owner',),self.runtime._decision_cache.pop(27))
-        targets={9:self.target}
-        order=self.runtime._gun_angle_order(self.state,self.command,targets,10.,lambda *a:True)
-        self.assertIn('_gun_angle_adjustment',self.state)
-        with mock.patch.object(self.runtime,'_gun_angle_target_fraction',return_value=1.):
-            moved=self.runtime._gun_angle_order(self.state,self.command,targets,12.1,lambda *a:True)
-        self.assertEqual('gun_angle_adjust',moved['combat_mode'])
-        self.assertEqual(9,moved['target_id'])
-        self.assertNotEqual(self.body['position'],moved['move_position'])
-        self.runtime._gun_angle_order(self.state,self.command,targets,12.2,lambda *a:True)
-        self.assertEqual('advance_contact',self.runtime._gun_angle_order(
-            self.state,self.command,targets,19.,lambda *a:True)['combat_mode'])
-        self.assertNotIn('_gun_angle_adjustment',self.state)
-        self.assertEqual('relocation_stalled',self.state['_gun_angle_last_terminal']['reason'])
+        # The guard is physical evidence; it never selects a destination.
+        # The shared CombatStop performs a bounded native-point preview only
+        # after the normal in-place laying attempt proves stalled.
+        from test_player_combat_stop import Scene
+        scene=Scene()
+        scene.candidate.update(mechanical='hull_laying',line='clear',
+            key=(0,('bot',2),0,'penetration'),sample=0)
+        scene.runtime.point_recovery_probe=lambda c,p,n:dict(status='clear',fire_permission=False)
+        laying=scene.apply(0.)
+        self.assertEqual('native_lay',scene.owner.receipt['reason'])
+        self.assertEqual('engage',laying['combat_mode'])
+        recovered=scene.apply(10.)
+        self.assertEqual('gun_angle_adjust',recovered['combat_mode'])
+        self.assertNotEqual(scene.target['position'],recovered['move_position'])
+        self.assertFalse(recovered['fire_allowed'])
+        self.assertIsNotNone(scene.owner._physical_recovery)
+        self.assertFalse(hasattr(self.runtime,'_gun_angle_order'))
 
     def test_clear_guard_releases_only_an_unconsumed_handoff(self):
         self.handoff(self.guard())
@@ -88,20 +92,21 @@ class TrafficPivotHandoffTests(unittest.TestCase):
         self.assertNotIn('_gun_angle_pivot_refusal',self.state)
         self.assertEqual('unconsumed_handoff_released',self.state['_traffic_rotation_receipt']['owner'])
         self.handoff(self.guard(11.),11.)
-        self.runtime._gun_angle_order(self.state,self.command,{9:self.target},11.,lambda *a:True)
         self.handoff(safe,11.1)
-        self.assertEqual(('bot',9),self.state['_gun_angle_pivot_refusal'])
+        self.assertNotIn('_gun_angle_pivot_refusal',self.state)
+        self.assertEqual('unconsumed_handoff_released',
+                         self.state['_traffic_rotation_receipt']['owner'])
 
     def test_target_loss_and_priority_handoff_retire_the_existing_action(self):
         for priority in ('base_defense','artillery_deploy'):
             self.handoff(self.guard())
-            self.runtime._gun_angle_order(self.state,self.command,{9:self.target},10.,lambda *a:True)
-            self.runtime._gun_angle_order(self.state,dict(self.command,combat_mode=priority),
-                {9:self.target},10.1,lambda *a:True)
+            self.handoff(self.guard(10.1),now=10.1,
+                command=dict(self.command,combat_mode=priority))
             self.assertNotIn('_gun_angle_adjustment',self.state)
             self.assertNotIn('_gun_angle_pivot_refusal',self.state)
         self.handoff(self.guard())
-        self.runtime._gun_angle_order(self.state,self.command,{},10.,lambda *a:True)
+        self.runtime._record_traffic_pivot(self.state,self.command,
+            self.guard(10.1),None,True,10.1)
         self.assertNotIn('_gun_angle_pivot_refusal',self.state)
 
     def test_ordinary_steering_and_priority_movement_do_not_create_mechanical_refusal(self):

@@ -24,7 +24,6 @@ PENETRATION_PROBABILITY = .65
 # Resolving a structural penetration at this multiplier proves at least 65%
 # under that law, without drawing a prospective shot's random penetration.
 PENETRATION_FACTOR_65 = .9679810530375992
-SEARCH_SECONDS = 8.
 FOREGROUND_CANDIDATES = 2
 BACKGROUND_CANDIDATES = 2
 WORLD_CHORDS_PER_FRONTIER = 12
@@ -186,7 +185,7 @@ def native_target_pose(owner, target, record=None):
 
 
 class AttackPolicy(object):
-    """A complete search episode belongs to the gun, not a selected enemy.
+    """One ammunition decision belongs to the gun, not a selected enemy.
 
     A snapshot lists every relevant enemy and every sample, including targets
     whose collision data is missing. Such targets have an unknown sample and
@@ -222,8 +221,6 @@ class AttackPolicy(object):
         self._current_he_observations = {}
         self._current_he_deferred = set()
         self.background_cursor = None
-        self.search_started = None
-        self.search_authority = None
         self.reload_authority = None
         self.fallback = False
         self.next_shell = None
@@ -348,9 +345,8 @@ class AttackPolicy(object):
                     mode == 'he_fallback' and not shell.get('is_he')):
                 continue
             for target in frame.get('targets', ()):
-                trial = (self._single_point_trial(shell, target)
-                         if mode == 'penetration' else None)
-                if trial is not None and trial['failed']:
+                trial = self._single_point_trial(shell, target)
+                if mode == 'penetration' and trial is not None and trial['failed']:
                     continue
                 # Missing geometry remains an explicit unknown obligation.
                 samples = ((trial['sample'],) if trial is not None else
@@ -706,7 +702,7 @@ class AttackPolicy(object):
 
         A blocked or unavailable other enemy is not a failed armour point,
         but cannot veto a legal current HE contact on a fully reviewed enemy.
-        These keys never qualify NEXT or the global eight-second search.
+        These keys never qualify NEXT or global armour failure.
         """
         shell = next((row for row in self.frame['shells'] if row['index'] == loaded), None)
         if shell is None or not shell.get('is_he'):
@@ -895,7 +891,6 @@ class AttackPolicy(object):
             self._frame_invalid = True
             return self._recover_incomplete(now, 'current_he_observation_changed')
         if self._he_observed(row) and self._executable_current(row, 'he_fallback'):
-            self._end_search()
             self.fallback = True
             reason = ('current_he_clip_fallback' if int(self.frame.get('clip_size', 1)) > 1
                       else 'he_fallback_contact')
@@ -945,8 +940,9 @@ class AttackPolicy(object):
         deferred = self._current_he_deferred if deferred is None else deferred
         jobs = self._jobs('he_fallback', loaded)
         eligible = self._loaded_he_fallback_targets(loaded)
-        if not all(job[0] in observations for job in jobs):
-            return None
+        # A proved usable CURRENT contact is enough to fire this trigger.
+        # Unobserved competitors may be better, but cannot hold an already
+        # loaded HE round indefinitely. Completed competitors remain ranked.
         for job in self._ranked_current_he_jobs(jobs, observations):
             if job[0][1] not in eligible:
                 continue
@@ -978,25 +974,27 @@ class AttackPolicy(object):
             if key in identities and value['identity'] == identities[key])
         deferred = self._current_he_deferred.intersection(observations)
         self._collect_current_he_observations(jobs, observations, deferred)
-        if jobs and len(observations) == len(jobs) and not any(
-                value['damage'] is not None for value in observations.values()):
-            # Unknown/blocked contacts get another finite pass, not a lasting
-            # exclusion. They have not proved zero damage or failed armour.
-            observations.clear()
-            deferred.clear()
+        refresh_unusable = bool(jobs and len(observations) == len(jobs) and not any(
+            value['damage'] is not None for value in observations.values()))
+        # A completed blocked/unknown comparison must not restart before a
+        # fresh obstruction can reach geometric recovery. Retain coverage
+        # only and refresh its finite queue within the original budget;
+        # neither a shot nor a negative certificate can use these hints.
         start = self.he_cursor
         for offset in range(len(jobs)):
             if self._used['foreground'] >= self.foreground_budget:
                 break
             position = (start + offset) % len(jobs)
             job = jobs[position]
-            if job[0] in observations:
+            if job[0] in observations and not refresh_unusable:
                 continue
             self.he_cursor = (position + 1) % len(jobs)
             self._evaluate(job, now, 'foreground')
             self._collect_current_he_observations((job,), observations, deferred)
         pending = tuple(job for job in jobs if job[0] not in observations)
-        if pending:
+        ready = self._best_current_he(loaded, consumable=True,
+                                      observations=observations, deferred=deferred)
+        if pending and ready is None:
             self._atomic_he_compare(pending, now)
             self._collect_current_he_observations(pending, observations, deferred)
         # The highest observation is only the next key to check. Recheck it
@@ -1046,7 +1044,9 @@ class AttackPolicy(object):
             observed = len(observations)
         self.he_comparison = dict(total=len(jobs), observed=observed,
                                   pending=len(jobs) - observed)
-        return not self._frame_invalid and observed == len(jobs)
+        return not self._frame_invalid and (observed == len(jobs) or
+            self._best_current_he(loaded, consumable=True,
+                                  observations=observations, deferred=deferred) is not None)
 
     def _atomic_he_compare(self, jobs, now):
         """Finish a moving HE domain within the same bounded atomic slice.
@@ -1347,12 +1347,9 @@ class AttackPolicy(object):
             return self._choose('preaim', reason, candidate)
         return self._choose('wait', reason)
 
-    def _end_search(self, penetration_found=False):
-        self.search_started = None
-        self.search_authority = None
-        if penetration_found:
-            self.fallback = False
-            self.reload_authority = None
+    def _clear_fallback(self):
+        self.fallback = False
+        self.reload_authority = None
 
     def _failure_fenced(self, indices=None):
         fence = getattr(self.evaluator, 'fence', None)
@@ -1423,7 +1420,7 @@ class AttackPolicy(object):
                 not self._executable_current(candidate, candidate.get('mode', 'penetration'))):
             action, reason, candidate = 'wait', 'current_shot_navigation_owned', None
         if (action in ('aim', 'navigate', 'unchanged', 'switch_shell', 'reload_clip',
-                       'trigger_active', 'search_penetration') or reason == 'no_relevant_enemy'):
+                       'trigger_active') or reason == 'no_relevant_enemy'):
             # A recovered shot or another task ends this obstruction's
             # inspection pass. Waiting for the same native work does not.
             self._physical_review = None
@@ -1431,14 +1428,11 @@ class AttackPolicy(object):
                    next_shell=self.next_shell,
                    phase=('preaiming' if action == 'preaim' or action == 'aim' and
                           (self.frame or {}).get('reloading') else action),
-                   search_started=self.search_started,
-                   search_deadline=(self.search_started + SEARCH_SECONDS
-                                    if self.search_started is not None else None),
                    fallback=bool(self.fallback),
                    foreground_queries=self._used['foreground'],
                    background_queries=self._used['background'])
         row.update(fields)
-        if action in ('firing_position', 'search_penetration'):
+        if action == 'firing_position':
             if self._move_kind != action:
                 self._move_episode += 1
             self._move_kind = action
@@ -1446,12 +1440,12 @@ class AttackPolicy(object):
             row['move_request'] = dict(kind=action, reason=reason,
                 target=candidate.get('target') if candidate else None,
                 sample=candidate.get('sample') if candidate else None,
+                shell_index=candidate.get('shell_index') if candidate else None,
+                mode=candidate.get('mode') if candidate else None,
+                key=candidate.get('key') if candidate else None,
                 solution=self.intent_solution(candidate) if candidate else None,
                 blocker=candidate.get('blocker') if candidate else None,
-                deadline=row['search_deadline'] if action == 'search_penetration' else None,
                 episode_id=episode_id)
-            if action == 'search_penetration':
-                self.search_authority['episode_id'] = episode_id
         elif action not in ('wait', 'preaim', 'trigger_active'):
             # A native query wait changes evidence status, not the accepted
             # movement task. A real aim/navigation/loading transition still
@@ -1614,16 +1608,14 @@ class AttackPolicy(object):
             he_deferred = self._current_he_deferred
             he_execution = self._current_he_execution
             he_cursor = self.he_cursor
-            search = (self.search_started, self.search_authority, self.fallback,
-                      self._move_episode, self._move_kind)
+            recovery = (self.fallback, self._move_episode, self._move_kind)
             self.reset()
             self.reload_authority = authority
             self.selected = selected
             if same_weapon:
                 # A siege/descriptor transition changes every geometric
-                # proof, not the elapsed time of this gun's movement task.
-                (self.search_started, self.search_authority, self.fallback,
-                 self._move_episode, self._move_kind) = search
+                # proof, not an already qualified fallback or laying task.
+                self.fallback, self._move_episode, self._move_kind = recovery
             if same_geometry_identity:
                 # A changed shared-combat admission domain retires evidence,
                 # not the rate limit on expensive speculative work or the
@@ -1689,9 +1681,8 @@ class AttackPolicy(object):
         magazine = (loaded, int(frame['clip']))
         previous = self._magazine
         if previous is not None and (loaded != previous[0] or magazine[1] > previous[1]):
-            # A genuinely different shell/clip gets new penetration evidence;
-            # the continuing HE fallback phase is not another eight seconds.
-            self._end_search()
+            # A genuinely different shell/clip gets a new current-contact
+            # comparison without inheriting the previous trigger's ranking.
             self._current_he_observations.clear()
             self._current_he_deferred.clear()
             # A completed load retains the point already being laid. A
@@ -1723,7 +1714,6 @@ class AttackPolicy(object):
                 # No observed target can support a prior ranked plan.
                 planned = (loaded if frame['ammo'][loaded] > 0 else
                            min(index for index, count in enumerate(frame['ammo']) if count > 0))
-                self._end_search()
                 return self._choose('reload_clip' if empty_clip else 'switch_shell',
                     'empty_clip' if empty_clip else 'current_ammunition_exhausted',
                     shell_index=planned, early_reload=False)
@@ -1754,8 +1744,8 @@ class AttackPolicy(object):
         is_magazine = int(frame.get('clip_size', 1)) > 1
         if frame['ammo'][loaded] <= 0:
             # Exhaustion is not a fabricated penetration failure. There is no
-            # current round/clip to preserve and therefore no eight-second
-            # prerequisite for selecting stocked ammunition for normal load.
+            # current round/clip to preserve when selecting stocked
+            # ammunition for normal loading.
             groups = self._penetration_groups(self._jobs())
             planned, status, unused_proofs = self._ranked_penetration(groups)
             if (planned is None and status == 'no_verified_penetration' and
@@ -1764,7 +1754,6 @@ class AttackPolicy(object):
             index = (planned['shell_index'] if planned is not None else
                      min(shell['index'] for shell in frame['shells']
                          if frame['ammo'][shell['index']] > 0))
-            self._end_search()
             return self._choose('reload_clip' if is_magazine else 'switch_shell',
                 'current_ammunition_exhausted', planned, shell_index=index,
                 early_reload=False)
@@ -1778,11 +1767,10 @@ class AttackPolicy(object):
             if frame['ammo'][index] <= 0:
                 index = min((shell for shell in frame['shells']
                              if frame['ammo'][shell['index']] > 0), key=_shell_rank)['index']
-            self._end_search()
             return self._choose('reload_clip', 'empty_clip', planned,
                                 shell_index=index, early_reload=False)
         if current is not None:
-            self._end_search(penetration_found=True)
+            self._clear_fallback()
             return self._choose('aim', 'current_shell_verified', current)
         if any(self._executable(row) for row in self._rows_for('penetration', loaded, fresh_line=True)):
             # A proved plate can belong to a different gun target while the
@@ -1791,6 +1779,16 @@ class AttackPolicy(object):
             # do not grant a shot which the current command cannot consume.
             return self._choose('wait', 'current_shot_navigation_owned')
         observed_current = self._rows_for('penetration', loaded, fresh_line=True)
+        loaded_he = bool(next((shell.get('is_he')
+            for shell in frame['shells'] if shell['index'] == loaded), False))
+        if loaded_he and self._loaded_he_fallback_targets(loaded):
+            # Another enemy's stationary review cannot veto a positively
+            # verified current HE contact on a fully reviewed enemy.
+            if not self._failure_fenced((loaded,)):
+                return self._recover_incomplete(now, 'observation_changed_before_fallback')
+            self.reload_authority = None
+            self.fallback = True
+            return self._fallback_decision(loaded, is_magazine, now)
         physical_blocker = next((row for row in observed_current if row.get('line') in (
             'friendly_blocked', 'world_blocked', 'enemy_blocked', 'vehicle_blocked')), None)
         if (physical_blocker is not None and
@@ -1799,7 +1797,6 @@ class AttackPolicy(object):
         valid_pen = [row for row in self._rows_for('penetration', loaded, fresh_line=True)
                      if row.get('armor') == 'passed' and self._needs_firing_position(row)]
         if valid_pen:
-            self._end_search()
             self.reload_authority = None
             candidate = min(valid_pen, key=lambda row: (
                 self._intent_order(row['key']),
@@ -1813,21 +1810,17 @@ class AttackPolicy(object):
             # A real safe stationary turn exposes a penetrable current-round
             # point. Let the original hull actuator realise it before using
             # HE fallback; never promote its future pose into an aim/fire row.
-            self._end_search()
             self.reload_authority = None
             candidate = min(planned_pen, key=self._penetration_order)
             return self._choose('firing_position', 'current_penetration_after_stationary_turn',
                                 candidate, movement_reason=candidate.get('reason'))
         current_failed = self._all_failed((loaded,))
-        loaded_he = bool(next((shell.get('is_he')
-            for shell in frame['shells'] if shell['index'] == loaded), False))
         if loaded_he:
             # Every physically loaded HE round owns its execution, including
             # a single-shot gun. NEXT may choose another load, but cannot
-            # discard this round or start a penetration-search detour.
-            self._end_search()
+            # discard this round while choosing the following load.
             self.reload_authority = None
-            if current_failed or self._loaded_he_fallback_targets(loaded):
+            if current_failed:
                 if not self._failure_fenced((loaded,)):
                     return self._recover_incomplete(now, 'observation_changed_before_fallback')
                 self.fallback = True
@@ -1840,7 +1833,7 @@ class AttackPolicy(object):
             if ranked is not None:
                 if not self._failure_fenced((loaded,)):
                     return self._recover_incomplete(now, 'observation_changed_before_reload')
-                self._end_search(penetration_found=True)
+                self._clear_fallback()
                 if is_magazine:
                     self._grant_early_reload(now, 'current_shell_all_armour_failed')
                     return self._early_reload_decision(loaded)
@@ -1849,7 +1842,7 @@ class AttackPolicy(object):
         if self.fallback and not loaded_he:
             alternative = self._best_penetration(exclude=loaded, plannable=True)
             if alternative is not None:
-                self._end_search(penetration_found=True)
+                self._clear_fallback()
                 if is_magazine:
                     self._grant_early_reload(now, 'new_penetration_opportunity')
                     return self._early_reload_decision(loaded)
@@ -1859,31 +1852,11 @@ class AttackPolicy(object):
             return self._fallback_decision(loaded, is_magazine, now)
         stocked = tuple(shell['index'] for shell in frame['shells']
                         if frame['ammo'][shell['index']] > 0)
-        eligible = not loaded_he and self._all_failed(stocked)
-        if self.search_authority is None and eligible:
-            if frame.get('search_drive') is False:
-                return self._choose('wait', 'search_drive_authority_unavailable')
+        if not loaded_he and self._fallback_qualified(stocked):
             if not self._failure_fenced(stocked):
-                return self._recover_incomplete(now, 'observation_changed_before_search')
-            self.search_authority = dict(qualified_at=now, pose=frame['pose'],
-                targets=tuple(_target_key(target) for target in frame['targets']),
-                shells=stocked)
-        if self.search_authority is not None:
-            if self.search_started is not None and now >= self.search_started + SEARCH_SECONDS:
-                alternative = self._best_penetration(exclude=loaded, plannable=True)
-                if alternative is not None:
-                    self._end_search(penetration_found=True)
-                    if is_magazine:
-                        self._grant_early_reload(now, 'penetration_search_expired')
-                        return self._early_reload_decision(loaded)
-                    return self._choose('switch_shell',
-                                        'penetration_search_expired', alternative,
-                                        shell_index=alternative['shell_index'])
-                self.fallback = True
-                return self._fallback_decision(loaded, is_magazine, now)
-            rows = self._rows_for('penetration', loaded, fresh_line=True)
-            return self._choose('search_penetration', 'confirmed_global_armour_failure',
-                                rows[0] if rows else None)
+                return self._recover_incomplete(now, 'observation_changed_before_fallback')
+            self.fallback = True
+            return self._fallback_decision(loaded, is_magazine, now)
         rows = self._rows_for('penetration', None if current_failed and not is_magazine else loaded,
                               fresh_line=True)
         if any(row.get('stationary_progress') for row in rows):
@@ -1902,7 +1875,6 @@ class AttackPolicy(object):
 
     def _ordinary_he_decision(self, loaded, now):
         """Use the loaded HE after its one-point-per-enemy penetration trial."""
-        self._end_search()
         self.reload_authority = None
         is_magazine = int(self.frame.get('clip_size', 1)) > 1
         # The HE frontier owns the remaining foreground contact slots. Do
@@ -1931,6 +1903,10 @@ class AttackPolicy(object):
         # navigation-owned candidate remains a positive global observation,
         # but cannot monopolise the loaded trigger over another legal point.
         runnable = (self._best_current_he(loaded, consumable=True) if loaded_he else None)
+        if runnable is not None:
+            # A current usable contact outranks a stale higher-damage hint
+            # that would need another position or a pending native recheck.
+            return self._choose_current_he('current_he_fallback_contact', runnable)
         if is_magazine and current is not None:
             if self._executable(current, 'he_fallback'):
                 return self._choose_current_he('current_he_clip_fallback', runnable or current)
@@ -1958,7 +1934,20 @@ class AttackPolicy(object):
             if loaded_he and self._physical_review_pending(loaded, blocked):
                 return self._recover_incomplete(now, 'stationary_alternatives_pending', rows)
             return self._choose('firing_position', 'he_fallback_obstructed', blocked)
+        jobs = self._jobs('he_fallback', loaded if loaded_he else None)
+        if jobs and all(self._he_contact_failed(self._current(job, require_line=True))
+                        for job in jobs):
+            return self._choose('navigate', 'he_contact_domain_failed')
         return self._recover_incomplete(now, 'he_contact_evidence_incomplete', rows)
+
+    @staticmethod
+    def _he_contact_failed(row):
+        # Only an explicit, complete native no-contact result may end this
+        # engagement. None, pending work, a blocked ray or a future hull pose
+        # is not an HE contact failure at the current physical position.
+        return bool(row is not None and row.get('line') == 'clear' and
+            row.get('mechanical') == 'reachable' and row.get('contact') is False and
+            not row.get('review_pending') and not row.get('stationary_progress'))
 
     def _work_actor(self):
         return int(getattr(self.runtime, 'actor_id', 0))
@@ -1986,7 +1975,7 @@ class AttackPolicy(object):
             self._work_actor(), self.background_budget)
         if not allowance:
             # Queue deferral is not a candidate observation. Preserve rows,
-            # the fair point cursor, NEXT and the already-confirmed 8s clock.
+            # the fair point cursor and NEXT.
             return self.next_shell
         self._background_at = now
         self._used['background'] = 0
@@ -2030,18 +2019,8 @@ class AttackPolicy(object):
         return self.next_shell
 
     def navigation_result(self, receipt):
-        """Observe normal recovery without granting a new search deadline."""
+        """Record normal same-point recovery without ammunition authority."""
         self.navigation_receipt = dict(receipt or {})
-        authority = self.search_authority
-        observed = self.navigation_receipt
-        if (authority is not None and observed.get('action') == 'search_penetration' and
-                observed.get('episode_id') == authority.get('episode_id')):
-            authority['navigation_status'] = observed.get('status')
-            if self.search_started is None and observed.get('attempted'):
-                self.search_started = float(observed['at'])
-                deadline = self.search_started + SEARCH_SECONDS
-                self.decision.update(search_started=self.search_started, search_deadline=deadline)
-                self.decision['move_request']['deadline'] = deadline
 
     def lay_stalled(self, candidate, now):
         self._lay_recovery = candidate, now + ATOMIC_CLOSE_INTERVAL
@@ -2051,12 +2030,20 @@ class AttackPolicy(object):
 
         Point evidence is not a launched shell's result. A still-valid armour
         proof survives a new friendly/world obstruction and remains owned by
-        ordinary firing-position navigation, not the eight-second search.
+        same-point geometric recovery rather than ammunition fallback.
         """
         if not isinstance(candidate, dict):
             return
         row = self.rows.get(candidate.get('key'))
         if row is None or row.get('pose_stamp') != candidate.get('pose_stamp'):
+            return
+        if (reason == 'auto_world_blocked' and
+                (blocker or {}).get('ray_stage') == 'scatter'):
+            # This actual trigger was refused, but the native centre ray
+            # and selected stationary aim point were not geometrically
+            # disproved. The next trigger still requires a complete fresh
+            # admission; do not invent a firing-position recovery or retire
+            # the otherwise valid selected point on one scattered path.
             return
         classifications = dict(auto_friendly_lane='friendly_blocked',
             auto_friendly_splash='friendly_blocked', auto_world_blocked='world_blocked',
@@ -2232,9 +2219,6 @@ class AttackPolicy(object):
                             ('mode', 'armor', 'line', 'mechanical', 'observed_at',
                              'penetration_threshold', 'expected_damage')) if self.next_plan else None,
             next_stationary_plan=self._stationary_status(self.next_plan),
-            search_started=self.search_started,
-            search_deadline=(self.search_started + SEARCH_SECONDS
-                             if self.search_started is not None else None),
             foreground_queries=self._used['foreground'],
             background_queries=self._used['background'],
             atomic=dict(self._atomic_receipt),
@@ -2275,6 +2259,7 @@ class NativeAttackEvaluator(object):
         self._identity = None
         self._at = None
         self._budgets = {}
+        self._recovery_probe = None
         self.observations = {}
         self.atomic_receipt = {}
         self._atomic_predictions = {}
@@ -2460,14 +2445,17 @@ class NativeAttackEvaluator(object):
             reloading=float(gun.reload_time) > 0.,
             limited_traverse=limited_traverse(descriptor),
             trigger_active=observation(runtime).trigger_active(),
-            search_drive=runtime.attack_search_drive_available(),
             artillery='SPG' in (descriptor.type.tags or ()),
             targets=tuple(targets), shells=tuple(shells),
             scene=scene, observed_at=now)
         self._observe_lanes(frame)
         if self._at != now:
             self._at = now
-            self._budgets = dict(foreground=WORLD_CHORDS_PER_FRONTIER,
+            active = getattr(getattr(runtime, 'combat_stop', None),
+                             'physical_recovery_active', None)
+            recovery = (WORLD_CHORDS_PER_FRONTIER // 2 if callable(active) and active() else 0)
+            self._budgets = dict(foreground=WORLD_CHORDS_PER_FRONTIER - recovery,
+                                 recovery=recovery,
                                  background=WORLD_CHORDS_PER_FRONTIER)
         valid = set((shell['index'], target['key'], sample)
                     for shell in shells if frame['ammo'][shell['index']] > 0
@@ -2578,6 +2566,98 @@ class NativeAttackEvaluator(object):
         job = self.jobs.get(key[:3])
         if job is not None:
             job.update(cursor=0, done=False, blocked=None, lane=None)
+
+    def point_recovery_probe(self, frame, candidate, destination, now):
+        """Preview only the selected sample's future line, never a shot proof.
+
+        A translated muzzle is a planning hypothesis. Real native alignment,
+        ground attitude, armour, the final scattered barrel path and the
+        source/target fencing must all be rechecked at the reached position.
+        The separate cursor is bounded by the reserved recovery chord budget;
+        no incomplete ray may become a clear destination.
+        """
+        pending = dict(status='pending', reason='native_recovery_proof_pending')
+        if not isinstance(frame, dict) or not isinstance(candidate, dict):
+            return pending
+        key = candidate.get('key')
+        try:
+            shell = next(row for row in frame['shells']
+                         if row['index'] == candidate['shell_index'])
+            target = next(row for row in frame['targets']
+                          if row['key'] == candidate['target_key'])
+            sample = candidate['sample']
+            if sample not in (target.get('samples') or ()):
+                return dict(status='unknown', reason='sample_unavailable')
+            position = frame['position']
+            destination = _point(destination)
+            delta = tuple(destination[i] - position[i] for i in range(3))
+            origin = tuple(frame['origin'][i] + delta[i] for i in range(3))
+            pose = frame['pose']
+            projected_pose = (destination, pose[1], origin, pose[3],
+                              pose[4], pose[5],
+                              tuple(pose[6][i] + delta[i] for i in range(3)))
+            projected_frame = dict(frame, position=destination, origin=origin,
+                                   pose=projected_pose,
+                                   planning_pose=_planning_pose(projected_pose),
+                                   source=dict(frame['source'], position=destination,
+                                               x=destination[0], y=destination[1],
+                                               z=destination[2]))
+            prediction_key = (shell['index'], target['key'], sample)
+            previous = self.predictions.get(prediction_key)
+            try:
+                predicted = self._prediction(projected_frame, shell, target, sample)
+            finally:
+                if previous is None:
+                    self.predictions.pop(prediction_key, None)
+                else:
+                    self.predictions[prediction_key] = previous
+            if predicted is None:
+                return dict(status='unknown', reason='future_geometry_unavailable')
+            if predicted.get('unreachable'):
+                return dict(status='blocked', reason='future_intercept_unreachable')
+            if predicted['reach']['status'] == 'mechanical_limited':
+                return dict(status='blocked', reason='future_pitch_unreachable')
+            path = predicted['path']
+            stamp = (key, destination, frame['identity'], frame['scene'],
+                     frame['pose'][1], target['pose'], target.get('velocity'),
+                     shell['signature'], tuple(path))
+            progress = self._recovery_probe
+            if progress is None or progress.get('stamp') != stamp:
+                progress = self._recovery_probe = dict(stamp=stamp, cursor=0)
+            available = self._budgets.get('recovery', 0)
+            while progress['cursor'] < len(path) - 1 and available > 0:
+                cursor = progress['cursor']
+                first, last = path[cursor], path[cursor + 1]
+                hit = self.owner._runtime.bigworld.wg_collideSegment(
+                    self.owner._avatar.spaceID, self.owner._vector(first),
+                    self.owner._vector(last), 128)
+                available -= 1
+                progress['cursor'] += 1
+                if hit is not None:
+                    self._recovery_probe = None
+                    self._budgets['recovery'] = available
+                    return dict(status='blocked', reason='future_world_blocked')
+            self._budgets['recovery'] = available
+            if progress['cursor'] < len(path) - 1:
+                return pending
+            if frame['lane_missing']:
+                return dict(status='unknown', reason='future_lane_geometry_unavailable')
+            verdict = self.runtime.geometry._bot_friendly_path_verdict(
+                projected_frame['source'], path, 0.)
+            if not isinstance(verdict, dict):
+                return dict(status='unknown', reason='future_lane_unknown')
+            if verdict.get('clear') is not True:
+                return dict(status='blocked' if verdict.get('blocked') else 'unknown',
+                            reason='future_lane_blocked' if verdict.get('blocked') else
+                                   'future_lane_unknown')
+            if not self.fence(frame):
+                return dict(status='pending', reason='recovery_observation_changed')
+            return dict(status='clear', reason='same_point_future_line_checked',
+                        point=predicted['solution']['point'],
+                        mechanical=predicted['reach']['status'])
+        except (AttributeError, KeyError, IndexError, TypeError, ValueError,
+                RuntimeError, OverflowError, ZeroDivisionError):
+            return dict(status='unknown', reason='recovery_native_unavailable')
 
     def scope_current(self, frame, proof):
         return stationary_scope.current(self.runtime, frame, proof)
@@ -2833,13 +2913,16 @@ class NativeAttackEvaluator(object):
                        if row.get('engine_id') == entity.id), None)
         if record is None:
             return result
+        receipt = {}
         blast = owner._projectile_he_blast_contact(
             dict(shooter_kind='player'), record, entity, shot, impact, rolled,
             state=dict(velocity=direction, gravity=(0., 0., 0.), elapsed=0.),
-            seed=geometry['seed'])
+            seed=geometry['seed'], receipt=receipt)
         if blast is not None:
             result.update(contact=True, expected_damage=float(blast['damage']),
                           he_contact=dict(blast))
+        elif receipt.get('complete') is True and receipt.get('status') == 'complete_no_contact':
+            result['contact'] = False
         return result
 
     def evaluate_ranked_recheck(self, frame, shell, target, sample, mode, now, channel):

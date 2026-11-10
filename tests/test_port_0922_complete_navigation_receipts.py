@@ -162,19 +162,18 @@ class RuntimeReceiptTests(unittest.TestCase):
         self.runtime._server_orders[11] = dict(combat_mode='advance_contact',
             move_position=(10.,0.,20.), fire_allowed=False,
             tactical_evidence=dict(at=500.,selection=dict(outcome='movement_lease')))
-        def hold(state, order, targets, now, clear):
+        def hold(state, order, targets, now):
             return dict(order, move_position=(state['x'],state['y'],state['z']),
                         throttle_override=0., combat_mode='engage')
-        with mock.patch.object(self.runtime,'_rear_laying_order',side_effect=lambda s,o,t,n:o), \
-                mock.patch.object(self.runtime,'_artillery_position_order',side_effect=lambda s,o,t,n:o), \
-                mock.patch.object(self.runtime,'_gun_angle_order',side_effect=hold):
+        with mock.patch.object(self.runtime,'_rear_laying_order',side_effect=hold), \
+                mock.patch.object(self.runtime,'_artillery_position_order',side_effect=lambda s,o,t,n:o):
             self.runtime.update(.04,1.)
             first=copy.deepcopy(self.runtime._decision_cache[11][3]['order_evidence'])
             self.runtime.update(.04,1.04)
         current=self.runtime._decision_cache[11][3]['order_evidence']
         self.assertEqual(first,current)
         self.assertEqual(1.,current['sampled_at'])
-        self.assertEqual(['server_live_target','rear_laying','artillery_position','gun_angle'],
+        self.assertEqual(['server_live_target','rear_laying','artillery_position'],
                          [stage['stage'] for stage in current['stages']])
         self.assertEqual('advance_contact',current['stages'][0]['order']['combat_mode'])
         self.assertEqual(0.,current['final_order']['throttle_override'])

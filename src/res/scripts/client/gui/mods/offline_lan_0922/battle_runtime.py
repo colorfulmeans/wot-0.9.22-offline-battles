@@ -16075,16 +16075,36 @@ class BattleRuntime(SharedBattleGeometry):
 
     def _projectile_he_blast_contact(
             self, meta, record, target, shot, impact, rolled_damage,
-            state=None, pose=None, seed=None):
+            state=None, pose=None, seed=None, receipt=None):
         """Choose maximum damage among proved, reachable native surfaces.
 
         Component bounds only generate finite directions. Every damage
         candidate needs a real structural collision inside the blast sphere;
         neither a missing ray nor an unavailable model supplies armour.
         """
+        completion = dict(known=True)
+        if receipt is not None:
+            receipt.clear()
+            receipt.update(complete=False, status='incomplete', reason='scan_pending')
+
+        def incomplete(reason):
+            completion['known'] = False
+            if receipt is not None:
+                receipt.update(complete=False, status='incomplete', reason=reason)
+
+        def finished(contact):
+            if receipt is not None and completion['known']:
+                receipt.update(complete=True,
+                    status='complete_contact' if contact is not None else 'complete_no_contact',
+                    reason='native_scan_complete')
+            return contact
+
         burst = self._vector(impact)
         radius = combat_rules.he_radius(shot)
         if radius <= 0.0:
+            if not math.isnan(radius) and not math.isinf(radius) and radius == 0.:
+                return finished(None)
+            incomplete('invalid_blast_radius')
             return None
         probe_target = target
         body_matrix = None
@@ -16093,9 +16113,11 @@ class BattleRuntime(SharedBattleGeometry):
             descriptor = self._projectile_descriptor_at_pose(target, pose)
             if (self._projectile_pitch_hull_aiming(descriptor) or
                     bool(getattr(target, 'isTurretDetached', False))):
+                incomplete('historic_blast_geometry_unavailable')
                 return None
             probe_target = self._projectile_frozen_target(target, pose)
             if probe_target is None:
+                incomplete('historic_blast_geometry_unavailable')
                 return None
             body_matrix = probe_target.matrix
         elif record.get('local') and self._local_matrix is not None:
@@ -16106,6 +16128,47 @@ class BattleRuntime(SharedBattleGeometry):
                 record, target)
         else:
             body_matrix = getattr(target, 'matrix', None)
+        if receipt is not None:
+            # The probe generator deliberately skips unavailable components.
+            # That remains useful for finding a real contact, but its empty
+            # result cannot prove a failed contact unless every attached
+            # native component and its transforms are actually available.
+            from .entities.remote_vehicle import _blast_bbox_bounds
+            try:
+                if body_matrix is None or any(math.isnan(float(value)) or
+                        math.isinf(float(value)) for value in tuple(impact) + (rolled_damage, radius)):
+                    raise ValueError('invalid blast observation')
+                for index, entry in enumerate(_pose_components(probe_target, self._runtime.math)):
+                    component, component_matrix, attached = entry
+                    if not attached:
+                        continue
+                    tester = _field(component, 'hitTester')
+                    materials = _field(component, 'materials')
+                    if (not callable(getattr(tester, 'localHitTest', None)) or
+                            _blast_bbox_bounds(_field(tester, 'bbox')) is None or
+                            not callable(getattr(materials, 'values', None))):
+                        raise ValueError('incomplete native component')
+                    root = chassis_matrix if index == 0 and chassis_matrix is not None else body_matrix
+                    inverse = self._runtime.math.Matrix(root)
+                    inverse.invert()
+                    local = component_matrix.applyPoint(inverse.applyPoint(burst))
+                    reverse = self._runtime.math.Matrix(component_matrix)
+                    reverse.invert()
+                    restored = root.applyPoint(reverse.applyPoint(local))
+                    if any(math.isnan(float(value)) or math.isinf(float(value))
+                           for value in _xyz(local) + _xyz(restored)):
+                        raise ValueError('invalid native transform')
+                    for material in materials.values():
+                        factor = float(_field(material, 'vehicleDamageFactor'))
+                        if math.isnan(factor) or math.isinf(factor):
+                            raise ValueError('invalid native material')
+                        if factor > 0.:
+                            armor = float(_field(material, 'armor'))
+                            if math.isnan(armor) or math.isinf(armor) or armor < 0.:
+                                raise ValueError('invalid native armour')
+            except (AttributeError, IndexError, KeyError, TypeError, ValueError,
+                    OverflowError, RuntimeError):
+                incomplete('native_blast_geometry_unavailable')
         spall = tank_collision.descriptor_spall_coefficient(
             getattr(probe_target, 'typeDescriptor', None))
         scene_start = self._projectile_he_scene_origin(impact, state)
@@ -16150,6 +16213,7 @@ class BattleRuntime(SharedBattleGeometry):
                     collisions = target.collideSegmentExt(start, end)
                 collect(start, end, collisions)
             except Exception as error:
+                incomplete('native_blast_surface_unavailable')
                 self._report_projectile_terminal_failure(
                     meta, state or {}, 'he_surface',
                     str(record.get('network_id')), error)
@@ -16162,14 +16226,18 @@ class BattleRuntime(SharedBattleGeometry):
                 state['cursor_time'])
         for contact in candidates:
             try:
-                if self._projectile_he_world_visible(
-                        scene_start, contact['point'], burst, **clock_kwargs):
-                    return contact
+                visible = self._projectile_he_world_visible(
+                    scene_start, contact['point'], burst, **clock_kwargs)
+                if visible:
+                    return finished(contact)
+                if visible is not False:
+                    incomplete('native_blast_occlusion_unavailable')
             except Exception as error:
+                incomplete('native_blast_occlusion_unavailable')
                 self._report_projectile_terminal_failure(
                     meta, state or {}, 'he_occlusion',
                     str(record.get('network_id')), error)
-        return None
+        return finished(None)
 
     @timed('projectile.direct')
     def _projectile_direct_effect(self, meta, state, terminal_data):

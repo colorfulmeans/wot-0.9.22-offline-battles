@@ -30,6 +30,19 @@ class SharedEngineControl(SharedOrderPlanning):
                 not runtime._live() or policy.decision.get('action') == 'unchanged'):
             runtime._shared_aim_intention = None
             return command, target
+        if isinstance(target, dict):
+            # A cached physical command can outlive the entity that its
+            # strategic observation named. Do not slew toward a dead or
+            # despawned contact while waiting for the next decision slice.
+            entity = runtime.target_entity(target)
+            try:
+                current = entity is not None and entity.isStarted and entity.isAlive()
+            except (AttributeError, TypeError, RuntimeError):
+                current = False
+            if not current:
+                command = dict(command, fire_allowed=False,
+                               aim_position=None, _ballistic_solution=None)
+                target = None
         candidate = runtime.current_attack_candidate(state, target, for_aim=True)
         if candidate is not None and isinstance(command.get('_ballistic_solution'), dict):
             runtime._shared_aim_intention = dict(
@@ -50,17 +63,28 @@ class SharedEngineControl(SharedOrderPlanning):
         observed = next((row for row in runtime.combat_targets()
             if (row.get('kind'), row.get('network_id')) == key and
                row.get('alive', True) and row.get('visible', True)), None)
-        replaced = any(value is not None and
-            (value.get('kind'), value.get('network_id')) != key
-            for value in (selected, target))
+        native = runtime.target_entity(observed) if observed is not None else None
+        try:
+            native_alive = native is not None and native.isStarted and native.isAlive()
+        except (AttributeError, TypeError, RuntimeError):
+            native_alive = False
+        lease = getattr(runtime, '_gun_handoff', None)
+        original = (lease.get('original') if lease is not None and
+                    lease.get('episode') == owner._episode and
+                    lease.get('candidate') == intention['key'] else None)
+        allowed = (key, original) if original is not None else (key,)
+        replaced = (selected is not None and
+            (selected.get('kind'), selected.get('network_id')) != key or
+            target is not None and
+            (target.get('kind'), target.get('network_id')) not in allowed)
         if (retained['generation'] != runtime.generation or
-                retained['episode'] != owner._episode or observed is None or replaced or
+                retained['episode'] != owner._episode or not native_alive or replaced or
                 retained['weapon_identity'] != tuple(observation(runtime).weapon_identity()) or
-                runtime.target_entity(observed) is not retained['entity'] or
+                native is not retained['entity'] or
                 int(runtime.gun.shot_index) != int(intention['shell_index'])):
             runtime._shared_aim_intention = None
             return command, target
-        if policy.decision.get('action') not in ('wait', 'preaim', 'firing_position'):
+        if policy.decision.get('action') not in ('aim', 'wait', 'preaim', 'firing_position'):
             return command, target
         solution = policy.evaluator.refresh_trigger_solution(intention, now)
         if solution is None:

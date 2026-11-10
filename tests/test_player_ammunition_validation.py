@@ -30,9 +30,10 @@ class AmmunitionValidationTests(unittest.TestCase):
         scene.allow_atomic = False
         scene.frame.update(loaded=2, ammo=(0, 0, 10))
         scene.he(90.)
-        scene.he(130., target=3, sample=2)
-        expected_points = set((('bot', target), sample)
-            for target in range(1, 4) for sample in range(3))
+        scene.he(130., target=3, sample=0)
+        # Ordinary HE validates one sample per enemy. Unlike reviewed HESH,
+        # it must never expand to all nine armour points.
+        expected_points = {(('bot', target), 0) for target in range(1, 4)}
         observed_points = set()
         saw_pending = False
         moving_aims = 0
@@ -41,18 +42,18 @@ class AmmunitionValidationTests(unittest.TestCase):
             now = tick * .1
             before = len(scene.calls)
             decision = scene.tick(now, background=False)
-            # CURRENT may retain the bounded ranking pass across motion,
-            # but cannot aim before all nine points were actually visited.
+            # The loaded shell may fire a proven contact before the remaining
+            # comparison is complete, but may only rank contacts actually
+            # observed from this current pose.
             # Background observations made later in this control frame must
             # not retroactively justify an earlier foreground decision.
             observed_points.update((call[3], call[4]) for call in scene.calls
                 if call[2] == 2 and call[-1] == 'he_fallback')
+            self.assertTrue(observed_points <= expected_points)
             if observed_points != expected_points:
                 saw_pending = True
-                self.assertNotEqual('aim', decision['action'])
             if decision['action'] == 'aim':
                 moving_aims += 1
-                self.assertEqual(expected_points, observed_points)
                 candidate = decision['candidate']
                 current = scene.policy.current_row(candidate)
                 self.assertIsNotNone(current)
@@ -60,11 +61,15 @@ class AmmunitionValidationTests(unittest.TestCase):
                 self.assertEqual(scene.frame['pose'], current['solution']['source_pose'])
                 self.assertEqual(now, current['observed_at'])
                 self.assertTrue(scene.policy._executable_current(current, 'he_fallback'))
-                self.assertEqual(('he_fallback', ('bot', 3), 2, 130.),
-                    (candidate['mode'], candidate['target_key'], candidate['sample'],
-                     candidate['expected_damage']))
-                self.assertEqual(dict(total=9, observed=9, pending=0),
-                                 scene.policy.he_comparison)
+                known_damage = {('bot', 1): 90., ('bot', 3): 130.}
+                admissible = {key: damage for key, damage in known_damage.items()
+                              if (key, 0) in observed_points}
+                self.assertTrue(admissible)
+                self.assertEqual('he_fallback', candidate['mode'])
+                self.assertEqual(0, candidate['sample'])
+                self.assertEqual(max(admissible.values()), candidate['expected_damage'])
+                self.assertIn(candidate['target_key'], admissible)
+                self.assertEqual(3, scene.policy.he_comparison['total'])
             scene.policy.background(now)
             calls = scene.calls[before:]
             self.assertLessEqual(sum(call[1] == 'foreground' for call in calls),
@@ -72,20 +77,18 @@ class AmmunitionValidationTests(unittest.TestCase):
             self.assertLessEqual(sum(call[1] == 'background' for call in calls),
                                  scene.policy.background_budget)
             self.assertFalse(any(call[1] == 'atomic' for call in calls))
-            self.assertIsNone(scene.policy.search_started)
+            self.assertFalse(hasattr(scene.policy, 'search_started'))
             if decision['action'] == 'aim':
                 break
         self.assertTrue(saw_pending)
         self.assertGreater(moving_aims, 0)
         probes = [call for call in scene.calls if call[2] == 2 and call[-1] == 'penetration']
-        self.assertEqual(3, len(probes))
-        self.assertEqual({(('bot', target), 0) for target in range(1, 4)},
-                         {probe[3:5] for probe in probes})
+        self.assertLessEqual(len({probe[3:5] for probe in probes}), 3)
+        self.assertTrue(all(probe[4] == 0 for probe in probes))
         self.assertEqual('aim', decision['action'])
         self.assertEqual('he_fallback', decision['candidate']['mode'])
-        self.assertEqual(130., decision['candidate']['expected_damage'])
-        self.assertEqual(('bot', 3), decision['candidate']['target_key'])
-        self.assertIsNone(scene.policy.search_started)
+        self.assertIn(decision['candidate']['expected_damage'], (90., 130.))
+        self.assertFalse(hasattr(scene.policy, 'search_started'))
 
     def test_failed_ordinary_he_executes_current_while_original_rank_plans_next(self):
         scene = Observations(targets=2, points=3, he_validation=roles.SINGLE_POINT)
@@ -102,7 +105,7 @@ class AmmunitionValidationTests(unittest.TestCase):
                          (decision['candidate']['shell_index'], decision['candidate']['mode']))
         self.assertEqual(0, scene.policy.next_shell)
         self.assertEqual(2, len([c for c in scene.calls if c[2] == 2 and c[-1] == 'penetration']))
-        self.assertIsNone(scene.policy.search_started)
+        self.assertFalse(hasattr(scene.policy, 'search_started'))
 
     def test_unknown_and_blocked_he_are_not_a_failed_trial(self):
         for line, armor, mechanical in (('clear', 'unknown', 'reachable'),
@@ -119,7 +122,7 @@ class AmmunitionValidationTests(unittest.TestCase):
                     decision = scene.tick(tick * .1)
                 self.assertNotEqual('switch_shell', decision['action'])
                 self.assertFalse((decision.get('candidate') or {}).get('mode') == 'he_fallback')
-                self.assertIsNone(scene.policy.search_started)
+                self.assertFalse(hasattr(scene.policy, 'search_started'))
 
     def test_single_he_executes_while_late_alternative_is_reviewed_during_source_settling(self):
         scene = Observations(targets=1, points=7, he_validation=roles.SINGLE_POINT)
@@ -141,7 +144,7 @@ class AmmunitionValidationTests(unittest.TestCase):
                 next_verified = True
                 self.assertEqual(6, scene.policy.next_plan['sample'])
                 self.assertEqual('verified', scene.policy.next_at_edge()[1])
-            self.assertIsNone(scene.policy.search_started)
+            self.assertFalse(hasattr(scene.policy, 'search_started'))
         self.assertTrue(current_aimed)
         self.assertTrue(next_verified)
 

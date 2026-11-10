@@ -224,7 +224,7 @@ class LimitedTraverseGeometryTests(TraverseHarness, unittest.TestCase):
                 self.assertTrue(row['solution']['needs_hull'])
                 self.assertFalse(row['solution']['reachable'])
                 self.assertFalse(row['solution']['source_verified'])
-                self.assertIsNone(scene.runtime.attack_policy.search_started)
+                self.assertFalse(hasattr(scene.runtime.attack_policy, 'search_started'))
 
     def test_wall_or_pitch_refusal_is_not_a_fireable_candidate(self):
         scene = self.scene()
@@ -253,7 +253,7 @@ class LimitedTraverseGeometryTests(TraverseHarness, unittest.TestCase):
         decision = scene.runtime.attack_policy.update(scene.now)
         self.assertEqual(('unchanged', 'copied_artillery_owner'),
                          (decision['action'], decision['reason']))
-        self.assertIsNone(scene.runtime.attack_policy.search_started)
+        self.assertFalse(hasattr(scene.runtime.attack_policy, 'search_started'))
         reach = mechanical_reach(scene.entity.typeDescriptor,
                                  _direction(.7, 0.), (0., 0., 0.))
         self.assertTrue(reach['needs_hull'])
@@ -265,7 +265,7 @@ class LimitedTraverseGeometryTests(TraverseHarness, unittest.TestCase):
         self.assertEqual('pending', row['line'])
         self.assertEqual('unknown', row['armor'])
         self.assertFalse(scene.fire())
-        self.assertIsNone(scene.runtime.attack_policy.search_started)
+        self.assertFalse(hasattr(scene.runtime.attack_policy, 'search_started'))
         self.assertFalse(scene.battle._projectile_meta)
 
     def test_actual_hull_change_rebuilds_native_source_before_firing_proof(self):
@@ -346,7 +346,9 @@ class LimitedTraverseConsumerTests(TraverseHarness, unittest.TestCase):
 
     def test_capture_circle_can_lay_limited_gun_without_claiming_a_fireable_target(self):
         scene = self.scene(capture=True)
-        self.advance_until(scene, lambda: bool(scene.runtime.state.get('hull_aiming')))
+        # Capture movement remains task-owned: the copied driver can turn in
+        # place without publishing a combat-owned hull_aiming motion lease.
+        self.advance_until(scene, lambda: scene.trace[-1]['sender'][1] > .01)
         self.assertEqual((0., 0., 0.), scene.position)
         self.assertEqual(0., scene.battle._sender.forward)
         self.assertGreater(scene.battle._sender.turn, 0.)
@@ -354,7 +356,7 @@ class LimitedTraverseConsumerTests(TraverseHarness, unittest.TestCase):
         self.assertFalse(scene.runtime.combat_stop.stop_allowed)
         self.assertTrue(scene.runtime.combat_stop.task_order.get('capture_area'))
         self.assertEqual(0, scene.control.automatic_commits)
-        self.assertIsNone(scene.runtime.attack_policy.search_started)
+        self.assertFalse(hasattr(scene.runtime.attack_policy, 'search_started'))
 
     def test_real_capture_order_reaches_track_arc_guard_at_circle_edge_and_inside(self):
         for edge in (False, True):
@@ -372,11 +374,11 @@ class LimitedTraverseConsumerTests(TraverseHarness, unittest.TestCase):
                     self.assertEqual('capturing', scene.runtime._mission['phase'])
                     self.assertFalse(scene.runtime.combat_stop.explicit_travel,
                         'Inside the original capture circle is not point-arrival travel')
-                    return bool(scene.runtime.state.get('hull_aiming'))
+                    return scene.trace[-1]['sender'][1] > .01
                 self.advance_until(scene, original_capture_can_aim)
                 self.assertEqual(((0., center), 30.), scene.control.last_order['capture_pivot_circle'])
                 self.assertFalse(scene.runtime.combat_stop.stop_allowed)
-                self.assertIsNone(scene.runtime.attack_policy.search_started)
+                self.assertFalse(hasattr(scene.runtime.attack_policy, 'search_started'))
                 self.assertEqual(0., scene.battle._sender.forward)
                 self.assertGreater(scene.battle._sender.turn, 0.)
                 before = tuple(scene.battle._local_position), scene.battle._local_yaw
@@ -511,7 +513,7 @@ class MovingTraverseConsumerTests(TraverseHarness, unittest.TestCase):
                 self.assertLess(scene.now-admitted, 16.6)
                 self.assertEqual(0., scene.body.yaw)
                 self.assertEqual(0, scene.control.automatic_commits)
-                self.assertIsNone(scene.runtime.attack_policy.search_started)
+                self.assertFalse(hasattr(scene.runtime.attack_policy, 'search_started'))
 
     def test_amx_1948_flickering_lane_leaves_recovery_to_the_original_driver(self):
         limit = math.radians(10.)
@@ -566,14 +568,15 @@ class MovingTraverseConsumerTests(TraverseHarness, unittest.TestCase):
                     self.assertEqual(before, tuple(scene.battle._gun_state.ammo))
                     self.assertEqual(3, scene.battle._gun_state.clip)
                     scene.trigger.assert_not_called()
-                    self.assertIsNone(runtime.attack_policy.search_started)
+                    self.assertFalse(hasattr(runtime.attack_policy, 'search_started'))
 
                     if next_event == 'new_position':
                         scene.position = (-1.49, 0., 0.)
                         scene.set_hull(.07)
                         scene.tick()
-                        self.assertNotEqual('native_lay',
-                            runtime.combat_stop.receipt.get('reason'))
+                        # A *materially new* source pose may start a fresh
+                        # bounded lay; the previous tiny flickers may not.
+                        self.assertFalse(scene.trace[-1]['order']['fire_allowed'])
                         scene.position = (-1.5, 0., 0.)
                         scene.set_hull(.071)
                         self.advance_until(scene, lambda: scene.trace[-1]['hull_aiming'])
@@ -619,7 +622,7 @@ class MovingTraverseConsumerTests(TraverseHarness, unittest.TestCase):
             scene.tick()
         self.assertEqual(0, scene.control.automatic_commits)
         self.assertFalse(scene.battle._projectile_meta)
-        self.assertIsNone(scene.runtime.attack_policy.search_started)
+        self.assertFalse(hasattr(scene.runtime.attack_policy, 'search_started'))
 
     def test_world_blocked_candidates_do_not_acquire_a_firing_hull_owner(self):
         scene = self.scene(capture=True)
@@ -629,7 +632,7 @@ class MovingTraverseConsumerTests(TraverseHarness, unittest.TestCase):
         self.assertTrue(scene.world_queries)
         self.assertFalse(any(row['hull_aiming'] for row in scene.trace))
         self.assertEqual(0, scene.control.automatic_commits)
-        self.assertIsNone(scene.runtime.attack_policy.search_started)
+        self.assertFalse(hasattr(scene.runtime.attack_policy, 'search_started'))
 
     def test_explicit_drive_retires_limited_hull_and_native_source_ownership(self):
         scene = self.scene()

@@ -27,7 +27,7 @@ class PhysicalReviewCoverageTests(unittest.TestCase):
             result = scene.tick(step * .05)
             self.assertLessEqual(scene.policy._used['foreground'], 2)
             self.assertLessEqual(scene.policy._used['background'], 2)
-            self.assertIsNone(scene.policy.search_authority)
+            self.assertFalse(hasattr(scene.policy, 'search_authority'))
             self.assertIsNone(scene.policy.reload_authority)
             self.assertFalse(scene.policy.apply_order({})['fire_allowed'])
             if result['action'] == 'firing_position':
@@ -59,7 +59,7 @@ class PhysicalReviewCoverageTests(unittest.TestCase):
                 for step in range(10):
                     result = scene.tick(step * .05)
                     self.assertNotEqual('firing_position', result['action'])
-                    self.assertIsNone(scene.policy.search_authority)
+                    self.assertFalse(hasattr(scene.policy, 'search_authority'))
                     self.assertFalse(scene.policy.apply_order({})['fire_allowed'])
 
     def test_fresh_blocker_sample_rotation_does_not_restart_the_same_review_pass(self):
@@ -76,7 +76,7 @@ class PhysicalReviewCoverageTests(unittest.TestCase):
                         scene.move_target(target, step)
                     result = scene.tick(step * .05)
                     self.assertFalse(scene.policy.apply_order({})['fire_allowed'])
-                    self.assertIsNone(scene.policy.search_authority)
+                    self.assertFalse(hasattr(scene.policy, 'search_authority'))
                     if result['action'] == 'firing_position':
                         break
                 self.assertEqual('firing_position', result['action'], scene.policy.status())
@@ -97,7 +97,7 @@ class PhysicalReviewCoverageTests(unittest.TestCase):
         for step in range(1, 10):
             result = scene.tick(step * .05)
             self.assertNotEqual('firing_position', result['action'], result)
-            self.assertIsNone(scene.policy.search_authority)
+            self.assertFalse(hasattr(scene.policy, 'search_authority'))
 
     def test_verified_aim_ends_review_before_a_later_same_place_obstruction(self):
         scene = self.scene(points=9)
@@ -113,7 +113,7 @@ class PhysicalReviewCoverageTests(unittest.TestCase):
         result = scene.tick(.2, background=False)
         self.assertNotEqual('firing_position', result['action'], result)
         self.assertFalse(scene.policy.apply_order({})['fire_allowed'])
-        self.assertIsNone(scene.policy.search_authority)
+        self.assertFalse(hasattr(scene.policy, 'search_authority'))
 
     def test_new_scope_must_complete_its_own_observations(self):
         for change in ('source', 'shell', 'entity', 'sample', 'new_target', 'blocker', 'reset'):
@@ -143,7 +143,7 @@ class PhysicalReviewCoverageTests(unittest.TestCase):
                     scene.policy.reset()
                 result = scene.tick(.1, background=False)
                 self.assertNotEqual('firing_position', result['action'], (change, result))
-                self.assertIsNone(scene.policy.search_authority)
+                self.assertFalse(hasattr(scene.policy, 'search_authority'))
                 self.assertFalse(scene.policy.apply_order({})['fire_allowed'])
 
 

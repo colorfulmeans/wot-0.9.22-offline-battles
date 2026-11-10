@@ -92,7 +92,7 @@ class SharedHEDamageRankingTests(unittest.TestCase):
         scene.on_evaluate = None
         decision = scene.tick(.1, background=False)
         self.assertEqual('aim', decision['action'])
-        self.assertEqual((('bot', 2), 200.),
+        self.assertEqual((('bot', 1), 80.),
             (decision['candidate']['target_key'], decision['candidate']['expected_damage']))
 
     def test_moving_he_domain_larger_than_atomic_slice_eventually_aims_current_best(self):
@@ -119,6 +119,9 @@ class SharedHEDamageRankingTests(unittest.TestCase):
                             target['value']['position'] = (step * .1, 0., 100. + index)
                     before = len(scene.calls)
                     decision = scene.tick(step * .1)
+                    if step == 0:
+                        self.assertEqual(targets, len(scene.policy._jobs('he_fallback', 2)),
+                            'ordinary HE must not validate eight redundant samples per enemy')
                     actions[decision['action']] = actions.get(decision['action'], 0) + 1
                     maximum_observed = max(maximum_observed,
                                            scene.policy.he_comparison['observed'])
@@ -135,7 +138,7 @@ class SharedHEDamageRankingTests(unittest.TestCase):
                     self.assertEqual('he_fallback', candidate['mode'])
                     self.assertEqual(current['pose_stamp'], candidate['pose_stamp'])
                     self.assertTrue(scene.policy._executable_current(current, 'he_fallback'))
-                    self.assertEqual((2, ('bot', targets), 8, 80. + targets + 8),
+                    self.assertEqual((2, ('bot', targets), 0, 80. + targets),
                         (candidate['shell_index'], candidate['target_key'],
                          candidate['sample'], candidate['expected_damage']))
                     expected_pose = ('enemy', targets, step if moving else 0)
@@ -232,7 +235,7 @@ class SharedHEDamageRankingTests(unittest.TestCase):
         self.assertEqual((None, 'not_observed'), scene.policy.next_at_edge())
         self.assertEqual(before, len(scene.calls))
         self.assertEqual(0, scene.atomic_calls)
-        self.assertIsNone(scene.policy.search_started)
+        self.assertFalse(hasattr(scene.policy, 'search_started'))
         scene.policy.background_budget = 2
         scene.tick(.1)
         self.assertTrue(any(call[1] == 'background' for call in scene.calls[before:]))
@@ -303,7 +306,7 @@ class SharedHEDamageRankingTests(unittest.TestCase):
             self.assertEqual(('aim', 2),
                              (decision['action'], decision['candidate']['shell_index']))
             self.assertEqual((6, (0, 0, 6, 30)), (scene.frame['clip'], scene.frame['ammo']))
-            self.assertIsNone(scene.policy.search_started)
+            self.assertFalse(hasattr(scene.policy, 'search_started'))
             plan, reason = scene.policy.next_at_edge()
             if plan is not None:
                 break
@@ -376,11 +379,11 @@ class SharedCurrentHEObservationTests(unittest.TestCase):
             self.move_all(scene, step)
             decision = self.tick(scene, step * .1)
             self.assertNotIn(decision['action'], ('switch_shell', 'reload_clip', 'search_penetration'))
-            self.assertIsNone(scene.policy.search_started)
+            self.assertFalse(hasattr(scene.policy, 'search_started'))
             self.assertIsNone(scene.policy.reload_authority)
             if decision['action'] == 'aim':
                 break
-        self.assert_current_aim(scene, decision, 7, 8, 95.)
+        self.assert_current_aim(scene, decision, 7, 0, 87.)
 
     def test_blocked_high_hint_requires_live_proof_before_advancing_to_next_contact(self):
         scene = self.scene()
@@ -431,7 +434,7 @@ class SharedCurrentHEObservationTests(unittest.TestCase):
             scene.policy._current_he_observations[first['candidate']['key']]['damage'],
             'deferring an unfinished recheck must not invent zero damage')
 
-    def test_pending_first_pass_contact_cannot_be_skipped_as_an_old_hint(self):
+    def test_pending_first_contact_does_not_block_a_new_loaded_he_contact(self):
         scene = self.scene(targets=2)
         scene.value(2, target=1, mode='he_fallback', armor='unknown',
                     line='pending', review_pending=True, contact=None,
@@ -441,17 +444,21 @@ class SharedCurrentHEObservationTests(unittest.TestCase):
         for step in range(101):
             self.move_all(scene, step)
             decision = self.tick(scene, step * .1)
-            self.assertNotEqual('aim', decision['action'])
-            self.assertFalse(scene.policy.apply_order({})['fire_allowed'])
-            self.assertGreater(scene.policy.he_comparison['pending'], 0)
+            # Pending target 1 is not an executable contact and cannot be
+            # ranked as zero. The *loaded* HE may nevertheless shoot the
+            # independently proved target 2 without waiting for that probe.
             self.assertNotIn((2, ('bot', 1), 0, 'he_fallback'),
                              scene.policy._current_he_observations)
             verified_lower = verified_lower or any(
                 row['target_key'] == ('bot', 2) and row['mode'] == 'he_fallback' and
                 scene.policy._executable_current(row, 'he_fallback')
                 for row in scene.policy.rows.values())
+            if decision['action'] == 'aim':
+                self.assert_current_aim(scene, decision, 2, 0, 100.)
+                break
         self.assertTrue(verified_lower,
-                        'the unvisited/pending point, not missing lower-target facts, must hold comparison')
+                        'a positive observed lower contact must be independently executable')
+        self.assertEqual('aim', decision['action'])
 
     def test_high_hint_dying_during_recheck_revokes_batch_then_prunes_dead_target(self):
         scene = self.scene()
@@ -499,14 +506,14 @@ class SharedCurrentHEObservationTests(unittest.TestCase):
             decision = self.tick(scene, step * .1)
             self.assertFalse(scene.policy._all_failed((0,)))
             self.assertFalse(scene.policy._fallback_qualified((0,)))
-            self.assertIsNone(scene.policy.search_started)
-            self.assertIsNone(scene.policy.search_authority)
+            self.assertFalse(hasattr(scene.policy, 'search_started'))
+            self.assertFalse(hasattr(scene.policy, 'search_authority'))
             self.assertIsNone(scene.policy.reload_authority)
             self.assertIsNone(scene.policy.next_at_edge()[0])
             aimed = aimed or decision['action'] == 'aim'
         self.assertTrue(aimed)
-        self.assert_current_aim(scene, decision, 7, 8, 95.)
-        self.assertEqual(63, len(scene.policy._current_he_observations))
+        self.assert_current_aim(scene, decision, 7, 0, 87.)
+        self.assertEqual(7, len(scene.policy._current_he_observations))
         self.assertTrue(all(set(value) == {'identity', 'damage'}
                             for value in scene.policy._current_he_observations.values()))
         self.assertIsNone(scene.policy._best_he(plannable=True),
@@ -518,12 +525,14 @@ class SharedCurrentHEObservationTests(unittest.TestCase):
         scene = self.scene(targets=2, clips=6)
         first = self.tick(scene, 0.)
         self.assert_current_aim(scene, first, 2, 0, 82.)
-        # The completed current comparison owns this uncommitted trigger.
-        # A physical commit opens the next comparison, whose new domain
-        # still has to be completely observed before another aim is valid.
+        # A physical commit opens the next comparison. New contacts need
+        # their own physical observation; ordinary HE only samples index 0.
         scene.policy.shot_committed(dict(burst_index=0, burst_count=1),
                                    dict(player_control=dict(candidate=first['candidate'])))
         scene.frame.update(clip=5, ammo=(0, 0, 59))
+        for old_target in (1, 2):
+            scene.value(2, target=old_target, mode='he_fallback',
+                        contact=None, expected_damage=None)
         target = copy.deepcopy(scene.frame['targets'][-1])
         target.update(key=('bot', 3), pose=('enemy', 3, 0), samples=(0, 1, 2),
                       sample_identity=('entity', 3, 'layout', 1))
@@ -534,14 +543,13 @@ class SharedCurrentHEObservationTests(unittest.TestCase):
         self.move_all(scene, 1)
         decision = self.tick(scene, .1, background=False)
         self.assertNotEqual('aim', decision['action'])
-        self.assertEqual(5, scene.policy.he_comparison['total'])
-        self.assertGreater(scene.policy.he_comparison['pending'], 0)
+        self.assertEqual(3, scene.policy.he_comparison['total'])
         for step in range(2, 31):
             self.move_all(scene, step)
             decision = self.tick(scene, step * .1)
             if decision['action'] == 'aim':
                 break
-        self.assert_current_aim(scene, decision, 3, 2, 302.)
+        self.assert_current_aim(scene, decision, 3, 0, 300.)
 
     def test_next_trigger_entity_or_sample_identity_change_cannot_inherit_current_hint(self):
         for change in ('entity', 'sample_identity', 'sample_layout'):
@@ -560,7 +568,7 @@ class SharedCurrentHEObservationTests(unittest.TestCase):
                     target['sample_identity'] = ('entity', 2, 'layout', 2)
                 else:
                     target['samples'] = (0, 1)
-                sample = 1 if change == 'sample_layout' else 0
+                sample = 0
                 scene.he(300., target=2, sample=sample)
                 before = len(scene.calls)
                 for step in range(1, 31):
@@ -575,7 +583,7 @@ class SharedCurrentHEObservationTests(unittest.TestCase):
     def test_final_trigger_commit_starts_a_new_current_he_comparison(self):
         scene = self.scene(points=2, clips=6)
         first = self.tick(scene, 0.)
-        self.assert_current_aim(scene, first, 3, 1, 84.)
+        self.assert_current_aim(scene, first, 3, 0, 83.)
         observations = copy.deepcopy(scene.policy._current_he_observations)
         scene.policy.shot_committed(dict(burst_index=0, burst_count=3),
                                    dict(player_control=dict(candidate=first['candidate'])))

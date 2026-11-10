@@ -168,10 +168,8 @@ class CombatStop(object):
             state['position'], visible[key])) if self.active else [])
         self.targets = tuple(visible[key] for key in admitted)
         # Priority is not a geometry/admission change. Reordering the same
-        # original eligible enemies must not restart the all-enemy eight-
-        # second search or discard an otherwise current NEXT proof.
-        # Committing movement must not invalidate the very native evidence
-        # which authorized it, or reset the same all-enemy search next tick.
+        # original eligible enemies must not discard an otherwise current NEXT
+        # proof. Committing movement must not invalidate its native evidence.
         self.signature = (self.active, tuple(sorted(admitted)))
         if not self.stop_allowed:
             self.pivot = None
@@ -216,19 +214,23 @@ class CombatStop(object):
         if policy._plannable(current, mode):
             return current
         if decision.get('action') == 'firing_position':
-            # These are the existing native recovery requests, not a new
-            # shootability gate. A proved physical path with a limited gun,
-            # or a real friendly blocker, can request laying/repositioning
-            # before there is an executable shot or a penetration result.
+            # A real geometric refusal can request same-point recovery
+            # without pretending its obstructed plate was penetrable.
+            blocked = current.get('line') in ('friendly_blocked', 'world_blocked',
+                                               'enemy_blocked', 'vehicle_blocked')
+            # A speculative route hint with an unknown plate is not a
+            # movement admission. A genuine native blocked row carries the
+            # evaluator's current source and lane stamps; a previously
+            # proved plate may also retain its current refusal.
+            certified_block = bool(blocked and (current.get('armor') == 'passed' or
+                current.get('pose_stamp') is not None and
+                current.get('line_stamp') is not None))
             if (isinstance(current.get('solution'), dict) and
-                    (current.get('armor') == 'passed' and policy._needs_firing_position(current) or
-                     current.get('line') == 'friendly_blocked' or
+                    (certified_block or
+                     current.get('armor') == 'passed' and policy._needs_firing_position(current) or
                      current.get('line') == 'clear' and current.get('mechanical') in
                         ('hull_laying', 'mechanical_limited'))):
                 return current
-        if (decision.get('action') == 'search_penetration' and
-                policy.search_authority is not None):
-            return current
         return None
 
     def _verified_shot(self):
@@ -246,6 +248,11 @@ class CombatStop(object):
         if not self.active:
             return order
         runtime, policy = self.runtime, self.runtime.attack_policy
+        if self.combat_owned and policy.decision.get('action') == 'navigate':
+            # A completed no-shot/no-HE decision is terminal for this
+            # engagement, not a parked combat task with a route-like label.
+            return self._release_to_route(order, now,
+                policy.decision.get('reason', 'combat_no_executable_contact'))
         proposal = self._proposal()
         verified_shot = self._verified_shot()
         mission = getattr(runtime, '_mission', None) or {}
@@ -261,10 +268,7 @@ class CombatStop(object):
         elif target is None and explicit_attack:
             target = self.engagement_target(order)
         if (not self.combat_owned and self._failed_recovery is not None and
-                verified_shot is None and not (
-                    policy.decision.get('action') == 'search_penetration' and
-                    policy.search_authority is not None) and
-                not self._recovery_context_changed()):
+                verified_shot is None and not self._recovery_context_changed()):
             # An expired physical move cannot reacquire the very same route
             # on every callback, even when an initial/explicit attack hint
             # still names this enemy. A new executable shot remains admissible.
@@ -310,7 +314,15 @@ class CombatStop(object):
         else:
             hint = self.task_order.get('initial_target_hint') or self.task_order
             primary = _key(dict(kind=hint.get('target_kind'), id=hint.get('target_id')))
+            capture_hull_lay = bool(
+                order.get('combat_mode') == 'base_capture' and
+                policy.decision.get('action') in ('aim', 'firing_position') and
+                proposal is not None and proposal.get('line') == 'clear' and
+                proposal.get('mechanical') == 'hull_laying')
             if (self._intent_target == primary and
+                    (capture_hull_lay or order.get('combat_mode') != 'base_capture' and
+                     not order.get('capture_area')) and
+                    not order.get('parking_phase') and
                     (order.get('throttle_override') == 0. or 'drive' not in runtime.features)):
                 # The existing stationary task may lay its own primary gun
                 # inside its capture/parking constraints. This is a native
@@ -348,13 +360,40 @@ class CombatStop(object):
         failed = self._failed_recovery
         if failed is None:
             return True
-        if _distance(self.runtime.state['position'], failed['position']) >= WAYPOINT_ARRIVAL_RADIUS:
+        state = self.runtime.state
+        if _distance(state['position'], failed['position']) >= .75:
             return True
-        poses = dict((_key(target), tuple(target['position'])) for target in self.targets)
-        if set(poses) != set(failed['targets']):
+        if abs(_angle(float(state.get('yaw', 0.)) - failed.get('yaw', 0.))) >= .12:
             return True
-        return any(_distance(position, failed['targets'][key]) >= WAYPOINT_ARRIVAL_RADIUS
-                   for key, position in poses.items())
+        # An unrelated enemy's motion or a changing roster is not a new
+        # firing opportunity for the still-blocked selected sample.
+        target = next((row for row in self.targets if _key(row) == failed.get('target')), None)
+        previous = failed.get('target_position')
+        return bool(target is not None and previous is not None and
+                    _distance(target['position'], previous) >= .75)
+
+    def _release_to_route(self, order, now, reason):
+        """Return actual motion ownership and preserve the failed geometry."""
+        phase = self._physical_recovery or {}
+        failed_target = phase.get('target') or self._intent_target
+        target = next((row for row in self.targets if _key(row) == failed_target), None)
+        self._failed_recovery = dict(position=tuple(self.runtime.state['position']),
+            yaw=float(self.runtime.state.get('yaw', 0.)),
+            target=failed_target, target_position=tuple(target['position']) if target else None,
+            key=phase.get('key'), reason=reason, at=now, episode=self._episode)
+        self._retire_physical_recovery(reason, now)
+        self.pivot = self.runtime._native_hull_laying = None
+        self.combat_owned = self.stop_allowed = False
+        self._intent_target = self._motion_order = None
+        self.runtime._last_navigation = dict(action='firing_position',
+            status='failed', reason=reason, owner='shared_combat',
+            at=now, episode=self._episode)
+        self.receipt.update(status='released', reason=reason,
+            combat_owned=False, stop_allowed=False, movement_owner='task')
+        self._publish_owner()
+        # The route was never replaced. Returning exactly its current task
+        # order lets the original driver resume its saved route progress.
+        return dict(self.task_order or order, fire_allowed=False)
 
     def physical_recovery_active(self):
         """Only this phase may consume the existing bounded mechanical law."""
@@ -395,84 +434,145 @@ class CombatStop(object):
                         fire_allowed=False)
         return order if not order.get('fire_allowed') else dict(order, fire_allowed=False)
 
-    def _physical_lay_at_new_position(self, order, target, now):
-        """A current native plan at a reached new pose may finish recovery.
+    def _physical_order(self, order, target, now, reason):
+        """Plan a bounded translation against the exact selected gun sample.
 
-        Candidate churn, a changed yaw at the same ground position, and
-        pending line evidence do not finish the checked physical manoeuvre.
-        The existing arrival tolerance and native laying proof are reused.
+        The original forward/reverse angle owner must not choose a position
+        independently. This owner asks the native evaluator whether the SAME
+        shell, target and sample can see a candidate destination, then gives
+        the ordinary driver only the checked destination. Arrival is not a
+        firing proof: current-position evidence must be observed again.
         """
         runtime, policy = self.runtime, self.runtime.attack_policy
         phase = self._physical_recovery
-        if (now < runtime.state.get('_native_rotation_refused_until', 0.) or
-                _distance(runtime.state['position'], phase['position']) < WAYPOINT_ARRIVAL_RADIUS):
-            return None
-        candidate = policy.decision.get('candidate')
-        if (candidate is None or _key(candidate.get('target') or {}) != phase['target'] or
-                candidate.get('shell_index') != runtime.gun.shot_index):
-            return None
-        current = policy.current_row(candidate, require_line=True)
-        if current is None:
-            return None
-        planned = policy._planned_evidence(current)
-        if (planned is not None and (planned.get('solution') or {}).get('needs_hull') and
-                policy._plannable(current, candidate.get('mode', 'penetration'))):
-            solution = planned['solution']
-        elif current.get('mechanical') == 'hull_laying' and current.get('line') == 'clear':
-            solution = current.get('solution')
-        else:
-            return None
-        if not isinstance(solution, dict):
-            return None
-        self._retire_physical_recovery('native_lay_proved_at_new_position', now)
-        self.pivot = runtime._native_hull_laying = None
-        self._motion_order = None
-        return self._lay_order(order, target, solution, now)
-
-    def _physical_order(self, order, target, now, reason):
-        """Delegate a proved physical refusal, never a speculative pursuit."""
-        runtime = self.runtime
-        if self._physical_recovery is None:
-            self._physical_recovery = dict(started=now, episode=self._episode,
-                position=tuple(runtime.state['position']), reason=reason,
-                target=_key(target),
-                identity=runtime.engine._artillery_target_identity(target))
-        identity = runtime.engine._artillery_target_identity(target)
-        runtime.state['_gun_angle_refusal'] = identity
-        if (self.pivot or {}).get('handoff') is not None:
-            runtime.state['_gun_angle_pivot_refusal'] = identity
-        runtime._last_navigation = dict(status='waiting', action='firing_position',
-            reason=reason, owner='copied_gun_angle_recovery',
-            episode=self._episode, started=self._physical_recovery['started'])
-        # This is the admitted stationary anchor entering the existing finite
-        # forward/reverse recovery. Its consumer alone chooses a checked goal.
-        return self._physical_target_order(order, target)
+        if phase is None:
+            selected = policy.decision.get('candidate')
+            request = policy.decision.get('move_request') or {}
+            key = request.get('key') or (selected or {}).get('key')
+            if selected is None or key is None:
+                return dict(self._stop(order, 'physical_point_unavailable', now),
+                            fire_allowed=False)
+            anchor = tuple(runtime.state['position'])
+            point = (selected.get('solution') or {}).get('point') or target['position']
+            bearing = math.atan2(float(point[0]) - anchor[0],
+                                 float(point[2]) - anchor[2])
+            destinations = []
+            for radius in (4., 8., 12.):
+                for offset in (math.pi / 2., -math.pi / 2., .4, -.4, 0., math.pi):
+                    yaw = bearing + offset
+                    destinations.append((anchor[0] + math.sin(yaw) * radius,
+                                         anchor[1], anchor[2] + math.cos(yaw) * radius))
+            phase = self._physical_recovery = dict(started=now, episode=self._episode,
+                position=anchor, reason=reason, target=_key(target),
+                identity=runtime.engine._artillery_target_identity(target),
+                key=key, sample=selected.get('sample'),
+                shell_index=selected.get('shell_index'), mode=selected.get('mode'),
+                candidate=dict(selected), destinations=tuple(destinations),
+                cursor=0, goal=None, checking=False, ready=False,
+                progress_at=now, best_distance=float('inf'))
+        if phase.get('ready'):
+            return dict(self._stop(order, 'same_point_geometry_verified', now),
+                        fire_allowed=False)
+        goal = phase.get('goal')
+        position = tuple(runtime.state['position'])
+        if goal is not None:
+            distance = _distance(position, goal)
+            if distance <= WAYPOINT_ARRIVAL_RADIUS:
+                phase.update(goal=None, checking=True, arrived_at=now)
+                self._motion_order = None
+                return dict(self._stop(order, 'point_recovery_arrived_recheck', now),
+                            fire_allowed=False)
+            if distance < phase['best_distance'] - .25:
+                phase.update(best_distance=distance, progress_at=now)
+            if now - phase['progress_at'] >= MECHANICAL_STALL_SECONDS:
+                return self._release_to_route(order, now, 'point_recovery_drive_stalled')
+            runtime._last_navigation = dict(action='firing_position', status='moving',
+                owner='same_point_recovery', key=phase['key'], goal=goal,
+                at=now, episode=self._episode)
+            return dict(order, combat_mode='gun_angle_adjust', move_position=goal,
+                face_position=target['position'], throttle_override=None,
+                arrival_radius=1., fire_allowed=False)
+        if phase.get('checking'):
+            current = policy.decision.get('candidate') or {}
+            row = policy.current_row(current, require_line=True) if current else None
+            if (current.get('key') == phase['key'] and row is not None and
+                    row.get('line') == 'clear' and
+                    row.get('mechanical') == 'hull_laying'):
+                # A real line after travel can still require normal in-place
+                # hull laying. That actuator never selects another location.
+                solution = row.get('solution')
+                if isinstance(solution, dict):
+                    laying = self._lay_order(order, target, solution, now)
+                    if laying is not None:
+                        return dict(laying, fire_allowed=False)
+            if (policy.decision.get('action') in ('wait', 'preaim') and
+                    now - phase['arrived_at'] < MECHANICAL_STALL_SECONDS):
+                return dict(self._stop(order, 'point_recovery_native_recheck_pending', now),
+                            fire_allowed=False)
+            phase['checking'] = False
+        if now - phase['started'] >= MECHANICAL_STALL_SECONDS and goal is None:
+            return self._release_to_route(order, now, 'point_recovery_exhausted')
+        probe = getattr(runtime, 'point_recovery_probe', None)
+        ground = getattr(getattr(runtime, 'geometry', None), '_navigation_ground', None)
+        grid = getattr(getattr(runtime.engine, 'navigator', None), 'grid', None)
+        segment = getattr(grid, 'segment_clear', None)
+        # Probe at most one usable candidate per control callback. An
+        # unfinished native world path retains this same destination and
+        # its cursor, rather than rechecking the first ray every tick.
+        checked = 0
+        while phase['cursor'] < len(phase['destinations']) and checked < 2:
+            candidate_position = phase['destinations'][phase['cursor']]
+            if callable(ground):
+                height = ground(candidate_position[0], candidate_position[2])
+                if height is None:
+                    phase['cursor'] += 1
+                    checked += 1
+                    continue
+                candidate_position = (candidate_position[0], float(height),
+                                      candidate_position[2])
+            if callable(segment) and not segment(position, candidate_position):
+                phase['cursor'] += 1
+                checked += 1
+                continue
+            verdict = (probe(phase['candidate'], candidate_position, now)
+                       if callable(probe) else {'status': 'unknown'})
+            status = (verdict or {}).get('status')
+            if status == 'pending':
+                break
+            phase['cursor'] += 1
+            checked += 1
+            if status != 'clear':
+                continue
+            phase.update(goal=candidate_position, progress_at=now,
+                         best_distance=_distance(position, candidate_position))
+            runtime._last_navigation = dict(action='firing_position', status='checked',
+                owner='same_point_recovery', key=phase['key'],
+                goal=candidate_position, at=now, episode=self._episode)
+            return dict(order, combat_mode='gun_angle_adjust',
+                move_position=candidate_position, face_position=target['position'],
+                throttle_override=None, arrival_radius=1., fire_allowed=False)
+        if phase['cursor'] >= len(phase['destinations']):
+            return self._release_to_route(order, now, 'point_recovery_no_checked_position')
+        runtime._last_navigation = dict(action='firing_position', status='checking',
+            owner='same_point_recovery', key=phase['key'],
+            candidates=phase['cursor'], at=now, episode=self._episode)
+        return dict(self._stop(order, 'point_recovery_probe_pending', now),
+                    fire_allowed=False)
 
     def physical_recovery_terminal(self, order, arrived):
         """A bounded recovery ends here; failure never becomes chase-enemy."""
         runtime, now = self.runtime, self.runtime.now
-        phase = self._physical_recovery or {}
-        self._physical_recovery = None
-        self.pivot = runtime._native_hull_laying = None
         if arrived:
             runtime._last_navigation = dict(status='arrived', action='firing_position',
-                reason='physical_recovery_arrived', owner='shared_combat',
+                reason='physical_recovery_recheck', owner='shared_combat',
                 at=now, episode=self._episode)
             self._motion_order = None
-            return dict(self._stop(order, 'physical_recovery_arrived', now),
+            phase = self._physical_recovery
+            if phase is not None:
+                phase.update(goal=None, arrived_at=now, checking=True)
+            return dict(self._stop(order, 'physical_recovery_recheck', now),
                         fire_allowed=False)
-        self._failed_recovery = dict(position=tuple(runtime.state['position']),
-            targets=dict((_key(target), tuple(target['position'])) for target in self.targets),
-            at=now, episode=self._episode, identity=phase.get('identity'))
-        runtime._last_navigation = dict(status='failed', action='firing_position',
-            reason='physical_recovery_exhausted', owner='shared_combat',
-            at=now, episode=self._episode, started=phase.get('started'))
-        self.combat_owned = self.stop_allowed = False
-        self._intent_target = self._motion_order = None
-        self.receipt.update(status='released', reason='physical_recovery_exhausted',
-            combat_owned=False, stop_allowed=False, movement_owner='task')
-        self._publish_owner()
-        return dict(self.task_order, fire_allowed=False)
+        return self._release_to_route(order, now, 'physical_recovery_exhausted')
 
     def mission_handoff(self, now):
         """A new explicit travel task retires the previous combat-only hold.
@@ -571,9 +671,8 @@ class CombatStop(object):
                         return self._physical_target_order(order, target)
                     return self._physical_order(order, target, now, phase['reason'])
                 return dict(order, fire_allowed=False)
-            # A current verified replacement point completes THIS target's
-            # combat lane recovery. Do not cancel unrelated or unproved
-            # navigation leases, nor wait for a fictitious timeout to stop.
+            # The actual current-position native row, not a destination
+            # preview, must establish a usable line before recovery succeeds.
             target = candidate['target']
             marker = runtime.engine._friendly_repositions.get(runtime.actor_id)
             if marker is not None and marker.get('target_id') == target.get('id'):
@@ -585,9 +684,20 @@ class CombatStop(object):
             for name in ('_gun_angle_refusal', '_gun_angle_pivot_refusal'):
                 if runtime.state.get(name) == identity:
                     runtime.state.pop(name, None)
-            self._retire_physical_recovery('verified_shot', now)
+            phase = self._physical_recovery
+            if phase is not None and phase.get('key') == candidate.get('key'):
+                if phase.get('ready') and now > phase.get('verified_at', now):
+                    self._retire_physical_recovery('same_point_geometry_verified', now)
+                else:
+                    phase.update(ready=True, checking=False, verified_at=now)
+                    runtime._last_navigation = dict(action='firing_position',
+                        status='geometry_verified', owner='same_point_recovery',
+                        key=phase['key'], at=now, episode=self._episode)
+            else:
+                self._retire_physical_recovery('verified_shot', now)
             self.pivot = runtime._native_hull_laying = None
-            self._physical_recovery = self._failed_recovery = None
+            self._failed_recovery = None
+            policy.navigation_result(None)
             return self._stop(order, 'verified_shot', now)
         if self._physical_recovery is not None:
             # The finite physical manoeuvre owns its destination until its
@@ -601,17 +711,38 @@ class CombatStop(object):
                         reason='friendly_lane', owner='copied_friendly_reposition',
                         episode=self._episode, started=self._physical_recovery['started'])
                     return self._physical_target_order(order, target)
-                laid = self._physical_lay_at_new_position(order, target, now)
-                if laid is not None:
-                    return laid
-                return self._physical_order(order, target, now,
+                if self._physical_recovery.get('ready'):
+                    phase = self._physical_recovery
+                    if (action == 'firing_position' and
+                            (decision.get('candidate') or {}).get('key') == phase['key']):
+                        phase.update(ready=False, checking=True, arrived_at=now)
+                    elif action == 'firing_position':
+                        return self._release_to_route(order, now,
+                            'same_point_request_changed')
+                    elif (action in ('wait', 'preaim') and
+                            (policy.frame or {}).get('reloading')):
+                        return dict(self._stop(order, 'same_point_reload_wait', now),
+                                    fire_allowed=False)
+                    elif action in ('wait', 'preaim'):
+                        # A prior real shot proof can expire before the next
+                        # native trigger. Do not leave its "ready" bit parked
+                        # forever if the next frame is no longer executable.
+                        phase.update(ready=False, checking=True, arrived_at=now)
+                    elif action not in ('firing_position', 'wait', 'preaim'):
+                        return self._release_to_route(order, now,
+                            'same_point_execution_unavailable')
+                # A later sampled opponent may have replaced the policy's
+                # gun hint while this exact-point move remains accepted.
+                # Keep both the physical target and gun intent bound to its
+                # original sample until a real terminal handoff.
+                return self._physical_order(self._physical_target_order(order, target), target, now,
                     self._physical_recovery['reason'])
+            return self._release_to_route(order, now, 'recovery_target_missing')
         if policy.stationary_review_wait():
             # Existing local recovery is not reset or restarted by a multi-
             # frame point review. Its unchanged consumer keeps its own lease.
             if ((self._motion_order is not None and
                     self._motion_order.get('combat_mode') != 'engage') or
-                    getattr(runtime, '_move_episode', None) or
                     runtime.engine._friendly_repositions.get(runtime.actor_id) or
                     runtime.state.get('_gun_angle_adjustment') or
                     runtime.state.get('_rear_aim_episode') or
@@ -696,8 +827,7 @@ class CombatStop(object):
         if candidate.get('line') in ('world_blocked', 'enemy_blocked', 'vehicle_blocked'):
             return self._physical_order(order, target, now, decision.get('reason'))
         # Pending queries, absent points and armour failures have no physical
-        # recovery authority. Keep the current combat anchor while the one
-        # policy reviews them; only its qualified search may request motion.
+        # recovery authority. Keep the current combat anchor during review.
         return dict(self._stop(order, 'physical_recovery_not_proved', now),
                     fire_allowed=False)
 

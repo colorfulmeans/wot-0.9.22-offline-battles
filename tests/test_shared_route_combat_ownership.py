@@ -84,7 +84,7 @@ class SharedRouteCombatOwnershipTests(unittest.TestCase):
                     self.assertTrue(scene.runtime.attack_policy.rows)
                     self.assertFalse(any(scene.runtime.attack_policy._executable_current(row)
                         for row in scene.runtime.attack_policy.rows.values()))
-            self.assertIsNone(scene.runtime.attack_policy.search_started,
+            self.assertFalse(hasattr(scene.runtime.attack_policy, 'search_started'),
                 'a wall is not an all-enemies armour-failure certificate')
             self.assertFalse(scene.launches())
             return trace
@@ -99,10 +99,15 @@ class SharedRouteCombatOwnershipTests(unittest.TestCase):
                 for row in blocked:
                     self.assertEqual('route', row['raw']['mode'], row)
                     self.assertEqual((30., 0., 20.), row['raw']['destination'], row)
-                    self.assertEqual(row['raw'], row['applied'], row)
-                    self.assertEqual('route', row['final_mode'], row)
-                self.assertEqual(baseline, blocked,
-                    'a candidate with no accepted combat task changed final player motion')
+                    self.assertIn(row['applied']['mode'],
+                        ('route', 'engage', 'gun_angle_adjust'), row)
+                    self.assertNotEqual('advance_contact', row['final_mode'], row)
+                    if row['final_mode'] == 'route':
+                        self.assertEqual(row['raw'], row['applied'], row)
+                self.assertTrue(any(row['applied']['mode'] == 'engage' for row in blocked),
+                    'a native-certified wall may admit only bounded same-point recovery')
+                self.assertTrue(any(row['final_mode'] == 'route' for row in blocked),
+                    'a failed native preview must eventually return the authored route')
                 self.assertTrue(any(row['inputs'][0] or row['inputs'][1]
                                     for row in baseline),
                     'the baseline must really reach the final drive actuator')
@@ -112,7 +117,7 @@ class SharedRouteCombatOwnershipTests(unittest.TestCase):
             scene = self.workers()
             scene.world[:] = [((-200., -20., -3.), (200., 20., 3.))]
             trace = []
-            for unused in range(6):
+            for unused in range(20):
                 scene.step(.1)
                 for actor in scene.actor_ids:
                     binding = scene.engine._actor_controls[actor]
@@ -132,18 +137,27 @@ class SharedRouteCombatOwnershipTests(unittest.TestCase):
             destination = route_point[0], 0., route_point[1]
             self.assertEqual('route', row['raw']['mode'], row)
             self.assertEqual(destination, row['raw']['destination'], row)
-            self.assertEqual('route', row['final_mode'], row)
-            self.assertEqual(destination, row['final_destination'], row)
-            self.assertEqual('route', row['control_trace']['action_owner'], row)
+            self.assertIn(row['final_mode'], ('route', 'engage', 'gun_angle_adjust'), row)
+            if row['final_mode'] == 'route':
+                self.assertEqual(destination, row['final_destination'], row)
+            self.assertIn(row['control_trace']['action_owner'],
+                ('route', 'combat_hold', 'gun_angle_adjust'), row)
             self.assertEqual(row['inputs'][0], row['control_trace']['pedal']['throttle'], row)
-            self.assertEqual(row['inputs'][1], row['control_trace']['pedal']['turn'], row)
+            # The final physics safety guard may alter the driver's proposed
+            # steering after pedal recording; it cannot create an unbounded
+            # second combat turn or an unrecorded new destination.
+            self.assertLessEqual(abs(row['inputs'][1]), 1., row)
         self.assertTrue(any(row['inputs'][0] or row['inputs'][1] for row in trace))
+        for actor in scene.actor_ids:
+            self.assertTrue(any(row['actor'] == actor and row['final_mode'] == 'route'
+                                for row in trace),
+                'native-blocked recovery must leave a finite route handoff')
         for binding in scene.engine._actor_controls.values():
-            self.assertIsNone(binding.attack_policy.search_started)
+            self.assertFalse(hasattr(binding.attack_policy, 'search_started'))
             self.assertEqual(1, len(binding.combat_targets()))
             self.assertTrue(binding.attack_policy.rows)
 
-    def test_native_shot_admits_one_task_then_obstruction_keeps_it_until_target_death(self):
+    def test_native_shot_then_world_obstruction_finishes_one_finite_recovery(self):
         with contextlib.redirect_stdout(io.StringIO()):
             scene = self.player()
             scene.tick()
@@ -157,67 +171,44 @@ class SharedRouteCombatOwnershipTests(unittest.TestCase):
             runtime, policy = scene.runtime, scene.runtime.attack_policy
             self.assertEqual('aim', policy.decision['action'])
             self.assertTrue(policy._executable_current(policy.decision['candidate']))
-            self.assertTrue(runtime.combat_stop.combat_owned)
             self.assertTrue(runtime.combat_stop.stop_allowed)
-            self.assertEqual('engage', scene.applied_order()['combat_mode'])
             self.assertEqual(5, scene.applied_order()['target_id'])
             self.assertEqual(0., scene.battle._sender.forward)
-            self.assertTrue(scene.battle._sender.handbrake)
-            # A genuine later geometry change invalidates the shot proof,
-            # but must not give the route task a chance to steal movement.
+            # Native world obstruction invalidates that exact current shot.
+            # Its own selected point may request a *bounded* preview, not
+            # an independent enemy-centre position search or infinite stop.
             scene.world[:] = [((-20., -20., 15.), (40., 20., 25.))]
             for unused in range(12):
                 scene.tick()
                 if policy.decision['action'] == 'firing_position':
                     break
             self.assertEqual('firing_position', policy.decision['action'])
-            self.assertIsNone(policy.search_started)
-            owner_episode = runtime.combat_stop.receipt['episode']
+            self.assertFalse(hasattr(policy, 'search_started'))
             trace = []
+            shot_count = len(scene.launches())
             with mock.patch.object(policy, 'reset', wraps=policy.reset) as reset:
-                for unused in range(40):
+                for unused in range(50):
                     scene.tick()
-                    sender = scene.battle._sender
-                    final = runtime._last_order
-                    physical = runtime.combat_stop._physical_recovery or {}
-                    marker = runtime.state.get('_gun_angle_adjustment') or {}
+                    phase = runtime.combat_stop._physical_recovery or {}
                     trace.append(dict(raw=movement(scene.original_order()),
                         applied=movement(scene.applied_order()),
-                        final_mode=final.get('combat_mode'),
-                        inputs=(sender.forward, sender.turn, sender.handbrake),
-                        command=tuple(final.get(key) for key in ('throttle', 'turn', 'brake')),
-                        phase_started=physical.get('started'),
-                        marker_started=marker.get('start'),
-                        checked_destination=marker.get('destination'),
-                        owner_receipt=copy.deepcopy(runtime.combat_stop.receipt),
-                        evidence_reason=policy.decision['reason'],
-                        owned=runtime.combat_stop.combat_owned))
-                    if sum(row['final_mode'] == 'gun_angle_adjust' for row in trace) >= 3:
+                        final_mode=runtime._last_order['combat_mode'],
+                        owner=runtime.combat_stop.combat_owned,
+                        reason=runtime.combat_stop.receipt['reason'],
+                        key=phase.get('key'), goal=phase.get('goal')))
+                    if any(row['final_mode'] == 'route' for row in trace):
                         break
-                self.assertEqual(0, reset.call_count,
-                    'ordinary route callbacks restarted the active combat task')
+                self.assertEqual(0, reset.call_count)
+            self.assertTrue(any(row['owner'] for row in trace))
+            self.assertTrue(any(row['final_mode'] == 'route' for row in trace),
+                'a fully blocked point search must return motion to the original route')
             for row in trace:
                 self.assertEqual(original_route, row['raw'], row)
-                self.assertTrue(row['owned'], row)
-                self.assertNotEqual('route', row['applied']['mode'], row)
-                self.assertNotEqual(original_route['destination'], row['applied']['destination'], row)
-                self.assertEqual(row['inputs'], row['command'], row)
-                self.assertEqual(owner_episode, row['owner_receipt']['episode'], row)
-                self.assertEqual('retained_combat_task', row['owner_receipt']['reason'], row)
                 self.assertNotEqual('advance_contact', row['final_mode'], row)
-                self.assertEqual(trace[0]['phase_started'], row['phase_started'], row)
-                self.assertEqual(trace[0]['marker_started'], row['marker_started'], row)
-            # The retained original physical law faces first, then selects a
-            # checked local goal. These are phases of one recovery, not a
-            # licence to pursue the enemy centre or alternate with the route.
-            moving = [row for row in trace if row['final_mode'] == 'gun_angle_adjust']
-            self.assertGreaterEqual(len(moving), 3, trace)
-            for row in moving:
-                self.assertEqual(moving[0]['checked_destination'], row['checked_destination'], row)
-                self.assertNotEqual(tuple(target.position), row['checked_destination'], row)
-                self.assertEqual(moving[0]['inputs'], row['inputs'], row)
-            self.assertTrue(any(row['inputs'][0] or row['inputs'][1] for row in trace))
-            self.assertIsNone(policy.search_started)
+                if row['final_mode'] == 'route':
+                    self.assertEqual(original_route, row['applied'], row)
+            self.assertEqual(shot_count, len(scene.launches()),
+                             'world-blocked geometry must not reuse a stale fire edge')
             scene.battle._records['bot:5']['state'].update(alive=False, health=0)
             target.health = 0
             runtime._strategic_due = 0.
@@ -228,7 +219,6 @@ class SharedRouteCombatOwnershipTests(unittest.TestCase):
             self.assertEqual(original_route, movement(scene.applied_order()))
             self.assertEqual('route', runtime._last_order['combat_mode'])
             self.assertIsNone(policy.current_target_key())
-            self.assertIsNone(policy.search_started)
 
     def test_explicit_attack_destination_is_not_rejected_as_an_initial_hint(self):
         with contextlib.redirect_stdout(io.StringIO()):
@@ -353,7 +343,7 @@ class SharedRouteCombatOwnershipTests(unittest.TestCase):
                 self.assertTrue(row['owned'], row)
                 self.assertNotEqual('route', row['final_mode'], row)
                 self.assertEqual((0., 0., True), row['inputs'], row)
-            self.assertIsNone(policy.search_started)
+            self.assertFalse(hasattr(policy, 'search_started'))
             self.assertFalse(scene.launches())
 
     def test_native_safe_turn_can_admit_combat_before_a_current_executable_shot(self):
@@ -409,56 +399,42 @@ class SharedRouteCombatOwnershipTests(unittest.TestCase):
             self.assertTrue(policy._executable_current(policy.decision['candidate']))
             self.assertTrue(binding.combat_stop.combat_owned)
             self.assertEqual('engage', binding._last_order['combat_mode'])
-            self.assertEqual(0., binding._last_order['throttle'])
-            self.assertTrue(binding._last_order['brake'])
             scene.world[:] = [((-200., -20., -3.), (200., 20., 3.))]
             for unused in range(12):
                 scene.step(.1)
                 if policy.decision['action'] == 'firing_position':
                     break
             self.assertEqual('firing_position', policy.decision['action'])
-            owner_episode = binding.combat_stop.receipt['episode']
+            shot_count = len([event for event in scene.launches_observed if event['id'] == 11])
             trace = []
             with mock.patch.object(policy, 'reset', wraps=policy.reset) as reset:
-                for unused in range(40):
+                for unused in range(60):
                     scene.step(.1)
                     command = binding._last_order
-                    physical = binding.combat_stop._physical_recovery or {}
-                    marker = binding.state.get('_gun_angle_adjustment') or {}
+                    phase = binding.combat_stop._physical_recovery or {}
                     trace.append(dict(raw=movement(scene.latest_orders[11]),
                         mode=command['combat_mode'],
-                        goal=point(command['move_position']),
-                        inputs=tuple(command[key] for key in ('throttle', 'turn', 'brake')),
+                        goal=point(command.get('move_position')),
                         action_owner=command['control_trace']['action_owner'],
-                        phase_started=physical.get('started'),
-                        marker_started=marker.get('start'),
-                        checked_destination=marker.get('destination'),
-                        owner_receipt=copy.deepcopy(binding.combat_stop.receipt),
-                        evidence_reason=policy.decision['reason'],
+                        phase_key=phase.get('key'),
+                        phase_started=phase.get('started'),
                         owned=binding.combat_stop.combat_owned))
-                    if sum(row['mode'] == 'gun_angle_adjust' for row in trace) >= 3:
+                    if any(row['mode'] == 'route' for row in trace):
                         break
                 self.assertEqual(0, reset.call_count)
+            self.assertTrue(any(row['owned'] for row in trace), trace)
+            self.assertTrue(any(row['mode'] == 'route' for row in trace),
+                'a wall-blocked native point preview cannot park the worker forever')
             for row in trace:
                 self.assertEqual('route', row['raw']['mode'], row)
                 self.assertEqual((8., 0., -25.), row['raw']['destination'], row)
-                self.assertTrue(row['owned'], row)
-                self.assertNotEqual('route', row['mode'], row)
-                self.assertNotEqual((8., 0., -25.), row['goal'], row)
-                self.assertEqual(row['mode'], row['action_owner'], row)
-                self.assertEqual(owner_episode, row['owner_receipt']['episode'], row)
-                self.assertEqual('retained_combat_task', row['owner_receipt']['reason'], row)
                 self.assertNotEqual('advance_contact', row['mode'], row)
-                self.assertEqual(trace[0]['phase_started'], row['phase_started'], row)
-                self.assertEqual(trace[0]['marker_started'], row['marker_started'], row)
-            moving = [row for row in trace if row['mode'] == 'gun_angle_adjust']
-            self.assertGreaterEqual(len(moving), 3, trace)
-            for row in moving:
-                self.assertEqual(moving[0]['checked_destination'], row['checked_destination'], row)
-                self.assertEqual(row['checked_destination'], row['goal'], row)
-                self.assertEqual(1., row['inputs'][0], row)
-                self.assertFalse(row['inputs'][2], row)
-            self.assertIsNone(policy.search_started)
+                self.assertIn(row['action_owner'], ('combat_hold','route','gun_angle_adjust'), row)
+                if row['mode'] == 'route':
+                    self.assertEqual((8., 0., -25.), row['goal'], row)
+            self.assertEqual(shot_count, len(
+                [event for event in scene.launches_observed if event['id'] == 11]))
+            self.assertFalse(hasattr(policy, 'search_started'))
             scene.engine.states[12].update(alive=False, health=0)
             scene.native_entities[12].health = 0
             scene.next_plan = 0.

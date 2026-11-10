@@ -99,7 +99,7 @@ class HEVerificationFlowTests(unittest.TestCase):
         saw_switch = []
         he_samples = set()
         def observe():
-            self.assertIsNone(policy.search_started)
+            self.assertFalse(hasattr(policy, 'search_started'))
             he_samples.update(row['sample'] for row in policy.rows.values()
                               if row['shell_index'] == 0 and row['mode'] == 'penetration')
             if policy.decision['action'] == 'switch_shell':
@@ -120,7 +120,7 @@ class HEVerificationFlowTests(unittest.TestCase):
         initial = tuple(gun.ammo)
         def observe():
             self.assertEqual(0, gun.shot_index)
-            self.assertIsNone(policy.search_started)
+            self.assertFalse(hasattr(policy, 'search_started'))
             self.assertIsNone(policy.reload_authority)
         self.run_until_shots(scene, observe=observe)
         self.assertEqual('current_he_clip_fallback', policy.decision['reason'])
@@ -176,7 +176,7 @@ class HEVerificationFlowTests(unittest.TestCase):
         gun.ammo[1] = 0
         initial = tuple(gun.ammo)
         def observe():
-            self.assertIsNone(policy.search_started)
+            self.assertFalse(hasattr(policy, 'search_started'))
             self.assertEqual(0, gun.shot_index)
         self.run_until_shots(scene, observe=observe)
         self.assertEqual('he_fallback', policy.decision['candidate']['mode'])
@@ -184,7 +184,7 @@ class HEVerificationFlowTests(unittest.TestCase):
         self.assertEqual((initial[0] - 1, 0), tuple(gun.ammo))
         self.assertEqual(1, scene.control.shot_commits)
 
-    def test_failed_ap_magazine_keeps_eight_seconds_then_loads_he_and_fires(self):
+    def test_failed_ap_magazine_loads_verified_he_without_eight_second_delay_and_fires(self):
         scene, target = self.scene(clip=6, armor=30.)
         gun, policy = scene.battle._gun_state, scene.runtime.attack_policy
         # There are two stocked roles: the loaded AP cassette and an
@@ -198,25 +198,19 @@ class HEVerificationFlowTests(unittest.TestCase):
             source['piercingPower'] = shot.piercingPower
             source['shell'].update(kind=kind, explosionRadius=shot.shell.explosionRadius)
         initial = tuple(gun.ammo)
-        search_started = reload_qualified_at = None
+        began = scene.now
+        reload_qualified_at = None
         saw_he_next = saw_native_load = False
         for unused in range(350):
             self.tick(scene)
-            if policy.search_started is not None and search_started is None:
-                search_started = policy.search_started
+            self.assertFalse(hasattr(policy, 'search_started'))
             if (policy.next_plan is not None and policy.next_shell == 1 and
                     policy.next_plan['mode'] == 'he_fallback'):
                 saw_he_next = True
-            if search_started is not None and scene.now - search_started < 8.:
-                self.assertEqual((0, 6, 0.), (gun.shot_index, gun.clip, gun.reload_time))
-                self.assertEqual(initial, tuple(gun.ammo))
-                self.assertFalse(scene.launches())
             decision = policy.decision
             if decision['action'] == 'reload_clip' and decision.get('early_reload'):
                 if reload_qualified_at is None:
                     reload_qualified_at = scene.now
-                self.assertIsNotNone(search_started)
-                self.assertGreaterEqual(scene.now - search_started, 8.)
                 self.assertEqual(1, decision['shell_index'],
                     'completed ordinary-HE trial must not make early reload choose AP again')
                 self.assertEqual('he_fallback', decision['candidate']['mode'])
@@ -226,6 +220,7 @@ class HEVerificationFlowTests(unittest.TestCase):
                 break
         self.assertTrue(saw_he_next)
         self.assertIsNotNone(reload_qualified_at)
+        self.assertLess(reload_qualified_at - began, 8.)
         self.assertTrue(saw_native_load)
         self.assertEqual([1], [shot['shell_index'] for shot in scene.launches()], policy.status())
         self.assertTrue(scene.launches()[0]['is_he'])
@@ -265,7 +260,7 @@ class HEVerificationFlowTests(unittest.TestCase):
             self.assertFalse(scene.launches())
             self.assertEqual(initial, tuple(gun.ammo))
             self.assertEqual(0, gun.shot_index)
-            self.assertIsNone(policy.search_started)
+            self.assertFalse(hasattr(policy, 'search_started'))
         self.assertTrue(saw_unknown)
         for component in ('chassis', 'hull', 'turret', 'gun'):
             getattr(target.typeDescriptor, component).hitTester.available = True
@@ -295,7 +290,7 @@ class HEVerificationFlowTests(unittest.TestCase):
             self.assertFalse(scene.launches())
             self.assertEqual(initial, tuple(gun.ammo))
             self.assertEqual(0, gun.shot_index)
-            self.assertIsNone(policy.search_started)
+            self.assertFalse(hasattr(policy, 'search_started'))
         self.assertTrue(saw_blocked)
         self.assertTrue(saw_alternative)
         scene.world[:] = []
@@ -364,7 +359,7 @@ class HEVerificationFlowTests(unittest.TestCase):
                         self.assertIsNone(policy.reload_authority)
                     if gun.shot_index == 1 and gun.reload_time > 0.:
                         saw_ap_loading.append(scene.now)
-                    self.assertIsNone(policy.search_started)
+                    self.assertFalse(hasattr(policy, 'search_started'))
 
                 self.run_until_shots(scene, count=clip + 1, steps=400, observe=observe)
                 self.assertEqual([0] * clip + [1],

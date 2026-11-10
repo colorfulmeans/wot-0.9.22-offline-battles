@@ -207,31 +207,33 @@ class RecordedHandoffTests(unittest.TestCase):
         self.assertGreater(self.runtime._mechanical_approach_speed(state)[0],1.)
 
     def test_player_contact_relocation_survives_approach_hold_alternation(self):
-        state=self.contact_state()
-        target=dict(id=1000001,network_id=1,kind='human',alive=True,position=(0.,0.,6.))
-        self.runtime.states[19]=state
-        order=dict(combat_mode='engage',target_id=1000001,move_position=(0.,0.,0.),
-                   throttle_override=0.,fire_allowed=True)
-        self.runtime._gun_angle_order(state,order,{1000001:target},0.,lambda *a:True)
-        self.assertEqual(0.,state['_gun_angle_adjustment']['start'])
-        order.update(combat_mode='advance_contact',move_position=target['position'])
-        order.pop('throttle_override')
-        with mock.patch.object(self.runtime,'_gun_angle_target_fraction',side_effect=(0.,1.)):
-            result=self.runtime._gun_angle_order(state,order,{1000001:target},2.1,lambda *a:True)
-        self.assertLess(result['move_position'][2],0.)
-        self.assertEqual(0.,state['_gun_angle_adjustment']['start'])
-        self.assertEqual(3.217203344,state['speed'])
-        defended=dict(order,combat_mode='base_defense')
-        self.assertIs(defended,self.runtime._gun_angle_order(state,defended,{1000001:target},2.2,lambda *a:True))
-        self.assertNotIn('_gun_angle_adjustment',state)
+        # The old independent gun-angle destination is gone. A current
+        # physical point task retains its checked goal through policy waits,
+        # while genuine priority travel returns its original route.
+        from test_player_recovery_continuity import SelectedPointRecoveryContinuityTests
+        scene=SelectedPointRecoveryContinuityTests().scene()
+        first=scene.apply(0.)
+        self.assertEqual('gun_angle_adjust',first['combat_mode'])
+        phase=scene.owner._physical_recovery
+        scene.decide('wait',candidate=False,reason='current_lane_pending')
+        self.assertEqual(phase['goal'],scene.apply(2.1)['move_position'])
+        self.assertEqual(0.,phase['started'])
+        scene.raw_order['combat_mode']='base_defense'
+        result=scene.apply(2.2)
+        self.assertEqual('base_defense',result['combat_mode'])
+        self.assertIsNone(scene.owner._physical_recovery)
+        self.assertFalse(hasattr(self.runtime,'_gun_angle_order'))
 
     def test_unblocked_approach_is_not_taken_over(self):
-        state=self.contact_state()
-        state['_translation_motion_receipt']['fraction']=1.
-        order=dict(combat_mode='advance_contact',target_id=1000001,move_position=(0.,0.,6.))
-        result=self.runtime._gun_angle_order(state,order,{},1.,lambda *a:True)
-        self.assertIs(order,result)
-        self.assertNotIn('_gun_angle_adjustment',state)
+        from test_player_combat_stop import Scene
+        scene=Scene(admitted=False)
+        scene.raw_order.update(combat_mode='advance_contact',target_id=None,
+            move_position=(0.,0.,6.),throttle_override=None,fire_allowed=False)
+        scene.candidate.update(line='clear',mechanical='reachable',armor='unknown')
+        scene.decide('wait',candidate=False,reason='native_proof_pending')
+        self.assertEqual(scene.raw_order,scene.apply(1.))
+        self.assertFalse(scene.owner.stop_allowed)
+        self.assertFalse(hasattr(self.runtime,'_gun_angle_order'))
 
     def test_snapshot_lane_producer_receipt_reaches_authority_for_both_targets(self):
         state=dict(id=19,team=2,x=0.,y=0.,z=0.)
@@ -272,9 +274,10 @@ class RecordedHandoffTests(unittest.TestCase):
         state=dict(id=7,_rotation_contact_trace=dict(reason='solid_lane',sampled_at=258.53,
             hit=(-83.2652,13.6345,102.1064)),
             _translation_motion_receipt=dict(outcome='unrestricted',fraction=1.))
-        result=self.runtime._report_blocked_planner((0.,0.,0.),
-            dict(move_position=(0.,0.,10.),recovery_mode='drive',movement_intent=True),
-            {},state,259.)
+        with mock.patch.object(self.fixture.module, 'detailed_enabled', return_value=True):
+            result=self.runtime._report_blocked_planner((0.,0.,0.),
+                dict(move_position=(0.,0.,10.),recovery_mode='drive',movement_intent=True),
+                {},state,259.)
         self.assertFalse(result)
         evidence=state['_planner_blocked_handoff']
         self.assertEqual('solid_lane',evidence['realised_rotation']['reason'])

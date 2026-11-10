@@ -881,8 +881,6 @@ class FullPlayerRuntime(MissionControl, CombatControl):
         self._last_navigation = {}
         self._last_fire_failure = None
         self._init_mission_state()
-        self._move_episode = None
-        self._move_retry = None
         self._requested_shell = None
         self._equipment_views = {}
         self._equipment_pending = {}
@@ -1144,7 +1142,6 @@ class FullPlayerRuntime(MissionControl, CombatControl):
             if callable(cancel):
                 cancel(callback)
             self._siege_pending = None
-        self._move_episode = None
         self._native_hull_laying = None
         self._cancel_mission(reason)
         self._strategic_due = 0.
@@ -1920,11 +1917,6 @@ class FullPlayerRuntime(MissionControl, CombatControl):
         # hull aiming, firing gates and route handoffs. This binding advances
         # only its foreground actor and never asks a BOT worker to decide.
         self.engine.update(float(dt), float(now), list(self._players))
-        if (self.combat_stop.stop_allowed and
-                self.attack_policy.decision.get('action') == 'search_penetration'):
-            # Tell the shared planner this is an active bounded
-            # local manoeuvre, not eight seconds of an idle ready-gun hold.
-            self.state['local_combat_manoeuvre'] = True
         marker = self._profile_stage(stages, marker, 'player_shared_control')
         # Only the foreground actor may have changed in this shared control
         # slice. Preserve the native-source correction without re-reading,
@@ -2079,8 +2071,6 @@ class FullPlayerRuntime(MissionControl, CombatControl):
         self.engine._motion_probe_cache.pop(self.actor_id, None)
         if not rotation_refused:
             self.engine._invalidate_realised_motion(self.actor_id, heading, 'foreground_contact')
-            if self._move_episode is not None and static:
-                self._move_episode['goal'] = None
         goal = self._last_order.get('move_position')
         if goal is not None and not rotation_refused:
             self.engine.navigator.report_hard_contact(self.actor_id, position, goal, heading, now)

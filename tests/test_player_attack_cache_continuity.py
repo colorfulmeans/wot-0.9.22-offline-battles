@@ -35,7 +35,6 @@ class NativeCacheContinuityTests(native_fire.AutomaticFireScene):
             geometry=self.runtime.geometry, now=self.now,
             current_source=self.runtime.current_source,
             target_entity=self.runtime.target_entity,
-            attack_search_drive_available=self.runtime.attack_search_drive_available,
             combat_targets=lambda: self.targets,
             combat_stop=SimpleNamespace(signature=('admitted', 1)))
         self.evaluator = NativeAttackEvaluator(self.observed_runtime)
@@ -261,7 +260,7 @@ class OrdinaryHEContinuityTests(unittest.TestCase):
                              decision['candidate']['target_key'])
             self.assertEqual(100., decision['candidate']['expected_damage'])
             selected.add(decision['candidate']['target_key'])
-            self.assertIsNone(scene.policy.search_started)
+            self.assertFalse(hasattr(scene.policy, 'search_started'))
             # A changed ranking cannot take this already-qualified trigger.
             # The next physical commit opens another complete comparison.
             scene.he(100. if tick % 2 == 0 else 50., target=1)
@@ -282,22 +281,26 @@ class OrdinaryHEContinuityTests(unittest.TestCase):
             self.assertLessEqual(sum(call[3] == target for call in probes), 1,
                 'fallback intent must not erase a completed same-target trial')
 
-    def test_next_trigger_sample_ranking_does_not_reopen_same_target_trial(self):
+    def test_ordinary_he_single_point_never_expands_to_other_target_samples(self):
         scene = Observations(targets=1, points=3, he_validation='single_point')
         scene.frame.update(loaded=2, ammo=(0, 0, 10))
         samples = set()
         for tick in range(8):
-            scene.he(50. if tick % 2 == 0 else 100., sample=1)
-            scene.he(100. if tick % 2 == 0 else 50., sample=2)
+            scene.he(50. if tick % 2 == 0 else 100., sample=0)
+            # An ordinary HE's other physical samples are outside both its
+            # one-point armour trial and its current HE fallback ranking.
+            scene.he(200., sample=1)
+            scene.he(300., sample=2)
             scene.prime('he_fallback', 2)
             decision = scene.tick(tick * .2)
             self.assertEqual('aim', decision['action'])
             self.assertEqual('he_fallback', decision['candidate']['mode'])
-            self.assertEqual(2 if tick % 2 == 0 else 1, decision['candidate']['sample'])
-            self.assertEqual(100., decision['candidate']['expected_damage'])
+            self.assertEqual(0, decision['candidate']['sample'])
+            self.assertEqual(50. if tick % 2 == 0 else 100.,
+                             decision['candidate']['expected_damage'])
             samples.add(decision['candidate']['sample'])
-            scene.he(100. if tick % 2 == 0 else 50., sample=1)
-            scene.he(50. if tick % 2 == 0 else 100., sample=2)
+            scene.he(900., sample=1)
+            scene.he(1000., sample=2)
             scene.prime('he_fallback', 2)
             current = scene.tick(tick * .2 + .05)
             self.assertEqual(('aim', decision['candidate']['key']),
@@ -305,7 +308,7 @@ class OrdinaryHEContinuityTests(unittest.TestCase):
             scene.policy.shot_committed(dict(burst_index=0, burst_count=1),
                 dict(player_control=dict(candidate=current['candidate'])))
             scene.frame['ammo'] = (0, 0, 9 - tick)
-        self.assertEqual({1, 2}, samples)
+        self.assertEqual({0}, samples)
         probes = [call for call in scene.calls if call[2] == 2 and call[-1] == 'penetration']
         self.assertEqual(1, len(probes))
 

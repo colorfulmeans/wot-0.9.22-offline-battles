@@ -802,8 +802,8 @@ class NativeRuntimeOwnershipTests(unittest.TestCase):
                 scene = self.scene()
                 control, owner, previous = scene.control, scene.battle, scene.runtime
                 old_engine, old_policy = previous.engine, previous.attack_policy
-                old_policy.search_started = scene.now
-                previous._move_episode = dict(legacy='retired-intent')
+                previous.combat_stop._failed_recovery = dict(
+                    reason='retired_native_position', at=scene.now)
                 if changed == 'entity':
                     owner._runtime.bigworld.entities[scene.entity.id] = copy.copy(scene.entity)
                 elif changed == 'gun':
@@ -832,8 +832,8 @@ class NativeRuntimeOwnershipTests(unittest.TestCase):
                 self.assertIsNot(previous, current)
                 self.assertIsNot(old_engine, current.engine)
                 self.assertIsNot(old_policy, current.attack_policy)
-                self.assertIsNone(current.attack_policy.search_started)
-                self.assertIsNone(current._move_episode)
+                self.assertFalse(hasattr(current.attack_policy, 'search_started'))
+                self.assertIsNone(current.combat_stop._failed_recovery)
                 self.assertTrue(previous.closed)
                 self.assertTrue(current.active)
                 self.assertEqual(0, control.automatic_commits)
@@ -1179,7 +1179,7 @@ class FullRuntimeMissionOwnershipTests(unittest.TestCase):
                 self.assertEqual(corner, runtime._last_order['move_position'])
                 self.assertTrue(runtime.combat_stop.navigation_owns(runtime._last_order))
                 self.assertEqual(0, scene.control.automatic_commits)
-                self.assertIsNone(runtime.attack_policy.search_started)
+                self.assertFalse(hasattr(runtime.attack_policy, 'search_started'))
                 if expected is None:
                     request.assert_not_called()
                     self.assertTrue(any(row['sender'][0] > 0. for row in scene.trace))

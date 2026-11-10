@@ -56,7 +56,7 @@ class HandoffAmmunitionTests(unittest.TestCase):
         queued_plan = None
         for unused in range(100):
             scene.tick()
-            self.assertIsNone(policy.search_started)
+            self.assertFalse(hasattr(policy, 'search_started'))
             self.assertEqual(0, gun.shot_index)
             if policy.next_plan is not None and not scene.launches():
                 self.assertEqual((1, 'penetration'),
@@ -127,7 +127,7 @@ class HandoffAmmunitionTests(unittest.TestCase):
                 (scene.original_order()['combat_mode'], scene.original_order()['target_id']))
             self.assertEqual(5, scene.original_order()['initial_target_hint']['target_id'])
             self.assertTrue(scene.runtime.combat_stop.active)
-            self.assertIsNone(policy.search_started)
+            self.assertFalse(hasattr(policy, 'search_started'))
             self.assertIsNone(policy.reload_authority)
             self.assertEqual(0, gun.shot_index)
             candidate = policy.decision.get('candidate')
@@ -194,7 +194,7 @@ class HandoffAmmunitionTests(unittest.TestCase):
             self.assertEqual(initial_ammo, tuple(gun.ammo))
             self.assertEqual(0, gun.shot_index)
             self.assertIsNone(gun.pending_index)
-            self.assertIsNone(policy.search_started)
+            self.assertFalse(hasattr(policy, 'search_started'))
             self.assertIsNone(policy.reload_authority)
             self.assertFalse(policy.fallback)
             self.assertEqual((0., 0.), (scene.battle._sender.forward, scene.battle._sender.turn))

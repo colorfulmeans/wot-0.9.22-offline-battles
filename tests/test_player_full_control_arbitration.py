@@ -187,7 +187,7 @@ class FullControlArbitrationTests(unittest.TestCase):
         for unused in range(50):
             row = scene.tick()
             self.assertIsNone(scene.control.last_control_failure, row)
-            self.assertIsNone(scene.runtime.attack_policy.search_started)
+            self.assertFalse(hasattr(scene.runtime.attack_policy, 'search_started'))
             self.assertEqual(before, scene.battle._gun_state.ammo)
             moving += bool(row['sender'][0] or row['sender'][1])
         self.assertGreater(moving, 0, scene.trace[-4:])
@@ -198,7 +198,8 @@ class FullControlArbitrationTests(unittest.TestCase):
         scene.world = [((-100., -100., 5.), (100., 100., 15.))]
         policy = scene.runtime.attack_policy
         owner = scene.runtime.combat_stop
-        rejected_proposals = 0
+        checked_proposals = 0
+        saw_combat_recovery = saw_route_release = False
         initial_ammo = tuple(scene.battle._gun_state.ammo)
         with mock.patch.object(policy, 'update', wraps=policy.update) as evaluate:
             for unused in range(50):
@@ -208,26 +209,29 @@ class FullControlArbitrationTests(unittest.TestCase):
                 selection = original['tactical_evidence']['selection']
                 self.assertEqual(('bot', scene.target.id), selection['selected'])
                 self.assertEqual('initial_distance_armor', selection['selection_law'])
-                self.assertIsNone(scene.runtime._last_order.get('target_id'), row)
                 self.assertEqual('route', original['combat_mode'])
-                self.assertEqual('route', scene.runtime._last_order['combat_mode'])
-                self.assertFalse(scene.runtime.combat_stop.combat_owned)
-                self.assertFalse(owner.stop_allowed)
-                self.assertFalse(owner.physical_recovery_active())
-                self.assertFalse(policy.navigation_receipt,
-                    'candidate-only review cannot publish an accepted combat movement')
-                self.assertEqual('candidate_evaluation_only', owner.receipt['reason'])
-                self.assertEqual('task', owner.receipt['movement_owner'])
+                if owner.stop_allowed:
+                    saw_combat_recovery = True
+                    self.assertTrue(owner.combat_owned)
+                    self.assertTrue(owner.physical_recovery_active())
+                    self.assertEqual(scene.target.id,
+                                     scene.runtime._last_order['target_id'])
+                    self.assertEqual('combat', owner.receipt['movement_owner'])
+                else:
+                    saw_route_release = True
+                    self.assertEqual('route', scene.runtime._last_order['combat_mode'])
+                    self.assertIsNone(scene.runtime._last_order.get('target_id'))
+                    self.assertEqual('task', owner.receipt['movement_owner'])
                 self.assertEqual({scene.target.id}, {target['network_id']
                     for target in scene.runtime.combat_targets()})
-                self.assertNotIn(row['action'], ('aim', 'search_penetration'))
+                self.assertNotEqual('aim', row['action'])
                 self.assertFalse(scene.runtime._last_order['fire_allowed'])
-                self.assertIsNone(policy.search_started)
-                self.assertIsNone(policy.search_authority)
+                self.assertFalse(hasattr(policy, 'search_started'))
+                self.assertFalse(hasattr(policy, 'search_authority'))
                 if row['action'] == 'firing_position':
                     # A completed native inspection may propose recovery.
-                    # An unproved plate behind a wall cannot acquire the
-                    # authored route from the sole movement owner.
+                    # The same current blocked sample may request a bounded
+                    # position inspection, never an unproved firing edge.
                     candidate = policy.current_row(policy.decision['candidate'],
                                                    require_line=True)
                     self.assertIsNotNone(candidate)
@@ -235,21 +239,22 @@ class FullControlArbitrationTests(unittest.TestCase):
                     self.assertEqual('unknown', candidate['armor'])
                     self.assertEqual('reachable', candidate['mechanical'])
                     self.assertEqual('unverified_points_obstructed', row['reason'])
-                    rejected_proposals += 1
+                    self.assertIsNotNone(owner._proposal())
+                    checked_proposals += 1
                 else:
                     self.assertEqual('wait', row['action'])
                     self.assertTrue(policy.stationary_review_wait())
                     self.assertIsNone(policy.decision.get('candidate'))
-                self.assertIsNone(owner._proposal())
             self.assertGreater(evaluate.call_count, 0)
         self.assertEqual(['eligible'],
             [candidate['reason'] for candidate in selection['candidates']])
         self.assertFalse(selection['candidates'][0]['local_lane'])
         # Completion, not the last frame's asynchronous review phase, is the
         # progress contract. Permanent waiting must not satisfy this test.
-        self.assertGreater(rejected_proposals, 0)
-        self.assertFalse(policy.navigation_receipt,
-            'candidate-only review cannot publish an accepted combat movement')
+        self.assertGreater(checked_proposals, 0)
+        self.assertTrue(saw_combat_recovery)
+        self.assertTrue(saw_route_release,
+            'failed same-point queries must return motion to the authored route')
         self.assertEqual(initial_ammo, tuple(scene.battle._gun_state.ammo))
         scene.trigger.assert_not_called()
 
@@ -284,7 +289,7 @@ class FullControlArbitrationTests(unittest.TestCase):
         self.assertEqual('route', original['combat_mode'])
         self.assertTrue(scene.runtime.combat_stop.combat_owned)
         self.assertEqual(scene.target.id, scene.runtime._last_order['target_id'])
-        self.assertIsNone(policy.search_started)
+        self.assertFalse(hasattr(policy, 'search_started'))
         scene.trigger.assert_not_called()
 
         scene.world = []

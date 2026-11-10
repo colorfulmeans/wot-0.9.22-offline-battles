@@ -33,6 +33,11 @@ class MissionControl(object):
 
     def _cancel_mission(self, reason):
         self._implicit_retry = None
+        # A cancelled explicit task cannot donate its previous gun-only
+        # override to a cached physical slice. A subsequent ordinary
+        # decision may independently acquire a fresh live target.
+        self._gun_handoff = None
+        self._shared_aim_intention = None
         if self._mission is not None and self._mission['status'] == 'running':
             self._mission.update(status='cancelled', phase='cancelled', reason=reason)
         if self._mission is not None:
@@ -130,7 +135,6 @@ class MissionControl(object):
         self._mission_halt = HaltObservation()
         self._implicit_retry = None
         self._implicit_failures = 0
-        self._move_episode = None
         if (kind in ('return_base', 'defend_base', 'capture_base') or
                 'position' in payload or 'x' in payload and 'z' in payload):
             self.combat_stop.mission_handoff(self.now)
@@ -308,7 +312,6 @@ class MissionControl(object):
         self._implicit_failures += 1
         self._implicit_retry = dict(at=now + min(30., 5. * self._implicit_failures),
                                    failures=self._implicit_failures)
-        self._move_episode = None
         self.engine._clear_friendly_reposition(self.actor_id)
         self._release_mission_inputs()
         self.engine._decision_cache.pop(self.actor_id, None)

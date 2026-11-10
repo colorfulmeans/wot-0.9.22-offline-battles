@@ -180,7 +180,6 @@ class BotControlBinding(MissionControl, CombatControl):
         self._last_order = {}
         self._last_navigation = {}
         self._last_fire_failure = None
-        self._move_episode = self._move_retry = None
         self._gun_handoff = None
         self._attack_lay = None
         self._native_hull_laying = None

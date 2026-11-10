@@ -76,7 +76,7 @@ class AttackModeIntentTests(unittest.TestCase):
         self.assertIsNone(scene.policy.next_plan)
         self.assertIsNone(scene.policy.loading_plan)
         self.assertIsNone(scene.policy.trigger)
-        self.assertIsNone(scene.policy.search_authority)
+        self.assertFalse(hasattr(scene.policy, 'search_authority'))
         self.assertIsNone(scene.policy.reload_authority)
         self.assertFalse(scene.policy.apply_order({})['fire_allowed'])
         self.assertTrue(scene.policy.rows)
@@ -102,7 +102,7 @@ class AttackModeIntentTests(unittest.TestCase):
         self.assertIs(authority, scene.policy.reload_authority)
         self.assertEqual(('reload_clip', True, authority['qualified_at']),
             (decision['action'], decision['early_reload'], decision['reload_qualified_at']))
-        self.assertIsNone(scene.policy.search_authority)
+        self.assertFalse(hasattr(scene.policy, 'search_authority'))
 
     def test_failed_retained_point_prefers_another_point_of_the_same_target(self):
         scene = self.scene()
@@ -140,7 +140,7 @@ class AttackModeIntentTests(unittest.TestCase):
         self.assertIsNone(scene.policy.loading_plan)
         self.assertIsNone(scene.policy.trigger)
         self.assertFalse(scene.policy.fallback)
-        self.assertIsNone(scene.policy.search_authority)
+        self.assertFalse(hasattr(scene.policy, 'search_authority'))
         self.assertTrue(scene.policy.rows)
         for row in scene.policy.rows.values():
             self.assertEqual(('unknown', 'pending'), (row['armor'], row['line']))
@@ -187,7 +187,7 @@ class AttackModeIntentTests(unittest.TestCase):
                      result['candidate']['shell_index'], result['candidate']['target_key'],
                      result['candidate']['sample']))
                 self.assertIsNone(scene.policy.reload_authority)
-                self.assertIsNone(scene.policy.search_started)
+                self.assertFalse(hasattr(scene.policy, 'search_started'))
                 self.assertNotIn('shell_index', result)
 
     def test_unresolved_preferred_target_does_not_starve_other_targets(self):
@@ -208,7 +208,7 @@ class AttackModeIntentTests(unittest.TestCase):
                 break
         self.assertEqual(('aim', ('bot', 1), 4), (result['action'],
             result['candidate']['target_key'], result['candidate']['sample']))
-        self.assertIsNone(scene.policy.search_started)
+        self.assertFalse(hasattr(scene.policy, 'search_started'))
 
     def test_retained_target_never_overrides_next_clip_ammunition_rank(self):
         scene = self.scene(clips=6)
@@ -294,8 +294,8 @@ class NativeHydraulicMagazineRulesTests(unittest.TestCase):
             scene.observe()
             decision = policy.update(scene.now)
             policy.background(scene.now)
-            self.assertIsNone(policy.search_started)
-            self.assertIsNone(policy.search_authority)
+            self.assertFalse(hasattr(policy, 'search_started'))
+            self.assertFalse(hasattr(policy, 'search_authority'))
             if predicate(decision):
                 return decision
             scene.fixture.now += .11
@@ -324,7 +324,7 @@ class NativeHydraulicMagazineRulesTests(unittest.TestCase):
             self.assertNotIn(decision['action'], ('reload_clip', 'switch_shell',
                                                  'search_penetration'))
             self.assertIsNone(runtime.attack_policy.reload_authority)
-            self.assertIsNone(runtime.attack_policy.search_authority)
+            self.assertFalse(hasattr(runtime.attack_policy, 'search_authority'))
             runtime._apply_shell_intent()
             self.assertEqual((0, 2, before),
                              (gun.shot_index, gun.clip, tuple(gun.ammo)))

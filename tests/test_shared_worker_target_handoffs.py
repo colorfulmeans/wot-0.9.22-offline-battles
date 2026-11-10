@@ -68,13 +68,13 @@ class SharedWorkerTargetHandoffTests(unittest.TestCase):
                 break
             self.assertEqual(source, tuple(binding.state['position']))
             self.assertEqual(committed, binding.state['fire_seq'])
-            self.assertIsNone(binding.attack_policy.search_started)
+            self.assertFalse(hasattr(binding.attack_policy, 'search_started'))
         self.assertEqual('firing_position', binding.attack_policy.decision['action'])
         marker = engine._friendly_repositions[11]
         self.assertEqual(14, marker['target_id'])
         self.assertEqual((14, 'bot', 12), marker['identity'][:3])
         self.assertGreater(marker['deadline'], scene.now)
-        self.assertIsNone(binding.attack_policy.search_started,
+        self.assertFalse(hasattr(binding.attack_policy, 'search_started'),
                           'A real friendly blocker is not an armour failure.')
         return scene, binding, marker
 
@@ -94,7 +94,7 @@ class SharedWorkerTargetHandoffTests(unittest.TestCase):
             for channel in ('foreground', 'background'):
                 self.assertLessEqual(frame['counts'].get((11, channel, 'candidate'), 0), 2)
         self.assertEqual((14, 'bot', 12), marker['identity'][:3])
-        self.assertIsNone(binding.attack_policy.search_authority)
+        self.assertFalse(hasattr(binding.attack_policy, 'search_authority'))
         self.assertEqual(scene.initial_ammo[11][0] - 1, binding.gun.ammo[0])
         self.assertEqual(1, binding.state['fire_seq'])
 
@@ -128,8 +128,8 @@ class SharedWorkerTargetHandoffTests(unittest.TestCase):
             self.assertEqual(source, tuple(binding.state['position']))
             self.assertEqual(ammo, tuple(binding.gun.ammo))
             self.assertEqual(committed, binding.state['fire_seq'])
-            self.assertIsNone(binding.attack_policy.search_started)
-            self.assertIsNone(binding.attack_policy.search_authority)
+            self.assertFalse(hasattr(binding.attack_policy, 'search_started'))
+            self.assertFalse(hasattr(binding.attack_policy, 'search_authority'))
         self.assertGreater(scene.counts[(11, 'foreground', 'world')], 0)
         self.assertEqual('wait', binding.attack_policy.decision['action'])
 
@@ -153,7 +153,7 @@ class SharedWorkerTargetHandoffTests(unittest.TestCase):
         for unused in range(200):
             scene.step()
             self.assertNotIn(11, scene.engine._friendly_repositions)
-            self.assertIsNone(binding.attack_policy.search_started)
+            self.assertFalse(hasattr(binding.attack_policy, 'search_started'))
             if binding.attack_policy.current_target_key() == ('bot', 15):
                 break
         self.assertEqual(('bot', 15), binding.attack_policy.current_target_key())

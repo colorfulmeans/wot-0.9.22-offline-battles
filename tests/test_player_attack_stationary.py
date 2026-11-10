@@ -99,7 +99,7 @@ class NativeStationaryCombatTests(unittest.TestCase):
         self.assertTrue(final['domains'][(0,)]['all_failed'])
         self.assertGreater(final['domains'][(0,)]['projected_failed'], 0)
         self.assertEqual(0, final['domains'][(0,)]['geometry_pending'])
-        self.assertIsNone(policy.search_started)
+        self.assertFalse(hasattr(policy, 'search_started'))
         self.assertFalse(scene.launches())
 
     def test_proved_future_penetration_turns_then_requires_actual_muzzle_before_fire(self):
@@ -125,7 +125,7 @@ class NativeStationaryCombatTests(unittest.TestCase):
         self.assertEqual(1, len(scene.launches()), scene.trace[-4:])
         self.assertGreater(abs(scene.body.yaw), .2)
         self.assertEqual([19, 10], scene.battle._gun_state.ammo)
-        self.assertIsNone(policy.search_started)
+        self.assertFalse(hasattr(policy, 'search_started'))
 
     def test_budget_wait_stays_physically_stopped_until_real_native_work_can_resume(self):
         scene = self.scene(limits=(-.1, .1), clip=6, burst=1, bearing=.7, rate=.8)
@@ -145,7 +145,7 @@ class NativeStationaryCombatTests(unittest.TestCase):
         self.assertEqual(1, len(set(r[5] for r in waits)))
         self.assertGreater(waits[-1][0] - waits[0][0], 3.)
         self.assertFalse(any(r[1] == 'firing_position' for r in observed), observed)
-        self.assertIsNone(policy.search_started)
+        self.assertFalse(hasattr(policy, 'search_started'))
         self.assertFalse(scene.launches())
         # Releasing the same real native budget, not waiting out a timer,
         # permits the stationary plan to complete and the original turn.
@@ -196,7 +196,7 @@ class NativeStationaryCombatTests(unittest.TestCase):
                     self.assertEqual(('clear', 'reachable', 'failed'),
                                      (proof['line'], proof['mechanical'], proof['armor']))
                 qualified = copy.deepcopy(selected_rows)
-            self.assertIsNone(policy.search_started)
+            self.assertFalse(hasattr(policy, 'search_started'))
             self.assertEqual(0, scene.battle._gun_state.shot_index)
             self.assertIsNone(policy.reload_authority)
             if scene.launches():
@@ -248,7 +248,7 @@ class NativeStationaryCombatTests(unittest.TestCase):
                 self.assertEqual('base_capture', runtime.combat_stop.task_order['combat_mode'])
                 self.assertEqual((45., 0., 0.),
                     runtime._last_order['control_trace']['strategic_move_position'])
-                self.assertIsNone(runtime.attack_policy.search_started)
+                self.assertFalse(hasattr(runtime.attack_policy, 'search_started'))
                 self.assertFalse(runtime._mission.get('capture_started'))
                 self.assertFalse(scene.launches())
 

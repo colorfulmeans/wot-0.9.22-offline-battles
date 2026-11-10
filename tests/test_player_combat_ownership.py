@@ -199,14 +199,20 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
                         self.assertEqual('eligible', selection['candidates'][0]['reason'])
                         self.assertFalse(selection['candidates'][0]['local_lane'])
                         self.assert_route_hint(scene, 2)
-                        self.assert_original_navigation(scene)
-                        self.assertFalse(scene.runtime.combat_stop.combat_owned)
-                        self.assertFalse(scene.runtime.combat_stop.stop_allowed)
+                        owner = scene.runtime.combat_stop
+                        if owner.stop_allowed:
+                            self.assertTrue(owner.combat_owned)
+                            self.assertEqual(2, scene.applied_order()['target_id'])
+                            self.assertIn(scene.applied_order()['combat_mode'],
+                                          ('engage', 'gun_angle_adjust'))
+                            self.assertTrue(owner.physical_recovery_active())
+                        else:
+                            self.assert_original_navigation(scene)
                         self.assertEqual((2,), tuple(row['network_id'] for row in
                             scene.runtime.combat_targets()))
                         self.assertEqual('class_mt_rim_east', scene.applied_order()['route_id'])
                         self.assertFalse(scene.applied_order()['fire_allowed'])
-                        self.assertIsNone(scene.runtime.attack_policy.search_started)
+                        self.assertFalse(hasattr(scene.runtime.attack_policy, 'search_started'))
                         self.assertFalse(scene.launches())
                 finally:
                     scene.doCleanups()
@@ -219,7 +225,7 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
             self.assertFalse(scene.runtime.visible_targets())
             self.assertEqual('route', scene.original_order()['combat_mode'])
             self.assert_original_navigation(scene)
-            self.assertIsNone(scene.runtime.attack_policy.search_started)
+            self.assertFalse(hasattr(scene.runtime.attack_policy, 'search_started'))
             self.assertFalse(scene.launches())
 
     def test_visible_blocked_contact_reaches_point_validation_not_armour_failure_search(self):
@@ -232,7 +238,11 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
                 scene.native_position((.4 * step, 0., .25 * step))
                 scene.tick()
                 self.assert_route_hint(scene, 2)
-                self.assert_original_navigation(scene)
+                if scene.runtime.combat_stop.stop_allowed:
+                    self.assertTrue(scene.runtime.combat_stop.physical_recovery_active())
+                    self.assertEqual(2, scene.applied_order()['target_id'])
+                else:
+                    self.assert_original_navigation(scene)
                 self.assertFalse(scene.applied_order()['fire_allowed'])
                 self.assertFalse(scene.launches())
             # Native line obstruction is now a shared point-review input,
@@ -240,9 +250,9 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
             self.assertGreater(evaluate.call_count, 0)
         self.assertEqual('wait', scene.runtime.attack_policy.decision['action'])
         self.assertTrue(scene.runtime.attack_policy.stationary_review_wait())
-        self.assertIsNone(scene.runtime.attack_policy.search_started)
+        self.assertFalse(hasattr(scene.runtime.attack_policy, 'search_started'))
 
-    def test_enabling_fire_refines_blocked_aim_without_changing_stb1_drive_commands(self):
+    def test_enabling_fire_grants_only_bounded_blocked_point_recovery(self):
         traces = []
         for features in (('drive',), ('drive', 'fire')):
             scene = self.scene(features=features)
@@ -263,7 +273,13 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
                 traces.append(trace)
             finally:
                 scene.doCleanups()
-        self.assertEqual(traces[0], traces[1])
+        self.assertNotEqual(traces[0], traces[1],
+            'fire control may park temporarily to inspect a blocked point')
+        self.assertTrue(all(row[0]['combat_mode'] == 'route' for row in traces[0]))
+        self.assertTrue(all(row[0]['combat_mode'] in
+            ('route', 'engage', 'gun_angle_adjust') for row in traces[1]))
+        self.assertTrue(any(row[0]['combat_mode'] == 'route' for row in traces[1]),
+            'failed point recovery must return to the original route')
         self.assertTrue(any(row[1] or row[2] for row in traces[0]),
                         'baseline must actually operate the drive actuator')
 
@@ -284,14 +300,17 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
             self.assertFalse(candidates[2]['local_lane'])
             self.assertEqual({2, 5}, set(row['network_id'] for row in
                 scene.runtime.combat_targets()))
-            self.assertIsNone(scene.applied_order().get('target_id'))
-            self.assert_original_navigation(scene)
-            self.assertFalse(scene.runtime.combat_stop.combat_owned)
+            if scene.runtime.combat_stop.stop_allowed:
+                self.assertEqual(2, scene.applied_order()['target_id'])
+                self.assertTrue(scene.runtime.combat_stop.physical_recovery_active())
+            else:
+                self.assertIsNone(scene.applied_order().get('target_id'))
+                self.assert_original_navigation(scene)
             candidate = scene.runtime.attack_policy.decision.get('candidate')
             if candidate is not None:
                 self.assertEqual(2, candidate['target']['network_id'])
                 self.assertNotEqual('passed', candidate['armor'])
-            self.assertIsNone(scene.runtime.attack_policy.search_started,
+            self.assertFalse(hasattr(scene.runtime.attack_policy, 'search_started'),
                 'a blocked unknown contact prevents an all-enemies armour failure')
             self.assertFalse(scene.applied_order()['fire_allowed'])
             self.assertFalse(scene.launches())
@@ -380,12 +399,14 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
             raw = scene.original_order()
             self.assert_route_hint(scene, 5)
             policy = scene.runtime.attack_policy
-            self.assertIsNone(policy.search_started,
+            self.assertFalse(hasattr(policy, 'search_started'),
                 'an already loaded HE clip does not need the eight-second gate')
             candidate = policy.decision.get('candidate')
             if candidate and candidate.get('mode') == 'he_fallback':
                 saw_fallback = True
-                self.assertEqual('current_he_clip_fallback', policy.decision['reason'])
+                self.assertIn(policy.decision['reason'],
+                    ('current_he_fallback_contact', 'current_he_clip_fallback',
+                     'he_fallback_contact'))
                 self.assertEqual(5, candidate['target']['network_id'])
                 self.assertGreater(candidate['expected_damage'], 0.)
                 self.assertEqual(0., scene.applied_order()['throttle_override'])
@@ -395,7 +416,7 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
         self.assertTrue(scene.launches(), scene.runtime.status())
         self.assertEqual([0], [row['shell_index'] for row in scene.launches()])
 
-    def test_admitted_all_armour_failure_searches_eight_seconds_before_he_fallback(self):
+    def test_admitted_all_armour_failure_switches_to_he_without_search_delay(self):
         scene = self.scene(clip=1, burst=1)
         scene.eligible_enemy(5, armor=30.)
         gun = scene.battle._gun_state
@@ -409,35 +430,26 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
             kind='HIGH_EXPLOSIVE', explosionRadius=5.)
         self.assertEqual({5: True}, scene.sample_original_lanes())
         scene.battle._advance_local_gun_to(scene.entity, scene.now)
-        search_started = fallback_at = None
+        began = scene.now
+        fallback_at = None
         for unused in range(250):
             scene.battle._advance_local_gun_to(scene.entity, scene.now)
             scene.tick()
             policy = scene.runtime.attack_policy
-            if policy.search_started is not None and search_started is None:
-                search_started = policy.search_started
-                self.assertEqual('player_search_penetration',
-                                 scene.control.last_order['combat_mode'])
-                self.assertTrue(scene.control.last_order['movement_intent'])
+            self.assertFalse(hasattr(policy, 'search_started'))
             candidate = policy.decision.get('candidate')
             if candidate and candidate.get('mode') == 'he_fallback':
                 if fallback_at is None:
                     fallback_at = scene.now
-                self.assertIsNotNone(search_started)
-                self.assertGreaterEqual(scene.now - search_started, 8.)
                 self.assertEqual(5, candidate['target']['network_id'])
-            if search_started is not None and scene.now - search_started < 8.:
-                self.assertEqual(0, gun.shot_index)
-                self.assertFalse(scene.launches())
             if scene.launches():
                 break
-        self.assertIsNotNone(search_started, scene.runtime.attack_policy.status())
         self.assertIsNotNone(fallback_at, scene.runtime.attack_policy.status())
-        self.assertGreaterEqual(fallback_at - search_started, 8.)
+        self.assertLess(fallback_at - began, 8.)
         self.assertTrue(scene.launches(), scene.runtime.status())
         self.assertEqual([1], [row['shell_index'] for row in scene.launches()])
 
-    def test_observed_health_changes_do_not_reorder_domain_or_restart_failure_timer(self):
+    def test_observed_health_changes_do_not_reorder_domain_or_delay_he_fallback(self):
         scene = self.scene(clip=1, burst=1)
         primary = scene.eligible_enemy(5, armor=30.)
         primary.health = 50
@@ -457,7 +469,8 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
         scene.battle.client.effective_params['gun']['shots'][1]['source_shot']['shell'].update(
             kind='HIGH_EXPLOSIVE', explosionRadius=5.)
         self.assertEqual({5: True, 2: True, 6: True}, scene.sample_original_lanes())
-        search_started = fallback_at = None
+        began = scene.now
+        fallback_at = None
         ranks = set()
         for step in range(180):
             if step and step % 11 == 0:
@@ -478,24 +491,15 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
             self.assertEqual(5, rank[0])
             ranks.add(rank)
             policy = scene.runtime.attack_policy
-            if policy.search_started is not None:
-                if search_started is None:
-                    search_started = policy.search_started
-                self.assertEqual(search_started, policy.search_started,
-                    'health changes in the same admitted enemies are not a new encounter')
+            self.assertFalse(hasattr(policy, 'search_started'))
             candidate = policy.decision.get('candidate')
             if candidate and candidate.get('mode') == 'he_fallback' and fallback_at is None:
                 fallback_at = scene.now
-                self.assertIsNotNone(search_started)
-                self.assertGreaterEqual(fallback_at - search_started, 8.)
-                self.assertLessEqual(fallback_at - search_started, 8.3)
-            if search_started is not None and scene.now - search_started < 8.:
-                self.assertEqual(0, gun.shot_index)
-                self.assertFalse(scene.launches())
             if scene.launches():
                 break
         self.assertEqual({(5, 6, 2)}, ranks)
         self.assertIsNotNone(fallback_at, scene.runtime.attack_policy.status())
+        self.assertLess(fallback_at - began, 8.)
         self.assertTrue(scene.launches(), scene.runtime.status())
         self.assertEqual([1], [row['shell_index'] for row in scene.launches()])
 
@@ -594,7 +598,7 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
                     break
             self.assertTrue(copied_recovery.called)
         self.assertEqual('firing_position', scene.runtime.attack_policy.decision['action'])
-        self.assertIsNone(scene.runtime.attack_policy.search_started,
+        self.assertFalse(hasattr(scene.runtime.attack_policy, 'search_started'),
                           'a blocked lane is not an all-enemies armour failure')
         marker = engine._friendly_repositions[scene.runtime.actor_id]
         self.assertEqual(5, marker['target_id'])
@@ -638,16 +642,22 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
                             order = scene.applied_order()
                             self.assertEqual('hold' if mission == 'hold_position' else
                                              'base_capture', order['combat_mode'])
-                            self.assertIsNone(order.get('target_id'))
+                            if 'fire' not in features:
+                                self.assertIsNone(order.get('target_id'))
+                            else:
+                                self.assertIn(order.get('target_id'), (None, 2))
                             self.assertEqual(point, order['move_position'])
                             self.assertEqual(0., order['throttle_override'])
-                            self.assertIsNone(scene.runtime.attack_policy.search_started)
+                            self.assertFalse(hasattr(scene.runtime.attack_policy, 'search_started'))
                             self.assertFalse(scene.runtime.combat_stop.stop_allowed)
                             self.assertFalse(order['fire_allowed'])
                             self.assertFalse(scene.launches())
                             sender = scene.battle._sender
                             movement = navigation_view(order)
                             movement.pop('aim_position')
+                            movement.pop('target_id', None)
+                            movement.pop('target_kind', None)
+                            movement.pop('face_position', None)
                             trace.append((movement, sender.forward,
                                           sender.turn, sender.handbrake))
                         traces.append(trace)
@@ -672,7 +682,7 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
                     self.assertEqual('team_return_base', order['combat_mode'])
                     self.assertEqual((0., 0., -45.), order['move_position'])
                     self.assertIsNone(order.get('throttle_override'))
-                    self.assertIsNone(scene.runtime.attack_policy.search_started)
+                    self.assertFalse(hasattr(scene.runtime.attack_policy, 'search_started'))
                     sender = scene.battle._sender
                     trace.append((navigation_view(order), sender.forward,
                                   sender.turn, sender.handbrake))
@@ -697,7 +707,7 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
                 resumed = True
                 self.assert_original_navigation(scene)
                 self.assertIsNone(scene.applied_order().get('target_id'))
-                self.assertIsNone(scene.runtime.attack_policy.search_started)
+                self.assertFalse(hasattr(scene.runtime.attack_policy, 'search_started'))
         self.assertTrue(resumed, 'original planner must resume its route after the contact expires')
 
 

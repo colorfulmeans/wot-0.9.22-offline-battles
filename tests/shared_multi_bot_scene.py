@@ -304,7 +304,7 @@ class MultiBotScene(OwnershipScene):
             row['actors'][actor] = dict(
                 target=policy.decision.get('target'),
                 action=policy.decision.get('action'), reason=policy.decision.get('reason'),
-                clock=policy.search_started, ammo=tuple(binding.gun.ammo),
+                ammo=tuple(binding.gun.ammo),
                 loaded=binding.gun.shot_index, clip=binding.gun.clip,
                 reload=binding.gun.reload_time, seq=binding.state['fire_seq'],
                 armor_batches=policy.evaluator.cache_observations['armour_batches'],

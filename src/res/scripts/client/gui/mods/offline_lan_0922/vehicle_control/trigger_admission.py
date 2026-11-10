@@ -367,7 +367,12 @@ class TriggerAdmission(object):
             if hit is not None:
                 if centre or _distance_sq(hit, path[0]) <= 25. ** 2:
                     proof['refusal'] = 'auto_world_blocked'
-                    proof['blocker'] = dict(kind='world', point=hit)
+                    # A clear real barrel may still have an obstructed
+                    # *scattered* ray. Preserve that distinction for the
+                    # combat owner: one sampled miss is not evidence that
+                    # the selected centre aim point needs a new position.
+                    proof['blocker'] = dict(kind='world', point=hit,
+                                            ray_stage='centre' if centre else 'scatter')
                     break
                 proof['path'] = tuple(path[:index + 1]) + (hit,)
                 proof['terminal_impact'] = hit

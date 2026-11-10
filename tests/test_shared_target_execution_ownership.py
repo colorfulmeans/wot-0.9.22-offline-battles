@@ -70,7 +70,7 @@ class SharedTargetExecutionOwnershipTests(unittest.TestCase):
         self.assertEqual(point, decision['candidate']['solution']['point'])
         self.assertEqual(14, scene.applied_order()['target_id'])
         self.assertTrue(scene.runtime.attack_policy._executable_current(decision['candidate']))
-        self.assertIsNone(scene.runtime.attack_policy.search_started)
+        self.assertFalse(hasattr(scene.runtime.attack_policy, 'search_started'))
         self.assertTrue(scene.runtime.combat_stop.stop_allowed)
 
     def test_macro_initial_target_motion_cannot_retire_other_targets_friendly_recovery(self):
@@ -110,7 +110,7 @@ class SharedTargetExecutionOwnershipTests(unittest.TestCase):
         self.assertEqual(marker['destination'], scene.runtime._last_order['move_position'])
         self.assertFalse(scene.applied_order()['fire_allowed'])
         self.assertFalse(scene.launches())
-        self.assertIsNone(policy.search_started)
+        self.assertFalse(hasattr(policy, 'search_started'))
 
     def test_stale_route_hint_cannot_suspend_a_current_native_verified_point(self):
         scene, unused_initial, unused_executable = self.scene()
@@ -271,7 +271,7 @@ class SharedTargetExecutionOwnershipTests(unittest.TestCase):
         self.assertEqual(scene.original_order()['move_position'],
             dict(zip(('x', 'y', 'z'), scene.applied_order()['move_position'])))
         self.assertIsNone(scene.applied_order().get('target_id'))
-        self.assertIsNone(policy.search_started,
+        self.assertFalse(hasattr(policy, 'search_started'),
             'true range obstruction is navigation work, not an armour-negative certificate')
 
 

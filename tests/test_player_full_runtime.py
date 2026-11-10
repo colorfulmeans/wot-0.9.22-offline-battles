@@ -649,7 +649,7 @@ class NativeAimLoopBoundaryTests(unittest.TestCase):
                 break
         self.assertTrue(moved_source)
         self.assertTrue(recovered, scene.runtime.status())
-        self.assertIsNone(scene.runtime.attack_policy.search_started)
+        self.assertFalse(hasattr(scene.runtime.attack_policy, 'search_started'))
         self.assertFalse(scene.launches())
 
     def test_rotated_native_turret_sample_stays_the_same_point_through_real_trigger(self):

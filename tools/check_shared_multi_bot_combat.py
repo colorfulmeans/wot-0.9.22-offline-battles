@@ -135,12 +135,19 @@ def run_case(actors, frames, warmup, enemies, schedule):
                 for row in measured for actor in row['actors']))
         for actor, binding in scene.engine._actor_controls.items():
             candidate = binding.attack_policy.decision.get('candidate') or {}
+            phase = binding.combat_stop._physical_recovery or {}
             result['final_actor_state'][str(actor)] = dict(team=binding.actor_team,
                 target=(candidate.get('target') or {}).get('network_id'),
                 action=binding.attack_policy.decision.get('action'),
                 reason=binding.attack_policy.decision.get('reason'),
                 last_fire_failure=binding._last_fire_failure,
-                search_started=binding.attack_policy.search_started,
+                he_fallback=bool(binding.attack_policy.fallback),
+                point_recovery=dict(active=bool(phase),
+                    started_at=phase.get('started'), target=phase.get('target'),
+                    sample=phase.get('sample'), shell_index=phase.get('shell_index'),
+                    goal=phase.get('goal'),
+                    owner_status=binding.combat_stop.receipt.get('status'),
+                    owner_reason=binding.combat_stop.receipt.get('reason')),
                 ammo=list(binding.gun.ammo), initial_ammo=scene.initial_ammo[actor],
                 clip=binding.gun.clip, reload_seconds=binding.gun.reload_time,
                 route=binding.state['route']['id'])
@@ -217,7 +224,7 @@ def main():
             result['name'], result['wall_ms']['mean'], result['cpu_ms']['mean'],
             result['measured_shots'], result['armour_batches']), file=sys.stderr, flush=True)
     after = identity()
-    report = dict(schema='shared-multi-bot-combat-v1', source_before=source,
+    report = dict(schema='shared-multi-bot-combat-v2', source_before=source,
         source_after=after, source_unchanged_during_run=source == after,
         environment=dict(python=platform.python_version(), architecture=platform.machine(),
                          logical_cpus=os.cpu_count()),

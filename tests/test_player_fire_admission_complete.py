@@ -812,6 +812,11 @@ class AutomaticFireAdmissionTests(AutomaticFireScene):
             self.assertFalse(self.fire())
             candidate = self.admission.pending
             self.assertEqual('auto_world_blocked', self.control.last_fire_failure)
+            self.assertEqual('scatter',self.admission.receipt['blocker']['ray_stage'])
+            policy=self.runtime.attack_policy
+            self.assertEqual('clear',policy.rows[self.candidate['key']]['line'])
+            self.assertNotIn(self.candidate['key'],policy._admission_blocks)
+            self.assertEqual(self.candidate['key'],policy.selected)
             self.step()
             self.assertFalse(self.fire())
             self.assertIs(candidate, self.admission.pending)

@@ -1,5 +1,10 @@
 # PR119 shared-control audit and completion — 2026-11-09
 
+> **Later November 10 correction:** `shared-control-offset-audit-20261110.md`
+> supersedes the historical eight-second search/independent gun-angle position
+> recovery discussed below. The current native point owner and release gates
+> must be verified on the new PR119 head, not the earlier package.
+
 ## Authority and evidence
 
 This audit supersedes the completion claims in the earlier handoff where they

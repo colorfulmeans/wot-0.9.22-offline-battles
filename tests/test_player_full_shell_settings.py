@@ -146,7 +146,7 @@ class FullShellSettingsTests(unittest.TestCase):
                 self.assertTrue(resumed, 'the original planner must restore the proved loading point')
                 self.assertEqual([0, 1, 1], [shot['shell_index'] for shot in scene.launches()])
                 self.assertEqual([0, 8], gun.ammo)
-                self.assertFalse(scene.runtime.attack_policy.search_started)
+                self.assertFalse(hasattr(scene.runtime.attack_policy, 'search_started'))
 
     def test_proved_single_round_replacement_can_apply_during_loading(self):
         scene = self.scene(clip=1, burst=1)
@@ -702,7 +702,7 @@ class FullShellSettingsTests(unittest.TestCase):
         for unused in range(100):
             row = scene.tick()
             self.assertIsNone(scene.control.last_control_failure, row)
-            self.assertIsNone(scene.runtime.attack_policy.search_started, row)
+            self.assertFalse(hasattr(scene.runtime.attack_policy, 'search_started'), row)
             self.assertNotIn(row['action'], ('reload_clip', 'switch_shell'))
             self.assertEqual((0, 3, 0., before),
                              (gun.shot_index, gun.clip, gun.reload_time, gun.ammo))
@@ -729,7 +729,7 @@ class FullShellSettingsTests(unittest.TestCase):
             decision = policy.update(scene.now)
             policy.background(scene.now)
             self.assertNotEqual('search_penetration', decision['action'])
-            self.assertIsNone(policy.search_started)
+            self.assertFalse(hasattr(policy, 'search_started'))
             self.assertEqual((0, 3, 0.), (gun.shot_index, gun.clip, gun.reload_time))
             if decision['action'] == 'reload_clip' and decision.get('early_reload'):
                 break
@@ -779,7 +779,7 @@ class FullShellSettingsTests(unittest.TestCase):
         for unused in range(230):
             row = scene.tick()
             self.assertIsNone(scene.control.last_control_failure, row)
-            self.assertIsNone(scene.runtime.attack_policy.search_started)
+            self.assertFalse(hasattr(scene.runtime.attack_policy, 'search_started'))
             self.assertNotEqual('search_penetration', row['action'])
             self.assertEqual(before, gun.ammo)
             if accepted:
@@ -809,24 +809,21 @@ class FullShellSettingsTests(unittest.TestCase):
             gun.shots[index].piercingPower = (1., 1.)
             scene.battle.client.effective_params['gun']['shots'][index]['source_shot'][
                 'piercingPower'] = (1., 1.)
-        started = None
+        began = scene.now
         for unused in range(180):
             row = self.tick_weapon(scene)
             policy = scene.runtime.attack_policy
-            if started is None:
-                started = policy.search_started
+            self.assertFalse(hasattr(policy, 'search_started'))
             if policy.decision.get('action') == 'navigate':
                 break
         else:
-            self.fail('The expired search never returned to navigation: %r' % scene.trace[-3:])
-        self.assertIsNotNone(started)
-        self.assertGreaterEqual(scene.now - started, attack_policy.SEARCH_SECONDS)
+            self.fail('Failed armour/absent HE did not release navigation: %r' % scene.trace[-3:])
+        self.assertLess(scene.now - began, 8.)
         self.assertEqual('no_he_or_verified_penetration', policy.decision['reason'])
+        self.assertFalse(scene.runtime.combat_stop.stop_allowed)
         self.assertFalse(hasattr(scene.runtime, '_unusable_ammo_retreat'))
-        order = copy.deepcopy(row['order'])
-        unchanged = copy.deepcopy(order)
-        self.assertIs(order, scene.runtime._move_order(order, scene.now))
-        self.assertEqual(unchanged, order)
+        order = row['order']
+        self.assertNotIn(order.get('combat_mode'), ('player_search_penetration',))
         self.assertNotIn(order.get('combat_mode'), ('withdraw', 'magazine_reload_retreat'))
         self.assertEqual(before, gun.ammo)
         self.assertFalse(scene.launches())

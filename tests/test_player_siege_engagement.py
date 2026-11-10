@@ -398,7 +398,7 @@ class SiegeEngagementTests(unittest.TestCase):
         self.assertIsNone(runtime.combat_stop.pivot)
         self.assertEqual(3, gun.clip)
         self.assertFalse(scene.launches())
-        self.assertIsNone(runtime.attack_policy.search_authority)
+        self.assertFalse(hasattr(runtime.attack_policy, 'search_authority'))
         sequence = runtime._siege_pending['sequence']
         scene.echo_mode(siege_mechanics.SWITCHING_ON, sequence)
         scene.tick(actuate=False)
@@ -547,7 +547,7 @@ class SiegeEngagementTests(unittest.TestCase):
         self.assertFalse(request['enabled'])
         self.assertIsNone(runtime.siege_aim_candidate())
         self.assertIsNone(runtime.hydraulic_aim_point(scene.entity))
-        self.assertIsNone(runtime.attack_policy.search_started)
+        self.assertFalse(hasattr(runtime.attack_policy, 'search_started'))
         sequence = request['sequence']
         scene.echo_mode(siege_mechanics.SWITCHING_OFF, sequence)
         for unused in range(5):

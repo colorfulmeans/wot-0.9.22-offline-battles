@@ -95,15 +95,15 @@ class SharedCurrentHEExecutionTests(unittest.TestCase):
         self.assertTrue(policy._executable_current(current, 'he_fallback'))
         self.assertEqual(candidate['pose_stamp'], current['pose_stamp'])
         self.assertLessEqual(policy._used['foreground'], policy.foreground_budget)
-        self.assertIsNone(policy.search_started)
+        self.assertFalse(hasattr(policy, 'search_started'))
 
-    def test_first_comparison_still_observes_all_points_and_selects_highest_damage(self):
+    def test_first_ordinary_he_comparison_observes_one_point_per_enemy_and_selects_damage(self):
         scene = self.scene()
         self.add_better(scene)
         candidate = self.acquire(scene, target=2)
         self.assertEqual(37., candidate['expected_damage'])
         self.assertEqual({2, 14}, {row['network_id'] for row in scene.runtime.combat_targets()})
-        self.assertGreater(scene.runtime.attack_policy.he_comparison['total'], 2)
+        self.assertEqual(2, scene.runtime.attack_policy.he_comparison['total'])
         self.assertFalse(scene.launches())
 
     def test_new_higher_damage_target_and_verified_next_cannot_preempt_current_he(self):
@@ -233,7 +233,7 @@ class SharedCurrentHEExecutionTests(unittest.TestCase):
         self.assertIsNone(policy._current_he_execution)
         self.assertFalse(scene.applied_order()['fire_allowed'])
         self.assertFalse(scene.launches())
-        self.assertIsNone(policy.search_started)
+        self.assertFalse(hasattr(policy, 'search_started'))
 
     def test_real_load_input_retires_the_current_he_execution_qualification(self):
         scene = self.scene()
@@ -264,7 +264,7 @@ class SharedCurrentHEExecutionTests(unittest.TestCase):
             scene.observe_control()
             policy = scene.runtime.attack_policy
             self.assertNotEqual('aim', policy.decision['action'])
-            self.assertIsNone(policy.search_started)
+            self.assertFalse(hasattr(policy, 'search_started'))
             self.assertFalse(scene.applied_order()['fire_allowed'])
             self.assertFalse(scene.launches())
         self.assertEqual('firing_position', policy.decision['action'])
@@ -279,7 +279,7 @@ class SharedCurrentHEExecutionTests(unittest.TestCase):
         self.assertNotEqual('aim', policy.decision['action'])
         self.assertFalse(scene.applied_order()['fire_allowed'])
         self.assertFalse(scene.launches())
-        self.assertIsNone(policy.search_started)
+        self.assertFalse(hasattr(policy, 'search_started'))
 
     def test_real_laying_refusal_preserves_the_uncommitted_intention_but_not_fire_proof(self):
         scene = self.scene()

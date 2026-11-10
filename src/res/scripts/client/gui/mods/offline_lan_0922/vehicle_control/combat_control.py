@@ -332,6 +332,7 @@ class CombatControl(object):
         selected = candidate['target']
         if (selected.get('kind'), selected.get('network_id')) != original:
             self._gun_handoff = dict(at=now, generation=self.generation,
+                episode=owner._episode, weapon=tuple(observation(self).weapon_identity()),
                 original=original, candidate=candidate['key'])
 
     def consume_gun_handoff(self, source, command, target, now):
@@ -340,7 +341,11 @@ class CombatControl(object):
         candidate = self.attack_policy.decision.get('candidate')
         original_target = ((target.get('kind'), target.get('network_id'))
                            if isinstance(target, dict) else (None, None))
-        if (lease is None or lease['at'] != now or lease['generation'] != self.generation or
+        owner = self.combat_stop
+        if (lease is None or lease['generation'] != self.generation or
+                lease['episode'] != owner._episode or not owner.active or
+                owner.explicit_travel or self._mission_brakes() or
+                lease['weapon'] != tuple(observation(self).weapon_identity()) or
                 candidate is None or lease['candidate'] != candidate['key'] or
                 lease['original'] != original_target or
                 command.get('target_id') not in ((target.get('id'), target.get('network_id'))
@@ -349,16 +354,24 @@ class CombatControl(object):
             return command, target
         selected = candidate['target']
         current = self.current_attack_candidate(source, selected)
-        if current is None or not self._gun_handoff_preserves_controls(current, command):
-            # This is an execution refusal, never an armour/geometry failure.
-            # The next frontier can consume the original target instead of
-            # retaining an impossible aim until a shot which cannot happen.
-            self.attack_policy.selected = None
-            self.attack_policy._choose('wait', 'gun_target_handoff_refused')
+        if current is None:
+            # A cached physical step can outlive its exact muzzle/line proof.
+            # Keep the decision's target so the shared aim-intention holder
+            # can refresh its motion, but never borrow a stale fire edge.
+            return dict(command, fire_allowed=False), target
+        if not self._gun_handoff_preserves_controls(current, command):
+            # A genuine movement conflict closes this gun-only lease. It
+            # does not erase the policy's observed enemy or armour evidence.
             self._gun_handoff = None
             return dict(command, fire_allowed=False), target
-        return dict(command, target_id=selected.get('network_id', selected.get('id')),
-            target_kind=selected.get('kind'), stable_hull_face=True), selected
+        refined = dict(command, target_id=selected.get('network_id', selected.get('id')),
+                       target_kind=selected.get('kind'), stable_hull_face=True)
+        if lease['at'] != now:
+            # A cached physical substep may retain this target for turret
+            # motion, but cannot inherit fire permission from an earlier
+            # policy frame. The next real control callback must re-prove it.
+            refined['fire_allowed'] = False
+        return refined, selected
 
     def _observe_attack_lay(self, state, target, intention, now):
         policy = self.attack_policy
@@ -397,10 +410,9 @@ class CombatControl(object):
             self.attack_policy.reset()
         self.attack_policy.decision = dict(action='unchanged',
             reason='original_navigation', candidate=None)
-        self._move_episode = None
         self._siege_aim_candidate = None
         self.siege_aim.reset()
-        if self._last_navigation.get('action') in ('search_penetration', 'firing_position'):
+        if self._last_navigation.get('action') == 'firing_position':
             self._last_navigation = {}
 
     def _accept_controls(self, command, throttle, turn, path_clear, motion_probe, now):
@@ -426,7 +438,7 @@ class CombatControl(object):
         self._last_order = order
         if self.combat_stop.stop_allowed and self.attack_policy is not None:
             action = self.attack_policy.decision['action']
-            if action in ('search_penetration', 'firing_position'):
+            if action == 'firing_position':
                 navigation = dict(self._last_navigation, action=action, at=now,
                     position=tuple(self.state['position']), path_clear=bool(path_clear),
                     throttle=order['throttle'], turn=order['turn'],
@@ -437,9 +449,6 @@ class CombatControl(object):
                     navigation.update(status='blocked', reason='copied_motion_probe')
                 elif abs(order['throttle']) > .01 or abs(order['turn']) > .01:
                     navigation.update(status='accepted')
-                episode = self._move_episode
-                if episode is not None:
-                    navigation['displacement'] = _distance(episode['source'], self.state['position'])
                 self.attack_policy.navigation_result(navigation)
 
     def _observe_loading_completion(self):
@@ -683,115 +692,13 @@ class CombatControl(object):
             self._siege_pending is None and
             not physical.mode_pending())
 
-    def attack_search_drive_available(self):
-        mission = self._mission or {}
-        return bool(self.combat_stop.can_request_movement and not self._mission_brakes() and
-                    self._implicit_retry is None and not mission.get('capture_started') and
-                    not (mission.get('explicit') and mission.get('destination') is not None))
-
-    def _move_order(self, order, now):
-        """The admitted armour search; ordinary recovery remains the BOT law."""
-        if not self.combat_stop.stop_allowed:
-            return order
-        decision = self.attack_policy.decision
-        action = decision.get('action')
-        if (self._move_episode is not None and self.attack_policy.search_authority is not None and
-                action in ('wait', 'preaim', 'firing_position')):
-            # The already accepted search owns its goal and clock while a
-            # native snapshot is pending. A fresh point/terminal task still
-            # retires it through the existing policy lifecycle below.
-            return order
-        if action == 'firing_position':
-            self._move_episode = None
-            return order
-        if action != 'search_penetration':
-            search_was_moving = self._move_episode is not None
-            deadline = (self._move_episode or {}).get('deadline')
-            if deadline is not None and now >= deadline:
-                self.attack_policy.navigation_result(dict(self._last_navigation,
-                    action='search_penetration', status='expired', at=now))
-            elif (self.attack_policy.navigation_receipt or {}).get('action') in (
-                    'firing_position', 'search_penetration'):
-                self.attack_policy.navigation_result(None)
-            if self._last_navigation.get('action') in ('firing_position', 'search_penetration'):
-                self._last_navigation = {}
-            self._move_episode = None
-            if search_was_moving and action != 'aim':
-                return dict(self.combat_stop._stop(order, 'penetration_search_finished', now),
-                            fire_allowed=False)
-            return order
-        request = decision.get('move_request') or {}
-        identity = request.get('episode_id')
-        if not self.attack_search_drive_available():
-            self._last_navigation = dict(action=action, episode_id=identity, at=now,
-                status='refused', reason='drive_authority_unavailable')
-            self.attack_policy.navigation_result(self._last_navigation)
-            return order
-        target = request.get('target') or (decision.get('candidate') or {}).get('target')
-        if not self.combat_stop.contains(target):
-            target = self.combat_stop.engagement_target(order)
-        if target is None:
-            return order
-        source = self.state['position']
-        episode = self._move_episode
-        if episode is None or episode['identity'] != identity:
-            retry = self._move_retry
-            if retry is not None and retry['identity'] == identity and now < retry['until'] and _distance(source, retry['source']) < 2.:
-                return order
-            episode = self._move_episode = dict(identity=identity, source=tuple(source),
-                deadline=None, cursor=0, goal=None, tried=[], target=dict(target))
-        episode['deadline'] = request.get('deadline')
-        if episode['deadline'] is not None and now >= episode['deadline']:
-            self._last_navigation = dict(status='timeout', reason='firing_position_exhausted',
-                                         action=action, fallback='ordinary_navigation')
-            self._move_retry = dict(identity=identity, source=tuple(source), until=now + 1.)
-            self._move_episode = None
-            self.attack_policy.navigation_result(self._last_navigation)
-            return order
-        goal = episode.get('goal')
-        if goal is not None and _distance(source, goal) < 1.5:
-            episode['tried'].append(goal)
-            episode['goal'] = goal = None
-        attempted = False
-        if goal is None:
-            # These are requests, not invented reachable receipts. The copied
-            # navigator proves and executes the route; native sweeps own the
-            # next physical move and report failed candidate edges normally.
-            target_position = _point(target['position'])
-            bearing = math.atan2(target_position[0] - source[0], target_position[2] - source[2])
-            offsets = (math.pi / 2., -math.pi / 2., math.pi / 4., -math.pi / 4., math.pi)
-            cursor = episode['cursor']
-            if cursor < len(offsets) * 2:
-                attempted = True
-                distance = 8. if cursor < len(offsets) else 16.
-                yaw = bearing + offsets[cursor % len(offsets)]
-                candidate = (episode['source'][0] + math.sin(yaw) * distance,
-                             source[1], episode['source'][2] + math.cos(yaw) * distance)
-                episode['cursor'] += 1
-                ground = self.geometry._navigation_ground(candidate[0], candidate[2])
-                if ground is not None:
-                    candidate = (candidate[0], float(ground), candidate[2])
-                    if self.engine.navigator.grid.segment_clear(source, candidate):
-                        episode['goal'] = goal = candidate
-        self._last_navigation = dict(
-            status='moving' if goal is not None else 'path_refused' if attempted else 'searching',
-            action=action, episode_id=identity, attempted=attempted, at=now,
-            goal=goal, candidates=episode['cursor'])
-        self.attack_policy.navigation_result(self._last_navigation)
-        episode['deadline'] = request.get('deadline')
-        self._last_navigation['deadline'] = episode['deadline']
-        if goal is None:
-            # A rejected local search edge does not authorize a direct chase
-            # to the enemy centre. Keep the search episode/clock and try its
-            # next checked edge on a subsequent control callback.
-            return dict(self.combat_stop._stop(order, 'penetration_search_no_checked_edge', now),
-                        fire_allowed=False)
-        result = dict(order, move_position=goal, throttle_override=None,
-                      fire_allowed=False, combat_mode='player_' + action)
-        return result
-
     def _release_native_hull_laying(self, reason, now):
         self.combat_stop.release_laying(reason, now)
+
+    def point_recovery_probe(self, candidate, destination, now):
+        """Ask the current native evaluator about this exact gun sample."""
+        return self.attack_policy.evaluator.point_recovery_probe(
+            self.attack_policy.frame, candidate, destination, now)
 
     def _ordinary_firing_order(self, order, now):
         return self.combat_stop.apply_order(order, now)
@@ -818,8 +725,6 @@ class CombatControl(object):
                 self._refresh_siege_aim(now)
                 order = self.attack_policy.apply_order(order, now)
                 order = self.combat_stop.apply_order(order, now)
-                if self.combat_stop.stop_allowed:
-                    order = self._move_order(order, now)
             else:
                 self._suspend_attack()
         order = self._mission_guard_order(order, now)

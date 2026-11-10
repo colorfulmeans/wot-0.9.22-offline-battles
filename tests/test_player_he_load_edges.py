@@ -26,18 +26,17 @@ class OrdinaryHELoadEdgesTests(unittest.TestCase):
         self.assertEqual('verified', reason)
         self.assertEqual(2, next_plan['shell_index'])
 
-    def test_ap_clip_preserves_eight_seconds_then_loads_the_verified_ordinary_he(self):
+    def test_ap_clip_immediately_loads_verified_ordinary_he_without_a_search(self):
         scene = self.scene()
         first = scene.tick(0.)
-        self.assertEqual('search_penetration', first['action'])
-        self.assertEqual(0., scene.policy.search_started)
-        before = scene.tick(7.9)
-        self.assertEqual('search_penetration', before['action'])
-        self.assertIsNone(scene.policy.reload_authority)
-        decision = scene.tick(8.)
-        self.assert_he_plan(scene, decision, 'reload_clip')
-        self.assertTrue(decision['early_reload'])
-        self.assertEqual('verified', decision['replacement_status'])
+        self.assert_he_plan(scene, first, 'reload_clip')
+        self.assertTrue(first['early_reload'])
+        self.assertEqual('verified', first['replacement_status'])
+        for now in (.1, 7.9):
+            decision = scene.tick(now)
+            self.assert_he_plan(scene, decision, 'reload_clip')
+            self.assertTrue(decision['early_reload'])
+            self.assertFalse(hasattr(scene.policy, 'search_started'))
 
     def test_exhausted_single_or_clip_keeps_verified_he_candidate_and_next(self):
         for clips in (1, 6):
@@ -48,7 +47,7 @@ class OrdinaryHELoadEdgesTests(unittest.TestCase):
                 self.assert_he_plan(scene, decision,
                                     'reload_clip' if clips > 1 else 'switch_shell')
                 self.assertFalse(decision['early_reload'])
-                self.assertIsNone(scene.policy.search_started)
+                self.assertFalse(hasattr(scene.policy, 'search_started'))
 
     def test_empty_clip_keeps_verified_he_candidate_with_or_without_old_ap_stock(self):
         for loaded, ammo in ((0, (30, 0, 30)), (2, (0, 0, 30))):
@@ -58,7 +57,7 @@ class OrdinaryHELoadEdgesTests(unittest.TestCase):
                 decision = scene.tick(0.)
                 self.assert_he_plan(scene, decision, 'reload_clip')
                 self.assertFalse(decision['early_reload'])
-                self.assertIsNone(scene.policy.search_started)
+                self.assertFalse(hasattr(scene.policy, 'search_started'))
 
     def test_expired_he_contact_cannot_become_a_verified_reload_candidate(self):
         scene = self.scene(ammo=(0, 0, 30))
@@ -78,7 +77,7 @@ class OrdinaryHELoadEdgesTests(unittest.TestCase):
             self.assertEqual((2, 'he_fallback'),
                 (decision['candidate']['shell_index'], decision['candidate']['mode']))
             self.assertIsNone(scene.policy.reload_authority)
-            self.assertIsNone(scene.policy.search_started)
+            self.assertFalse(hasattr(scene.policy, 'search_started'))
             self.assertEqual(0, scene.policy.next_shell)
         scene.frame['trigger_active'] = True
         decision = scene.tick(8.2)
@@ -95,7 +94,7 @@ class OrdinaryHELoadEdgesTests(unittest.TestCase):
             scene.frame['pose'] = ('source', step)
             decision = scene.tick(step * .1)
             self.assertLessEqual(scene.policy._used['foreground'], 2)
-            self.assertIsNone(scene.policy.search_started)
+            self.assertFalse(hasattr(scene.policy, 'search_started'))
             if decision['action'] == 'aim':
                 break
         self.assertEqual('aim', decision['action'], decision)

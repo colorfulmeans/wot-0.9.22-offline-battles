@@ -206,8 +206,10 @@ class Report141918ControlRegressionTests(unittest.TestCase):
                 # A finite physical terminal returns the route in this same
                 # driver callback, after the intermediate order was sampled.
                 self.assertTrue(physical_released)
-                terminal = scene.runtime.state.get('_gun_angle_last_terminal') or {}
-                self.assertEqual('relocation_stalled', terminal.get('reason'))
+                terminal = scene.runtime.combat_stop._failed_recovery or {}
+                self.assertIn(terminal.get('reason'),
+                    ('point_recovery_no_checked_position',
+                     'point_recovery_exhausted', 'point_recovery_drive_stalled'))
             self.assertFalse(consumed['fire_allowed'])
         for order in (row['original'], row['applied']):
             self.assertEqual(ROUTE_ID, order.get('route_id'))
@@ -216,7 +218,7 @@ class Report141918ControlRegressionTests(unittest.TestCase):
         candidate = scene.runtime.attack_policy.decision.get('candidate')
         if candidate is not None:
             self.assertEqual(14, candidate['target']['network_id'])
-        self.assertIsNone(scene.runtime.attack_policy.search_started,
+        self.assertFalse(hasattr(scene.runtime.attack_policy, 'search_started'),
             'blocked geometry or already loaded HE must not manufacture eight-second armor failure')
         self.assertFalse(any(domain.get('all_failed') for domain in row['policy']['failure_domains']))
         self.assertEqual(2, scene.battle._gun_state.shot_index)
@@ -277,9 +279,11 @@ class Report141918ControlRegressionTests(unittest.TestCase):
                     (evidence.get('blocker') or {}).get('actor_key') == ('bot', 10)
                     for evidence in scene.runtime.attack_policy.rows.values())
                 physical_started = physical_started or owner.physical_recovery_active()
-                physical_terminal = physical_terminal or (
-                    (scene.runtime.state.get('_gun_angle_last_terminal') or {}).get('reason') ==
-                    'relocation_stalled' and owner._failed_recovery is not None)
+                physical_terminal = physical_terminal or bool(
+                    owner._failed_recovery is not None and
+                    owner._failed_recovery.get('reason') in (
+                        'point_recovery_no_checked_position',
+                        'point_recovery_exhausted', 'point_recovery_drive_stalled'))
                 self.assert_task_and_domain(scene, row,
                     combat_admitted=owner.combat_owned,
                     physical_released=not owner.combat_owned)
@@ -358,7 +362,7 @@ class Report141918ControlRegressionTests(unittest.TestCase):
                 self.assertIsNone(row['original']['target_id'])
                 self.assertEqual({1, 14}, set(t['network_id'] for t in scene.runtime.combat_targets()))
                 self.assertEqual(ROUTE_ID, row['applied']['route_id'])
-                self.assertIsNone(scene.runtime.attack_policy.search_started)
+                self.assertFalse(hasattr(scene.runtime.attack_policy, 'search_started'))
                 self.assertNotIn('hull_angle_degrees', row['applied'])
                 if row['policy']['action'] == 'aim':
                     self.assertEqual(('bot', 14), row['policy']['target'])

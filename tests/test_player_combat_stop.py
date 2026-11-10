@@ -49,8 +49,7 @@ class Scene:
         engine._gun_angle_target_fraction = lambda *args: None
         engine.navigator = SimpleNamespace(bot_states={}, paths={},
             grid=SimpleNamespace(_proof_deferred=False))
-        self.policy = SimpleNamespace(decision={}, rows={}, search_started=None,
-            search_authority=None, selected=None,
+        self.policy = SimpleNamespace(decision={}, rows={}, selected=None,
             _executable=AttackPolicy._executable,
             _needs_firing_position=AttackPolicy._needs_firing_position,
             _planned_evidence=AttackPolicy._planned_evidence,
@@ -399,7 +398,7 @@ class NativePlanningInputTests(unittest.TestCase):
         self.assertFalse(result['fire_allowed'])
         self.assertEqual(actual, scene.candidate)
         self.assertFalse(AttackPolicy._executable(scene.candidate))
-        self.assertIsNone(scene.policy.search_started)
+        self.assertFalse(hasattr(scene.policy, 'search_started'))
 
     def test_stationary_motion_requires_current_proved_loaded_shell_plan(self):
         for case in ('stale', 'pending', 'not_proved', 'blocked', 'armor_failed', 'no_hull', 'other_shell'):
@@ -423,7 +422,7 @@ class NativePlanningInputTests(unittest.TestCase):
                 result = scene.apply(0.)
                 self.assertIsNone(scene.owner.pivot)
                 self.assertFalse(result['fire_allowed'])
-                self.assertEqual('copied_gun_angle_recovery', scene.runtime._last_navigation['owner'])
+                self.assertEqual('same_point_recovery', scene.runtime._last_navigation['owner'])
 
     def test_stationary_he_contact_plan_is_motion_only_not_penetration_proof(self):
         scene = Scene()
@@ -499,9 +498,9 @@ class NativePlanningInputTests(unittest.TestCase):
         self.assertEqual(0., scene.owner.pivot['progress_at'])
         result = scene.apply(MECHANICAL_STALL_SECONDS)
         self.assertEqual('native_pivot_stalled', scene.owner.pivot['handoff']['reason'])
-        self.assertEqual('copied_gun_angle_recovery', scene.runtime._last_navigation['owner'])
+        self.assertEqual('same_point_recovery', scene.runtime._last_navigation['owner'])
         self.assertNotEqual('route', result['combat_mode'])
-        self.assertIsNone(scene.policy.search_started)
+        self.assertFalse(hasattr(scene.policy, 'search_started'))
         scene.runtime.planner._route.assert_not_called()
 
     def test_actual_native_progress_renews_only_the_existing_stall_allowance(self):
@@ -523,37 +522,37 @@ class NativePlanningInputTests(unittest.TestCase):
         scene = Scene()
         scene.candidate.update(mechanical='hull_laying', line='clear')
         scene.candidate['solution']['yaw'] = .7
-        engine = scene.runtime.engine
-        def consume(now):
-            return engine._gun_angle_order(scene.state, scene.apply(now),
-                {2: scene.target}, now, lambda *args: True)
-        consume(0.)
-        consume(MECHANICAL_STALL_SECONDS)
+        scene.runtime.point_recovery_probe = lambda *args: dict(status='clear')
+        scene.apply(0.)
+        scene.apply(MECHANICAL_STALL_SECONDS)
         handoff = scene.owner.pivot['handoff']
         for moment in (7., 8.1, 8.2):
             scene.candidate['solution']['yaw'] *= -1
-            consume(moment)
+            scene.apply(moment)
             self.assertIs(handoff, scene.owner.pivot['handoff'])
-            self.assertEqual('copied_gun_angle_recovery', scene.runtime._last_navigation['owner'])
-        marker = scene.state['_gun_angle_adjustment']
-        scene.position((WAYPOINT_ARRIVAL_RADIUS - .01, 0., 0.))
-        consume(8.3)
+            self.assertEqual('same_point_recovery', scene.runtime._last_navigation['owner'])
+        phase = scene.owner._physical_recovery
+        self.assertIsNotNone(phase)
+        self.assertEqual(scene.candidate['key'], phase['key'])
+        goal = phase['goal']
+        self.assertIsNotNone(goal)
+        scene.position((goal[0] - .01, goal[1], goal[2]))
+        scene.apply(8.3)
         self.assertIs(handoff, scene.owner.pivot['handoff'])
-        scene.position((WAYPOINT_ARRIVAL_RADIUS, 0., 0.))
-        consume(8.4)
-        self.assertNotIn('_gun_angle_adjustment', scene.state)
-        self.assertEqual('native_lay_proved_at_new_position',
-                         scene.state['_gun_angle_last_terminal']['reason'])
-        self.assertNotIn('handoff', scene.owner.pivot)
-        self.assertEqual(8.4, scene.owner.pivot['progress_at'])
+        scene.apply(8.4)
+        self.assertIs(phase, scene.owner._physical_recovery)
+        self.assertEqual(phase['key'], scene.candidate['key'])
+        self.assertFalse(scene.owner._motion_order.get('fire_allowed', False))
 
 
 class UnchangedRecoveryConsumerTests(unittest.TestCase):
     def test_player_inherits_original_friendly_mechanical_and_rear_laws(self):
-        for name in ('_friendly_reposition_order', '_gun_angle_order', '_rear_laying_order'):
+        for name in ('_friendly_reposition_order', '_rear_laying_order'):
             with self.subTest(name=name):
                 self.assertIs(getattr(bot_runtime.BotRuntime, name),
                               getattr(_PlayerBehaviorEngine, name))
+        self.assertFalse(hasattr(bot_runtime.BotRuntime, '_gun_angle_order'))
+        self.assertFalse(hasattr(_PlayerBehaviorEngine, '_gun_angle_order'))
 
     def test_mechanical_failure_ends_the_bounded_move_without_starting_a_pursuit(self):
         scene = Scene()
@@ -562,40 +561,43 @@ class UnchangedRecoveryConsumerTests(unittest.TestCase):
             move_position=(20., 0., -30.), throttle_override=None,
             aim_position=None, fire_allowed=False)
         order = scene.apply(0.)
-        engine = scene.runtime.engine
-        rejected = mock.Mock(return_value=False)
-        first = engine._gun_angle_order(scene.state, order, {2: scene.target}, 0., rejected)
-        self.assertEqual(0., scene.state['_gun_angle_adjustment']['start'])
-        rejected.assert_not_called()
-        result = engine._gun_angle_order(scene.state, first, {2: scene.target}, 2., rejected)
-        self.assertEqual(2, rejected.call_count)
-        self.assertEqual('bounded_attempt_complete', scene.state['_gun_angle_last_terminal']['reason'])
+        self.assertTrue(scene.owner.physical_recovery_active())
+        scene.runtime.point_recovery_probe = lambda *args: dict(status='blocked')
+        result = order
+        for tick in range(1, 15):
+            result = scene.apply(tick * .1)
+            if not scene.owner.combat_owned:
+                break
+        self.assertEqual('point_recovery_no_checked_position',
+                         scene.owner._failed_recovery['reason'])
         self.assertEqual('route', result['combat_mode'])
         self.assertEqual((20., 0., -30.), result['move_position'])
         self.assertIsNone(result['target_id'])
         self.assertFalse(scene.owner.stop_allowed)
         self.assertEqual(3, scene.runtime.gun.clip)
-        self.assertIsNone(scene.policy.search_started)
+        self.assertFalse(hasattr(scene.policy, 'search_started'))
         scene.runtime.planner._route.assert_not_called()
 
-    def test_stationary_review_does_not_suspend_or_restart_original_mechanical_recovery(self):
+    def test_stationary_review_does_not_restart_same_point_mechanical_recovery(self):
         scene = Scene()
         scene.candidate.update(mechanical='mechanical_limited', line='clear')
+        scene.raw_order.update(combat_mode='route', target_id=None, target_kind=None,
+            move_position=(20., 0., -30.), throttle_override=None,
+            aim_position=None, fire_allowed=False)
         order = scene.apply(0.)
-        engine = scene.runtime.engine
-        order = engine._gun_angle_order(scene.state, order, {2: scene.target}, 0., lambda *a: False)
-        marker = scene.state['_gun_angle_adjustment']
+        phase = scene.owner._physical_recovery
         scene.decide('wait', candidate=False, reason='stationary_domain_review_pending')
         scene.owner.accept(scene.raw_order)
         result = scene.owner.apply_order(order, 1.)
-        self.assertIs(order, result)
-        self.assertIs(marker, scene.state['_gun_angle_adjustment'])
-        result = engine._gun_angle_order(scene.state, result, {2: scene.target}, 2., lambda *a: False)
-        self.assertEqual(scene.raw_order['combat_mode'], result['combat_mode'])
-        self.assertEqual(scene.raw_order['move_position'], result['move_position'])
+        self.assertIs(phase, scene.owner._physical_recovery)
+        self.assertEqual(0., phase['started'])
+        self.assertFalse(result['fire_allowed'])
+        scene.runtime.point_recovery_probe = lambda *args: dict(status='blocked')
+        result = scene.apply(MECHANICAL_STALL_SECONDS)
+        self.assertEqual('route', result['combat_mode'])
         self.assertFalse(scene.owner.stop_allowed)
-        self.assertNotIn('_gun_angle_adjustment', scene.state)
-        self.assertEqual('bounded_attempt_complete', scene.state['_gun_angle_last_terminal']['reason'])
+        self.assertEqual('point_recovery_exhausted',
+                         scene.owner._failed_recovery['reason'])
 
     def test_stationary_review_keeps_pivot_age_without_creating_new_recovery(self):
         scene = Scene()
@@ -867,7 +869,7 @@ class SiegeOriginalOwnershipTests(unittest.TestCase):
                 self.assertFalse(result['fire_allowed'])
                 self.assertEqual('engagement_waits_native_siege', scene.owner.receipt['reason'])
                 self.assertIsNone(scene.owner.pivot)
-                self.assertIsNone(scene.policy.search_started)
+                self.assertFalse(hasattr(scene.policy, 'search_started'))
 
     def test_unselected_visible_enemy_cannot_start_siege_even_as_late_callback_target(self):
         scene = Scene(siege=siege_mechanics.DISABLED, admitted=False)
@@ -981,7 +983,7 @@ class SiegeOriginalOwnershipTests(unittest.TestCase):
         self.assertEqual('native_pivot_stalled', scene.owner.pivot['handoff']['reason'])
         self.assertTrue(self.desired(scene))
         self.assertEqual(original_rows, scene.policy.rows)
-        self.assertIsNone(scene.policy.search_started)
+        self.assertFalse(hasattr(scene.policy, 'search_started'))
         scene.runtime.planner._route.assert_not_called()
 
     def test_actual_siege_preaim_never_steals_reload_trigger_or_armor_search(self):
@@ -999,7 +1001,7 @@ class SiegeOriginalOwnershipTests(unittest.TestCase):
                                     result['aim_position'])
                 self.assertTrue(scene.owner.active)
                 self.assertIsNone(scene.owner.pivot)
-                self.assertIsNone(scene.policy.search_started)
+                self.assertFalse(hasattr(scene.policy, 'search_started'))
 
     def test_hydraulic_motion_cannot_retarget_an_already_resolved_contact(self):
         scene = Scene(siege=siege_mechanics.ENABLED)

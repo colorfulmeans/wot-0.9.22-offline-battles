@@ -199,7 +199,7 @@ class CombatTrackingLifecycleTests(unittest.TestCase):
         self.assertIsNone(scene.applied_order()['target_id'])
         self.assertEqual(scene.original_order()['move_position'],
             dict(zip(('x', 'y', 'z'), scene.applied_order()['move_position'])))
-        self.assertIsNone(policy.search_started)
+        self.assertFalse(hasattr(policy, 'search_started'))
 
     def test_magazine_observations_preserve_hint_and_route_without_macro_fire_permission(self):
         self.fx.states[0] = _weapon_state(self.fx.states[0], clip=2, clip_size=4,

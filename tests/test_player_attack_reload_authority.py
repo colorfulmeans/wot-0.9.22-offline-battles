@@ -40,7 +40,7 @@ class ReloadAuthorityLifecycleTests(unittest.TestCase):
             scene.step(.11)
             decision = policy.update(scene.now)
             policy.background(scene.now)
-            self.assertIsNone(policy.search_started)
+            self.assertFalse(hasattr(policy, 'search_started'))
             if decision['action'] == 'reload_clip' and decision.get('early_reload'):
                 return decision
         self.fail('verified alternative did not qualify current-failed reload: %r' % policy.status())
@@ -70,7 +70,7 @@ class ReloadAuthorityLifecycleTests(unittest.TestCase):
             scene.set_hull(0.)
             scene.step(.11)
             decision = policy.update(scene.now)
-            self.assertIsNone(policy.search_started)
+            self.assertFalse(hasattr(policy, 'search_started'))
             authority = policy.reload_authority
             self.assertIsNotNone(authority)
             self.assertEqual(qualified_at, authority['qualified_at'])
@@ -215,7 +215,7 @@ class ReloadAuthorityLifecycleTests(unittest.TestCase):
         self.assertGreater(gun.reload_time, 0.)
         self.assertEqual((2, 'he_fallback'),
             (policy.loading_plan['shell_index'], policy.loading_plan['mode']))
-        self.assertIsNone(policy.search_started)
+        self.assertFalse(hasattr(policy, 'search_started'))
 
 
 if __name__ == '__main__':

@@ -1,4 +1,4 @@
-"""Current ammunition execution and global penetration-search admission.
+"""Current ammunition execution without a penetration-search timer.
 
 These finite observation fixtures do not substitute policy decisions. They
 exercise the user-approved distinction between a loaded HE round and NEXT,
@@ -27,7 +27,7 @@ class LoadedHEPolicyTests(unittest.TestCase):
                     self.assertEqual((2, 'he_fallback'),
                                      (decision['candidate']['shell_index'],
                                       decision['candidate']['mode']))
-                    self.assertIsNone(scene.policy.search_authority)
+                    self.assertFalse(hasattr(scene.policy, 'search_authority'))
                     self.assertIsNone(scene.policy.reload_authority)
                     self.assertEqual(0, scene.policy.next_shell)
 
@@ -81,7 +81,7 @@ class LoadedHEPolicyTests(unittest.TestCase):
                         (decision['candidate']['shell_index'],
                          decision['candidate']['target_key'], decision['candidate']['mode']))
                     self.assertFalse(scene.policy._all_failed((2,)))
-                    self.assertIsNone(scene.policy.search_authority)
+                    self.assertFalse(hasattr(scene.policy, 'search_authority'))
                     self.assertIsNone(scene.policy.reload_authority)
                     blocked = scene.policy.rows[(2, ('bot', 1), 0, 'penetration')]
                     self.assertEqual(('unknown', 'world_blocked'),
@@ -184,7 +184,7 @@ class LoadedHEPolicyTests(unittest.TestCase):
                          (decision['candidate']['target_key'], decision['candidate']['mode']))
         self.assertFalse(scene.policy._executable_current(decision['candidate'], 'he_fallback'))
         self.assertFalse(scene.policy.apply_order({})['fire_allowed'])
-        self.assertIsNone(scene.policy.search_authority)
+        self.assertFalse(hasattr(scene.policy, 'search_authority'))
         self.assertIsNone(scene.policy.reload_authority)
         self.assertTrue(all(not trial['failed']
                            for trial in scene.policy._single_point_history.values()))
@@ -220,7 +220,7 @@ class LoadedHEPolicyTests(unittest.TestCase):
                 self.assertTrue(all(not trial['failed']
                                    for trial in scene.policy._single_point_history.values()))
                 self.assertFalse(scene.policy._all_failed((2,)))
-                self.assertIsNone(scene.policy.search_authority)
+                self.assertFalse(hasattr(scene.policy, 'search_authority'))
                 self.assertIsNone(scene.policy.reload_authority)
 
     def test_non_he_clip_can_reload_verified_alternative_without_moving(self):
@@ -231,7 +231,7 @@ class LoadedHEPolicyTests(unittest.TestCase):
         self.assertEqual('reload_clip', decision['action'], decision)
         self.assertEqual(1, decision['shell_index'])
         self.assertTrue(decision['early_reload'])
-        self.assertIsNone(scene.policy.search_authority)
+        self.assertFalse(hasattr(scene.policy, 'search_authority'))
 
     def test_current_clip_failure_does_not_start_search_with_other_ammo_unknown(self):
         scene = Observations(clips=6, targets=1, points=1)
@@ -242,10 +242,10 @@ class LoadedHEPolicyTests(unittest.TestCase):
         for now in (0., 2.1, 10., 30.):
             decision = scene.tick(now)
             self.assertIn(decision['action'], ('wait', 'preaim'), decision)
-            self.assertIsNone(scene.policy.search_authority)
-            self.assertIsNone(scene.policy.search_started)
+            self.assertFalse(hasattr(scene.policy, 'search_authority'))
+            self.assertFalse(hasattr(scene.policy, 'search_started'))
 
-    def test_limited_traverse_does_not_skip_global_eight_second_search(self):
+    def test_limited_traverse_switches_to_legal_he_without_eight_second_search(self):
         for clips in (1, 6):
             with self.subTest(clips=clips):
                 scene = Observations(clips=clips, targets=1, points=1)
@@ -254,9 +254,16 @@ class LoadedHEPolicyTests(unittest.TestCase):
                 scene.prime()
                 scene.prime('he_fallback')
                 decision = scene.tick(0.)
-                self.assertEqual('search_penetration', decision['action'], decision)
-                self.assertEqual((0, 1, 2), scene.policy.search_authority['shells'])
-                self.assertIsNone(scene.policy.reload_authority)
+                self.assertEqual('switch_shell' if clips == 1 else 'reload_clip',
+                                 decision['action'], decision)
+                self.assertEqual(2, decision['shell_index'])
+                self.assertFalse(hasattr(scene.policy, 'search_authority'))
+                self.assertFalse(hasattr(scene.policy, 'search_started'))
+                if clips == 1:
+                    self.assertIsNone(scene.policy.reload_authority)
+                else:
+                    self.assertEqual('he_fallback_plan',
+                                     scene.policy.reload_authority['reason'])
 
     def test_query_timeout_never_becomes_a_physical_movement_request(self):
         scene = Observations(targets=1, points=1)
@@ -267,7 +274,7 @@ class LoadedHEPolicyTests(unittest.TestCase):
             decision = scene.tick(now)
             self.assertIn(decision['action'], ('wait', 'preaim'), decision)
             self.assertNotIn('move_request', decision)
-            self.assertIsNone(scene.policy.search_authority)
+            self.assertFalse(hasattr(scene.policy, 'search_authority'))
 
     def test_waiting_for_native_barrel_keeps_qualified_ap_intention(self):
         scene = Observations(targets=1, points=1)
@@ -287,9 +294,9 @@ class LoadedHEPolicyTests(unittest.TestCase):
             decision = scene.tick(now)
             self.assertEqual('firing_position', decision['action'], decision)
             self.assertEqual(('bot', 1), decision['candidate']['target_key'])
-            self.assertIsNone(scene.policy.search_authority)
+            self.assertFalse(hasattr(scene.policy, 'search_authority'))
 
-    def test_search_elapsed_survives_roster_and_same_weapon_descriptor_changes(self):
+    def test_roster_or_descriptor_change_cannot_recreate_deleted_search_timer(self):
         for change in ('roster', 'descriptor'):
             with self.subTest(change=change):
                 scene = Observations(targets=1, points=1)
@@ -299,18 +306,21 @@ class LoadedHEPolicyTests(unittest.TestCase):
                 scene.prime()
                 scene.prime('he_fallback')
                 first = scene.tick(0.)
-                self.assertEqual('search_penetration', first['action'])
+                self.assertEqual('switch_shell', first['action'])
+                self.assertEqual(2, first['shell_index'])
                 if change == 'roster':
                     scene.frame['combat_signature'] = ('domain', 2)
                 else:
                     scene.frame['identity'] = ('round', 'siege_descriptor')
-                scene.tick(4.)
-                self.assertEqual(0., scene.policy.search_started)
+                scene.tick(.1)
+                self.assertFalse(hasattr(scene.policy, 'search_started'))
                 scene.prime()
                 scene.prime('he_fallback')
-                expired = scene.tick(8.)
-                self.assertEqual('switch_shell', expired['action'], expired)
-                self.assertEqual(2, expired['shell_index'])
+                scene.frame['loaded'] = 2
+                loaded = scene.tick(.2)
+                self.assertEqual('aim', loaded['action'], loaded)
+                self.assertEqual((2, 'he_fallback'),
+                    (loaded['candidate']['shell_index'], loaded['candidate']['mode']))
 
     def test_large_rotating_all_ammo_domain_cannot_borrow_current_clip_failure(self):
         scene = Observations(clips=6, targets=3, points=9)
@@ -319,7 +329,7 @@ class LoadedHEPolicyTests(unittest.TestCase):
                 scene.move_target(target, step)
             result = scene.tick(step * .1)
             self.assertNotEqual('search_penetration', result['action'])
-            self.assertIsNone(scene.policy.search_started)
+            self.assertFalse(hasattr(scene.policy, 'search_started'))
             self.assertLessEqual(scene.policy._used['atomic'], 48)
 
     def test_full_he_late_enemy_gets_complete_fair_review_within_unchanged_atomic_budget(self):
@@ -346,7 +356,7 @@ class LoadedHEPolicyTests(unittest.TestCase):
                     for channel, limit in (('foreground', 2), ('background', 2), ('atomic', 48)):
                         self.assertLessEqual(sum(call[1] == channel for call in calls), limit)
                     self.assertFalse(scene.policy._all_failed((2,)))
-                    self.assertIsNone(scene.policy.search_authority)
+                    self.assertFalse(hasattr(scene.policy, 'search_authority'))
                     self.assertIsNone(scene.policy.reload_authority)
                     self.assertIsNone(scene.policy.next_at_edge()[0])
                     self.assertNotIn(decision['action'], ('switch_shell', 'reload_clip'))

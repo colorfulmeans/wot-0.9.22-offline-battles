@@ -1,5 +1,12 @@
 # Shared loaded-HE and recovery contract, November 10
 
+> **Subsequent control-offset decision (same day):** the user removed the
+> eight-second penetration search entirely and replaced independent BOT
+> shooting-position choice with native validation of the *same* aim point at
+> candidate positions. This document retains the earlier decision as history;
+> `shared-control-offset-audit-20261110.md` is authoritative for the new
+> movement/HE fallback contract and current verification gates.
+
 This follow-up starts from PR119 head `909ac35293c3cf50788f74ecc6fb327868110756`.
 The supplied `042532-d29cb4308aa1` report identifies that exact build; the
 observed failures are not attributed to the user running an older package.

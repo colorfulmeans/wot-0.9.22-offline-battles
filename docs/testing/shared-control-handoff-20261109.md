@@ -1,5 +1,14 @@
 # Shared automatic control handoff — 2026-11-09
 
+> **November 10 control-offset correction:** the eight-second penetration
+> search and the independent BOT gun-angle position finder described in this
+> historical handoff have now been removed. The single-sample native firing-
+> position recovery, immediate eligible HE fallback and finite route-release
+> contracts are recorded in
+> `shared-control-offset-audit-20261110.md`. This newer record controls where
+> the historical descriptions below conflict; final package identity must
+> still be verified from the newly pushed PR/CI run.
+
 ## Audit correction: read before the historical migration record
 
 The `be5bf798` delivery passed its recorded CI/package checks but did **not**

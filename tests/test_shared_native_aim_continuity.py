@@ -84,7 +84,7 @@ class SharedNativeAimContinuityTests(unittest.TestCase):
         self.assertFalse(runtime.state['gun_aligned'])
         self.assertFalse(runtime._last_order.get('fire_allowed'))
         self.assertFalse(self.scene.launches())
-        self.assertIsNone(runtime.attack_policy.search_started)
+        self.assertFalse(hasattr(runtime.attack_policy, 'search_started'))
 
     def test_pending_aim_tracks_current_enemy_pose_not_stale_world_point(self):
         old = tuple(self.scene.runtime.weapon.point)
@@ -177,7 +177,7 @@ class SharedWorkerAimContinuityTests(unittest.TestCase):
             self.assertFalse(binding.state['gun_aligned'])
             self.assertFalse(binding._last_order['fire_allowed'])
             self.assertEqual(episode, binding.combat_stop._episode)
-            self.assertIsNone(binding.attack_policy.search_started)
+            self.assertFalse(hasattr(binding.attack_policy, 'search_started'))
         self.assertFalse([row for row in scene.launches_observed if row['id'] == 11])
 
     def test_worker_releases_pending_intention_when_actual_enemy_dies(self):
