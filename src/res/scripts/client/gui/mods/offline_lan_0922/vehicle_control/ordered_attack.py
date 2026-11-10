@@ -138,6 +138,11 @@ class OrderedAttack(object):
         return None
 
     @staticmethod
+    def _clear_failure(policy, row):
+        evidence = policy._planned_evidence(row) or row or {}
+        return evidence.get('line') == 'clear' and evidence.get('armor') == 'failed'
+
+    @staticmethod
     def _unproved_hull_lay(row):
         return (row is not None and row.get('line') == 'clear' and
                 row.get('mechanical') == 'hull_laying' and row.get('armor') == 'unknown' and
@@ -183,8 +188,7 @@ class OrderedAttack(object):
             return 'navigation_owned', None
         evidence = [self._negative_evidence(policy, job, row)
                     for job, row in zip(jobs, current)]
-        clear = next((row for row in evidence if row and row.get('line') == 'clear'
-                      and row.get('armor') == 'failed'), None)
+        clear = next((row for row in evidence if self._clear_failure(policy, row)), None)
         blocked = next((row for row in current if row is not None and
                         row.get('line') in ('friendly_blocked', 'world_blocked') and
                         isinstance(row.get('solution'), dict)), None)
@@ -262,7 +266,7 @@ class OrderedAttack(object):
                 return policy._recover_incomplete(now, reason)
             self.covered.add(key)
             if row is not None:
-                if row.get('line') == 'clear' and row.get('armor') == 'failed':
+                if self._clear_failure(policy, row):
                     self.checked_lanes.add(key)
                 else:
                     obstructed = obstructed or row

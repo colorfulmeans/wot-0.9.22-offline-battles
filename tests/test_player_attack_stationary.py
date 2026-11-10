@@ -91,23 +91,26 @@ class NativeStationaryCombatTests(unittest.TestCase):
             scene.tick()
             receipts.append(dict(now=scene.now, yaw=scene.body.yaw,
                 decision=copy.deepcopy(policy.decision),
-                domains=copy.deepcopy(policy.failure_domains),
                 sender=(scene.battle._sender.forward, scene.battle._sender.turn),
                 arcs=len(scene.planner._arcs)))
             self.assertIsNone(scene.control.last_control_failure)
-            if policy.decision['reason'] == 'current_shell_all_armour_failed':
+            if policy.decision['reason'] == 'ordered_penetration_exhausted':
                 break
         final = receipts[-1]
-        self.assertEqual('current_shell_all_armour_failed', final['decision']['reason'],
+        self.assertEqual('ordered_penetration_exhausted', final['decision']['reason'],
                          [(r['decision']['reason'], r['yaw'], r['arcs']) for r in receipts])
         self.assertGreater(len(receipts), 1)
         self.assertTrue(any(r['decision']['reason'] == 'stationary_domain_review_pending'
                             for r in receipts[:-1]))
         self.assertTrue(all(abs(r['yaw']) < 1.e-8 for r in receipts), receipts)
         self.assertEqual(2, len(policy.frame['targets']))
-        self.assertTrue(final['domains'][(0,)]['all_failed'])
-        self.assertGreater(final['domains'][(0,)]['projected_failed'], 0)
-        self.assertEqual(0, final['domains'][(0,)]['geometry_pending'])
+        self.assertEqual(1, final['decision']['shell_index'])
+        jobs = policy._jobs(shell_index=0)
+        rows = [policy._current(job, require_line=True) for job in jobs]
+        self.assertTrue(all(policy._reviewed(row, 'penetration') for row in rows))
+        self.assertFalse(any(policy._plannable(row) for row in rows))
+        self.assertTrue(any((policy._planned_evidence(row) or {}).get('armor') == 'failed'
+                            for row in rows))
         self.assertFalse(hasattr(policy, 'search_started'))
         self.assertFalse(scene.launches())
 
@@ -166,7 +169,7 @@ class NativeStationaryCombatTests(unittest.TestCase):
         self.assertTrue(policy._plannable(policy.decision['candidate']))
         self.assertFalse(scene.launches())
 
-    def test_he_reviewed_enemy_fallback_does_not_wait_for_another_yaw_domain(self):
+    def test_he_current_sample_fallback_does_not_start_another_yaw_domain(self):
         scene = self.scene(limits=(-.1, .1), clip=6, burst=1, bearing=0., rate=.8)
         other = scene.vehicle(43, (math.sin(.8) * 40., 0., math.cos(.8) * 40.), team=2)
         self.admit_contacts(scene)
@@ -174,9 +177,8 @@ class NativeStationaryCombatTests(unittest.TestCase):
             for material in getattr(other.typeDescriptor, name).materials.values():
                 material.armor = 10000.
         scene.set_he(1.)
-        # The selected enemy must have a complete negative point domain for
-        # full-validation HESH. Another yaw domain cannot hold up its legal
-        # contact shot, nor count as negative before native review finishes.
+        # HESH also uses one mounted point in ordinary player control. The
+        # other target's yaw domain cannot delay this legal contact shot.
         descriptor = scene.entity.typeDescriptor
         descriptor.name = descriptor.type.name = 'uk:GB83_FV4005'
         descriptor.gun.name = '_183mm_AT_Gun'
@@ -188,23 +190,14 @@ class NativeStationaryCombatTests(unittest.TestCase):
         for unused in range(120):
             scene.tick()
             candidate = policy.decision.get('candidate')
-            if (candidate is not None and candidate.get('mode') == 'he_fallback' and
-                    candidate['target_key'] in policy._loaded_he_fallback_targets(0)):
-                selected_rows = [policy._current(job, require_line=True)
-                    for job in policy._jobs(shell_index=0)
-                    if job[0][1] == candidate['target_key']]
-                self.assertTrue(selected_rows)
-                for row in selected_rows:
-                    self.assertIsNotNone(row)
-                    if row.get('scope') == 'excluded':
-                        self.assertEqual('excluded', row['scope_proof']['scope'])
-                        continue
-                    proof = (row if row['mechanical'] == 'reachable' else
-                             policy._planned_evidence(row))
-                    self.assertIsNotNone(proof)
-                    self.assertEqual(('clear', 'reachable', 'failed'),
-                                     (proof['line'], proof['mechanical'], proof['armor']))
-                qualified = copy.deepcopy(selected_rows)
+            if candidate is not None and candidate.get('mode') == 'he_fallback':
+                self.assertEqual(('bot', 42), candidate['target_key'])
+                key = candidate['key'][:3] + ('penetration',)
+                proof = policy.rows[key]
+                self.assertEqual(('clear', 'reachable', 'failed'),
+                                 (proof['line'], proof['mechanical'], proof['armor']))
+                self.assertEqual({key[:3]}, {row['key'][:3] for row in policy.rows.values()})
+                qualified = copy.deepcopy(proof)
             self.assertFalse(hasattr(policy, 'search_started'))
             self.assertEqual(0, scene.battle._gun_state.shot_index)
             self.assertIsNone(policy.reload_authority)

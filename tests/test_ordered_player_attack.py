@@ -55,6 +55,21 @@ class OrderedPlayerAttackTests(unittest.TestCase):
         self.assertEqual(0, scene.policy.next_at_edge()[0]['shell_index'])
         self.assertEqual(calls, scene.calls)
 
+    def test_other_points_then_second_vehicle_use_the_same_loaded_shell(self):
+        scene = self.scene(clips=6, targets=3, points=2)
+        scene.value(0, target=1, line='enemy_blocked', armor='unknown')
+        scene.passed(0, target=2)
+        scene.passed(1, target=1)
+        scene.passed(0, target=3)
+        for step in range(4):
+            decision = scene.tick(float(step))
+            if decision['action'] == 'aim':
+                break
+            self.assertEqual('wait', decision['action'])
+        self.assertEqual((0, ('bot', 2), 0, 'penetration'), decision['candidate']['key'])
+        self.assertEqual([(0, ('bot', 1), 0), (0, ('bot', 1), 1), (0, ('bot', 2), 0)],
+                         [call[2:5] for call in scene.calls])
+
     def test_pending_is_not_a_shell_exhaustion_or_a_retarget(self):
         scene = self.scene(targets=2, points=1)
         scene.value(0, target=1, line='pending', armor='unknown')
