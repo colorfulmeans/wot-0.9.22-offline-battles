@@ -114,6 +114,22 @@ class Observations(object):
 
 
 class RebuiltForegroundTests(unittest.TestCase):
+    def test_existing_green_point_precedes_any_new_foreground_query(self):
+        scene = Observations(targets=6, points=2, he=False)
+        policy = scene.policy
+        scene.passed(target=6, sample=1)
+        policy.frame = scene.snapshot(0.)
+        key = (0, ('bot', 6), 1, 'penetration')
+        job = next(job for job in policy._jobs(shell_index=0) if job[0] == key)
+        policy._evaluate(job, 0., 'background')
+        scene.calls.clear()
+
+        decision = policy.update(.05)
+
+        self.assertEqual('aim', decision['action'])
+        self.assertEqual(key, decision['candidate']['key'])
+        self.assertEqual([], scene.calls)
+
     def test_exhausted_inventory_returns_to_existing_navigation_without_retreat(self):
         scene = Observations()
         scene.frame['ammo'] = (0, 0, 0)
@@ -482,9 +498,9 @@ class RebuiltForegroundTests(unittest.TestCase):
                 self.assertEqual(('bot', 2), result['candidate']['target_key'])
                 self.assertFalse(hasattr(scene.policy, 'search_started'))
 
-    def test_final_trigger_revalidates_expired_point_in_its_ammunition_rank(self):
+    def test_next_preparation_revalidates_expired_point_in_its_ammunition_rank(self):
         scene = Observations(targets=2, points=5)
-        # Exercise the final-edge backstop when the frame has only a fair
+        # Exercise the background backstop when the frame has only a fair
         # background slot and cannot reserve a ranked recheck.
         scene.policy.background_budget = 1
         scene.passed(0)
@@ -498,14 +514,14 @@ class RebuiltForegroundTests(unittest.TestCase):
         self.assertIsNone(scene.policy.next_plan)
         self.assertIsNone(scene.policy.current_row(old))
         scene.policy.atomic_clock = lambda: 0.
-        renewed, status = scene.policy.refresh_next_at_trigger(.1)
+        renewed, status = scene.policy.prepare_next_load(.1)
         self.assertEqual('verified', status)
         self.assertEqual(old['key'], renewed['key'])
         self.assertNotEqual(old['line_stamp'], renewed['line_stamp'])
         self.assertEqual([(2, ('bot', 2), 4, 'penetration')],
                          [call[2:] for call in scene.calls if call[:2] == (.1, 'atomic')])
 
-    def test_final_trigger_keeps_lower_plan_pending_when_higher_rank_unresolved(self):
+    def test_next_preparation_keeps_lower_plan_pending_when_higher_rank_unresolved(self):
         for he, first_rank in ((True, 2), (False, 1)):
             with self.subTest(he=he):
                 scene = Observations(targets=2, points=5, he=he)
@@ -520,7 +536,7 @@ class RebuiltForegroundTests(unittest.TestCase):
                     scene.value(first_rank, sample=sample, armor='pending', line='pending')
                 scene.tick(.1)
                 scene.policy.atomic_clock = lambda: 0.
-                self.assertEqual((None, 'higher_rank_pending'), scene.policy.refresh_next_at_trigger(.1))
+                self.assertEqual((None, 'higher_rank_pending'), scene.policy.prepare_next_load(.1))
                 probes = [call for call in scene.calls if call[:2] == (.1, 'atomic')]
                 self.assertTrue(probes)
                 self.assertEqual({first_rank}, set(call[2] for call in probes))

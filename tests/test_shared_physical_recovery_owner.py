@@ -209,41 +209,46 @@ class PhysicalRecoveryOwnershipTests(unittest.TestCase):
 
 
 class CombatCircleArrivalTests(unittest.TestCase):
-    def test_crossing_capture_circle_during_combat_does_not_complete_suspended_route(self):
+    def test_capture_entry_retires_combat_travel_on_cached_order_with_live_target(self):
         with contextlib.redirect_stdout(io.StringIO()):
             scene = OwnershipScene()
             scene.setUp()
             self.addCleanup(scene.doCleanups)
             scene.configure(clip=1, burst=1)
-            # Isolate the downstream consumer from authored-route confirmation.
-            scene.runtime.combat_stop._route_requires_confirmation = lambda order: False
+            scene.battle._spawn_planner.capture_bases['2'] = [dict(x=14., z=0., radius=6.)]
             target = scene.eligible_enemy(5)
-            for unused in range(20):
-                scene.tick()
+            owner = scene.runtime.combat_stop
+            start = scene.now
+            for unused in range(80):
+                scene.tick(.125)
                 if scene.runtime.combat_stop.combat_owned:
                     break
-            self.assertTrue(scene.runtime.combat_stop.combat_owned)
-            owner = scene.runtime.combat_stop
-            episode = owner.receipt['episode']
-            scene.battle._spawn_planner.capture_bases['2'] = [dict(x=0., z=0., radius=6.)]
-            for unused in range(5):
-                scene.runtime._strategic_due = 0.
-                scene.tick()
-                original = scene.original_order()
-                self.assertNotIn('capture_area', original)
-                self.assertEqual('route', original['combat_mode'])
-                self.assertEqual(episode, owner.receipt['episode'])
-                self.assertTrue(owner.stop_allowed)
-                self.assertIsNone(scene.runtime._mission)
-            # Combat really ends; ordinary physical circle arrival is still
-            # allowed to constrain the resumed route on subsequent planning.
-            scene.battle._records['bot:5']['state'].update(alive=False, health=0)
-            target.health = 0
-            for unused in range(3):
-                scene.runtime._strategic_due = 0.
-                scene.tick()
+            self.assertTrue(owner.stop_allowed, owner.receipt)
+            self.assertGreaterEqual(scene.now - start, 5.)
+            self.assertNotIn('capture_area', scene.original_order())
+            self.assertEqual('route', scene.original_order()['combat_mode'])
+
+            cached = scene.runtime._strategic_result
+            scene.runtime._strategic_due = scene.now + .5
+            scene.native_position((9., 0., 0.))
+            scene.tick(.125)
+
+            self.assertIs(cached, scene.runtime._strategic_result)
+            self.assertTrue(target.isAlive())
             self.assertFalse(owner.stop_allowed)
-            self.assertIn('capture_area', scene.original_order())
+            self.assertEqual('task', owner.receipt['movement_owner'])
+            self.assertEqual(6., owner.task_order['capture_area']['radius'])
+            self.assertEqual((9., 0., 0.), scene.applied_order()['move_position'])
+            self.assertEqual(0., scene.battle._sender.forward)
+            self.assertTrue(owner.active)
+            shots_at_entry = len(scene.launches())
+            for unused in range(80):
+                scene.battle._advance_local_gun_to(scene.entity, scene.now + .125)
+                scene.tick(.125)
+                self.assertEqual(0., scene.battle._sender.forward)
+                if len(scene.launches()) > shots_at_entry:
+                    break
+            self.assertEqual(shots_at_entry + 1, len(scene.launches()))
 
 
 if __name__ == '__main__':

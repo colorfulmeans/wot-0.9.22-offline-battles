@@ -1,5 +1,47 @@
 # PR119 control-offset correction — November 10, 2026
 
+## Follow-up for the 23:53 AT7 report — circle handoff and current shot
+
+The report `wot-error-report-20261110-235323-94c3a3f842a5.zip` identifies
+`ef5b7cca` / `colorfulmeans-42842677225-1`. It exercised the five-second
+route gate and a committed AP shot after manual HE-to-AP. HE stayed at ten
+rounds during a roughly 51-second engagement despite verified aim and
+permissive orders. Capture scoring began at 23:51:24, the original route
+resumed inside the circle at 23:51:39, and the vehicle held near the end of
+the lane at 23:51:44 without a firing target. The capture hold itself was
+registered at that stop.
+
+- The shared planner records actual circle occupancy independently of
+  combat's movement lease. Eligible route orders carry the capture objective
+  so each binding can accept entry from its current grounded pose even on
+  a cached order. The circle hold owns translation and leaves the existing
+  gun handoff available. A blocked initial hint cannot veto travel from a
+  completed route terminal outside the circle.
+- The mounted shell takes a still-valid selected or cached executable point
+  before issuing new point queries. NEXT's bounded preparation runs after
+  current-shot control. The last trigger consumes a prepared plan, with
+  existing ranking tolerance for an already accepted queue and live lane
+  and domain checks. The existing native launch admission proves the shot.
+- The launcher checkbox **Collect detailed diagnostic logs** explicitly
+  enables the new `BATTLE REVIEW` stages for direct-fire gates, trigger
+  context and native submission, last-trigger NEXT, current-point
+  invalidation, and capture handoff. The checkbox is independent of other
+  settings that enable general diagnostics. Records reuse observed facts,
+  summarize repeated reasons, and share the existing review limits.
+- The regressions compare actual drive commands with and without fire,
+  require forward travel in the clear-route fixture, and exercise a living
+  enemy, the real five-second dwell, entry on a cached route order, and a
+  subsequent committed shot at zero throttle. The tests also cover cached
+  green-point priority, an expired NEXT plan without trigger-time scanning,
+  an HE magazine into AP, manual HE-to-AP, and diagnostic opt-in.
+
+On Windows #1513, enable the checkbox before launching. Recheck the AT7
+entry and parked fire, first HE launch, and the final round of a cassette.
+Export the report after the match. Use the direct-fire and NEXT stages to
+identify the missing native HE step and distinguish load ranking from
+current-shot refusals. The current penetration-cache motion envelope awaits
+measured deltas from that report. The PR identifies the verified build.
+
 ## Follow-up for the 22:01 AT7 report
 
 The report \`wot-error-report-20261110-220155-71db166b8729.zip\` identifies

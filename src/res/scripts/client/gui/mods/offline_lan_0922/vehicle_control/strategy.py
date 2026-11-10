@@ -1221,21 +1221,16 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
     def _protect_capture_order(self, order, bot, target):
         """Circle occupancy belongs to every arrival, not a three-Bot squad."""
         actor = bot['id']
-        if (self._combat_movement_task(bot) is not None and
-                self._task_combat(order, bot)):
-            # Crossing a circle during an admitted combat manoeuvre is not
-            # arrival of the suspended route. Creating a capture constraint
-            # here revoked that same movement receipt on the next callback,
-            # then the route terminal manufactured a permanent hold. Explicit
-            # capture/travel orders still pass through their task owner.
-            self._capture_arrivals.pop(actor, None)
-            return
         if (target is None or actor in self._travel_tasks or
                 actor in self._route_recoveries or order.get('team_command') or
                 order.get('defense_base_id')):
             self._capture_arrivals.pop(actor, None)
             return
         area = dict(id=target['id'], point=dict(target['point']), radius=target['radius'])
+        if (order.get('combat_mode') in ('route', 'advance', 'base_capture', 'hold', 'base_screen')
+                and not order.get('parking_phase')):
+            # The binding can observe entry before the next strategic order.
+            order['capture_objective'] = area
         previous = self._capture_arrivals.get(actor)
         if previous is not None and previous != area:
             self._capture_arrivals.pop(actor, None)
@@ -2526,8 +2521,7 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
             if (not capture and not final_inside and capture_target and
                     route_state.get('completed_terminal') == final and
                     order.get('combat_mode') in ('route', 'advance') and
-                    not order.get('target_id') and not order.get('initial_target_hint') and
-                    not order.get('team_command') and
+                    order.get('target_id') is None and not order.get('team_command') and
                     not order.get('parking_phase') and not route_state.get('holding') and
                     order.get('move_position') == final):
                 self._apply_base_capture_order(order, bot, capture_target)
@@ -2556,8 +2550,7 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
             evidence['outcome'] = 'physical_or_capture_not_arrived'
             return
         route_state['completed_terminal'] = final
-        if (not capture and capture_target and not final_inside and
-                order.get('target_id') is None and not order.get('initial_target_hint')):
+        if not capture and capture_target and not final_inside and order.get('target_id') is None:
             # Complete a lane outside the circle before handing travel to the
             # objective. A combat or authored parking owner still takes priority.
             self._apply_base_capture_order(order, bot, capture_target)

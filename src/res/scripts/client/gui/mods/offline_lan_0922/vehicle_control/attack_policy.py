@@ -15,6 +15,7 @@ import time
 
 from .. import ballistics, combat_rules, gun_pitch_limits, shot_geometry
 from ..gun_mechanics import _field
+from ..native_input_diagnostics import combat_detail, combat_detail_enabled
 from ..projectile_runtime import PROJECTILE_BROADPHASE_RADIUS
 from . import ammunition_validation, stationary_plan, stationary_scope
 
@@ -121,6 +122,24 @@ def _planning_pose(pose):
     # pivot moves. Body rotation, pivot and descriptor fence its proof. The
     # raw physics position is independent of the native shot transform.
     return pose[1:3] + pose[4:6]
+
+
+def _proof_motion_details(row, stamp, frame):
+    """Describe the lost point from its existing proof and frame."""
+    previous = (row.get('solution') or {}).get('source_pose')
+    current = frame.get('pose')
+    result = dict(key=row['key'], armor=row.get('armor'), line=row.get('line'))
+    if previous and current and len(previous) >= 7 and len(current) >= 7:
+        result.update(source_shift_m=math.sqrt(_distance_sq(previous[6], current[6])),
+            muzzle_shift_m=math.sqrt(_distance_sq(previous[2], current[2])),
+            body_angles=(previous[1], current[1]), gun_angles=(previous[3], current[3]))
+    old = (row.get('pose_stamp') or (None,) * 6)[2]
+    new = stamp[2] if stamp else None
+    if old and new and len(old) >= 6 and len(new) >= 6:
+        result.update(target_shift_m=math.sqrt(_distance_sq(old[2][0], new[2][0])),
+            target_angles=(old[2][1:], new[2][1:]),
+            target_components_changed=old[3:6] != new[3:6])
+    return result
 
 
 # Anchor NEXT ranking to the last completed observation, never the last frame.
@@ -410,6 +429,10 @@ class AttackPolicy(object):
             return None
         if (require_line and row.get('line_stamp') !=
                 self._line_stamp(self.frame, row.get('line_region'))):
+            if key == self.selected and combat_detail_enabled():
+                runtime = self.runtime
+                combat_detail(runtime, 'current_point_proof', runtime.actor_id, runtime.now,
+                    'lane_changed', lambda: dict(key=key, previous_line=row.get('line')))
             return None
         scope_current = getattr(self.evaluator, 'scope_current', None)
         if (row.get('scope') == 'excluded' and callable(scope_current) and
@@ -626,6 +649,12 @@ class AttackPolicy(object):
                 else:
                     observation['expected_damage'] = damage
         self.rows[key] = row
+        if (key == self.selected and row.get('line') in
+                ('world_blocked', 'friendly_blocked', 'enemy_blocked', 'vehicle_blocked')
+                and combat_detail_enabled()):
+            runtime = self.runtime
+            combat_detail(runtime, 'current_point_lane', runtime.actor_id, now, row['line'],
+                lambda: dict(key=key, blocker=row.get('blocker')))
         geometry = _ranking_geometry(self.frame, target)
         if self._reviewed(row, mode):
             if (geometry is not None and not row.get('stationary_plan') and
@@ -672,6 +701,13 @@ class AttackPolicy(object):
             row = self._current(selected_job, require_line=True)
             if self._executable_current(row):
                 return row
+        # A green point already proved by foreground or background work
+        # needs no other sample to be inspected before it can be used.
+        for job in jobs:
+            if job is not selected_job:
+                row = self._current(job, require_line=True)
+                if self._executable_current(row):
+                    return row
         # Refresh a retained point first, but never let one pending point
         # prevent all other points or enemies from receiving a budget slice.
         remaining = max(0, self.foreground_budget - self._used['foreground'])
@@ -693,11 +729,6 @@ class AttackPolicy(object):
             if (row is None or not projected_complete and
                     (row.get('armor') in ('pending', 'unknown') or row.get('line') != 'clear')):
                 row = self._evaluate(job, now, 'foreground')
-            if self._executable_current(row):
-                return row
-        # A prior frame/background proof can be the earliest useful point.
-        for job in jobs:
-            row = self._current(job, require_line=True)
             if self._executable_current(row):
                 return row
         return None
@@ -1308,7 +1339,7 @@ class AttackPolicy(object):
             groups[-1][1].append(row)
         return groups
 
-    def next_at_edge(self, native_fence=True):
+    def next_at_edge(self, native_fence=True, queued=None):
         plan = self.next_plan
         current = self.current_row(plan)
         if plan is None:
@@ -1316,7 +1347,12 @@ class AttackPolicy(object):
         if self.next_domain != self._next_domain(plan['mode']):
             return None, 'rank_domain_changed'
         if not self._plannable(current, plan['mode']):
-            return None, 'candidate_expired'
+            # Only an already accepted NEXT input can ride the ranking
+            # envelope. The same cached winner must still pass the checks
+            # below, including the affected lane and the live roster.
+            if plan is not queued or current is not None:
+                return None, 'candidate_expired'
+            current = plan
         proofs = self.next_proofs or (plan,)
         jobs = dict((job[0], job) for mode in ('penetration', 'he_fallback')
                     for job in self._jobs(mode))
@@ -1417,8 +1453,8 @@ class AttackPolicy(object):
                 ('armor', 'line', 'mechanical', 'reason', 'observed_at'))
         return details
 
-    def refresh_next_at_trigger(self, now):
-        """Give the final trigger a bounded, same-observation ranked pass."""
+    def prepare_next_load(self, now):
+        """Finish a bounded NEXT pass after current-shot control."""
         self.background(now)
         plan, reason = self.next_at_edge()
         self.next_edge_receipt = dict(at=now, checked=0, status=reason,
@@ -1901,7 +1937,8 @@ class AttackPolicy(object):
         valid_keys = set(job[0] for job in jobs)
         stamps = dict((job[0], self._stamp(frame, job[1], job[2])) for job in jobs)
         for key in list(self.rows):
-            old, stamp = self.rows[key].get('pose_stamp'), stamps.get(key)
+            row = self.rows[key]
+            old, stamp = row.get('pose_stamp'), stamps.get(key)
             if old != stamp or key not in valid_keys:
                 if key not in valid_keys or old is None or old[0] != stamp[0]:
                     reason = 'domain'
@@ -1911,6 +1948,10 @@ class AttackPolicy(object):
                     reason = 'target'
                 else:
                     reason = 'shell'
+                if key == self.selected and combat_detail_enabled():
+                    runtime = self.runtime
+                    combat_detail(runtime, 'current_point_proof', runtime.actor_id, now, reason,
+                        lambda: _proof_motion_details(row, stamp, frame))
                 self.proof_revocations[reason] += 1
                 self.rows.pop(key, None)
         for key in list(self._next_rows):

@@ -235,7 +235,6 @@ class RouteTasksMixin:
     def _task_capture_handoff(self,order,bot,target):
         if (target is None or bot['id'] in self._travel_tasks or bot['id'] in self._route_recoveries or
                 order.get('team_command') or order.get('target_id') is not None or
-                order.get('initial_target_hint') or
                 bot['profile'].get('class_tag')=='SPG' or
                 order.get('combat_mode') not in ('route','advance','base_screen')):return
         route=self._task_route(bot)

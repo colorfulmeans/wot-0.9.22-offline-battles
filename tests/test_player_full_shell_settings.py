@@ -256,7 +256,7 @@ class FullShellSettingsTests(unittest.TestCase):
         self.assertEqual([0, 2], [row['shell_index'] for row in scene.launches()])
         self.assertEqual([19, 10, 9], gun.ammo)
 
-    def test_trigger_refreshes_current_frame_before_releasing_an_owned_next_shell(self):
+    def test_trigger_drops_an_expired_owned_next_plan_without_scanning(self):
         from test_player_rebuilt_attack_policy import Observations
 
         scene = self.scene(clip=1, burst=1, third=True)
@@ -276,10 +276,16 @@ class FullShellSettingsTests(unittest.TestCase):
         runtime.now += .11
         observations.tick(runtime.now, background=False)
         self.assertIsNone(observations.policy.current_row(observations.policy.next_plan))
+        observations.calls.clear()
         plan = runtime._apply_next_shell(at_trigger=True)
-        self.assertEqual(2, plan['shell_index'])
+        self.assertIsNone(plan)
+        self.assertIsNone(gun.pending_index)
+        self.assertEqual([], observations.calls)
+
+        runtime._prepare_next_shell(runtime.now)
         self.assertEqual(2, gun.pending_index)
-        self.assertEqual([(scene.settings.NEXT_SHELLS, 103)], scene.setting_calls)
+        self.assertEqual([(scene.settings.NEXT_SHELLS, 103), (scene.settings.NEXT_SHELLS, 101),
+                          (scene.settings.NEXT_SHELLS, 103)], scene.setting_calls)
 
     def test_source_changes_recheck_a_ranked_queue_before_releasing_it(self):
         from test_player_rebuilt_attack_policy import Observations

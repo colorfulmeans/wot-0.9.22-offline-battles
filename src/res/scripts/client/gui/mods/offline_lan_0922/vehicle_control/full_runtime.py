@@ -37,6 +37,7 @@ from .mission_control import MissionControl
 from .combat_stop import CombatStop, MECHANICAL_STALL_SECONDS
 from .siege_planning import ActualSiegeAim
 from .combat_control import CombatControl, _point, _angle, _distance, _field
+from ..native_input_diagnostics import combat_detail, combat_detail_enabled
 from .actor_observation import PlayerObservation
 from .target_selection import nominal_armor
 
@@ -851,8 +852,15 @@ class _PlayerBehaviorEngine(shared_runtime.BotRuntime):
             state, runtime.weapon.target, solution, launch_receipt)
         if context is None:
             return False
-        accepted = runtime.controller.issue_automatic_trigger(context, runtime.now)
+        controller = runtime.controller
+        accepted = controller.issue_automatic_trigger(context, runtime.now)
         runtime._sync_weapon_observation()
+        if combat_detail_enabled():
+            combat_detail(runtime, 'auto_native_trigger', runtime.actor_id, runtime.now,
+                'accepted' if accepted else controller.last_fire_failure or 'native_trigger_no_receipt',
+                lambda: dict(candidate=(candidate or {}).get('key'), shell=runtime.gun.shot_index,
+                    trigger=controller.trigger_sequence, shot_seq=runtime._last_committed_shot_seq,
+                    pending=bool(getattr(runtime.owner, '_local_fire_intent', None))))
         return bool(accepted)
 
 
@@ -1936,8 +1944,7 @@ class FullPlayerRuntime(MissionControl, CombatControl):
             self._observe_mission(now)
             if self._live(token) and 'fire' in self.features:
                 if self.combat_stop.active and not self.combat_stop.waiting_for_siege():
-                    self.attack_policy.background(now)
-                    self._apply_next_shell()
+                    self._prepare_next_shell(now)
                 self._record_attack(now)
         self._profile_stage(stages, marker, 'player_post')
         self._profile_capture(stages, now)

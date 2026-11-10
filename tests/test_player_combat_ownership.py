@@ -273,7 +273,7 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
                 for step in range(15):
                     # Identical externally observed poses make a drive-output
                     # comparison independent of a fabricated physics solver.
-                    scene.native_position((.4 * step, 0., .25 * step), .35)
+                    scene.native_position((.4 * step, 0., .25 * step), .98)
                     scene.tick()
                     sender = scene.battle._sender
                     movement = navigation_view(scene.applied_order())
@@ -287,8 +287,8 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
             'checking a blocked point cannot stop or steer a route-owned hull')
         self.assertTrue(all(row[0]['combat_mode'] == 'route' for row in traces[0]))
         self.assertTrue(all(row[0]['combat_mode'] == 'route' for row in traces[1]))
-        self.assertTrue(any(row[1] or row[2] for row in traces[0]),
-                        'baseline must actually operate the drive actuator')
+        self.assertTrue(any(row[1] > 0. for row in traces[0]),
+                        'the clear route baseline must actually move forward')
 
     def test_nearest_blocked_contact_and_armored_alternative_share_one_review_domain(self):
         scene = self.scene()

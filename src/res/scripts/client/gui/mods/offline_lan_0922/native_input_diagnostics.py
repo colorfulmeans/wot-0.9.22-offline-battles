@@ -24,6 +24,7 @@ _reports_by_method, _record_sequence = {}, 0
 # Detailed geometry histories are opt-in and bounded independently of errors
 # and lifecycle messages. Never use this budget for gameplay or wire events.
 DETAIL_ENV = 'WOT_OFFLINE_DIAGNOSTICS'
+COMBAT_DETAIL_ENV = 'WOT_OFFLINE_COMBAT_DIAGNOSTICS'
 DETAIL_LABELS = frozenset(('BOT INITIAL ROUTE CAPACITY', 'BOT WATER DANGER', 'BOT ENVIRONMENT DEATH',
     'SPG FIRE GATE', 'BOT MOTION', 'BOT SLOPE POSE', 'BOT SUPPORT MODE',
     'SUPPORT QUERY PERF', 'BOT GUN SOLUTION', 'BOT SLOPE', 'BOT HEIGHT LINKS',
@@ -49,6 +50,43 @@ _detail_round = None
 
 def detailed_enabled():
     return os.environ.get(DETAIL_ENV) == '1'
+
+
+def combat_detail_enabled():
+    return os.environ.get(COMBAT_DETAIL_ENV) == '1'
+
+
+def combat_detail(owner, stage, key, now, reason, build):
+    """Summarize repeated control observations under the explicit log checkbox."""
+    if not combat_detail_enabled():
+        return
+    try:
+        round_id = getattr(owner, 'round_id', None)
+        if round_id is None:
+            round_id = getattr(getattr(owner, 'client', None), 'round_id', None)
+        scope = getattr(owner, '_combat_detail_observations', None)
+        if scope is None or scope[0] != round_id:
+            owner._combat_detail_observations = scope = (round_id, {})
+        state = scope[1]
+        token = (stage, key)
+        previous = state.get(token)
+        same = previous is not None and previous[0] == reason and now >= previous[1]
+        if same and now - previous[1] < 2.:
+            previous[2] += 1
+            return
+        state[token] = [reason, now, 0]
+
+        def payload():
+            result = build()
+            result.update(actor=key, reason=reason,
+                          occurrences=previous[2] + 1 if same else 1)
+            if not same and previous is not None and previous[2]:
+                result.update(previous_reason=previous[0], previous_repeats=previous[2])
+            return result
+
+        battle_review_record(owner, stage, key, now, payload, interval=0., limit=512)
+    except Exception:
+        pass
 
 
 def team_killer_receipt(stage, **values):

@@ -49,7 +49,8 @@ from gui.mods.offline_lan_0922 import tank_collision
 from gui.mods.offline_lan_0922 import vehicle_physics
 from gui.mods.offline_lan_0922 import native_simulation
 from gui.mods.offline_lan_0922.worker_diagnostics import timed, call as timed_call
-from gui.mods.offline_lan_0922.native_input_diagnostics import detailed_enabled
+from gui.mods.offline_lan_0922.native_input_diagnostics import (
+    combat_detail, combat_detail_enabled, detailed_enabled)
 
 
 try:
@@ -16386,6 +16387,7 @@ class BotRuntime(SharedEngineControl):
         publish = bool(self._publish_control_this_step)
         refresh_control = bool(self._refresh_control_this_step)
         record_orders = detailed_enabled()
+        trace_combat = combat_detail_enabled()
         diagnostic = self._combat_diagnostics
         if diagnostic is not None and diagnostic.active:
             diagnostic.begin_slice(frame_step, refresh_control, publish)
@@ -18196,16 +18198,22 @@ class BotRuntime(SharedEngineControl):
                         ballistic_solution is not None and
                         (fire_range <= 0.0 or target_distance < fire_range))
             artillery_launch_stage = None
-            if (publish and local_action_fresh and
+            fire_ready = (publish and local_action_fresh and
                     command['fire_allowed'] and target is not None and
                     in_range and
                     not state.get('_drowning', False) and
                     not state.get('_overturned', False) and
                     'gunHealth' not in destroyed_devices and
                     state.get('gun_aligned') and
-                    not burst_state.active and
-                    gun_state.ready(reload_factor) and
-                    ammo_state.can_fire() and
+                    not burst_state.active)
+            gun_ready = ammo_ready = None
+            if fire_ready:
+                gun_ready = gun_state.ready(reload_factor)
+                ammo_ready = gun_ready and ammo_state.can_fire()
+                fire_ready = ammo_ready
+            fire_gate = 'line_precheck' if fire_ready else 'fire_preconditions'
+            lane_verdict = {}
+            if (fire_ready and
                     (pending_intent is not None or
                      pending_reproof is not None or
                      self._shot_clear(
@@ -18214,7 +18222,7 @@ class BotRuntime(SharedEngineControl):
                 launch_receipt = None
                 launch_preview = None
                 lane_clear = False
-                lane_verdict = {}
+                fire_gate = 'direct_aim_mismatch'
                 if is_spg:
                     artillery_launch_stage = 'exact_launch_pending'
                     launch_receipt = self._artillery_launch_receipt(
@@ -18237,6 +18245,7 @@ class BotRuntime(SharedEngineControl):
                         lane_clear, lane_verdict = \
                             self._friendly_lane_verdict(lane_value)
                 elif self._direct_aim_matches(state, target, ballistic_solution):
+                    fire_gate = 'launch_preview_unavailable'
                     launch_preview = self._direct_launch_preview(
                         state, descriptor, state['shell_index'], gun_state,
                         ballistic_solution)
@@ -18263,12 +18272,14 @@ class BotRuntime(SharedEngineControl):
                         ammo_state=ammo_state,
                         launch_preview=launch_preview,
                         launch_time_us=step_end_time_us)
+                    fire_gate = 'trigger_submitted' if fired else 'trigger_not_submitted'
                     if fired:
                         self._retain_magazine_followup(state, command, target, now)
                     if fired and is_spg:
                         artillery_launch_stage = 'fired'
                         self._cancel_artillery_intent(state['id'], reason='fired', now=now)
                 elif launch is not None:
+                    fire_gate = 'final_lane_rejected'
                     # The final lane gate may invalidate an earlier proof.
                     # Revisit the shared point controller; this gun consumer
                     # cannot create an independent sideways movement owner.
@@ -18279,6 +18290,17 @@ class BotRuntime(SharedEngineControl):
                         # again after its normal safe-driver motion completes.
                         self._cancel_artillery_intent(state['id'], reason='friendly_lane_blocked',
                             now=now, evidence=lane_verdict)
+            if trace_combat and not is_spg and command['fire_allowed']:
+                combat_detail(self, 'auto_fire_gate', state['id'], now, fire_gate,
+                    lambda: dict(target=(target or {}).get('network_id'),
+                        shell=state['shell_index'], clip=state['clip'],
+                        reload=state['reload_time'], shot_seq=state.get('fire_seq'),
+                        published=publish, solution_fresh=local_action_fresh,
+                        in_range=in_range, aligned=state.get('gun_aligned'),
+                        gun_ready=gun_ready, ammo_ready=ammo_ready,
+                        burst=burst_state.active, drowning=state.get('_drowning'),
+                        overturned=state.get('_overturned'),
+                        gun_damaged='gunHealth' in destroyed_devices, lane=lane_verdict))
             if is_spg and publish:
                 try:
                     self._record_artillery_gate(

@@ -9,12 +9,15 @@ injected by these regressions.
 import contextlib
 import io
 import math
+import os
 import unittest
+from unittest import mock
 
 from test_player_combat_ownership import OwnershipScene
 from test_player_combat_stop import Scene
 from test_player_rebuilt_attack_policy import Observations
 from test_player_stationary_plan import install_plan_observations
+from gui.mods.offline_lan_0922 import native_input_diagnostics as logs
 from gui.mods.offline_lan_0922.vehicle_control.attack_policy import _planning_pose
 
 
@@ -109,6 +112,27 @@ class LiveReportLivenessTests(unittest.TestCase):
             if len(scene.launches()) > 1:
                 break
         self.assertEqual([0, 1], [shot['shell_index'] for shot in scene.launches()], policy.status())
+
+    def test_checkbox_controls_new_evidence_on_the_same_real_he_shot(self):
+        for enabled in ('0', '1'):
+            with self.subTest(enabled=enabled):
+                scene = self.scene(features=('fire',))
+                scene.set_he(piercing=1.)
+                target = scene.eligible_enemy(50, armor=30.)
+                scene.pose(target, (0., 0., 40.))
+                with mock.patch.dict(os.environ, {logs.DETAIL_ENV: '1',
+                        logs.COMBAT_DETAIL_ENV: enabled}), \
+                        mock.patch.object(logs, 'write_json_record') as record:
+                    for unused in range(80):
+                        scene.tick(.125)
+                        if scene.launches():
+                            break
+                self.assertEqual([0], [shot['shell_index'] for shot in scene.launches()])
+                stages = {call.args[1].get('stage') for call in record.call_args_list
+                          if len(call.args) > 1 and isinstance(call.args[1], dict)}
+                self.assertEqual(enabled == '1', 'auto_fire_gate' in stages)
+                self.assertEqual(enabled == '1', 'auto_native_trigger' in stages)
+                scene.doCleanups()
 
     def test_loaded_he_commits_with_source_jitter_and_fourteen_blocked_enemies(self):
         for features in (('fire',), ('drive', 'fire')):

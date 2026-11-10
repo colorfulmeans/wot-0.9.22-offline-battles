@@ -51,6 +51,22 @@ class BaseCircleArrivalTests(unittest.TestCase):
         fourth = self.helper.order(scene, 4., contact=False)
         self.assertEqual(0., fourth['throttle_override'])
 
+    def test_blocked_enemy_hint_cannot_stop_capture_at_terminal_outside_circle(self):
+        scene = self.helper.scene((84.523, -194.48))
+        scene[3]['capture_bases']['1'][0].update(x=100., z=-250., radius=30.)
+        first = self.helper.order(scene, lane=False)
+        self.assertEqual('route', first['combat_mode'])
+        self.assertEqual(2., first['move_position']['x'])
+
+        scene[2][0].update(x=2., z=-250.)
+        order = self.helper.order(scene, 2., lane=False)
+
+        self.assertEqual(8, order['initial_target_hint']['target_id'])
+        self.assertEqual('base_capture', order['combat_mode'])
+        self.assertEqual(100., order['move_position']['x'])
+        self.assertIsNone(order['target_id'])
+        self.assertFalse(order['fire_allowed'])
+
     def test_enemy_circle_entry_retires_remaining_macro_gates(self):
         scene = self.helper.scene((70., 346.))
         self.helper.order(scene, contact=False)

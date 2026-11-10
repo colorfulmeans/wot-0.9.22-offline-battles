@@ -39,6 +39,7 @@ def environment(settings, diagnostics=False, single=True):
     result['WOT_OFFLINE_COLLISION_DIAGNOSTICS'] = '1' if settings.get('collision') else '0'
     result['WOT_OFFLINE_DIAGNOSTICS'] = '1' if (
         diagnostics or settings.get('logs') or settings.get('collision') or settings.get('control') or scene != 'normal') else '0'
+    result['WOT_OFFLINE_COMBAT_DIAGNOSTICS'] = '1' if settings.get('logs') else '0'
     if settings.get('control'):
         result['WOT_OFFLINE_PLAYER_AUTOCONTROL'] = ','.join(
             key for key in ('drive', 'fire', 'consumables') if settings.get(key)) or 'enabled'

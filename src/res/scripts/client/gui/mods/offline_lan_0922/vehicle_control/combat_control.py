@@ -13,6 +13,7 @@ from .actor_observation import observation
 from .. import bot_runtime as shared_runtime
 from .. import capture_orders, siege_mechanics
 from ..ai import driver as shared_driver
+from ..native_input_diagnostics import combat_detail, combat_detail_enabled
 from .combat_stop import MECHANICAL_STALL_SECONDS
 from .native_aim import NATIVE_ANGLE_TOLERANCE
 
@@ -38,9 +39,14 @@ class CombatControl(object):
 
     def prepare_trigger_context(self, state, target, solution, launch_receipt=None):
         """Select one first-edge intention; physical bindings prove/commit it."""
+        trace_combat = combat_detail_enabled()
         if (not self._live() or self._mission_brakes() or
                 'fire' not in self.features or not state.get('gun_aligned') or
                 not self._siege_fire_ready()):
+            if trace_combat:
+                combat_detail(self, 'auto_trigger_context', self.actor_id, self.now,
+                    'trigger_context_unavailable',
+                    lambda: dict(aligned=state.get('gun_aligned'), shell=self.gun.shot_index))
             return None
         candidate = self.attack_policy.decision.get('candidate')
         artillery = (state.get('profile') or {}).get('class_tag') == 'SPG'
@@ -49,10 +55,18 @@ class CombatControl(object):
             policy = self.attack_policy
             if (not self.combat_stop.active or policy.decision['action'] != 'aim' or
                     candidate is None or not self.combat_stop.contains(candidate.get('target'))):
+                if trace_combat:
+                    combat_detail(self, 'auto_trigger_context', self.actor_id, self.now,
+                        'attack_intention_unavailable',
+                        lambda: dict(action=policy.decision['action'],
+                            candidate=(candidate or {}).get('key'), active=self.combat_stop.active))
                 return None
             token = self.generation
             load_plan = self._apply_next_shell(at_trigger=True)
             if not self._live(token):
+                if trace_combat:
+                    combat_detail(self, 'auto_trigger_context', self.actor_id, self.now,
+                        'owner_changed_after_next', lambda: dict(candidate=candidate['key']))
                 return None
             # Motion integration and native gun laying happen after the
             # policy selected this intention. Refresh that same sample at
@@ -62,6 +76,11 @@ class CombatControl(object):
                     policy.decision.get('candidate') is not candidate or
                     policy.decision.get('action') != 'aim' or
                     not self.combat_stop.contains(candidate.get('target'))):
+                if trace_combat:
+                    combat_detail(self, 'auto_trigger_context', self.actor_id, self.now,
+                        'same_point_refresh_refused' if solution is None else 'attack_intention_changed',
+                        lambda: dict(candidate=candidate['key'], refresh=getattr(
+                            policy.evaluator, 'trigger_refresh_receipt', {}).get('reason')))
                 return None
         elif launch_receipt is not None:
             intent = self.engine._artillery_intents.get(state['id']) or {}
@@ -429,12 +448,30 @@ class CombatControl(object):
                 owner='copied_combat_hull_aim', at=now)
         else:
             order.pop('confirmed_facing', None)
-        area = (self._mission or {}).get('capture_area')
+        area = ((self._mission or {}).get('capture_area') or
+                self.combat_stop.task_order.get('capture_area'))
         if area and capture_orders.inside(self.state, area) and not self.state.get('airborne'):
             center = area['point']
             order['capture_pivot_circle'] = ((center['x'], center['z']), area['radius'])
         else:
             order.pop('capture_pivot_circle', None)
+        if combat_detail_enabled():
+            task = self.combat_stop.task_order
+            objective = area or task.get('capture_objective')
+            if objective is not None:
+                inside = capture_orders.inside(self.state, objective)
+                if inside or area is not None:
+                    ownership = self.combat_stop.receipt
+                    target_key = (order.get('target_kind'), order.get('target_id'))
+                    combat_detail(self, 'capture_handoff', self.actor_id, now,
+                        (inside, area is not None, ownership.get('movement_owner'),
+                         order.get('combat_mode'), bool(throttle), target_key),
+                        lambda: dict(circle=objective, registered=area is not None,
+                            position=self.state['position'], inside=inside,
+                            owner=ownership.get('movement_owner'), episode=ownership.get('episode'),
+                            task_mode=task.get('combat_mode'), route_index=task.get('route_index'),
+                            destination=order.get('move_position'), throttle=throttle, turn=turn,
+                            target=target_key, fire=order.get('fire_allowed')))
         self._last_order = order
         if self.combat_stop.stop_allowed and self.attack_policy is not None:
             action = self.attack_policy.decision['action']
@@ -513,6 +550,18 @@ class CombatControl(object):
             self._record_shell('queue_release', 'NEXT_SHELLS', lease['index'], True,
                                reason, force=at_trigger, plan=lease.get('plan'))
 
+    def _prepare_next_shell(self, now):
+        policy, gun = self.attack_policy, self.gun
+        frame = policy.frame
+        loaded = int(gun.shot_index)
+        if (frame is not None and frame['loaded'] == loaded and frame['ammo'] == tuple(gun.ammo)
+                and 0 < min(gun.clip, gun.ammo[loaded]) <= gun.burst_count
+                and self._manual_shell is None):
+            policy.prepare_next_load(now)
+        else:
+            policy.background(now)
+        self._apply_next_shell()
+
     def _apply_next_shell(self, at_trigger=False):
         if (not self._live() or self._mission_brakes() or 'fire' not in self.features or
                 not self.combat_stop.active):
@@ -539,22 +588,29 @@ class CombatControl(object):
         stale_frame = (frame is None or policy._frame_invalid or
                        frame['loaded'] != gun.shot_index or frame['ammo'] != tuple(gun.ammo))
         if at_trigger:
-            # Current-shot approval is independent of this bounded ranking.
+            # Use only the prepared plan; a new scan belongs to background work.
             plan, reason = ((None, 'observation_changed') if stale_frame else
-                            policy.refresh_next_at_trigger(self.now))
+                            policy.next_at_edge(queued=(lease or {}).get('plan')))
             index = plan['shell_index'] if plan is not None else None
+            if combat_detail_enabled():
+                combat_detail(self, 'next_at_last_trigger', self.actor_id, self.now, reason,
+                    lambda: dict(loaded=gun.shot_index, clip=gun.clip, queued=gun.pending_index,
+                        plan=(plan or {}).get('key'), shot_seq=self._last_committed_shot_seq,
+                        ranking_status=policy.next_status, coverage=policy.background_coverage,
+                        previous_plan=((lease or {}).get('plan') or {}).get('key')))
         else:
             index, plan, reason = policy.next_shell, policy.next_plan, policy.next_status
             if plan is not None and stale_frame:
                 return
             if plan is not None:
-                plan, reason = policy.next_at_edge(native_fence=False)
+                plan, reason = policy.next_at_edge(
+                    native_fence=False, queued=(lease or {}).get('plan'))
                 index = plan['shell_index'] if plan is not None else None
         if index is None:
             if lease is not None:
                 self._release_next_shell(reason, required=False, at_trigger=at_trigger)
             elif at_trigger:
-                self._record_shell('queue_unavailable', 'NEXT_SHELLS', None, False, reason, force=True)
+                self._record_shell('queue_unavailable', 'NEXT_SHELLS', None, False, reason)
             return
         index = int(index)
         if index < 0 or index >= len(gun.ammo) or gun.ammo[index] <= 0:

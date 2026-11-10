@@ -625,8 +625,7 @@ class BotControlBinding(MissionControl, CombatControl):
         if not self._live():
             return
         if self.combat_stop.active and not self.combat_stop.waiting_for_siege():
-            self.attack_policy.background(self.now)
-            self._apply_next_shell()
+            self._prepare_next_shell(self.now)
 
     def _admission(self):
         if self.trigger_admission is None:

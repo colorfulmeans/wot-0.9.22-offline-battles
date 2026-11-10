@@ -18,6 +18,20 @@ def inside(pose, area):
     return math.hypot(pose['x']-center['x'], pose['z']-center['z']) <= area['radius']
 
 
+def observe_arrival(order, pose, previous_area):
+    """Apply the accepted circle at the native pose, even on a cached order."""
+    area = order.get('capture_objective')
+    if (area is None or not pose.get('world_pose') or
+            pose.get('airborne') or pose.get('route_wreck_blocked')):
+        return order
+    if order.get('capture_area') != area and previous_area != area and not inside(pose, area):
+        return order
+    result = dict(order, capture_area=area)
+    if result.get('combat_mode') == 'hold':
+        result['combat_mode'] = 'base_capture'
+    return constrain(result, pose)
+
+
 def constrain(order, pose):
     area = order.get('capture_area')
     if not area:
