@@ -755,7 +755,8 @@ class AttackPolicy(object):
             self.frame.get('targets') and
             not any(counts[name] for name in ('passed', 'projected_passed', 'geometry_pending',
                                              'armor_pending', 'unobserved')))
-        self.failure_domains[indices] = counts
+        if row_for is None:
+            self.failure_domains[indices] = counts
         return counts
 
     def _all_failed(self, indices):
@@ -776,9 +777,11 @@ class AttackPolicy(object):
         remaining = tuple(index for index in indices if not self._single_point_failed(index))
         if not remaining:
             return bool(indices)
-        if row_for is None:
-            return self._all_failed(remaining)
-        return self._failure_domain(remaining, row_for)['all_failed']
+        # Keep the current physical diagnostic and its exact proof separate
+        # from the wider envelope used exclusively to rank a subsequent load.
+        exact = self._all_failed(remaining)
+        return exact or (row_for is not None and
+                         self._failure_domain(remaining, row_for)['all_failed'])
 
     def _loaded_he_fallback_targets(self, loaded):
         """Keep current HE fallback local to each proved enemy domain.

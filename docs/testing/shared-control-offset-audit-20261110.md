@@ -43,7 +43,8 @@ fallback phase left the gun in \`he_damage_comparison_pending\` after reload.
   identity, scene, or a relevant moving blocker invalidate the corresponding
   evidence. A known failed plate or a static world hit can retain its rank
   outcome across traffic changes. Unchecked/blocked armour does not qualify
-  global HE fallback. The actual winning point is freshly checked before
+  global HE fallback. Tolerant NEXT observations are kept out of the exact
+  physical failure diagnostics. The winning point is freshly checked before
   queuing NEXT, and current aim/fire still uses exact geometry and the
   original native shot-admission checks. No query quota is increased.
 - A real ammunition change clears the previous shell's fallback and lay
