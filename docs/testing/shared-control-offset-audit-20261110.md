@@ -16,10 +16,14 @@ registered at that stop.
   so each binding can accept entry from its current grounded pose even on
   a cached order. The circle hold owns translation and leaves the existing
   gun handoff available. A blocked initial hint cannot veto travel from a
-  completed route terminal outside the circle.
+  completed route terminal outside the circle. Actor-local circle entry
+  constrains the accepted ordinary order after mission selection, so it
+  cannot create a new mission or displace a controller-owned task.
 - The mounted shell takes a still-valid selected or cached executable point
   before issuing new point queries. NEXT's bounded preparation runs after
-  current-shot control. The last trigger consumes a prepared plan, with
+  current-shot control during the reload before the final in-clip trigger.
+  A ready gun uses the ordinary fair background pass. The last trigger
+  consumes a prepared plan, with
   existing ranking tolerance for an already accepted queue and live lane
   and domain checks. The existing native launch admission proves the shot.
 - The launcher checkbox **Collect detailed diagnostic logs** explicitly

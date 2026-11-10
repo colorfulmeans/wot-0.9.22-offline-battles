@@ -54,9 +54,12 @@ class MissionControl(object):
         return 'fire' not in self.features or self._acquire_mission_inputs()
 
     def _accept_task_order(self, order, now):
-        order = capture_orders.observe_arrival(
-            order, self.state, self.combat_stop.task_order.get('capture_area'))
         order = self._mission_order(order, now)
+        if self._mission is None:
+            # A local circle hold constrains the accepted order. It does not
+            # create a new mission or replace an explicit mission's task.
+            order = capture_orders.observe_arrival(
+                order, self.state, self.combat_stop.task_order.get('capture_area'))
         self._observe_mission(now)
         return self._accept_combat_order(order, now)
 
@@ -154,8 +157,10 @@ class MissionControl(object):
     def _mission_order(self, order, now):
         mission = self._mission
         if (mission is None and order.get('combat_mode') == 'base_capture' and
-                (order.get('capture_base_id') or not order.get('initial_target_hint')) and
-                self._implicit_retry is None):
+                not order.get('initial_target_hint') and self._implicit_retry is None):
+            # A physical circle constraint may label an ordinary route as
+            # base_capture while its enemy is only an evaluation hint. That
+            # is not a new strategic capture task and must not create one.
             self._mission_sequence += 1
             mission = self._mission = dict(id='auto-capture-%d' % self._mission_sequence,
                 action='capture_base', explicit=False, payload={}, status='running',

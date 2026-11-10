@@ -556,6 +556,7 @@ class CombatControl(object):
         loaded = int(gun.shot_index)
         if (frame is not None and frame['loaded'] == loaded and frame['ammo'] == tuple(gun.ammo)
                 and 0 < min(gun.clip, gun.ammo[loaded]) <= gun.burst_count
+                and gun.reload_time > 0.
                 and self._manual_shell is None):
             policy.prepare_next_load(now)
         else:

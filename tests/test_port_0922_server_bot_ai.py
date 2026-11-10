@@ -1009,7 +1009,7 @@ class ServerBotTacticsTests(unittest.TestCase):
         self.assertFalse(order['fire_allowed'])
         self.assertNotIn('capture_base_id', order)
 
-    def test_initial_hint_does_not_create_automatic_capture_at_completed_terminal(self):
+    def test_initial_hint_does_not_block_capture_after_completed_terminal(self):
         planner = BotPlanner()
         route = _route('short', [(0, -100, False), (0, 100, False)])
         manifest = [_bot(11, 1, 0, route, 'mediumTank')]
@@ -1022,8 +1022,10 @@ class ServerBotTacticsTests(unittest.TestCase):
             states[0]['z'] = z
             order = planner.build_orders(manifest, states, players, now, defense)['orders'][0]
             self.assertEqual(2, _initial_hint(order)['target_id'])
-            self.assertNotEqual('base_capture', order['combat_mode'])
-            self.assertNotIn('capture_base_id', order)
+            self.assertEqual('base_capture', order['combat_mode'])
+            self.assertEqual(defense['capture_bases']['2'][0]['id'], order['capture_base_id'])
+            self.assertIsNone(order['target_id'])
+            self.assertFalse(order['fire_allowed'])
         players[0]['alive'] = False
         released = planner.build_orders(manifest, states, players, 1.4, defense)['orders'][0]
         self.assertEqual('base_capture', released['combat_mode'])
