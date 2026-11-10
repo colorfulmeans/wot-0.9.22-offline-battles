@@ -38,6 +38,15 @@ combat ownership followed by a return to its centre on handoff.
   separate missing native geometry, mechanical restrictions and obstructed
   points in a fresh Windows battle.
 
+The first #1513 preflight used the team 2 east route in the same Mittengard
+stationary-target scene. The exported report `wot-error-report-20261111-042019-0aa0ba72934c.zip`
+records eight AP and one HE launch. When actor 2's points 1, 2 and 4 were
+obstructed, the next committed AP shot used point 5 on actor 2. The later
+HE fallback fired point 0 on actor 9, and its native reload mounted AP.
+The follow-up retains the earlier out-of-range review receipt without
+granting firing or movement permission. It also distinguishes the fired
+shell from the shell mounted by the same trigger's reload in the detailed log.
+
 ## Follow-up for the 23:53 AT7 report — circle handoff and current shot
 
 The report `wot-error-report-20261110-235323-94c3a3f842a5.zip` identifies

@@ -853,12 +853,14 @@ class _PlayerBehaviorEngine(shared_runtime.BotRuntime):
         if context is None:
             return False
         controller = runtime.controller
+        trigger_shell = runtime.gun.shot_index
         accepted = controller.issue_automatic_trigger(context, runtime.now)
         runtime._sync_weapon_observation()
         if combat_detail_enabled():
             combat_detail(runtime, 'auto_native_trigger', runtime.actor_id, runtime.now,
                 'accepted' if accepted else controller.last_fire_failure or 'native_trigger_no_receipt',
-                lambda: dict(candidate=(candidate or {}).get('key'), shell=runtime.gun.shot_index,
+                lambda: dict(candidate=(candidate or {}).get('key'), shell=trigger_shell,
+                    loaded_after=runtime.gun.shot_index,
                     trigger=controller.trigger_sequence, shot_seq=runtime._last_committed_shot_seq,
                     pending=bool(getattr(runtime.owner, '_local_fire_intent', None))))
         return bool(accepted)

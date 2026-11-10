@@ -199,7 +199,9 @@ class OrderedAttack(object):
             if lay is not None:
                 return 'native_lay', lay
             return 'wait', blocked
-        return 'complete', clear or blocked
+        range_limited = next((row for row in current if row is not None and
+            row.get('scope_reason') == 'outside_stationary_horizontal_range'), None)
+        return 'complete', clear or blocked or range_limited
 
     def update(self, policy, now):
         frame = policy.frame

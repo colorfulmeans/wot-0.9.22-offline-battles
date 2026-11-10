@@ -2083,7 +2083,8 @@ class AttackPolicy(object):
             if combat_detail_enabled():
                 runtime = self.runtime
                 combat_detail(runtime, 'ordered_attack', runtime.actor_id, now, result['reason'],
-                    lambda: dict(target=self.ordered.target, sample=self.ordered.sample,
+                    lambda: dict(target=self.ordered.target,
+                        aim_sample=(self.ordered.he_sample if self.ordered.loaded_he else self.ordered.sample),
                         checked=len(self.ordered.covered), targets=tuple(self.ordered.order),
                         loaded=loaded, clip=frame['clip'], proposed=result.get('shell_index'),
                         candidate=(result.get('candidate') or {}).get('key'),
