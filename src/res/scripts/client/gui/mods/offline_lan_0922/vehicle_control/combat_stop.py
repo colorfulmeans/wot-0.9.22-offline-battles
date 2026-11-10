@@ -374,7 +374,8 @@ class CombatStop(object):
         refusal = candidate.get('stationary_pending') or ''
         return ('blocked' not in refusal and 'actuator_unavailable' not in refusal and
                 candidate.get('line') == 'clear' and candidate.get('mechanical') == 'hull_laying' and
-                candidate.get('armor') == 'passed' and mode == 'penetration' and
+                mode == 'penetration' and
+                (candidate.get('armor') == 'passed' or candidate.get('route_he_damage', 0.) > 0.) and
                 self._lay_solution(candidate) is not None)
 
     def _route_lay_can_retry(self, proposal):

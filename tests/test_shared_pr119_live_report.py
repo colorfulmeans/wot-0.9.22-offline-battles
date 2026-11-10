@@ -8,11 +8,13 @@ injected by these regressions.
 """
 import contextlib
 import io
+import math
 import unittest
 
 from test_player_combat_ownership import OwnershipScene
 from test_player_combat_stop import Scene
 from test_player_rebuilt_attack_policy import Observations
+from test_player_stationary_plan import install_plan_observations
 from gui.mods.offline_lan_0922.vehicle_control.attack_policy import _planning_pose
 
 
@@ -214,6 +216,38 @@ class StableRouteAttackTests(unittest.TestCase):
         for step in range(50):
             self.assertEqual('route', scene.apply(step * .125)['combat_mode'])
         self.assertEqual(0, scene.owner._episode)
+
+    def test_moving_limited_vehicle_qualifies_proved_ap_or_ordinary_he_lay(self):
+        for he in (False, True):
+            with self.subTest(he=he), contextlib.redirect_stdout(io.StringIO()):
+                scene = OwnershipScene()
+                scene.setUp()
+                self.addCleanup(scene.doCleanups)
+                scene.configure(limited=True, clip=10, burst=1)
+                if he:
+                    scene.set_he(piercing=1.)
+                scene.position = (0., 0., 0.)
+                install_plan_observations(scene)
+                target = scene.eligible_enemy(50, armor=30.)
+                scene.pose(target, (math.sin(.7) * 45., 0., math.cos(.7) * 45.))
+                for step in range(41):
+                    scene.native_position((step * .04, 0., 0.))
+                    scene.battle._local_speed = .32
+                    order = scene.tick(.125)
+                    self.assertFalse(scene.launches())
+                    if step < 40:
+                        self.assertEqual('route', order['combat_mode'])
+                owner = scene.runtime.combat_stop
+                self.assertEqual(5., owner.receipt['confirmation_seconds'])
+                self.assertEqual('native_lay', owner.receipt['reason'])
+                candidate = scene.runtime.attack_policy.decision['candidate']
+                self.assertEqual('hull_laying', candidate['mechanical'])
+                if he:
+                    self.assertEqual('failed', candidate['armor'])
+                    self.assertGreater(candidate['route_he_damage'], 0.)
+                    self.assertIsNone(candidate['contact'])
+                else:
+                    self.assertEqual('passed', candidate['armor'])
 
     def test_full_runtime_drives_before_sustained_current_proof(self):
         scene = OwnershipScene()

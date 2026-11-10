@@ -25,7 +25,8 @@ fallback phase left the gun in \`he_damage_comparison_pending\` after reload.
   Current HE contact must satisfy the existing HE fallback law. A verified
   stationary projection can qualify a limited traverse point. An in-motion
   hull-lay candidate may also qualify from a clear ideal ray and a confirmed
-  plate while the ordinary native actuator still checks each physical turn.
+  plate or the legal one-point ordinary HE contact. The ordinary native
+  actuator still checks each physical turn.
   A clear ray with unknown armour, or a translated line preview alone,
   grants no route takeover. Worker tactics, explicit travel/capture and the
   separate hydraulic siege request/echo protocol keep their existing scope.

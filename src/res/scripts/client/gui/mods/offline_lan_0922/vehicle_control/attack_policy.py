@@ -2076,6 +2076,12 @@ class AttackPolicy(object):
             candidate = min(planned_pen, key=self._penetration_order)
             return self._choose('firing_position', 'current_penetration_after_stationary_turn',
                                 candidate, movement_reason=candidate.get('reason'))
+        if loaded_he:
+            he_lay = [row for row in observed_current if row.get('route_he_damage', 0.) > 0.]
+            if he_lay:
+                return self._choose('firing_position', 'current_he_contact_after_hull_lay',
+                    min(he_lay, key=lambda row: (-row['route_he_damage'],
+                                               self._penetration_order(row))))
         current_failed = self._all_failed((loaded,))
         if loaded_he:
             # Every physically loaded HE round owns its execution, including
@@ -3392,11 +3398,12 @@ class NativeAttackEvaluator(object):
                               blocker=dict(verdict or {}))
                 return reported
             result['line'] = 'clear'
+            route_lay = reach['status'] == 'hull_laying'
             if reach['status'] != 'reachable':
                 result['reason'] = reach['reason']
                 self._point_scope(frame, shell, target, predicted, result)
                 combat = getattr(self.runtime, 'combat_stop', None)
-                if (mode != 'penetration' or reach['status'] != 'hull_laying' or
+                if (mode != 'penetration' or not route_lay or
                         result.get('scope') == 'excluded' or combat is None or
                         not combat._route_requires_confirmation(combat.task_order) or
                         combat.combat_owned):
@@ -3420,7 +3427,9 @@ class NativeAttackEvaluator(object):
             if job['armour'] is None:
                 result['reason'] = 'native_armour_unknown'
                 return reported
-            if mode == 'he_fallback':
+            he_lay = (route_lay and job['armour']['penetration']['armor'] == 'failed' and
+                      ammunition_validation.shell_mode(shell) == ammunition_validation.SINGLE_POINT)
+            if mode == 'he_fallback' or he_lay:
                 blast_stamp = frame['scene'], frame['debris']
                 if job['he'] is None or job['he'][0] != blast_stamp:
                     damage = self._he_damage(shell, target, job['armour'])
@@ -3428,7 +3437,17 @@ class NativeAttackEvaluator(object):
                         job['he'] = (blast_stamp, damage)
                 else:
                     damage = job['he'][1]
-                result.update(damage)
+                if he_lay:
+                    # Ordinary HE has one penetration/contact sample per
+                    # enemy. Preserve the actual hull limitation and publish
+                    # this positive contact only for movement qualification.
+                    result.update(job['armour']['penetration'])
+                    score = damage.get('expected_damage')
+                    if (damage.get('contact') is True and score is not None and
+                            not math.isnan(score) and not math.isinf(score) and score > 0.):
+                        result['route_he_damage'] = score
+                else:
+                    result.update(damage)
             else:
                 result.update(job['armour']['penetration'])
             result['reason'] = ('verified' if result['armor'] == 'passed' else
