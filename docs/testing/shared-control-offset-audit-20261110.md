@@ -1,5 +1,75 @@
 # PR119 control-offset correction — November 10, 2026
 
+## Follow-up for the 22:01 AT7 report
+
+The report \`wot-error-report-20261110-220155-71db166b8729.zip\` identifies
+\`3c6deb7e\` / \`colorfulmeans-42817074658-1\`. Its AT7 stayed at the same
+horizontal position from 21:58:31 to 21:59:33 while the shared engagement
+episode went from 9 to 369. Actual commands alternated route turn -1.00 and
+combat turn about +0.65. A briefly clear ray could start laying with unknown
+armour. The next blocked ray returned to the route and the following clear
+ray recreated the pivot. The early route-only collision wait is separate.
+
+The last HE round produced \`higher_rank_pending\` (2/14 current HE-rank
+checks) followed by a native same-shell reload. NEXT was empty in all 22 HE
+status samples. The HE phase recorded 1,510 source-proof revocations. A
+manual CURRENT change later loaded 10 AP rounds, but the preceding HE
+fallback phase left the gun in \`he_damage_comparison_pending\` after reload.
+
+### Contract and implementation
+
+- A normal player-controlled automatic route remains the movement owner
+  until one enemy has a proved opportunity with the current shell for five
+  continuous observed seconds. An invalid, absent, or changed opportunity
+  resets the timer. The timer also resets after a gap longer than 0.75 s.
+  Current HE contact must satisfy the existing HE fallback law. A verified
+  stationary projection can qualify a limited traverse point. An in-motion
+  hull-lay candidate may also qualify from a clear ideal ray and a confirmed
+  plate while the ordinary native actuator still checks each physical turn.
+  A clear ray with unknown armour, or a translated line preview alone,
+  grants no route takeover. Worker tactics, explicit travel/capture and the
+  separate hydraulic siege request/echo protocol keep their existing scope.
+- For an admitted route-derived pivot, brief observed lane blockage freezes
+  the turn and removes fire permission. After one second of lost opportunity
+  the route resumes. Reentry requires a new full five-second observation;
+  an unchanged failed rotation or stalled lay cannot repeat from the same
+  location. The existing six-second mechanical watchdog still runs while
+  checking the lane and only actual turn progress refreshes it.
+- NEXT keeps completed ranking evidence anchored to its measured geometry.
+  The experimental limits are up to 0.20 m of source/target movement (stricter
+  near the target), 0.5 degrees of target/component rotation, and 0.15 m/s
+  change in target velocity. Changes in weapon, target geometry/armour
+  identity, scene, or a relevant moving blocker invalidate the corresponding
+  evidence. A known failed plate or a static world hit can retain its rank
+  outcome across traffic changes. Unchecked/blocked armour does not qualify
+  global HE fallback. The actual winning point is freshly checked before
+  queuing NEXT, and current aim/fire still uses exact geometry and the
+  original native shot-admission checks. No query quota is increased.
+- A real ammunition change clears the previous shell's fallback and lay
+  retry state. Queuing a future shell or continuing a same-shell reload does
+  not reset the current shell phase. NEXT remains independent of the
+  current clip and keeps HE penetration, AP, higher-penetration, HE fallback
+  order. An unfinished ranking grants no current clip unload authority.
+
+### Verification and native acceptance
+
+The report regression exercises a real authored route through the five-second
+gate, clear/blocked alternation, a sustained limited-traverse opportunity,
+a full ten-round HE clip with source jitter and actual AP reload, and a
+manual CURRENT HE-to-AP input followed by the actual AP launch. Controlled
+queries also verify expiry beyond the ranking envelope and the requirement
+for fresh winning-point proof. Existing downstream fixtures that assume an
+eligible engagement isolate the route-dwell decision in their setup; the
+report and embedded ownership regressions use the production threshold.
+
+On Windows #1513, compare a brief spot with a sustained attackable point on
+the same AT7 opening. Check that brief peeks preserve route direction and a
+stable contact takes the hull once. Repeat at a wall and with an intervening
+friendly, then let one HE cassette finish and separately switch manually to
+AP. The PR delivery header identifies the exact CI run and Windows package.
+All lower-level driving, traffic, navigation, route, physics, and collision
+files are outside this change.
+
 ## Live-report continuation: implemented and locally verified
 
 The user's `wot-error-report-20261110-184606-069fba6421d8.zip` rejects the

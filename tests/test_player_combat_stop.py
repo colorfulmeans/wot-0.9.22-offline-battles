@@ -320,7 +320,11 @@ class OriginalOwnershipBoundaryTests(unittest.TestCase):
         self.assertEqual((2, 3), tuple(row['id'] for row in scene.owner.targets))
         scene.candidate.update(line='clear')
         scene.decide('aim')
-        result = scene.apply(0.)
+        for step in range(40):
+            result = scene.apply(step * .125)
+            self.assertEqual('advance', result['combat_mode'])
+            self.assertFalse(scene.owner.stop_allowed)
+        result = scene.apply(5.)
         self.assertTrue(scene.owner.stop_allowed)
         self.assertEqual('engage', result['combat_mode'])
         self.assertEqual(scene.state['position'], result['move_position'])

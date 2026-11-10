@@ -547,8 +547,9 @@ class CombatControl(object):
             index, plan, reason = policy.next_shell, policy.next_plan, policy.next_status
             if plan is not None and stale_frame:
                 return
-            if plan is not None and not policy._plannable(policy.current_row(plan), plan['mode']):
-                index, plan, reason = None, None, 'candidate_expired'
+            if plan is not None:
+                plan, reason = policy.next_at_edge(native_fence=False)
+                index = plan['shell_index'] if plan is not None else None
         if index is None:
             if lease is not None:
                 self._release_next_shell(reason, required=False, at_trigger=at_trigger)

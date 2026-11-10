@@ -13,6 +13,9 @@ from gui.mods.offline_lan_0922 import siege_mechanics
 class RecoveryAdmissionAndContinuityTests(unittest.TestCase):
     def scene(self, statuses=(), siege=None):
         scene = Scene(admitted=False, siege=siege)
+        # Exercise the original recovery consumer with an already eligible
+        # tactical order; the player-route gate has separate report tests.
+        scene.owner._route_requires_confirmation = lambda order: False
         scene.raw_order.update(combat_mode='route', target_kind=None,
             target_id=None, move_position=(20., 0., -30.),
             face_position=(20., 0., -30.), throttle_override=None,

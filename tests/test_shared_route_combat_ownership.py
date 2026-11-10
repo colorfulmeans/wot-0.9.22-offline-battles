@@ -42,7 +42,11 @@ class SharedRouteCombatOwnershipTests(unittest.TestCase):
         scene = OwnershipScene()
         scene.setUp()
         self.addCleanup(scene.doCleanups)
-        return scene.configure(limited=limited, clip=1, burst=1)
+        scene.configure(limited=limited, clip=1, burst=1)
+        # Isolate proof and the existing recovery consumers from the user's
+        # new route dwell, which is covered end-to-end in the report suite.
+        scene.runtime.combat_stop._route_requires_confirmation = lambda order: False
+        return scene
 
     def workers(self):
         scene = MultiBotScene()

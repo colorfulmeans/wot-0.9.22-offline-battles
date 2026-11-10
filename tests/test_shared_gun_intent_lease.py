@@ -193,6 +193,8 @@ class SharedGunIntentLeaseTests(unittest.TestCase):
         scene.setUp()
         self.addCleanup(scene.doCleanups)
         scene.configure(clip=1, burst=1)
+        # Isolate the downstream consumer from authored-route confirmation.
+        scene.runtime.combat_stop._route_requires_confirmation = lambda order: False
         enemy = scene.eligible_enemy(14, armor=10.)
         scene.pose(enemy, (24., 0., 50.))
         scene.sample_original_lanes()

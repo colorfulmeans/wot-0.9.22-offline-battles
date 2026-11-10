@@ -166,7 +166,11 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
         scene = OwnershipScene()
         scene.setUp()
         self.addCleanup(scene.doCleanups)
-        return scene.configure(features, limited, clip, burst, player_id)
+        scene.configure(features, limited, clip, burst, player_id)
+        # Focus on movement ownership once an opportunity has been accepted.
+        # The report suite separately drives this fixture through the real gate.
+        scene.runtime.combat_stop._route_requires_confirmation = lambda order: False
+        return scene
 
     def assert_original_navigation(self, scene):
         original = navigation_view(scene.original_order())

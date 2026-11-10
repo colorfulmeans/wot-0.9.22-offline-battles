@@ -38,6 +38,8 @@ class SharedCurrentHEExecutionTests(unittest.TestCase):
         scene.setUp()
         self.addCleanup(scene.doCleanups)
         scene.configure(clip=6, burst=burst, limited=limited)
+        # Isolate the downstream consumer from authored-route confirmation.
+        scene.runtime.combat_stop._route_requires_confirmation = lambda order: False
         scene.set_he(piercing=1.)
         # This physical load has only ordinary HE in stock. NEXT may compare
         # the same shell for a future trigger, but cannot spend CURRENT.

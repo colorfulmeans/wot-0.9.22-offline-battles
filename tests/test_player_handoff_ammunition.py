@@ -18,6 +18,8 @@ class HandoffAmmunitionTests(unittest.TestCase):
         scene.setUp()
         self.addCleanup(scene.doCleanups)
         scene.configure(clip=clip, burst=burst, limited=limited, player_id=player_id)
+        # Isolate the downstream consumer from authored-route confirmation.
+        scene.runtime.combat_stop._route_requires_confirmation = lambda order: False
         # configure can change the session player identity. Publish its real
         # fixture parameters under that identity for the actual launch boundary.
         scene.battle.client._published_player_effective_params[player_id] = (

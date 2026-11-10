@@ -47,6 +47,8 @@ class SharedNativeAimContinuityTests(unittest.TestCase):
         self.scene.setUp()
         self.addCleanup(self.scene.doCleanups)
         self.scene.configure(clip=1, burst=1)
+        # Isolate the downstream consumer from authored-route confirmation.
+        self.scene.runtime.combat_stop._route_requires_confirmation = lambda order: False
         self.enemy = self.scene.eligible_enemy(14, armor=10.)
         self.scene.pose(self.enemy, (24., 0., 50.))
         self.scene.sample_original_lanes()

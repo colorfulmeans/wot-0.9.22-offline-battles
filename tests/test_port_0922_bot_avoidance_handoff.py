@@ -9,6 +9,9 @@ from gui.mods.offline_lan_0922.ai.adapter import BotAdapter
 class AvoidanceHandoffTests(unittest.TestCase):
     def scene(self, kind='bot', status='clear'):
         scene = Scene(admitted=False)
+        # Exercise the original recovery consumer with an already eligible
+        # tactical order; the player-route gate has separate report tests.
+        scene.owner._route_requires_confirmation = lambda order: False
         scene.target.update(kind=kind)
         scene.raw_order.update(combat_mode='route', target_id=None,
             target_kind=None, move_position=(20., 0., -30.),

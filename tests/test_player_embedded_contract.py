@@ -389,9 +389,14 @@ class EmbeddedSharedImportOrderTests(unittest.TestCase):
         self.assertNotIn('_combat_movement_owner', runtime.state)
         original_signature = owner.signature
 
-        current = dict(blocked, armor='passed', line='clear', mechanical='reachable')
+        current = dict(blocked, key=(0, ('bot', 12), 0, 'penetration'),
+                       armor='passed', line='clear', mechanical='reachable')
         policy.decision = dict(action='aim', candidate=current)
-        runtime.now = 2.
+        for step in range(40):
+            runtime.now = 2. + step * .125
+            observed = owner.finish(owner.resolve(owner.accept(route), runtime.now))
+            self.assertEqual(route, observed)
+        runtime.now = 7.
         admitted = owner.finish(owner.resolve(owner.accept(route), runtime.now))
         self.assertTrue(owner.combat_owned)
         self.assertTrue(owner.stop_allowed)
@@ -405,7 +410,7 @@ class EmbeddedSharedImportOrderTests(unittest.TestCase):
         self.assertIsNone(policy.current_target_key())
         runtime.state['position'] = (1., 0., 1.)
         next_route = dict(route, route_index=2, move_position=dict(x=60., y=0., z=140.))
-        runtime.now = 3.
+        runtime.now = 7.25
         continued = owner.finish(owner.resolve(owner.accept(next_route), runtime.now))
         self.assertTrue(owner.combat_owned)
         self.assertEqual(episode, owner.receipt['episode'])
@@ -414,7 +419,7 @@ class EmbeddedSharedImportOrderTests(unittest.TestCase):
         self.assertEqual(12, continued['target_id'])
 
         target.update(alive=False, health=0)
-        runtime.now = 4.
+        runtime.now = 7.5
         released = owner.finish(owner.resolve(owner.accept(route), runtime.now))
         self.assertFalse(owner.active)
         self.assertFalse(owner.combat_owned)
@@ -424,11 +429,14 @@ class EmbeddedSharedImportOrderTests(unittest.TestCase):
 
     def test_current_native_lay_admission_and_explicit_exit_on_python27(self):
         runtime, owner, target, route = self.combat_movement_fixture()
-        candidate = dict(target=target, armor='unknown', line='clear',
+        candidate = dict(target=target, armor='passed', line='clear',
             mechanical='hull_laying', solution=dict(yaw=1., needs_hull=True),
-            mode='penetration', shell_index=0)
+            mode='penetration', shell_index=0, key=(0, ('bot', 12), 0, 'penetration'))
         runtime.attack_policy.decision = dict(action='firing_position', candidate=candidate)
-        runtime.now = 1.
+        for step in range(40):
+            runtime.now = 1. + step * .125
+            self.assertEqual(route, owner.resolve(owner.accept(route), runtime.now))
+        runtime.now = 6.
         admitted = owner.resolve(owner.accept(route), runtime.now)
         self.assertTrue(owner.combat_owned)
         # finish consumes the existing recovery driver's output; this fixture
@@ -437,13 +445,13 @@ class EmbeddedSharedImportOrderTests(unittest.TestCase):
                         move_position=(8., 0., 3.), throttle_override=None)
         owner.finish(recovery)
         runtime.attack_policy.decision = dict(action='wait', candidate=None)
-        runtime.now = 2.
+        runtime.now = 6.25
         continued = owner.finish(owner.resolve(owner.accept(route), runtime.now))
         self.assertEqual((8., 0., 3.), continued['move_position'])
         self.assertEqual('gun_angle_adjust', continued['combat_mode'])
         self.assertTrue(owner.stop_allowed)
         travel = dict(route, combat_mode='team_return_base')
-        runtime.now = 3.
+        runtime.now = 6.5
         self.assertEqual(travel, owner.finish(owner.resolve(owner.accept(travel), runtime.now)))
         self.assertFalse(owner.combat_owned)
         self.assertNotIn('_combat_movement_owner', runtime.state)

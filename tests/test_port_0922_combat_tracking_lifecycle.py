@@ -141,6 +141,8 @@ class CombatTrackingLifecycleTests(unittest.TestCase):
         self.addCleanup(scene.doCleanups)
         scene.configure(clip=1, burst=1)
         scene.eligible_enemy(14, armor=10.)
+        # Isolate the downstream consumer from authored-route confirmation.
+        scene.runtime.combat_stop._route_requires_confirmation = lambda order: False
         self.assertEqual({14: True}, scene.sample_original_lanes())
         for unused in range(20):
             scene.tick(.1)

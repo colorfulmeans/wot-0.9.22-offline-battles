@@ -64,6 +64,10 @@ class TraverseScene(fire_tests.AutomaticFireScene):
         self.assertTrue(self.control.toggle(), self.control.last_control_failure)
         self.addCleanup(self.control.close)
         self.runtime = self.control.runtime
+        # These fixtures isolate the gun, actuator and command consumers.
+        # The authored-route qualification is exercised in the live-report
+        # full-loop fixture without this setup override.
+        self.runtime.combat_stop._route_requires_confirmation = lambda order: False
         self.admission = self.control._admission()
         self.trigger = mock.Mock(wraps=self.control._native_trigger)
         self.control._native_trigger = self.trigger

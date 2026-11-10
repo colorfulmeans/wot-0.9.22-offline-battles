@@ -17,6 +17,8 @@ class SharedTargetExecutionOwnershipTests(unittest.TestCase):
         scene.setUp()
         self.addCleanup(scene.doCleanups)
         scene.configure(clip=1, burst=1)
+        # Isolate the downstream consumer from authored-route confirmation.
+        scene.runtime.combat_stop._route_requires_confirmation = lambda order: False
         return scene
 
     def scene(self):

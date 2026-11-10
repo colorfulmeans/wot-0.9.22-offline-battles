@@ -123,6 +123,49 @@ def _planning_pose(pose):
     return pose[1:3] + pose[4:6]
 
 
+# Anchor NEXT ranking to the last completed observation, never the last frame.
+NEXT_POSITION_TOLERANCE = .20
+NEXT_ANGLE_TOLERANCE = math.radians(.5)
+NEXT_SPEED_TOLERANCE = .15
+
+
+def _ranking_geometry(frame, target):
+    pose = target.get('pose')
+    if (frame.get('origin') is None or target.get('sample_identity') is None or
+            pose is None or target.get('velocity') is None):
+        return None
+    return frame['origin'], pose[2:6], target['velocity'], target['sample_identity']
+
+
+def _same_ranking_geometry(previous, current):
+    if previous is None or current is None or previous[3] != current[3]:
+        return False
+    source, matrices, velocity, unused = current
+    origin, old_matrices, old_velocity, unused = previous
+    # A small translation changes incidence more at close range.
+    tolerance = min(NEXT_POSITION_TOLERANCE, .004 *
+                    math.sqrt(_distance_sq(origin, old_matrices[0][0])))
+    if (_distance_sq(origin, source) > tolerance ** 2 or
+            _distance_sq(velocity, old_velocity) > NEXT_SPEED_TOLERANCE ** 2):
+        return False
+    for old, new in zip(old_matrices, matrices):
+        if (_distance_sq(old[0], new[0]) > tolerance ** 2 or
+                any(abs((a - b + math.pi) % (2. * math.pi) - math.pi) >
+                    NEXT_ANGLE_TOLERANCE for a, b in zip(old[1:], new[1:]))):
+            return False
+    return True
+
+
+def _rank_independent_of_traffic(row):
+    # A static BSP hit or a failed plate does not become a penetrating
+    # candidate when a teammate moves. Other blockers require live evidence.
+    return (row.get('line') == 'world_blocked' and
+            (row.get('blocker') or {}).get('kind') == 'world' or
+            row.get('mode') == 'penetration' and row.get('line') == 'clear' and
+            row.get('armor') == 'failed' and not row.get('stationary_plan') and
+            not row.get('scope_proof'))
+
+
 def _shell_signature(index, shot):
     native = combat_rules.legacy_shot(shot)
     shell = native.get('shell') or {}
@@ -209,6 +252,7 @@ class AttackPolicy(object):
     def reset(self):
         self.frame = None
         self.rows = {}
+        self._next_rows = {}
         self._admission_blocks = {}
         self._lay_recovery = None
         self._physical_review = None
@@ -304,15 +348,17 @@ class AttackPolicy(object):
         history_key = (shell['index'], identity)
         trial = self._single_point_history.get(history_key)
         samples = target.get('samples') or (None,)
-        if (trial is None or trial['target_key'] != identity or
-                trial['shell_signature'] != signature or
-                trial['target_pose'] != target.get('pose') or
-                trial['velocity'] != target.get('velocity') or trial['sample'] not in samples):
+        geometry = _ranking_geometry(self.frame, target)
+        same_target = trial is not None and (
+            _same_ranking_geometry(trial['ranking_geometry'], geometry) if geometry is not None
+            else trial['target_pose'] == target.get('pose') and trial['velocity'] == target.get('velocity'))
+        if (not same_target or trial['target_key'] != identity or
+                trial['shell_signature'] != signature or trial['sample'] not in samples):
             sample = (intention[2] if intention is not None and intention[1] == identity and
                       intention[2] in samples else samples[0])
             trial = dict(target_key=identity, sample=sample, shell_signature=signature,
                          target_pose=target.get('pose'), velocity=target.get('velocity'),
-                         failed=False)
+                         ranking_geometry=geometry, failed=False)
             self._single_point_history[history_key] = trial
         self._single_point_trials[shell['index']] = trial
         return trial
@@ -374,6 +420,26 @@ class AttackPolicy(object):
         if (plan is not None and callable(plan_current) and
                 not plan_current(self.frame, plan.get('proof'))):
             return None
+        return row
+
+    def _next_row(self, job):
+        """Completed observations may rank a later load, never a current shot."""
+        row = self._current(job, require_line=True)
+        key, shell, target, unused, mode = job
+        if self._reviewed(row, mode):
+            return row
+        cached = self._next_rows.get(key)
+        if cached is None:
+            return row
+        geometry, previous = cached
+        if (previous['pose_stamp'][4] != self._stamp(self.frame, shell, target)[4] or
+                not _same_ranking_geometry(geometry, _ranking_geometry(self.frame, target))):
+            self._next_rows.pop(key, None)
+            return row
+        if (previous['line_stamp'] == self._line_stamp(self.frame, previous.get('line_region')) or
+                _rank_independent_of_traffic(previous) and
+                previous['line_stamp'][0] == self.frame['scene']):
+            return previous
         return row
 
     @staticmethod
@@ -560,6 +626,14 @@ class AttackPolicy(object):
                 else:
                     observation['expected_damage'] = damage
         self.rows[key] = row
+        geometry = _ranking_geometry(self.frame, target)
+        if self._reviewed(row, mode):
+            if (geometry is not None and not row.get('stationary_plan') and
+                    not row.get('scope_proof') and not row.get('review_pending') and
+                    (row['line'] == 'clear' or _rank_independent_of_traffic(row))):
+                self._next_rows[key] = (geometry, row)
+            else:
+                self._next_rows.pop(key, None)
         self._record_physical_review(job, row)
         if (mode == 'penetration' and
                 ammunition_validation.shell_mode(shell) == ammunition_validation.SINGLE_POINT and
@@ -567,7 +641,8 @@ class AttackPolicy(object):
                 row['mechanical'] == 'reachable'):
             trial = self._single_point_trial(shell, target)
             if trial is not None and (trial['target_key'], trial['sample']) == (key[1], sample):
-                trial['failed'] = True
+                trial.update(failed=True, ranking_geometry=geometry,
+                             target_pose=target.get('pose'), velocity=target.get('velocity'))
                 # The reduced ordinary-HE obligation is now a policy choice,
                 # never a fabricated all-points/all-enemies armour failure.
                 self._job_lists = {}
@@ -637,7 +712,7 @@ class AttackPolicy(object):
                 result.append(row)
         return result
 
-    def _failure_domain(self, indices):
+    def _failure_domain(self, indices, row_for=None):
         """Keep an excluded geometric domain distinct from armour failure.
 
         A current yaw limit, blocked ray or navigation timeout is not an
@@ -653,7 +728,7 @@ class AttackPolicy(object):
                       strategy_excluded=tuple(index for index in indices
                           if self._single_point_failed(index)))
         for job in jobs:
-            row = self._current(job, require_line=True)
+            row = self._current(job, require_line=True) if row_for is None else row_for(job)
             if row is None:
                 counts['unobserved'] += 1
             elif (row.get('scope') == 'excluded' and
@@ -690,7 +765,7 @@ class AttackPolicy(object):
         return tuple(shell['index'] for shell in self.frame['shells']
                      if shell['index'] != exclude and self.frame['ammo'][shell['index']] > 0)
 
-    def _fallback_qualified(self, indices):
+    def _fallback_qualified(self, indices, row_for=None):
         """Combine exact negative proof with completed ordinary-HE trials.
 
         Removed single-point jobs do not make an empty armour universe a
@@ -699,7 +774,11 @@ class AttackPolicy(object):
         """
         indices = tuple(sorted(set(indices)))
         remaining = tuple(index for index in indices if not self._single_point_failed(index))
-        return self._all_failed(remaining) if remaining else bool(indices)
+        if not remaining:
+            return bool(indices)
+        if row_for is None:
+            return self._all_failed(remaining)
+        return self._failure_domain(remaining, row_for)['all_failed']
 
     def _loaded_he_fallback_targets(self, loaded):
         """Keep current HE fallback local to each proved enemy domain.
@@ -768,11 +847,12 @@ class AttackPolicy(object):
                     (not consumable or self._executable_current(row, 'he_fallback'))]
         if not rows:
             return None
-        return min(rows, key=lambda row: (-float((row if self._executable(row, 'he_fallback')
-                   else self._planned_evidence(row))['expected_damage']),
-                   self._intent_order(row['key']),
-                   _shell_rank(row['shell']), repr(row['target_key']),
-                   repr(row['sample'])))
+        return min(rows, key=self._he_order)
+
+    def _he_order(self, row):
+        evidence = row if self._executable(row, 'he_fallback') else self._planned_evidence(row)
+        return (-float(evidence['expected_damage']), self._intent_order(row['key']),
+                _shell_rank(row['shell']), repr(row['target_key']), repr(row['sample']))
 
     def _plan_next(self, row, status='verified', proofs=()):
         self.next_plan = row
@@ -1210,17 +1290,22 @@ class AttackPolicy(object):
             checked.extend(rows)
         return None, 'no_verified_penetration', tuple(checked)
 
-    def _penetration_groups(self, jobs, current=None):
+    def _penetration_groups(self, jobs, current=None, ranked=False):
         groups = []
         for job in jobs:
             index = job[0][0]
             if not groups or groups[-1][0] != index:
                 groups.append((index, []))
-            groups[-1][1].append(current[job[0]] if current is not None and job[0] in current else
-                                 self._current(job, require_line=True))
+            if current is not None and job[0] in current:
+                row = current[job[0]]
+            elif ranked:
+                row = self._next_row(job)
+            else:
+                row = self._current(job, require_line=True)
+            groups[-1][1].append(row)
         return groups
 
-    def next_at_edge(self):
+    def next_at_edge(self, native_fence=True):
         plan = self.next_plan
         current = self.current_row(plan)
         if plan is None:
@@ -1232,12 +1317,14 @@ class AttackPolicy(object):
         proofs = self.next_proofs or (plan,)
         jobs = dict((job[0], job) for mode in ('penetration', 'he_fallback')
                     for job in self._jobs(mode))
-        rows = tuple(self._current(jobs[proof['key']], require_line=True)
+        rows = tuple(self._next_row(jobs[proof['key']])
                      if proof['key'] in jobs else None for proof in proofs)
         if any(row is None or row is not proof for row, proof in zip(rows, proofs)):
             return None, 'rank_evidence_changed'
+        if not native_fence:
+            return current, 'verified'
         fence = getattr(self.evaluator, 'fence_next', None)
-        valid = (fence(self.frame, proofs, len(proofs) > 1) if callable(fence)
+        valid = (fence(self.frame, rows, len(rows) > 1) if callable(fence)
                  else self.evaluator.fence(self.frame))
         return (current, 'verified') if valid else (None, 'observation_changed')
 
@@ -1252,14 +1339,15 @@ class AttackPolicy(object):
     def _refresh_ranked_next(self, groups, exclude):
         best, status, proofs = self._ranked_penetration(groups, exclude=exclude)
         if best is None and status == 'no_verified_penetration':
-            if self._fallback_qualified(self._stocked_indices(exclude)):
-                best = self._best_he(exclude=exclude, plannable=True)
-                if best is not None:
-                    he_rows = tuple(self._current(job, require_line=True)
-                                    for job in self._jobs('he_fallback') if job[0][0] != exclude)
-                    status, proofs = 'verified_he_fallback', proofs + he_rows
-                elif any(not self._he_observed(self._current(job, require_line=True))
-                         for job in self._jobs('he_fallback') if job[0][0] != exclude):
+            if self._fallback_qualified(self._stocked_indices(exclude), self._next_row):
+                he_rows = tuple(self._next_row(job)
+                                for job in self._jobs('he_fallback') if job[0][0] != exclude)
+                if all(self._he_observed(row) for row in he_rows):
+                    options = [row for row in he_rows if self._plannable(row, 'he_fallback')]
+                    if options:
+                        best = min(options, key=self._he_order)
+                        status, proofs = 'verified_he_fallback', proofs + he_rows
+                else:
                     status = 'he_damage_comparison_pending'
             else:
                 # A checked blocked lane can reject a penetration candidate
@@ -1332,7 +1420,8 @@ class AttackPolicy(object):
         plan, reason = self.next_at_edge()
         self.next_edge_receipt = dict(at=now, checked=0, status=reason,
             result=(plan or {}).get('key'))
-        if (plan is not None or reason != 'higher_rank_pending' or
+        if (plan is not None or reason not in ('higher_rank_pending', 'candidate_expired',
+                                              'rank_evidence_changed') or
                 self.frame is None or self._frame_invalid or self._atomic_at == now or
                 now < self._next_edge_at + ATOMIC_CLOSE_INTERVAL):
             return plan, reason
@@ -1343,8 +1432,12 @@ class AttackPolicy(object):
         self.evaluator.atomic_deadline = started + NEXT_EDGE_WALL_SECONDS
         self.evaluator.atomic_clock = self.atomic_clock
         exclude = self._next_excluded()
-        domain = self._jobs()
-        jobs = [job for job in domain if job[0][0] != exclude]
+        winner = self.next_plan if reason == 'candidate_expired' else None
+        if winner is not None:
+            jobs = [job for job in self._jobs(winner['mode'], winner['shell_index'])
+                    if job[0] == winner['key']]
+        else:
+            jobs = [job for job in self._jobs() if job[0][0] != exclude]
         begin = getattr(self.evaluator, 'begin_atomic', None)
         if not callable(begin) or not begin(self.frame, jobs, now):
             return None, reason
@@ -1361,16 +1454,18 @@ class AttackPolicy(object):
             if index != shell_index and unresolved:
                 break
             index = shell_index
-            row = self._current(job, require_line=True)
-            if not self._reviewed(row, 'penetration'):
+            mode = job[4]
+            current = self._current(job, require_line=True)
+            row = self._next_row(job) if winner is None else current
+            if not self._reviewed(row, mode) or (row is not current and self._plannable(row, mode)):
                 if count >= NEXT_EDGE_CANDIDATES or self.atomic_clock() >= self.evaluator.atomic_deadline:
                     break
                 row = self._evaluate(job, now, 'atomic')
                 count += 1
-            if self._plannable(row):
+            if self._plannable(row, mode):
                 break
-            unresolved = unresolved or not self._reviewed(row, 'penetration')
-        self._refresh_ranked_next(self._penetration_groups(self._jobs()), exclude)
+            unresolved = unresolved or not self._reviewed(row, mode)
+        self._refresh_ranked_next(self._penetration_groups(self._jobs(), ranked=True), exclude)
         plan, reason = self.next_at_edge()
         self.next_edge_receipt = dict(at=now, checked=count, status=reason,
             result=(plan or {}).get('key'),
@@ -1378,6 +1473,9 @@ class AttackPolicy(object):
         return plan, reason
 
     def load_started(self, shell_index, plan=None):
+        if self._magazine is not None and self._magazine[0] != shell_index:
+            self._clear_fallback()
+            self._lay_recovery = None
         self.selected = None
         self._current_he_execution = None
         self._physical_review = None
@@ -1745,6 +1843,7 @@ class AttackPolicy(object):
             same_weapon = weapon_identity == self._weapon_identity
             same_geometry_identity = identity == self._identity and same_weapon
             authority = self.reload_authority if same_weapon else None
+            magazine = self._magazine if same_weapon else None
             selected = self.selected if same_weapon else None
             atomic_at = self._atomic_at
             next_edge_at = self._next_edge_at
@@ -1757,6 +1856,7 @@ class AttackPolicy(object):
             recovery = (self.fallback, self._move_episode, self._move_kind)
             self.reset()
             self.reload_authority = authority
+            self._magazine = magazine
             self.selected = selected
             if same_weapon:
                 # A siege/descriptor transition changes every geometric
@@ -1810,6 +1910,9 @@ class AttackPolicy(object):
                     reason = 'shell'
                 self.proof_revocations[reason] += 1
                 self.rows.pop(key, None)
+        for key in list(self._next_rows):
+            if key not in valid_keys:
+                self._next_rows.pop(key, None)
         for key in list(self._admission_blocks):
             blocked = self._admission_blocks[key]
             if (key not in valid_keys or not self._matching_admission_block(blocked, stamps[key]) or
@@ -1826,6 +1929,9 @@ class AttackPolicy(object):
             self.loading_plan = None
         magazine = (loaded, int(frame['clip']))
         previous = self._magazine
+        if previous is not None and loaded != previous[0]:
+            self._clear_fallback()
+            self._lay_recovery = None
         if previous is not None and (loaded != previous[0] or magazine[1] > previous[1]):
             # A genuinely different shell/clip gets a new current-contact
             # comparison without inheriting the previous trigger's ranking.
@@ -2150,13 +2256,21 @@ class AttackPolicy(object):
         # The cursor survives roster changes and completes the ordered pass.
         # A moving high-rank point cannot repeatedly restart it, and the last
         # selected point never jumps the ammunition order.
-        current = dict((job[0], self._current(job, require_line=True)) for job in jobs)
+        current = dict((job[0], self._next_row(job)) for job in jobs)
         pending = sorted(((job[4] == 'he_fallback', _shell_rank(job[1]),
                            repr(job[0][1]), repr(job[3])), job) for job in jobs
                          if not self._reviewed(current[job[0]], job[4]))
         exclude = self._next_excluded()
-        recheck = None
-        if allowance > 1 and pending and self._penetration_hints:
+        winner = self.next_plan
+        recheck = next((job for job in jobs if winner is not None and
+                        job[0] == winner['key'] and current[job[0]] is winner and
+                        not self._plannable(self._current(job, require_line=True), job[4])), None)
+        if recheck is not None and (allowance > 1 or not pending):
+            self._evaluate(recheck, now, 'background', ranked_recheck=True)
+            current[recheck[0]] = self._next_row(recheck)
+        else:
+            recheck = None
+        if recheck is None and allowance > 1 and pending and self._penetration_hints:
             # Spend at most one existing slot on a previously proved point
             # of the first unresolved rank. A pose change retires its proof,
             # not its place in that rank's queue. Leave a slot for the fair
@@ -2175,7 +2289,8 @@ class AttackPolicy(object):
             if job is recheck:
                 continue
             self.background_cursor = key
-            current[job[0]] = self._evaluate(job, now, 'background')
+            self._evaluate(job, now, 'background')
+            current[job[0]] = self._next_row(job)
         if not pending:
             self.background_cursor = None
         # An ordinary-HE trial can leave the penetration universe during this
@@ -2200,6 +2315,7 @@ class AttackPolicy(object):
         """
         if not isinstance(candidate, dict):
             return
+        self._next_rows.pop(candidate.get('key'), None)
         row = self.rows.get(candidate.get('key'))
         if row is None or row.get('pose_stamp') != candidate.get('pose_stamp'):
             return
@@ -2943,6 +3059,8 @@ class NativeAttackEvaluator(object):
             if rows is not None:
                 for row in rows:
                     region = row.get('line_region')
+                    if _rank_independent_of_traffic(row):
+                        continue
                     if region is None:
                         if live['line_revision'] != frame['line_revision']:
                             return False
@@ -3277,7 +3395,15 @@ class NativeAttackEvaluator(object):
             if reach['status'] != 'reachable':
                 result['reason'] = reach['reason']
                 self._point_scope(frame, shell, target, predicted, result)
-                return reported
+                combat = getattr(self.runtime, 'combat_stop', None)
+                if (mode != 'penetration' or reach['status'] != 'hull_laying' or
+                        result.get('scope') == 'excluded' or combat is None or
+                        not combat._route_requires_confirmation(combat.task_order) or
+                        combat.combat_owned):
+                    return reported
+                # Observe the ideal ray's plate while the route still drives.
+                # Mechanical reach remains hull_laying; this cannot fire or
+                # bypass the native actuator's rotation checks after admission.
             if job['armour'] is None:
                 if channel == 'atomic':
                     if (self.atomic_clock() >= self.atomic_deadline or
