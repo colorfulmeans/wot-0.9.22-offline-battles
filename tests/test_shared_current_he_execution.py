@@ -134,6 +134,31 @@ class SharedCurrentHEExecutionTests(unittest.TestCase):
         candidate = self.acquire(scene, target=2)
         self.assertEqual(37., candidate['expected_damage'])
 
+    def test_atomic_budget_after_first_contact_cannot_skip_an_unvisited_he_enemy(self):
+        scene = self.scene()
+        self.add_better(scene)
+        policy = scene.runtime.attack_policy
+        clock = [0.]
+        policy.atomic_clock = lambda: clock[0]
+        native_evaluate = policy._evaluate
+        exhausted_once = [False]
+
+        def exhaust_after_first_contact(job, now, channel):
+            result = native_evaluate(job, now, channel)
+            if (not exhausted_once[0] and channel == 'atomic' and
+                    job[4] == 'he_fallback' and job[0][1] == ('bot', 14)):
+                clock[0] += policy.atomic_time_budget + .012
+                exhausted_once[0] = True
+            return result
+
+        policy._evaluate = exhaust_after_first_contact
+        scene.observe_control()
+        self.assertTrue(exhausted_once[0])
+        self.assertEqual(1, policy.he_comparison['pending'])
+        self.assertNotEqual('aim', policy.decision['action'])
+        candidate = self.acquire(scene, target=2)
+        self.assertEqual(37., candidate['expected_damage'])
+
     def test_new_higher_damage_target_and_verified_next_cannot_preempt_current_he(self):
         for armor, damage in ((30., 11.), (60., 0.)):
             with self.subTest(current_damage=damage):

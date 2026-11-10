@@ -154,6 +154,44 @@ background quota overruns; those variable wall-limited counts are not FPS.
 The fresh Windows Python 2.7 build and exact downloaded launcher remain
 separate CI gates.
 
+### Follow-up CI package and same-run download correction
+
+The corrected head `c75908f4` passed the complete
+[Tests run 42792625606](https://github.com/colorfulmeans/wot-0.9.22-offline-battles/actions/runs/42792625606)
+client job: 524/524 files, 10,667 methods with 9 skips, plus 49/49 launcher
+files, 1,328 methods with 170 platform skips. Navigation, native geometry,
+Windows server/editor and the Windows first-chance exception probe passed.
+The actual Python 2.7 bytecode and native x86 source stamp were built and
+checked in that run. The separately scheduled BOT regression job **failed one
+of the 15 cases** in `test_shared_current_he_execution.py`: the expensive
+second HE contact was skipped entirely when the atomic frame budget elapsed
+immediately after evaluating the first contact. A lower-damage first target
+could thus be prematurely locked. Both an explicitly budget-exhausted second
+row and a wholly unvisited qualified second contact now defer the first lock
+until their expected-damage results can be compared. Dedicated virtual-clock
+regressions cover both shapes without increasing the per-frame budget or
+relaxing the existing highest-damage HE assertion. The follow-up CI run, not
+this failed run, must demonstrate BOT success.
+
+Its Windows launcher was built and **uploaded successfully** as artifact
+`13752143372`, 68,578,817 bytes, SHA-256
+`d0463d89141ba954c9628a292b34af2d26f537d158906c2b9726439281737fa1`.
+An independent download of those exact bytes passed outer ZIP CRC, the x64
+launcher PE identity, all **265** bundled server/shared-control Python source
+comparisons, the nested client ZIP and `.wotmod` CRCs, shipping x86 native
+source stamp, starter equality and replay reader identity. This validates
+contents, not execution of the Windows GUI on Linux.
+
+The final Windows job nevertheless failed **after upload**: an immediate
+`actions/download-artifact@v4` REST artifact-ID lookup returned `Not Found`
+for its freshly uploaded ID. Consequently its downloaded-executable server
+smoke step did not run, and that CI run is not reported as all green. The
+follow-up workflow uses the documented same-run artifact **name** download
+without cross-run `github-token`/REST-ID lookup, retaining the exact
+one-extraction Windows server-startup assertion. No shipping gameplay source
+or client tests were relaxed for this workflow repair; a new CI result must
+pass before the package is considered fully delivered.
+
 The GitHub Actions BOT group, full client suite, actual Python 2.7 compiler,
 Windows launcher packaging and user in-game regression remain separate final
 gates. Neither a host pass nor a future-path probe proves an actual game shot,

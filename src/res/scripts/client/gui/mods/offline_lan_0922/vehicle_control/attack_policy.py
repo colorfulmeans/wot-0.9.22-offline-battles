@@ -1063,6 +1063,19 @@ class AttackPolicy(object):
                     reason.startswith('atomic_') and reason.endswith('_budget_exhausted')):
                 competing_budget = True
                 break
+        if not competing_budget:
+            receipt = self._atomic_receipt or {}
+            reason = receipt.get('reason') or ''
+            if (receipt.get('observed_at') == now and reason.startswith('atomic_') and
+                    reason.endswith('_budget_exhausted')):
+                # The slice may expire *after* the first positive contact,
+                # before the next qualified enemy is even visited. That
+                # unvisited point has no row-level budget receipt to inspect.
+                # An explicitly pending native query is different: it must
+                # not prevent firing the independently proved CURRENT HE.
+                competing_budget = any(job[0][1] in eligible and
+                    job[0] not in observations and
+                    self._current(job, require_line=True) is None for job in jobs)
         return (not self._frame_invalid and not competing_budget and
             (observed == len(jobs) or
              self._best_current_he(loaded, consumable=True,
