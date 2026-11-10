@@ -239,7 +239,9 @@ class FullControlArbitrationTests(unittest.TestCase):
                     self.assertEqual('unknown', candidate['armor'])
                     self.assertEqual('reachable', candidate['mechanical'])
                     self.assertEqual('unverified_points_obstructed', row['reason'])
-                    self.assertIsNotNone(owner._proposal())
+                    self.assertIsNone(owner._proposal(),
+                        'a current blocker is not positive movement permission')
+                    self.assertIsNotNone(owner._recovery_candidate())
                     checked_proposals += 1
                 else:
                     self.assertEqual('wait', row['action'])
@@ -252,7 +254,8 @@ class FullControlArbitrationTests(unittest.TestCase):
         # Completion, not the last frame's asynchronous review phase, is the
         # progress contract. Permanent waiting must not satisfy this test.
         self.assertGreater(checked_proposals, 0)
-        self.assertTrue(saw_combat_recovery)
+        self.assertFalse(saw_combat_recovery,
+            'all unchecked or rejected recovery positions must leave the route in control')
         self.assertTrue(saw_route_release,
             'failed same-point queries must return motion to the authored route')
         self.assertEqual(initial_ammo, tuple(scene.battle._gun_state.ammo))

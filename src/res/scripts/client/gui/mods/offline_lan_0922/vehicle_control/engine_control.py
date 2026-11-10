@@ -167,8 +167,6 @@ class SharedEngineControl(SharedOrderPlanning):
                     state['_gun_angle_refusal'] = identity
                 else:
                     state.pop('_gun_angle_refusal', None)
-                if reachable:
-                    (state.get('_gun_angle_rejected') or {}).pop(identity, None)
                 state['_gun_solution_receipt'] = dict(at=now, target=identity,
                     shell_index=int(shell_index), origin=solution['_origin'],
                     aim_position=solution['aim_position'],

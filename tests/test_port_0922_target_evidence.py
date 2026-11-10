@@ -252,12 +252,14 @@ class LanePublicationTests(unittest.TestCase):
                 self.assertEqual([], row['shootable_by_bot_ids'])
                 self.assertNotEqual('published', self.runtime.states[11]['_lane_publication_evidence']['reason'])
 
-    def test_mechanical_retry_cooldown_is_not_a_negative_native_lane(self):
-        self.runtime._gun_angle_rejected = lambda *args: True
+    def test_mechanical_refusal_is_not_a_negative_native_lane(self):
+        self.runtime.states[11]['_gun_angle_refusal'] = ('bot', 19)
         row = self.pack()
         self.assertEqual([11], row['shootable_by_bot_ids'])
         self.assertEqual('published',self.runtime.states[11]['_lane_publication_evidence']['reason'])
-        self.assertTrue(self.runtime.states[11]['_lane_publication_evidence']['mechanical_retry_suppressed'])
+        self.assertTrue(self.runtime.states[11]['_lane_publication_evidence']['mechanical_refusal'])
+        self.assertNotIn('mechanical_retry_suppressed',
+                         self.runtime.states[11]['_lane_publication_evidence'])
 
     def test_expiry_publishes_pending_only_for_selected_positive_lane(self):
         row = self.pack(4.)

@@ -274,9 +274,9 @@ class CombatControl(object):
         if (not command or 'drive' in self.features and (
                 command.get('movement_intent', True) or
                 abs(float(command.get('throttle', 0.))) > .01) or
-                any(state.get(name) for name in ('_gun_angle_adjustment',
+                any(state.get(name) for name in (
                     '_rear_aim_episode', '_rear_hull_aim', '_rear_motion_lease')) or
-                self.actor_id in self.engine._friendly_repositions):
+                owner.physical_recovery_active()):
             return False
         descriptor = self.engine._descriptors.get(self.actor_id, {})
         limits = self.engine._gun_yaw_limits.get(self.actor_id)

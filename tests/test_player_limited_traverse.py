@@ -549,18 +549,19 @@ class MovingTraverseConsumerTests(TraverseHarness, unittest.TestCase):
                         # The native sight verdict changes with hull pose, while the
                         # hull stays on the same patch of ground in the live incident.
                         lane_clear = bool(index % 2)
-                        scene.set_hull(.001 * (index + 1))
+                        # Microscopic source refresh is not real angular
+                        # progress. A .001 rad step would legitimately renew
+                        # the existing native progress watchdog each tick.
+                        scene.set_hull(1.e-8 * (index + 1))
                         row = scene.tick()
                         candidate = runtime.attack_policy.decision['candidate']
                         if candidate is not None:
                             self.assertFalse(runtime.attack_policy._executable(candidate))
-                        pivot = runtime.combat_stop.pivot or {}
-                        if pivot.get('handoff') is not None:
+                        if runtime.combat_stop._failed_recovery is not None:
                             handed_off = True
-                            # Tiny source/lane changes cannot renew the
-                            # attack-owned pivot. Original recovery may steer,
-                            # wait or complete according to its unchanged law;
-                            # no new controller forces a route or terminal stop.
+                            # A physical refusal/stall retires the pivot.
+                            # Further source changes request inspection but
+                            # cannot recreate movement ownership by themselves.
                             self.assertNotEqual('native_lay',
                                 runtime.combat_stop.receipt.get('reason'))
                         self.assertFalse(row['order']['fire_allowed'])
@@ -574,10 +575,17 @@ class MovingTraverseConsumerTests(TraverseHarness, unittest.TestCase):
                         scene.position = (-1.49, 0., 0.)
                         scene.set_hull(.07)
                         scene.tick()
-                        # A *materially new* source pose may start a fresh
-                        # bounded lay; the previous tiny flickers may not.
+                        # A changed pose requests fresh destination checks;
+                        # it does not itself certify another native pivot.
                         self.assertFalse(scene.trace[-1]['order']['fire_allowed'])
                         scene.position = (-1.5, 0., 0.)
+                        scene.set_hull(.071)
+                        self.advance_until(scene, lambda:
+                            runtime.combat_stop.physical_recovery_active() and
+                            runtime.combat_stop._physical_recovery.get('goal') is not None)
+                        phase = runtime.combat_stop._physical_recovery
+                        self.assertFalse(scene.trace[-1]['order']['fire_allowed'])
+                        scene.position = phase['goal']
                         scene.set_hull(.071)
                         self.advance_until(scene, lambda: scene.trace[-1]['hull_aiming'])
                         self.assertGreater(scene.trace[-1]['sender'][1], 0.)

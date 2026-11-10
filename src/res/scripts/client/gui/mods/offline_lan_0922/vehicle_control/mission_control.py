@@ -141,8 +141,6 @@ class MissionControl(object):
         self.combat_stop.reset()
         self._siege_aim_candidate = None
         self.siege_aim.reset()
-        self.engine._clear_friendly_reposition(self.actor_id)
-        self.state.pop('_gun_angle_adjustment', None)
         if kind == 'hold_position' and not ('position' in payload or 'x' in payload and 'z' in payload):
             self._mission['hold_point'] = tuple(self.state['position'])
         if 'position' in payload:
@@ -312,7 +310,7 @@ class MissionControl(object):
         self._implicit_failures += 1
         self._implicit_retry = dict(at=now + min(30., 5. * self._implicit_failures),
                                    failures=self._implicit_failures)
-        self.engine._clear_friendly_reposition(self.actor_id)
+        self.combat_stop.reset()
         self._release_mission_inputs()
         self.engine._decision_cache.pop(self.actor_id, None)
         return True

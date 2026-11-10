@@ -119,6 +119,9 @@ class SelectedPointRecoveryContinuityTests(unittest.TestCase):
         self.assertEqual('route', scene.apply(2.)['combat_mode'])
         scene.position((1., 0., 0.))
         result = scene.apply(2.1)
+        self.assertFalse(scene.owner.stop_allowed)
+        scene.runtime.point_recovery_probe = lambda *args: dict(status='clear')
+        result = scene.apply(2.2)
         self.assertTrue(scene.owner.stop_allowed)
         self.assertIsNotNone(scene.owner._physical_recovery)
         self.assertFalse(result['fire_allowed'])
@@ -134,10 +137,14 @@ class SelectedPointRecoveryContinuityTests(unittest.TestCase):
         self.assertEqual('route', scene.apply(2.)['combat_mode'])
         scene.target['position'] = (0., 0., 79.)
         scene.apply(2.1)
+        self.assertFalse(scene.owner.stop_allowed)
+        self.assertTrue(scene.owner.physical_recovery_pending())
+        scene.runtime.point_recovery_probe = lambda *args: dict(status='clear')
+        scene.apply(2.2)
         self.assertTrue(scene.owner.stop_allowed)
         self.assertIsNotNone(scene.owner._physical_recovery)
 
-    def test_material_yaw_change_reopens_recovery_but_tiny_turn_does_not(self):
+    def test_yaw_change_requests_review_but_cannot_certify_movement(self):
         scene = self.scene(['blocked'] * 40)
         for tick in range(20):
             scene.apply(tick * .1)
@@ -147,6 +154,10 @@ class SelectedPointRecoveryContinuityTests(unittest.TestCase):
         self.assertEqual('route', scene.apply(2.)['combat_mode'])
         scene.state['yaw'] = .16
         scene.apply(2.1)
+        self.assertFalse(scene.owner.stop_allowed)
+        self.assertTrue(scene.owner.physical_recovery_pending())
+        scene.runtime.point_recovery_probe = lambda *args: dict(status='clear')
+        scene.apply(2.2)
         self.assertTrue(scene.owner.stop_allowed)
 
     def test_navigation_decision_and_real_mission_handoff_return_original_driver(self):

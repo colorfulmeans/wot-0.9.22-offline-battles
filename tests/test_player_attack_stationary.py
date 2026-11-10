@@ -23,7 +23,16 @@ class NativeStationaryCombatTests(unittest.TestCase):
         scene = NativePlanScene()
         scene.setUp()
         self.addCleanup(scene.doCleanups)
-        scene.configure_plan(**kwargs)
+        bearing = kwargs.pop('bearing', .7)
+        # Establish a normal combat stop through an actually executable
+        # head-on point, before the observed enemy changes its bearing. An
+        # unadmitted pending review may not park the route; an already
+        # admitted native pivot must not be silently frozen by this suite.
+        scene.configure_plan(bearing=0., **kwargs)
+        self.assertTrue(scene.runtime.combat_stop.combat_owned)
+        self.assertIsNone(scene.runtime.combat_stop.pivot)
+        scene.bearing = bearing
+        scene.pose(scene.target, (math.sin(bearing) * 40., 0., math.cos(bearing) * 40.))
         scene.plan_receipts = []
         scene.runtime.attack_policy.reset()
         scene.runtime.attack_policy.atomic_time_budget = .25

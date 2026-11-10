@@ -233,6 +233,7 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
         scene.obstructed_enemy()
         self.assertEqual({2: False}, scene.sample_original_lanes())
         evaluator = scene.runtime.attack_policy.evaluator
+        checked_proposals = 0
         with mock.patch.object(evaluator, 'evaluate', wraps=evaluator.evaluate) as evaluate:
             for step in range(15):
                 scene.native_position((.4 * step, 0., .25 * step))
@@ -245,14 +246,19 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
                     self.assert_original_navigation(scene)
                 self.assertFalse(scene.applied_order()['fire_allowed'])
                 self.assertFalse(scene.launches())
+                decision = scene.runtime.attack_policy.decision
+                if decision['action'] == 'firing_position':
+                    self.assertEqual('world_blocked', decision['candidate']['line'])
+                    checked_proposals += 1
             # Native line obstruction is now a shared point-review input,
             # not an old strategic exclusion or a penetration failure.
             self.assertGreater(evaluate.call_count, 0)
-        self.assertEqual('wait', scene.runtime.attack_policy.decision['action'])
-        self.assertTrue(scene.runtime.attack_policy.stationary_review_wait())
+        self.assertGreater(checked_proposals, 0,
+            'source-position refresh must not restart the finite inspection forever')
+        self.assertIn(scene.runtime.attack_policy.decision['action'], ('wait', 'firing_position'))
         self.assertFalse(hasattr(scene.runtime.attack_policy, 'search_started'))
 
-    def test_enabling_fire_grants_only_bounded_blocked_point_recovery(self):
+    def test_enabling_fire_keeps_route_until_same_point_recovery_is_checked(self):
         traces = []
         for features in (('drive',), ('drive', 'fire')):
             scene = self.scene(features=features)
@@ -273,13 +279,10 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
                 traces.append(trace)
             finally:
                 scene.doCleanups()
-        self.assertNotEqual(traces[0], traces[1],
-            'fire control may park temporarily to inspect a blocked point')
+        self.assertEqual(traces[0], traces[1],
+            'checking a blocked point cannot stop or steer a route-owned hull')
         self.assertTrue(all(row[0]['combat_mode'] == 'route' for row in traces[0]))
-        self.assertTrue(all(row[0]['combat_mode'] in
-            ('route', 'engage', 'gun_angle_adjust') for row in traces[1]))
-        self.assertTrue(any(row[0]['combat_mode'] == 'route' for row in traces[1]),
-            'failed point recovery must return to the original route')
+        self.assertTrue(all(row[0]['combat_mode'] == 'route' for row in traces[1]))
         self.assertTrue(any(row[1] or row[2] for row in traces[0]),
                         'baseline must actually operate the drive actuator')
 
@@ -579,7 +582,7 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
         self.assertFalse(result['fire_allowed'])
         self.assertFalse(scene.launches())
 
-    def test_genuine_combat_stop_releases_to_original_friendly_lane_recovery(self):
+    def test_genuine_combat_stop_uses_checked_same_point_friendly_recovery(self):
         scene = self.scene()
         scene.eligible_enemy(5)
         self.assertEqual({5: True}, scene.sample_original_lanes())
@@ -590,24 +593,31 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
         self.assertEqual(0., scene.applied_order()['throttle_override'])
         friend = scene.vehicle(3, (10., 0., 20.), team=1)
         engine = scene.runtime.engine
-        with mock.patch.object(engine, '_friendly_reposition_order',
-                wraps=engine._friendly_reposition_order) as copied_recovery:
+        with mock.patch.object(scene.runtime, 'point_recovery_probe',
+                wraps=scene.runtime.point_recovery_probe) as checked_recovery:
             for unused in range(12):
                 scene.tick()
-                if scene.runtime.actor_id in engine._friendly_repositions:
+                phase = scene.runtime.combat_stop._physical_recovery
+                if phase is not None and phase.get('goal') is not None:
                     break
-            self.assertTrue(copied_recovery.called)
+            self.assertTrue(checked_recovery.called)
         self.assertEqual('firing_position', scene.runtime.attack_policy.decision['action'])
         self.assertFalse(hasattr(scene.runtime.attack_policy, 'search_started'),
                           'a blocked lane is not an all-enemies armour failure')
-        marker = engine._friendly_repositions[scene.runtime.actor_id]
-        self.assertEqual(5, marker['target_id'])
-        self.assertEqual(3, marker['identity'][2])
-        self.assertGreater(marker['deadline'], scene.now)
-        self.assertNotEqual((0., 0., 0.), marker['destination'])
+        marker = scene.runtime.combat_stop._physical_recovery
+        self.assertIsNotNone(marker)
+        self.assertEqual(('bot', 5), marker['target'])
+        self.assertEqual('friendly_blocked', marker['candidate']['line'])
+        self.assertEqual(scene.runtime.attack_policy.decision['candidate']['key'], marker['key'])
+        self.assertIsNotNone(marker['goal'])
+        self.assertNotEqual((0., 0., 0.), marker['goal'])
+        self.assertTrue(all(call.args[0]['key'] == marker['key']
+                            for call in checked_recovery.call_args_list))
+        self.assertFalse(hasattr(engine, '_friendly_repositions'))
+        self.assertFalse(hasattr(engine, '_friendly_reposition_order'))
         command = scene.control.last_order
-        self.assertEqual('friendly_lane_reposition', command['combat_mode'])
-        self.assertEqual(marker['destination'], command['move_position'])
+        self.assertEqual('gun_angle_adjust', command['combat_mode'])
+        self.assertEqual(marker['goal'], command['move_position'])
         self.assertTrue(command['movement_intent'])
         self.assertFalse(command['fire_allowed'])
         self.assertFalse(scene.launches())
@@ -619,7 +629,8 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
             if scene.runtime.attack_policy.decision['action'] == 'aim':
                 break
         self.assertEqual('aim', scene.runtime.attack_policy.decision['action'])
-        self.assertNotIn(scene.runtime.actor_id, engine._friendly_repositions)
+        phase = scene.runtime.combat_stop._physical_recovery
+        self.assertTrue(phase is None or phase.get('ready'), phase)
         self.assertEqual(0., scene.applied_order()['throttle_override'])
         self.assertEqual(5, scene.applied_order()['target_id'])
 

@@ -237,12 +237,6 @@ BAKED_MOTION_LOOKAHEAD_SECONDS = 1.5
 # Match the copied longitudinal integrator's parked-speed boundary when
 # integrating the remaining coast distance for a terminal route target.
 TRAFFIC_DIRECTION_SPEED_EPSILON = 0.02
-# A friendly-hull escape is a temporary tactical override, not a new route.
-# Bound it so an unreachable lateral point cannot suppress the server order
-# forever; every metre still has to pass the ordinary native motion gate.
-FRIENDLY_REPOSITION_SECONDS = 4.0
-FRIENDLY_REPOSITION_MAX_SECONDS = 16.0
-FRIENDLY_REPOSITION_RETRY_SECONDS = 8.0
 # A final exact receipt costs nine native rays. Thirteen jobs per render frame
 # drains all 29 Bots within three frames even at the supported 24 FPS floor.
 # The complete dual-height, three-lane generic sweep remains authoritative
@@ -2260,7 +2254,6 @@ class BotRuntime(SharedEngineControl):
         self._artillery_reproofs = {}
         self._spg_aim_solutions = {}
         self._ballistic_solution_cache = {}
-        self._friendly_repositions = {}
         self._shot_los_cache = {}
         self._shot_los_deadlines = {}
         self._reset_shot_lane_work()
@@ -3801,7 +3794,6 @@ class BotRuntime(SharedEngineControl):
             self._pending_launch_by_bot = {}
             self._clear_artillery_intents()
             self._ballistic_solution_cache = {}
-            self._friendly_repositions = {}
             self._shot_los_cache = {}
             self._incoming_lanes = {}
             self._incoming_lane_budget = 0
@@ -3881,7 +3873,6 @@ class BotRuntime(SharedEngineControl):
             self._retire_native_simulation()
             self._clear_artillery_intents()
             self._ballistic_solution_cache = {}
-            self._friendly_repositions = {}
         previous_authority = self.authority_id
         self.authority_id = message.get('bot_authority_id')
         authority_handoff = (
@@ -3903,7 +3894,6 @@ class BotRuntime(SharedEngineControl):
             self._pending_manifest_authority_id = None
             self._clear_artillery_intents()
             self._ballistic_solution_cache = {}
-            self._friendly_repositions = {}
             self._visibility_cache = {}
             self._visibility_inflight = set()
             self._visibility_waiting = []
@@ -4951,7 +4941,6 @@ class BotRuntime(SharedEngineControl):
                     state['critical'] = terminal
                 state['combat_fire_elapsed'] = 0.0
                 state['combat_fire_timer'] = 0.0
-                self._friendly_repositions.pop(state['id'], None)
                 state['death_reason'] = 1
                 state['speed'] = 0.0
                 state['movement_dir'] = 0
@@ -5019,7 +5008,6 @@ class BotRuntime(SharedEngineControl):
         state['_drowned'] = True
         state['_drown_time'] = BOT_DROWNING_SECONDS
         state['_drowning'] = False
-        self._friendly_repositions.pop(state['id'], None)
         state['speed'] = 0.0
         state['movement_dir'] = 0
         state['rotation_dir'] = 0
@@ -5073,7 +5061,6 @@ class BotRuntime(SharedEngineControl):
         state['display_health'] = 0
         state['death_reason'] = BOT_OVERTURN_DEATH_REASON
         state['_overturn_time'] = BOT_OVERTURN_DEATH_SECONDS
-        self._friendly_repositions.pop(state['id'], None)
         state['target_kind'] = None
         state['target_id'] = None
         return True
@@ -5094,7 +5081,6 @@ class BotRuntime(SharedEngineControl):
             self._clear_actor_controls()
             self._retire_native_simulation()
             self._clear_artillery_intents()
-            self._friendly_repositions = {}
             self._contact_lease_elapsed = {}
         server_tick = message.get('server_tick')
         if server_tick is not None:
@@ -5164,7 +5150,6 @@ class BotRuntime(SharedEngineControl):
                     not state['alive']):
                 self._cancel_artillery_intent(state['id'])
             if not state['alive']:
-                self._friendly_repositions.pop(state['id'], None)
                 state['speed'] = 0.0
                 state['movement_dir'] = 0
                 state['rotation_dir'] = 0
@@ -7887,10 +7872,6 @@ class BotRuntime(SharedEngineControl):
             'previous_execution_window': dict(state.get('_previous_execution_window') or {}),
             'planner_blocked_handoff': dict(state.get('_planner_blocked_handoff') or {}),
             'planner_blocked_last_replan': dict(state.get('_planner_blocked_last_replan') or {}),
-            'friendly_reposition': dict(self._friendly_repositions.get(int(state['id'])) or {}),
-            'friendly_reposition_event': dict(state.get('_friendly_reposition_event') or {}),
-            'friendly_reposition_last_terminal': dict(state.get('_friendly_reposition_last_terminal') or {}),
-            'friendly_reposition_retry': dict(state.get('_friendly_reposition_retry') or {}),
             'local_combat_manoeuvre': bool(state.get('local_combat_manoeuvre')),
             'spg_deployment': dict(
                 observed_at=now, initial=state.get('_spg_initial'),
@@ -8124,14 +8105,8 @@ class BotRuntime(SharedEngineControl):
             'committed_corridor': dict(state.get('_committed_corridor') or {}),
             'motion_control_gates': list(state.get('_motion_control_gates') or ()),
             'mobility_critical': _canonical_critical(state.get('critical')),
-            'gun_angle_adjustment': dict(state.get('_gun_angle_adjustment') or {}),
-            'gun_angle_handoff': dict(state.get('_gun_angle_handoff') or {}),
-            'gun_angle_last_terminal': dict(state.get('_gun_angle_last_terminal') or {}),
             'gun_solution_history': list(state.get('_gun_solution_history') or ()),
             'translation_sweep': dict(state.get('_translation_motion_receipt') or {}),
-            'gun_angle_rejected': [
-                {'target': key, 'seconds_left': max(0.0, deadline - now)}
-                for key, deadline in sorted((state.get('_gun_angle_rejected') or {}).items())],
             'nearby': sorted(nearby, key=lambda item: item['id']),
             'rotation_contact': {key:value for key,value in
                 (state.get('_rotation_contact_trace') or {}).items() if key in (
@@ -9074,7 +9049,6 @@ class BotRuntime(SharedEngineControl):
             state['critical'] = terminal
         state['combat_fire_elapsed'] = 0.0
         state['combat_fire_timer'] = 0.0
-        self._friendly_repositions.pop(state['id'], None)
         state['death_reason'] = 2 if struck_vehicle else 3
         state['speed'] = 0.0
         state['movement_dir'] = 0
@@ -13138,8 +13112,6 @@ class BotRuntime(SharedEngineControl):
                 state, descriptor, yaw, pitch):
             state['_gun_angle_refusal'] = self._artillery_target_identity(target)
             return finish('mechanical_refusal')
-        identity = self._artillery_target_identity(target)
-        (state.get('_gun_angle_rejected') or {}).pop(identity, None)
         return finish('reachable', {
             'aim_position': aim_position, 'yaw': yaw, 'pitch': pitch,
             'flight_time': flight_time, 'arc': 'low',
@@ -14452,8 +14424,6 @@ class BotRuntime(SharedEngineControl):
                     radio = self._radio_network.contact(actor_key, key[1:], now)[:2]
                 source = self.states.get(int(actor), {})
                 lane = self._shot_los_cache.get((int(actor),) + key[1:])
-                rejected = self._gun_angle_rejected(source, key[1:], now)
-                # Retry cooldown bounds local movement, not geometric lane validity.
                 reason = ('not_visible' if not visible else
                           'source_dead' if not source.get('alive', True) else
                           'lane_expired' if lane is not None and now-lane[0] > maximum_age else
@@ -14467,8 +14437,7 @@ class BotRuntime(SharedEngineControl):
                     lane_sampled_at=lane[0] if lane is not None else None,
                     lane_clear=bool(lane[1]) if lane is not None else None,
                     lane_age=now-lane[0] if lane is not None else None,
-                    mechanical_refusal=source.get('_gun_angle_refusal') == key[1:],
-                    mechanical_retry_suppressed=bool(rejected))
+                    mechanical_refusal=source.get('_gun_angle_refusal') == key[1:])
                 evidence['movement_refresh_pending'] = bool(
                     reason == 'lane_expired' and lane[1] and radio[0] > 0.0 and
                     actor in selected_sources)
@@ -14874,118 +14843,6 @@ class BotRuntime(SharedEngineControl):
                 return False, {}
             return bool(value['clear']), dict(value)
         return bool(value), {}
-
-    def _clear_friendly_reposition(self, bot_id):
-        try:
-            bot_id = int(bot_id)
-        except (TypeError, ValueError, OverflowError):
-            return False
-        removed = self._friendly_repositions.pop(bot_id, None)
-        state = self.states.get(bot_id)
-        if state is not None:
-            state['local_combat_manoeuvre'] = bool(state.get('_gun_angle_adjustment'))
-            if removed is not None:
-                state['_friendly_reposition_last_terminal'] = dict(
-                    state.get('_friendly_reposition_event') or {})
-        if removed is not None:
-            self._decision_cache.pop(bot_id, None)
-        return removed is not None
-
-    def _mark_friendly_reposition(
-            self, state, command, target, launch, verdict, now):
-        """Move laterally through the existing safe driver after a blocked shot."""
-        if command.get('combat_mode') == 'base_defense':
-            return False
-        try:
-            bot_id = int(state['id'])
-            source_team = int(state['team'])
-            fire_seq = int(launch['fire_seq'])
-            shot_yaw = float(launch['shot_yaw'])
-            target_id = int(command['target_id'])
-            blocker_kind = str(verdict['blocker_kind'])
-            blocker_id = int(verdict['blocker_id'])
-            blocker_team = int(verdict['blocker_team'])
-            blocker_position = tuple(
-                float(verdict['blocker_position'][index])
-                for index in range(3))
-        except (KeyError, TypeError, ValueError, IndexError, OverflowError):
-            return False
-        if (blocker_kind not in ('bot', 'player') or
-                blocker_id <= 0 or blocker_team != source_team or
-                (blocker_kind == 'bot' and blocker_id == bot_id) or
-                any(math.isnan(value) or math.isinf(value)
-                    for value in blocker_position)):
-            return False
-        shape = state.get('collision_shape')
-        try:
-            source_radius = math.hypot(float(shape[0]), float(shape[1]))
-        except (TypeError, ValueError, IndexError):
-            source_radius = math.hypot(
-                max(0.3, _number(state.get('half_width'), 1.7)),
-                max(0.5, _number(state.get('half_length'), 3.5)))
-        blocker_radius = _number(
-            verdict.get('blocker_radius'), source_radius)
-        if (math.isnan(blocker_radius) or math.isinf(blocker_radius) or
-                blocker_radius <= 0.0):
-            blocker_radius = source_radius
-        clearance = source_radius + blocker_radius + \
-            tank_collision.POSITION_SLOP
-        identity = (target_id, blocker_kind, blocker_id, fire_seq)
-        active = self._friendly_repositions.get(bot_id)
-        if active is not None and active.get('identity') == identity and now < active['deadline']:
-            return True
-        retry = state.get('_friendly_reposition_retry')
-        if (retry is not None and retry['identity'] == identity and
-                _distance(_position(state), retry['origin']) < 2.0 and
-                _distance(blocker_position, retry['blocker_position']) < 2.0):
-            if now < retry['until']:
-                # Preserve the terminal reason across the quiet retry window;
-                # otherwise a three-second observer sees only "waiting".
-                retry['observed_at'] = now
-                return False
-        else:
-            retry = None
-            state.pop('_friendly_reposition_retry', None)
-        side = 1.0 if ((bot_id + fire_seq) & 1) else -1.0
-        if retry is not None and retry['attempts'] % 2:
-            side = -side
-        position = _position(state)
-        destination = (
-            position[0] + math.cos(shot_yaw) * clearance * side,
-            position[1],
-            position[2] - math.sin(shot_yaw) * clearance * side,
-        )
-        # Every chassis rotates before translating sideways, including tanks
-        # with a freely rotating turret. Keep the existing bounded allowance.
-        params = self._physics_params_for(bot_id)
-        rate = max(0.1, abs(_number((params or {}).get('rotSpd'), 0.1)))
-        yaw = math.atan2(destination[0]-position[0], destination[2]-position[2])
-        turn_angle = abs(_angle_delta(yaw, state.get('yaw', 0.0)))
-        duration = min(FRIENDLY_REPOSITION_MAX_SECONDS,
-            FRIENDLY_REPOSITION_SECONDS + turn_angle / rate + 2.0)
-        self._friendly_repositions[bot_id] = {
-            'target_id': target_id,
-            'target_kind': target.get('kind') if isinstance(target, dict)
-            else None,
-            'destination': destination,
-            'shell_index': int(state.get('shell_index', 0)),
-            'fire_range': max(0.0, _number(command.get('fire_range'))),
-            'deadline': _number(now) + duration,
-            'time_budget': dict(base=FRIENDLY_REPOSITION_SECONDS,
-                turn_angle=turn_angle, turn_rate=rate, turn_seconds=turn_angle/rate,
-                settle_seconds=2.0, maximum=FRIENDLY_REPOSITION_MAX_SECONDS,
-                granted=duration),
-            'started_at': now, 'origin': position, 'identity': identity,
-            'blocker_position': blocker_position, 'side': side,
-            'attempts': int(retry['attempts']) if retry is not None else 0,
-        }
-        state['local_combat_manoeuvre'] = True
-        state['_friendly_reposition_event'] = dict(at=now, outcome='started',
-            marker=dict(self._friendly_repositions[bot_id]))
-        # The next authority frame must run the safe LocalDriver for this new
-        # destination; a cached hold command would otherwise remain stationary.
-        self._decision_cache.pop(bot_id, None)
-        return True
 
     def _physical_parking_occupancy(self, state, travel=False):
         """Reuse current bodies and descriptor caches; do not query terrain."""
@@ -15503,14 +15360,6 @@ class BotRuntime(SharedEngineControl):
             'position_retry_seconds': max(0.0, round(state.get('_spg_fire_position_retry_at', now) - now, 3)),
         })
 
-    @staticmethod
-    def _gun_angle_rejected(state, identity, now):
-        rejected = state.get('_gun_angle_rejected') or {}
-        for key, deadline in tuple(rejected.items()):
-            if now >= deadline:
-                rejected.pop(key, None)
-        return identity in rejected
-
     def _rear_approach_blocked(self, state, order, targets, now):
         """A fresh blocked lane leaves authored approach in control of travel.
 
@@ -15598,8 +15447,7 @@ class BotRuntime(SharedEngineControl):
         elif not target.get('visible', True) or fresh_blocked:
             reason = 'lane_lost'
         elif (state.get('_gun_angle_refusal') == identity or
-                state.get('_gun_angle_pivot_refusal') == identity or
-                state.get('_gun_angle_adjustment') is not None):
+                state.get('_gun_angle_pivot_refusal') == identity):
             reason = 'mechanical_recovery'
         elif _distance(_position(state), hold['origin']) > 1.5:
             reason = 'translated'
@@ -15782,11 +15630,11 @@ class BotRuntime(SharedEngineControl):
         return _number(state.get('speed')), 'physical_speed'
 
     def _record_traffic_pivot(self, state, command, safety, target, hull_aiming, now):
-        """Hand an actually denied firing pivot to the existing angle owner.
+        """Publish a denied firing pivot for the shared movement owner.
 
         This observes the already executed traffic sweep; it never samples or
         grants collision clearance. Clear an unconsumed handoff when the guard
-        clears, without cancelling an angle action that already owns its exit.
+        clears, without cancelling a checked recovery that owns its exit.
         """
         previous = state.get('_traffic_rotation_receipt') or {}
         identity = self._artillery_target_identity(target)
@@ -15799,6 +15647,9 @@ class BotRuntime(SharedEngineControl):
                 'base_defense', 'artillery_deploy', 'artillery_relocate') and
             (state.get('profile') or {}).get('class_tag') != 'SPG')
         handoff = bool(eligible and receipt.get('blocked'))
+        control = self._actor_controls.get(state['id'])
+        owner = getattr(control, 'combat_stop', None)
+        recovering = bool(owner is not None and owner.physical_recovery_active())
         receipt.update(at=now, target=identity, hull_aiming=bool(hull_aiming),
             eligible=eligible, handoff=handoff,
             requested_mode=command.get('combat_mode'),
@@ -15808,86 +15659,14 @@ class BotRuntime(SharedEngineControl):
             state['_gun_angle_pivot_refusal'] = identity
             if not previous.get('handoff') or previous.get('target') != identity:
                 self._decision_cache.pop(state['id'], None)
-            receipt['owner'] = 'existing_gun_angle_recovery'
-        elif (previous.get('handoff') and
-                state.get('_gun_angle_adjustment') is None and
+            receipt['owner'] = 'shared_point_recovery' if recovering else 'native_pivot_refusal'
+        elif (previous.get('handoff') and not recovering and
                 state.get('_gun_angle_pivot_refusal') == previous.get('target')):
             state.pop('_gun_angle_pivot_refusal', None)
             receipt['owner'] = 'unconsumed_handoff_released'
         else:
-            receipt['owner'] = ('existing_gun_angle_recovery' if
-                state.get('_gun_angle_adjustment') is not None else 'ordinary_controls')
+            receipt['owner'] = ('shared_point_recovery' if recovering else 'ordinary_controls')
         state['_traffic_rotation_receipt'] = receipt
-
-    def _friendly_reposition_order(self, state, targets, now, order):
-        """Consume the resolved shared intention for this physical escape.
-
-        The server's initial target hint can differ from AttackPolicy's
-        retained target. Only the refined order may hand off its recovery;
-        re-reading the hint would cancel and recreate the same native lease.
-        """
-        bot_id = int(state['id'])
-        if order.get('parking_phase') in ('waiting', 'queue'):
-            marker = self._friendly_repositions.get(bot_id)
-            if marker is not None:
-                state['_friendly_reposition_event'] = dict(at=now, outcome='parking_handoff',
-                    marker=dict(marker))
-            self._clear_friendly_reposition(bot_id)
-            return None, False
-        marker = self._friendly_repositions.get(bot_id)
-        if marker is None:
-            return None, False
-        selected_id = order.get('target_id')
-        if order.get('target_kind') == 'human' and selected_id is not None:
-            selected_id = self._human_planner_id(selected_id)
-        if selected_id is not None and selected_id != marker.get('target_id'):
-            state['_friendly_reposition_event'] = dict(at=now, outcome='target_changed',
-                next_target=selected_id, marker=dict(marker))
-            self._clear_friendly_reposition(bot_id)
-            return None, False
-        if order.get('combat_mode') == 'base_defense':
-            state['_friendly_reposition_event'] = dict(at=now, outcome='priority_handoff',
-                next_owner=order.get('combat_mode'), marker=dict(marker))
-            self._clear_friendly_reposition(bot_id)
-            return None, False
-        if _number(now) >= _number(marker.get('deadline')):
-            if 'identity' in marker:
-                state['_friendly_reposition_retry'] = dict(identity=marker['identity'],
-                    origin=_position(state), blocker_position=marker['blocker_position'],
-                    attempts=marker['attempts'] + 1,
-                    until=now + FRIENDLY_REPOSITION_RETRY_SECONDS)
-            state['_friendly_reposition_event'] = dict(at=now, outcome='timeout',
-                remaining=_distance(_position(state), marker['destination']), marker=dict(marker))
-            self._clear_friendly_reposition(bot_id)
-            return None, True
-        target = (targets or {}).get(marker['target_id'])
-        if (not isinstance(target, dict) or
-                not bool(target.get('alive', True)) or
-                ('health' in target and _number(target.get('health')) <= 0.0)):
-            state['_friendly_reposition_event'] = dict(at=now, outcome='target_gone', marker=dict(marker))
-            self._clear_friendly_reposition(bot_id)
-            return None, False
-        destination = marker['destination']
-        if _distance(_position(state), destination) <= \
-                ai_driver.WAYPOINT_ARRIVAL_RADIUS:
-            state['_friendly_reposition_event'] = dict(at=now, outcome='arrived', marker=dict(marker))
-            state.pop('_friendly_reposition_retry', None)
-            self._clear_friendly_reposition(bot_id)
-            return None, False
-        target_position = _point(
-            target.get('position'), _position(target))
-        return {
-            'target_id': marker['target_id'],
-            'target_kind': marker['target_kind'],
-            'aim_position': target_position,
-            'face_position': target_position,
-            'move_position': destination,
-            'fire_allowed': False,
-            'combat_mode': 'friendly_lane_reposition',
-            'throttle_override': 1.0,
-            'fire_range': marker['fire_range'],
-            'shell_index': marker['shell_index'],
-        }, False
 
     @staticmethod
     def _direct_preview_values(launch_preview, expected_seq):
@@ -17173,26 +16952,9 @@ class BotRuntime(SharedEngineControl):
                     server_order = self._shared_control_order(state, contacts, players, now)
                 if worker_control is not None:
                     server_order = worker_control.refine_order(server_order, contacts, now)
-                reposition_order, reposition_expired = \
-                    self._friendly_reposition_order(state, targets, now, server_order)
                 if (server_order or {}).get('empty_ammo'):
                     empty_ammo.handoff(self,state,server_order)
-                    reposition_order=None
-                if (reposition_order is not None and
-                        callable(decide_with_order)):
-                    if diagnostic is not None:
-                        diagnostic.count('decision_reposition_order')
-                    if (server_order or {}).get('capture_area'):
-                        reposition_order = dict(reposition_order, capture_area=server_order['capture_area'])
-                    command = timed_call(
-                        self._combat_diagnostics, 'bot.planner_driver',
-                        decide_with_order,
-                        decision_state, reposition_order, sample_clear)
-                    if record_orders:
-                        command['order_evidence'] = dict(sampled_at=now,
-                            source='friendly_reposition', final_order=_order_evidence(reposition_order),
-                            server_selection=(server_order or {}).get('tactical_evidence'))
-                elif server_order is not None and callable(decide_with_order):
+                if server_order is not None and callable(decide_with_order):
                     if diagnostic is not None:
                         diagnostic.count('decision_server_order')
                     server_order = dict(server_order)
@@ -17241,11 +17003,6 @@ class BotRuntime(SharedEngineControl):
                     state['id'], dict(traffic_bodies[state['id']],
                                       pose_clear=sample_pose_clear), command,
                     decision_state['neighbours'], now, sample_clear)
-                if reposition_expired:
-                    # Resume the ordinary strategic movement on this frame,
-                    # but do not immediately recreate the expired override by
-                    # attempting the same blocked shot again.
-                    command['fire_allowed'] = False
                 bot_id = int(state['id'])
                 self._decision_counts[bot_id] = self._decision_counts.get(
                     bot_id, 0) + 1
@@ -17347,9 +17104,9 @@ class BotRuntime(SharedEngineControl):
                     0 if command.get('fire_allowed') else 1)
             command, target = self._apply_blocked_direct_aim(
                 state, command, target, now, final_shot_lane_budget)
+            recovery_owner = getattr(worker_control, 'combat_stop', None)
             state['local_combat_manoeuvre'] = bool(
-                state['id'] in self._friendly_repositions or
-                state.get('_gun_angle_adjustment') or
+                recovery_owner is not None and recovery_owner.physical_recovery_active() or
                 command.get('combat_mode') == 'gun_angle_adjust')
             command = _overlay_live_target_pose(command, target, position)
             state['target_kind'] = (
@@ -18500,8 +18257,6 @@ class BotRuntime(SharedEngineControl):
                             self._friendly_lane_verdict(lane_value)
                 launch = launch_receipt if is_spg else launch_preview
                 if launch is not None and lane_clear:
-                    self._clear_friendly_reposition(state['id'])
-                    state.pop('_friendly_reposition_retry', None)
                     fired = self._fire(
                         state, gun_state, reload_factor, descriptor,
                         launch_receipt=launch_receipt,
@@ -18514,8 +18269,10 @@ class BotRuntime(SharedEngineControl):
                         artillery_launch_stage = 'fired'
                         self._cancel_artillery_intent(state['id'], reason='fired', now=now)
                 elif launch is not None:
-                    self._mark_friendly_reposition(
-                        state, command, target, launch, lane_verdict, now)
+                    # The final lane gate may invalidate an earlier proof.
+                    # Revisit the shared point controller; this gun consumer
+                    # cannot create an independent sideways movement owner.
+                    self._decision_cache.pop(state['id'], None)
                     if is_spg:
                         # The proved path belongs to the old muzzle pose. A
                         # moving SPG must discard it and prove the next shot
@@ -18744,7 +18501,16 @@ class BotRuntime(SharedEngineControl):
         for state in ordered_states:
             control = self._actor_controls.get(int(state['id']))
             if control is not None and getattr(control, 'actor_kind', None) == 'bot':
-                control.after_native_update(now)
+                if not state['alive']:
+                    # Dead actors skip decisions above. Retire their shared
+                    # movement/gun leases here as well; _live() deliberately
+                    # refuses to run background work for a dead binding.
+                    control.close()
+                    if self._actor_controls.get(int(state['id'])) is control:
+                        self._actor_controls.pop(int(state['id']), None)
+                    state['local_combat_manoeuvre'] = False
+                else:
+                    control.after_native_update(now)
             if publish:
                 self._mark_combat_publication(state)
         if not publish:

@@ -1,5 +1,205 @@
 # PR119 control-offset correction — November 10, 2026
 
+## Live-report continuation: implemented and locally verified
+
+The user's `wot-error-report-20261110-184606-069fba6421d8.zip` rejects the
+in-battle completeness of the previous delivery. Its installed and bundled
+build is `colorfulmeans-42796652971-1`, the actual `2f8db7b6` PR head, not an
+older package. The current continuation starts from that exact remote commit.
+The prior verification results below remain historical evidence, not proof
+that the reported control and HE failures are fixed.
+
+The reviewed report and production-order reproductions identify three issues:
+
+- An unchecked blocked-point recovery can first take the hull, face the
+  enemy, fail and release the route. A route-only yaw change can then admit
+  the same failure again. Opening-route controls alternate between opposing
+  turns even though the original driver and route laws were not edited.
+- A valid limited-traverse native hull lay can be replaced by a candidate-less
+  stationary-review wait. Exact physical-source changes invalidate evidence;
+  review then freezes the admitted hull instead of continuing the same lay.
+- Loaded ordinary HE contact review receives only the budget left by repeated
+  penetration review. Current-source jitter can retire background contacts
+  before consumption; even a completed historical coverage count is not a
+  current executable contact.
+
+The user has now authorized implementation, independent review, original-PR
+update and a fresh Windows test package after reading the handoffs and dialog.
+The controlling rules are:
+
+1. Loaded HE reviews current HE penetration, then its legal HE fallback,
+   before AP and higher-penetration alternatives. Ordinary HE penetration and
+   fallback share one stable sample per target. Whitelisted full-validation
+   HE keeps its existing point domain. Non-HE selections use the ordinary
+   HE-penetration, AP, higher-penetration, final-HE-fallback ranking even when
+   the physically loaded shell is the higher-penetration one.
+2. Validation order does not grant a new unloading authority. Current valid
+   rounds/cassettes and accepted trigger tails retain their existing ownership;
+   independently reviewed NEXT chooses the subsequent load. Loaded HE cannot
+   be discarded just because a different shell has a better NEXT plan.
+3. A proved legal current ordinary-HE contact can execute without waiting for
+   unvisited or pending competitors. Completed usable candidates remain
+   damage-ranked. This supersedes historical wording which makes a complete
+   all-enemy HE comparison a prerequisite for ordinary CURRENT execution;
+   it does not remove the independent NEXT or SPG validation requirements.
+4. Scheduling progress and point intention survive exact proof refreshes.
+   They are not negative-armour certificates, movement permission or fire
+   permission. Current geometry, ammunition and native first-edge checks stay
+   strict; work quotas and the penetration threshold are not increased.
+5. Before initial recovery takes a route-owned hull, it needs a current
+   executable point, a justified native stationary lay, or a concrete checked
+   same-point recovery destination. The existing native siege mode-entry
+   protocol remains a separate, narrow authorization; it cannot grant a shot
+   or an unchecked relocation. A blocker or pending probe alone cannot stop
+   or steer the vehicle. Relevant changes may schedule another check; only a
+   newly proved action, not a yaw threshold, admits another episode.
+6. An admitted same-point native lay continues through planning waits using
+   the original live actuator and collision checks. Manual/task/capture
+   restrictions, identity loss, actual completion and real lack of progress
+   remain terminal boundaries. A stale steering value is not replayed.
+7. Friendly line obstruction joins the same point-bound recovery. Its old
+   independent side-choice, arrival-success and retry owner must not survive
+   as a fallback. Physical ally collision and firing-safety checks remain.
+
+No driver gain, steering speed, authored route, navigation law, damage model,
+eight-second penetration search, extra controller, main merge, tag or release
+is authorized. Modified regression expectations must name the superseding
+rule; old-source failures and final-tree results are recorded separately.
+Implementation and independent cross-module review are complete. The frozen
+runtime passes the final local inventory below. The original PR's current
+delivery section records the exact commit, same-commit CI outcome, artifact
+identity and downloaded-package hashes; historical delivery entries below
+must not be used as the evidence for this continuation.
+
+### Implemented boundaries and review findings
+
+- `CombatStop` separates an unadmitted inspection from actual motion
+  ownership. The original route remains in control while future positions
+  are being queried. A completed failed inspection cannot gain ownership
+  merely because the normal driver changes yaw. A checked destination, a
+  genuine newly opened same-point native lay, or another current legal point
+  can create the next episode. The failure latch is not global to all targets.
+- An admitted pivot retains its exact target and point through planning
+  waits. Both the contact ID and the aim/face point are rebound before the
+  ordinary live-target overlay, eliminating a second target's opposing turn.
+  Physical progress, rotation refusal, task cancellation, target loss and
+  current gun identity remain live boundaries. Missing geometry does not
+  replay an old steering value, and continuing a pivot never grants fire.
+- Current ordinary HE's qualified local contact work uses the existing
+  foreground or same atomic slice before unrelated unknown penetration work.
+  Historical damage hints are rechecked exactly. A high-damage hint whose
+  current check is pending can yield to a current executable contact without
+  converting the pending target into a zero-damage or armour-failed result.
+  A newly proved current HE penetration still precedes an uncommitted fallback.
+- Finite inspection progress is no longer keyed to the raw source position.
+  Exact source poses still revoke all old positive and negative physical
+  evidence. Future-position chord work freezes one explicit hypothetical
+  source pose for the same destination, shell, target and point; it is never
+  a current firing proof. Changed target/component/domain/lane observations
+  restart it. Cancellation or replacement during the final native callback
+  cannot publish the old plan or destroy a replacement task.
+- Friendly obstruction uses the same selected-point task. The independent
+  friendly side-choice, retry timer and arrival-success owner, its consumers,
+  and the obsolete gun-angle adjustment/rejection store are deleted rather
+  than left as fallbacks. Native ally collision and final shot-lane refusal
+  remain. BOT death retires its shared control binding while preserving
+  already committed launch records; object identity protects a replacement
+  binding from an old close callback.
+- The integration run caught and repaired a siege-mode admission regression
+  introduced by narrowing ordinary recovery ownership. Clear native mode
+  admission and explicit attack authority use the existing request/echo
+  protocol. A cold wall or single-feature controller cannot acquire a new
+  hull/mode permission. Existing siege and full-controller assertions are
+  retained. Reload/switch intents are not reinterpreted as failed hydraulic
+  geometry or a reason to discard an accepted movement task.
+
+### Regression provenance and scope
+
+New files cover policy scheduling, actual native future-ray work, shared
+recovery liveness, BOT friendly recovery/lifecycle, and the reported opening
+route plus loaded-HE execution chain. The latter uses the real shared policy,
+driver, native evaluator adapter, trigger admission and ammunition accounting
+with controlled native observations and deterministic query cost. Its HE
+regression reached an actual committed shot and exactly one round deduction,
+not merely an `aim` decision. This is still not a Windows #1513 playtest.
+
+Pre-fix failures were retained for HE budget starvation, source-jitter review,
+native lay loss during planning waits, unchecked cold recovery, pending
+high-damage hints, future-ray progress, final-callback task cancellation,
+target/sample mismatch and source-BOT death. A first draft of the live HE
+fixture reused the source entity ID for an enemy; that fixture error was
+corrected before the valid no-shot baseline was recorded and is not claimed
+as a production defect.
+
+Existing tests were migrated only where their expectations required retired
+friendly APIs or admitted unchecked blockers/yaw-only retries. The new
+expectations require unchanged actual route inputs until a checked goal.
+Stationary-domain tests first establish a legitimate current-point combat
+stop before testing a planning wait; they no longer depend on freezing an
+already admitted pivot. Their negative-domain and no-fire assertions remain.
+The original HE damage-ranking, penetration threshold, NEXT unknown-domain,
+siege and controller tests are not weakened to hide failures.
+
+The source diff leaves `ai/driver.py`, `ai/navigation.py`, `ai/traffic.py`,
+`tank_collision.py` and `vehicle_control/route_tasks.py` unchanged. The only
+`native_motion_core.py` change removes a write to the deleted friendly store.
+No new test skip, query-budget increase, steering gain, collision bypass,
+early current-HE unload, eight-second search or second recovery owner is added.
+
+### Final local verification
+
+Python 3.11.9 used the CI-pinned Pillow 12.3.0, NumPy 2.3.5, ModernGL 5.12.0
+and glcontext 3.0.0 dependencies. The final complete run started after all
+production and regression edits were frozen, and each test file ran in its own
+interpreter to prevent native test doubles leaking between files.
+
+| Gate | Observed result |
+| --- | --- |
+| Complete client inventory | 529/529 files passed; 10,721 reported tests, including 9 existing environment/resource skips |
+| Complete launcher inventory | 49/49 files passed; 1,328 reported tests, with 170 recorded platform/display/resource skips |
+| Shared-control ownership checker | 89 tests passed |
+| Client source syntax under local Python 3.11 | All 262 modules compile; this is not the Python 2.7 package gate |
+| 29-actor analytic shared-control workload | Completed; no-enemy case: 0 launches; mixed AP/HE case: 62 measured launches and 633 armour batches |
+| Whitespace/integration diff | `git diff --check` passed; no remaining unstaged runtime edit |
+
+The 29-actor workload recorded an unchanged runtime fingerprint before and
+after execution across the 261 files in `offline_lan_0922`:
+`afed59ce20df6639c5f44b34ce751ed1f0377443412df474fbc3840ec571db38`.
+Its geometry is analytic and its timing is not a Windows-client FPS estimate.
+Focused test totals overlap the full inventory and are not added to it.
+
+The unchanged CI workflow must still compile and test with real Python 2.7,
+rebuild the shipping x86 native module, compare every packaged client code
+object with the same checkout, and build/run the extracted Windows launcher.
+Delivery additionally compares the downloaded launcher's bundled Python
+sources, build identity and nested client/wotmod bytes with that same run.
+The exact post-build attestation belongs in the current PR delivery section,
+so this handoff does not invent a future run ID or self-referential commit SHA.
+
+### Native acceptance still required
+
+Use the fresh artifact identified in the PR, not the rejected
+`colorfulmeans-42796652971-1` package. The user's next playtest should check:
+
+1. The same AT7 opening route with drive and fire enabled: no unchecked
+   enemy inspection may alternate opposing chassis turns with navigation.
+2. A target outside the actual gun arc: the original native hull actuator
+   should continue the same accepted point through policy review waits.
+3. Loaded ordinary HE: a legal current contact should reach an actual shot,
+   while NEXT remains independent and does not unload the current cassette.
+4. Current high-penetration ammunition: subsequent loading follows verified
+   HE-penetration/AP/high-penetration order, not permanent loaded-shell bias.
+5. World/friendly obstruction and arrival: retain the same point, revalidate
+   at the actual destination, and return the original route on finite failure.
+6. Capture/manual/return-base and target death: old movement/gun intentions
+   must end without cancelling already committed projectile records.
+
+No new exact Windows #1513 battle or subjective steering smoothness is claimed
+by the local tests. Report the installed build identity with any remaining
+opening-route, HE, recovery, turret-continuity or frame-pacing failure.
+
+## Historical delivery record
+
 ## Authority and starting point
 
 This continuation starts at the original open PR #119 head `d149aadc`, not

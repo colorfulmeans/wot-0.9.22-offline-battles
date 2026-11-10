@@ -274,11 +274,13 @@ class NativeHECompletionTests(native_fire.AutomaticFireScene):
 
     def test_geometry_recovery_reuses_half_the_existing_foreground_world_budget(self):
         evaluator = self.runtime.attack_policy.evaluator
-        self.runtime.combat_stop.physical_recovery_active = lambda: True
+        # Cold same-point preflight needs work before acquiring movement.
+        self.runtime.combat_stop.physical_recovery_active = lambda: False
+        self.runtime.combat_stop.physical_recovery_pending = lambda: True
         evaluator.snapshot(self.now + .1)
         self.assertEqual((6, 6, 12), tuple(evaluator._budgets[name]
                          for name in ('foreground', 'recovery', 'background')))
-        self.runtime.combat_stop.physical_recovery_active = lambda: False
+        self.runtime.combat_stop.physical_recovery_pending = lambda: False
         evaluator.snapshot(self.now + .2)
         self.assertEqual((12, 0, 12), tuple(evaluator._budgets[name]
                          for name in ('foreground', 'recovery', 'background')))

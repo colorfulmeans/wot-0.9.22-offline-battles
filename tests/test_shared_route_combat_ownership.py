@@ -99,15 +99,14 @@ class SharedRouteCombatOwnershipTests(unittest.TestCase):
                 for row in blocked:
                     self.assertEqual('route', row['raw']['mode'], row)
                     self.assertEqual((30., 0., 20.), row['raw']['destination'], row)
-                    self.assertIn(row['applied']['mode'],
-                        ('route', 'engage', 'gun_angle_adjust'), row)
+                    self.assertEqual('route', row['applied']['mode'], row)
                     self.assertNotEqual('advance_contact', row['final_mode'], row)
                     if row['final_mode'] == 'route':
                         self.assertEqual(row['raw'], row['applied'], row)
-                self.assertTrue(any(row['applied']['mode'] == 'engage' for row in blocked),
-                    'a native-certified wall may admit only bounded same-point recovery')
-                self.assertTrue(any(row['final_mode'] == 'route' for row in blocked),
-                    'a failed native preview must eventually return the authored route')
+                self.assertEqual(baseline, blocked,
+                    'an obstructed point without a checked destination cannot take route controls')
+                self.assertTrue(all(row['final_mode'] == 'route' for row in blocked),
+                    'native inspection must leave the authored route in control')
                 self.assertTrue(any(row['inputs'][0] or row['inputs'][1]
                                     for row in baseline),
                     'the baseline must really reach the final drive actuator')

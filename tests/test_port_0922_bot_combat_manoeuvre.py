@@ -61,98 +61,112 @@ class FiringPositionArrivalTests(unittest.TestCase):
 
 
 class FriendlyManoeuvreTests(unittest.TestCase):
-    def setUp(self):
-        self.module = _load()
-        self.runtime = self.module.BotRuntime(1)
-        self.state = dict(id=8, team=1, x=0., y=0., z=0., yaw=0.,
-            half_length=3., half_width=1.5, shell_index=0, fire_seq=2)
-        self.runtime.states[8] = self.state
-        self.runtime._gun_yaw_limits[8] = (-.05, .05, True)
-        self.command = dict(target_id=18, fire_range=450.)
-        self.target = dict(kind='bot', alive=True, position=(0., 0., 100.))
-        self.launch = dict(fire_seq=3, shot_yaw=0.)
-        self.verdict = dict(blocker_kind='bot', blocker_id=7, blocker_team=1,
-            blocker_position=(0., 0., 20.), blocker_radius=3.)
+    """The shared task owns friendly recovery and its bounded terminal."""
+    def scene(self, status='clear'):
+        from test_player_combat_stop import Scene
+        scene = Scene(admitted=False)
+        scene.raw_order.update(combat_mode='route', target_kind=None,
+            target_id=None, move_position=(20., 0., -30.),
+            face_position=(20., 0., -30.), throttle_override=None,
+            aim_position=None, fire_allowed=False)
+        scene.candidate.update(key=(0, ('bot', 2), 0, 'penetration'),
+            target_key=('bot', 2), sample=0, line='friendly_blocked',
+            mechanical='reachable', blocker=dict(blocker_kind='bot',
+                blocker_id=7, blocker_team=1, blocker_position=(0., 0., 20.)))
+        scene.probe_status = status
+        scene.runtime.point_recovery_probe = lambda *args: dict(status=scene.probe_status)
+        return scene
 
-    def mark(self, now):
-        with mock.patch.object(self.runtime, '_physics_params_for',
-                               return_value=dict(rotSpd=math.radians(20))):
-            return self.runtime._mark_friendly_reposition(self.state,
-                self.command, self.target, self.launch, self.verdict, now)
+    def test_fixed_gun_keeps_one_checked_destination(self):
+        scene = self.scene()
+        first = scene.apply(10.)
+        phase = scene.owner._physical_recovery
+        self.assertEqual(scene.candidate['key'], phase['key'])
+        for now in (10.1, 11., 13.):
+            command = scene.apply(now)
+            self.assertEqual(first['move_position'], command['move_position'])
+            self.assertIs(phase, scene.owner._physical_recovery)
+            self.assertEqual(10., phase['started'])
+            self.assertFalse(command['fire_allowed'])
 
-    def test_fixed_gun_gets_turn_time_and_keeps_one_destination(self):
-        self.assertTrue(self.mark(10.))
-        marker = dict(self.runtime._friendly_repositions[8])
-        self.assertGreater(marker['deadline'], 16.)
-        self.assertLessEqual(marker['deadline'], 26.)
-        for now in (11., 14.1, 16.):
-            command, expired = self.runtime._friendly_reposition_order(
-                self.state, {18: self.target}, now, self.runtime._server_orders.get(8, {}))
-            self.assertFalse(expired)
-            self.assertEqual(marker['destination'], command['move_position'])
-        self.assertTrue(self.state['local_combat_manoeuvre'])
+    def test_turreted_vehicle_has_the_same_real_progress_exit(self):
+        scene = self.scene()
+        scene.runtime.engine._gun_yaw_limits[1] = (-math.pi, math.pi, False)
+        scene.apply(10.)
+        command = scene.apply(16.1)
+        self.assertEqual('route', command['combat_mode'])
+        self.assertFalse(scene.owner.stop_allowed)
+        self.assertIsNone(scene.owner._physical_recovery)
+        self.assertEqual('point_recovery_drive_stalled', scene.owner.receipt['reason'])
 
-    def test_turreted_vehicle_gets_same_bounded_turn_budget(self):
-        self.runtime._gun_yaw_limits[8] = (-math.pi, math.pi, False)
-        self.mark(10.)
-        marker = self.runtime._friendly_repositions[8]
-        self.assertAlmostEqual(20.5, marker['deadline'])
-        self.assertEqual('bot', marker['target_kind'])
-        self.assertEqual(10.5, marker['time_budget']['granted'])
+    def test_repeated_blocker_does_not_extend_the_task_progress_clock(self):
+        scene = self.scene()
+        scene.apply(10.)
+        phase = scene.owner._physical_recovery
+        for now in (10.2, 11., 14., 15.9):
+            scene.apply(now)
+            self.assertIs(phase, scene.owner._physical_recovery)
+            self.assertEqual(10., phase['progress_at'])
+        self.assertEqual('route', scene.apply(16.1)['combat_mode'])
 
-    def test_repeated_blocked_shot_cannot_extend_active_deadline(self):
-        self.mark(10.)
-        deadline = self.runtime._friendly_repositions[8]['deadline']
-        self.mark(11.)
-        self.assertEqual(deadline, self.runtime._friendly_repositions[8]['deadline'])
-
-    def test_new_priority_target_cancels_old_manoeuvre(self):
-        self.mark(10.)
-        self.runtime._server_orders[8] = dict(target_id=19, target_kind='bot')
-        self.assertEqual((None, False), self.runtime._friendly_reposition_order(
-            self.state, {18:self.target}, 11., self.runtime._server_orders.get(8, {})))
-        self.assertFalse(self.state['local_combat_manoeuvre'])
-        self.assertEqual('target_changed', self.state['_friendly_reposition_event']['outcome'])
+    def test_new_macro_hint_cannot_replace_the_checked_point_task(self):
+        scene = self.scene()
+        scene.apply(10.)
+        phase = scene.owner._physical_recovery
+        scene.raw_order.update(target_id=19, target_kind='bot')
+        command = scene.apply(11.)
+        self.assertIs(phase, scene.owner._physical_recovery)
+        self.assertEqual(2, command['target_id'])
+        self.assertEqual(phase['goal'], command['move_position'])
 
     def test_base_defense_cannot_start_a_new_lane_override(self):
-        self.command['combat_mode'] = 'base_defense'
-        self.assertFalse(self.mark(10.))
-        self.assertNotIn(8, self.runtime._friendly_repositions)
+        scene = self.scene()
+        scene.raw_order['combat_mode'] = 'base_defense'
+        command = scene.apply(10.)
+        self.assertEqual('base_defense', command['combat_mode'])
+        self.assertEqual((20., 0., -30.), command['move_position'])
+        self.assertIsNone(scene.owner._physical_recovery)
+        self.assertFalse(scene.owner.stop_allowed)
 
-    def test_timeout_clears_owner_and_prevents_identical_immediate_retry(self):
-        self.mark(10.)
-        marker = dict(self.runtime._friendly_repositions[8])
-        end = marker['deadline'] + .01
-        self.assertEqual((None, True), self.runtime._friendly_reposition_order(
-            self.state, {18: self.target}, end, self.runtime._server_orders.get(8, {})))
-        self.assertFalse(self.state['local_combat_manoeuvre'])
-        self.assertFalse(self.mark(end + .2))
-        self.assertEqual('timeout', self.state['_friendly_reposition_last_terminal']['outcome'])
-        self.assertEqual(end, self.state['_friendly_reposition_last_terminal']['at'])
-        self.assertEqual(end + .2, self.state['_friendly_reposition_retry']['observed_at'])
-        self.assertTrue(self.mark(end + 8.1))
-        self.assertEqual(-marker['side'], self.runtime._friendly_repositions[8]['side'])
+    def test_failed_task_cannot_reacquire_from_time_or_route_yaw_alone(self):
+        scene = self.scene()
+        scene.apply(10.)
+        scene.apply(16.1)
+        scene.probe_status = 'blocked'
+        scene.state['yaw'] = .13
+        for now in (16.2, 17., 20., 30.):
+            command = scene.apply(now)
+            self.assertEqual('route', command['combat_mode'])
+            self.assertFalse(scene.owner.stop_allowed)
+            self.assertFalse(command['fire_allowed'])
+        self.assertEqual(1, scene.owner._episode)
 
-    def test_target_death_and_priority_handoff_release_owner(self):
-        for order, target, outcome in (({}, dict(self.target, alive=False), 'target_gone'),
-                (dict(combat_mode='base_defense'), self.target, 'priority_handoff')):
-            self.runtime._server_orders[8] = order
-            self.mark(10.)
-            command, expired = self.runtime._friendly_reposition_order(
-                self.state, {18:target}, 11., self.runtime._server_orders.get(8, {}))
-            self.assertIsNone(command)
-            self.assertFalse(expired)
-            self.assertFalse(self.state['local_combat_manoeuvre'])
-            self.assertEqual(outcome, self.state['_friendly_reposition_event']['outcome'])
+    def test_target_death_and_priority_handoff_release_the_shared_task(self):
+        for cause in ('target_gone', 'priority_handoff'):
+            with self.subTest(cause=cause):
+                scene = self.scene()
+                scene.apply(10.)
+                if cause == 'target_gone':
+                    scene.target['alive'] = False
+                else:
+                    scene.raw_order['combat_mode'] = 'base_defense'
+                command = scene.apply(11.)
+                self.assertIsNone(scene.owner._physical_recovery)
+                self.assertFalse(scene.owner.stop_allowed)
+                self.assertEqual((20., 0., -30.), command['move_position'])
 
-    def test_arrival_releases_owner_and_keeps_friendly_shot_gate(self):
-        self.mark(10.)
-        point = self.runtime._friendly_repositions[8]['destination']
-        self.state.update(x=point[0], y=point[1], z=point[2])
-        self.assertEqual((None, False), self.runtime._friendly_reposition_order(
-            self.state, {18:self.target}, 11., self.runtime._server_orders.get(8, {})))
-        self.assertFalse(self.state['local_combat_manoeuvre'])
-        self.assertEqual('arrived', self.state['_friendly_reposition_event']['outcome'])
+    def test_arrival_requires_same_point_native_recheck(self):
+        scene = self.scene()
+        scene.apply(10.)
+        phase = scene.owner._physical_recovery
+        scene.position(phase['goal'])
+        scene.probe_status = 'blocked'
+        command = scene.apply(11.)
+        self.assertIs(phase, scene.owner._physical_recovery)
+        self.assertTrue(phase['checking'])
+        self.assertFalse(phase['ready'])
+        self.assertFalse(command['fire_allowed'])
+        self.assertEqual('point_recovery_arrived_recheck', scene.owner.receipt['reason'])
 
 
 class LocalActionFeedbackTests(unittest.TestCase):

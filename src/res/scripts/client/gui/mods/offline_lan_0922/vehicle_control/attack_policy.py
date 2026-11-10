@@ -432,8 +432,12 @@ class AttackPolicy(object):
                 row.get('mechanical') in ('hull_laying', 'mechanical_limited'))
 
     def _physical_review_source(self, shell):
+        # This identifies a finite inspection task, not a geometric proof.
+        # Translating or settling the source revokes every exact row through
+        # _stamp, but cannot restart the same queue of inspected alternatives.
+        # A current obstruction is required again before recovery is proposed.
         return (self.frame['identity'], self.frame.get('weapon_identity'),
-                self.frame['position'], int(shell['index']), shell.get('signature'))
+                int(shell['index']), shell.get('signature'))
 
     @staticmethod
     def _physical_review_cause(row):
@@ -916,6 +920,13 @@ class AttackPolicy(object):
         for job in jobs:
             row = self._current(job, require_line=True)
             if not self._he_observed(row):
+                if (deferred is not None and row is not None and
+                        observations.get(job[0], {}).get('damage') is not None):
+                    # A measured winner which received a current unfinished
+                    # recheck may yield now, even while unrelated contacts
+                    # remain unvisited. Preserve its score, never invent a
+                    # zero or wait for global coverage before deferring it.
+                    deferred.add(job[0])
                 continue
             evidence = (row if self._executable(row, 'he_fallback') else
                         self._planned_evidence(row))
@@ -974,6 +985,7 @@ class AttackPolicy(object):
             if key in identities and value['identity'] == identities[key])
         deferred = self._current_he_deferred.intersection(observations)
         self._collect_current_he_observations(jobs, observations, deferred)
+        eligible = self._loaded_he_fallback_targets(loaded)
         refresh_unusable = bool(jobs and len(observations) == len(jobs) and not any(
             value['damage'] is not None for value in observations.values()))
         # A completed blocked/unknown comparison must not restart before a
@@ -981,21 +993,36 @@ class AttackPolicy(object):
         # only and refresh its finite queue within the original budget;
         # neither a shot nor a negative certificate can use these hints.
         start = self.he_cursor
-        for offset in range(len(jobs)):
+        rotated = [((start + offset) % len(jobs), jobs[(start + offset) % len(jobs)])
+                   for offset in range(len(jobs))]
+        ranked = self._ranked_current_he_jobs(jobs, observations)
+        priority = dict((job[0], index) for index, job in enumerate(ranked)
+                        if job[0][1] in eligible)
+        # A completed local penetration attempt owns its next contact check.
+        # Do not spend CURRENT's entire foreground/atomic slice on unrelated
+        # penetration work before the qualified same point gets any budget.
+        # Retained damage is ordering only: its exact row must be rechecked.
+        ordered = sorted(rotated, key=lambda pair: (
+            0 if pair[1][0] in priority else
+            1 if pair[1][0][1] in eligible and pair[1][0] not in observations else
+            2 if pair[1][0][1] in eligible else 3,
+            priority.get(pair[1][0], 0)))
+        for position, job in ordered:
             if self._used['foreground'] >= self.foreground_budget:
                 break
-            position = (start + offset) % len(jobs)
-            job = jobs[position]
-            if job[0] in observations and not refresh_unusable:
+            row = self._current(job, require_line=True)
+            if (job[0] in observations and (self._he_observed(row) or
+                    job[0][1] not in eligible and not refresh_unusable)):
                 continue
             self.he_cursor = (position + 1) % len(jobs)
             self._evaluate(job, now, 'foreground')
             self._collect_current_he_observations((job,), observations, deferred)
-        pending = tuple(job for job in jobs if job[0] not in observations)
+        pending = tuple(job for unused_position, job in ordered
+                        if job[0] not in observations)
         ready = self._best_current_he(loaded, consumable=True,
                                       observations=observations, deferred=deferred)
         if pending and ready is None:
-            self._atomic_he_compare(pending, now)
+            self._atomic_he_compare(pending, now, current_he=True)
             self._collect_current_he_observations(pending, observations, deferred)
         # The highest observation is only the next key to check. Recheck it
         # with the remaining original budgets; a changed/blocked winner is
@@ -1081,7 +1108,7 @@ class AttackPolicy(object):
              self._best_current_he(loaded, consumable=True,
                                    observations=observations, deferred=deferred) is not None))
 
-    def _atomic_he_compare(self, jobs, now):
+    def _atomic_he_compare(self, jobs, now, current_he=False):
         """Finish a moving HE domain within the same bounded atomic slice.
 
         Negative ammunition proof and HE ranking must sometimes coexist in
@@ -1091,6 +1118,19 @@ class AttackPolicy(object):
         """
         if self._frame_invalid:
             return
+        if current_he:
+            expanded = []
+            for job in jobs:
+                trial = self._single_point_trial(job[1], job[2])
+                if trial is not None and not trial['failed']:
+                    key = job[0][:3] + ('penetration',)
+                    expanded.append((key, job[1], job[2], job[3], 'penetration'))
+                expanded.append(job)
+            # The same finite slice may qualify later competitors, but only
+            # after the current qualified contact has had its first turn.
+            # This retains completed damage ranking when spare work exists;
+            # unresolved enemies cannot consume CURRENT's whole slice first.
+            jobs = tuple(expanded)
         if self._atomic_frame is not self.frame:
             if now < self._atomic_at + ATOMIC_CLOSE_INTERVAL or len(jobs) > ATOMIC_MAX_JOBS:
                 return
@@ -1115,6 +1155,10 @@ class AttackPolicy(object):
             if self.atomic_clock() >= self._atomic_deadline or self._used['atomic'] >= ATOMIC_CANDIDATES:
                 self._atomic_receipt['reason'] = 'atomic_frame_budget_exhausted'
                 break
+            if current_he and job[4] == 'he_fallback':
+                trial = self._single_point_trial(job[1], job[2])
+                if trial is not None and not trial['failed']:
+                    continue
             if not self._he_observed(self._current(job, require_line=True)):
                 self._evaluate(job, now, 'atomic')
         if not self.evaluator.fence(self.frame):
@@ -1348,6 +1392,74 @@ class AttackPolicy(object):
                     if job[0] == candidate['key']), None)
         return self._current(job, require_line) if job is not None else None
 
+    def retained_lay_candidate(self, key, now):
+        """Refresh one admitted laying intention without global armour work.
+
+        A current clear row can continue normal mechanical admission. A
+        prediction alone is pending line/armour evidence, and is usable only
+        by CombatStop's already admitted pivot. It never creates a firing
+        row, a new movement owner, or a completed failure certificate.
+        """
+        receipt = dict(status='invalid', candidate=None, solution=None,
+                       mechanical=None)
+        if self.frame is None or self._frame_invalid:
+            receipt['status'] = 'pending'
+            return receipt
+        if (not isinstance(key, tuple) or len(key) != 4 or
+                key[0] != self.frame['loaded']):
+            return receipt
+        job = next((job for job in self._jobs(key[3], key[0]) if job[0] == key), None)
+        if job is None:
+            return receipt
+        row = self._current(job, require_line=True)
+        if row is None and self._used['foreground'] < self.foreground_budget:
+            self._evaluate(job, now, 'foreground')
+            row = self._current(job, require_line=True)
+        fence = getattr(self.evaluator, 'fence_next', None)
+        if row is not None and callable(fence):
+            valid = fence(self.frame, (row,), False)
+        else:
+            fence = getattr(self.evaluator, 'fence', None)
+            valid = callable(fence) and fence(self.frame)
+        if not valid:
+            row = None
+        if row is not None and isinstance(row.get('solution'), dict):
+            planned = self._planned_evidence(row)
+            if (planned is not None and (planned.get('solution') or {}).get('needs_hull') and
+                    self._plannable(row, row['mode'])):
+                # The exact-current native stationary plan is already a
+                # checked turn hypothesis. Retain its mechanical intention,
+                # without replacing the actual blocked row or granting fire.
+                receipt.update(status='clear', candidate=row,
+                               solution=planned['solution'], mechanical='hull_laying')
+                return receipt
+            mechanical = row.get('mechanical')
+            blocked = (row.get('line') in ('friendly_blocked', 'world_blocked',
+                        'enemy_blocked', 'vehicle_blocked') or
+                       mechanical == 'mechanical_limited')
+            clear = (row.get('line') == 'clear' and mechanical in
+                     ('reachable', 'hull_laying', 'hydraulic_laying'))
+            receipt.update(status='blocked' if blocked else 'clear' if clear else 'pending',
+                           candidate=row, solution=row['solution'], mechanical=mechanical)
+            return receipt
+        refresh = getattr(self.evaluator, 'refresh_trigger_solution', None)
+        intent = dict(key=key, shell_index=key[0], shell=job[1],
+                      target=job[2].get('value', job[2]), target_key=key[1],
+                      sample=key[2], mode=key[3])
+        solution = refresh(intent, now) if callable(refresh) else None
+        receipt['status'] = 'pending'
+        if not isinstance(solution, dict):
+            return receipt
+        mechanical = ('reachable' if solution.get('reachable') else
+                      'hull_laying' if solution.get('needs_hull') else
+                      'mechanical_limited')
+        intent.update(solution=solution, line='pending', armor='unknown',
+                      mechanical=mechanical, contact=None, expected_damage=None,
+                      reason='retained_lay_geometry_only')
+        receipt.update(status='blocked' if mechanical == 'mechanical_limited' else 'pending',
+                       candidate=intent, solution=solution, mechanical=mechanical)
+        return receipt
+
     def intent_solution(self, candidate):
         """Return only an aiming/navigation point, not a firing certificate."""
         row = self.current_row(candidate)
@@ -1374,9 +1486,10 @@ class AttackPolicy(object):
         # A query's age proves neither an obstruction nor armour failure.
         # Keep the admitted task and let the bounded frontier continue;
         # physical recovery needs its own observed cause.
-        if (candidate is not None and candidate.get('mechanical') == 'reachable' and
+        if (candidate is not None and candidate.get('mechanical') in
+                ('reachable', 'hull_laying', 'hydraulic_laying') and
                 candidate.get('line') in ('clear', 'pending') and
-                self.decision['action'] in ('aim', 'preaim')):
+                self.decision['action'] in ('aim', 'preaim', 'firing_position')):
             return self._choose('preaim', reason, candidate)
         return self._choose('wait', reason)
 
@@ -1580,7 +1693,7 @@ class AttackPolicy(object):
                     line=row['line'], mechanical=row['mechanical'])
             if self.frame.get('lane_missing'):
                 break
-            if (loaded_he and len(jobs) > ATOMIC_CANDIDATES and
+            if (loaded_he and
                     (offset + 1 == len(jobs) or jobs[offset + 1][0][1] != job[0][1]) and
                     job[0][1] in self._loaded_he_fallback_targets(loaded)):
                 # Spend the remainder of this SAME slice on current contact
@@ -1763,9 +1876,19 @@ class AttackPolicy(object):
         continuing_he = self._continue_current_he(now)
         if continuing_he is not None:
             return continuing_he
-        current = self._frontier(now)
         current_load = frame['ammo'][loaded] > 0 and (frame['clip'] > 0 or frame.get('reloading'))
-        if current_load and self._single_point_failed(loaded):
+        if current_load and self._loaded_he_fallback_targets(loaded):
+            # A positive current penetration row still executes first. Once
+            # its local trial failed, CURRENT HE contact owns the original
+            # foreground quota before other enemies' unresolved penetration.
+            current = next((row for row in self._rows_for('penetration', loaded,
+                fresh_line=True) if self._executable_current(row)), None)
+            if current is not None:
+                self._clear_fallback()
+                return self._choose('aim', 'current_shell_verified', current)
+            return self._ordinary_he_decision(loaded, now)
+        current = self._frontier(now)
+        if current_load and current is None and self._loaded_he_fallback_targets(loaded):
             return self._ordinary_he_decision(loaded, now)
         if current is None and not any(row.get('armor') == 'passed'
                 for row in self._rows_for('penetration', loaded)):
@@ -1923,6 +2046,16 @@ class AttackPolicy(object):
                              if shell['index'] == loaded), False))
         complete = (self._current_he_frontier(now, loaded) if loaded_he else
                     self._he_frontier(now))
+        if loaded_he and not self._frame_invalid:
+            penetration = [row for row in self._rows_for('penetration', loaded,
+                fresh_line=True) if self._executable_current(row)]
+            if penetration:
+                # Spare contact-comparison work may verify another CURRENT
+                # HE penetration. Its actual positive point takes priority
+                # before this trigger has committed a fallback intention.
+                self._clear_fallback()
+                return self._choose('aim', 'current_shell_verified',
+                                    min(penetration, key=self._penetration_order))
         if not complete:
             return self._recover_incomplete(now, 'he_damage_comparison_pending',
                 self._rows_for('he_fallback', loaded, fresh_line=True))
@@ -2484,9 +2617,9 @@ class NativeAttackEvaluator(object):
         self._observe_lanes(frame)
         if self._at != now:
             self._at = now
-            active = getattr(getattr(runtime, 'combat_stop', None),
-                             'physical_recovery_active', None)
-            recovery = (WORLD_CHORDS_PER_FRONTIER // 2 if callable(active) and active() else 0)
+            pending = getattr(getattr(runtime, 'combat_stop', None),
+                              'physical_recovery_pending', None)
+            recovery = (WORLD_CHORDS_PER_FRONTIER // 2 if callable(pending) and pending() else 0)
             self._budgets = dict(foreground=WORLD_CHORDS_PER_FRONTIER - recovery,
                                  recovery=recovery,
                                  background=WORLD_CHORDS_PER_FRONTIER)
@@ -2600,6 +2733,10 @@ class NativeAttackEvaluator(object):
         if job is not None:
             job.update(cursor=0, done=False, blocked=None, lane=None)
 
+    def cancel_point_recovery(self):
+        """A retired movement task cannot donate its hypothetical ray work."""
+        self._recovery_probe = None
+
     def point_recovery_probe(self, frame, candidate, destination, now):
         """Preview only the selected sample's future line, never a shot proof.
 
@@ -2621,42 +2758,55 @@ class NativeAttackEvaluator(object):
             sample = candidate['sample']
             if sample not in (target.get('samples') or ()):
                 return dict(status='unknown', reason='sample_unavailable')
-            position = frame['position']
             destination = _point(destination)
-            delta = tuple(destination[i] - position[i] for i in range(3))
-            origin = tuple(frame['origin'][i] + delta[i] for i in range(3))
-            pose = frame['pose']
-            projected_pose = (destination, pose[1], origin, pose[3],
-                              pose[4], pose[5],
-                              tuple(pose[6][i] + delta[i] for i in range(3)))
-            projected_frame = dict(frame, position=destination, origin=origin,
-                                   pose=projected_pose,
-                                   planning_pose=_planning_pose(projected_pose),
-                                   source=dict(frame['source'], position=destination,
-                                               x=destination[0], y=destination[1],
-                                               z=destination[2]))
-            prediction_key = (shell['index'], target['key'], sample)
-            previous = self.predictions.get(prediction_key)
-            try:
-                predicted = self._prediction(projected_frame, shell, target, sample)
-            finally:
-                if previous is None:
-                    self.predictions.pop(prediction_key, None)
-                else:
-                    self.predictions[prediction_key] = previous
-            if predicted is None:
-                return dict(status='unknown', reason='future_geometry_unavailable')
-            if predicted.get('unreachable'):
-                return dict(status='blocked', reason='future_intercept_unreachable')
-            if predicted['reach']['status'] == 'mechanical_limited':
-                return dict(status='blocked', reason='future_pitch_unreachable')
-            path = predicted['path']
             stamp = (key, destination, frame['identity'], frame['scene'],
-                     frame['pose'][1], target['pose'], target.get('velocity'),
-                     shell['signature'], tuple(path))
+                     frame.get('combat_signature'), frame['pose'][4:6],
+                     frame['source'].get('id'), frame['source'].get('team'),
+                     target['pose'], target.get('velocity'), target.get('sample_identity'),
+                     target.get('samples'), shell['signature'])
             progress = self._recovery_probe
-            if progress is None or progress.get('stamp') != stamp:
-                progress = self._recovery_probe = dict(stamp=stamp, cursor=0)
+            if (progress is None or progress.get('stamp') != stamp or
+                    progress['lane_stamp'] != self.lane_stamp(frame, progress['line_region'])):
+                self._recovery_probe = None
+                # Freeze this destination's assumed source attitude and
+                # muzzle transform as part of its planning hypothesis. All
+                # slices inspect this SAME exact path; actual source motion
+                # never turns completed chords into proof for a new path.
+                # Current firing rows and reached-position checks continue
+                # to use their original exact native source pose fences.
+                position, pose = frame['position'], frame['pose']
+                delta = tuple(destination[i] - position[i] for i in range(3))
+                origin = tuple(frame['origin'][i] + delta[i] for i in range(3))
+                projected_pose = (destination, pose[1], origin, pose[3],
+                                  pose[4], pose[5],
+                                  tuple(pose[6][i] + delta[i] for i in range(3)))
+                projected_frame = dict(frame, position=destination, origin=origin,
+                                       pose=projected_pose,
+                                       planning_pose=_planning_pose(projected_pose),
+                                       source=dict(frame['source'], position=destination,
+                                                   x=destination[0], y=destination[1],
+                                                   z=destination[2]))
+                prediction_key = (shell['index'], target['key'], sample)
+                previous = self.predictions.get(prediction_key)
+                try:
+                    predicted = self._prediction(projected_frame, shell, target, sample)
+                finally:
+                    if previous is None:
+                        self.predictions.pop(prediction_key, None)
+                    else:
+                        self.predictions[prediction_key] = previous
+                if predicted is None:
+                    return dict(status='unknown', reason='future_geometry_unavailable')
+                if predicted.get('unreachable'):
+                    return dict(status='blocked', reason='future_intercept_unreachable')
+                if predicted['reach']['status'] == 'mechanical_limited':
+                    return dict(status='blocked', reason='future_pitch_unreachable')
+                region = predicted['line_region']
+                progress = self._recovery_probe = dict(stamp=stamp, cursor=0,
+                    projected_frame=projected_frame, predicted=predicted,
+                    line_region=region, lane_stamp=self.lane_stamp(frame, region))
+            projected_frame, predicted = progress['projected_frame'], progress['predicted']
+            path = predicted['path']
             available = self._budgets.get('recovery', 0)
             while progress['cursor'] < len(path) - 1 and available > 0:
                 cursor = progress['cursor']
@@ -2671,6 +2821,8 @@ class NativeAttackEvaluator(object):
                     self._budgets['recovery'] = available
                     return dict(status='blocked', reason='future_world_blocked')
             self._budgets['recovery'] = available
+            if self._recovery_probe is not progress:
+                return pending
             if progress['cursor'] < len(path) - 1:
                 return pending
             if frame['lane_missing']:
@@ -2680,15 +2832,26 @@ class NativeAttackEvaluator(object):
             if not isinstance(verdict, dict):
                 return dict(status='unknown', reason='future_lane_unknown')
             if verdict.get('clear') is not True:
-                return dict(status='blocked' if verdict.get('blocked') else 'unknown',
-                            reason='future_lane_blocked' if verdict.get('blocked') else
+                friendly = (verdict.get('blocker_team') == frame['source'].get('team') and
+                            verdict.get('blocker_kind') in ('bot', 'player', 'human') and
+                            verdict.get('blocker_id') is not None)
+                blocked = (friendly or verdict.get('blocked') is True and
+                           verdict.get('blocker_kind') in ('wreck', 'debris'))
+                return dict(status='blocked' if blocked else 'unknown',
+                            reason='future_lane_blocked' if blocked else
                                    'future_lane_unknown')
-            if not self.fence(frame):
+            if not self.fence(frame) or self._scene_stamp() != frame['scene']:
                 return dict(status='pending', reason='recovery_observation_changed')
+            # Final native lane/fence reads can re-enter task retirement or
+            # start a replacement with this same key. Geometry validity does
+            # not prove that this particular inspection still owns its work.
+            # Check after every native callback, without erasing a new task.
+            if self._recovery_probe is not progress or progress.get('stamp') != stamp:
+                return dict(status='pending', reason='recovery_task_changed')
             return dict(status='clear', reason='same_point_future_line_checked',
                         point=predicted['solution']['point'],
                         mechanical=predicted['reach']['status'])
-        except (AttributeError, KeyError, IndexError, TypeError, ValueError,
+        except (AttributeError, KeyError, IndexError, TypeError, ValueError, StopIteration,
                 RuntimeError, OverflowError, ZeroDivisionError):
             return dict(status='unknown', reason='recovery_native_unavailable')
 

@@ -2626,7 +2626,6 @@ class BotRuntimeTests(unittest.TestCase):
             'speed': 7.0, 'movement_dir': 1, 'rotation_dir': -1,
             'target_kind': 'human', 'target_id': 1,
         })
-        runtime._friendly_repositions[11] = {'until': 99.0}
         payload = _critical_payload(
             {'name': 'engineHealth', 'hp': 0.0, 'max_hp': 100.0,
              'state': 'destroyed'},
@@ -2666,7 +2665,7 @@ class BotRuntimeTests(unittest.TestCase):
             state['speed'], state['movement_dir'], state['rotation_dir']))
         self.assertIsNone(state['target_kind'])
         self.assertIsNone(state['target_id'])
-        self.assertNotIn(11, runtime._friendly_repositions)
+        self.assertFalse(hasattr(runtime, '_friendly_repositions'))
         self.assertTrue(runtime._mark_combat_publication(state))
         projected = bot_state_rows.decoded(bot_state_rows.rows([state]), 0)
         self.assertEqual((0, False, 640, 5), (
@@ -12806,7 +12805,7 @@ class BotRuntimeTests(unittest.TestCase):
             .15, now + .15, players=[player])[0])[0]
         self.assertEqual(0, blocked['fire_seq'])
         self.assertEqual(1, probes[0][2]['fire_seq'])
-        self.assertNotIn(11, runtime._friendly_repositions)
+        self.assertFalse(hasattr(runtime, '_friendly_repositions'))
         fired = bot_state_rows.bots(runtime.update(
             .15, now + .30, players=[player])[0])[0]
         self.assertEqual(1, fired['fire_seq'])
@@ -12819,14 +12818,20 @@ class BotRuntimeTests(unittest.TestCase):
             item[:2] for item in probes])
 
     def test_authored_wait_cancels_friendly_reposition_without_translation(self):
-        runtime=self.runtime
-        runtime.battle_start(self.start)
-        for phase in ('waiting','queue'):
-            runtime._server_orders[11]={'parking_phase':phase}
-            runtime._friendly_repositions[11]={'until':99.}
-            self.assertEqual((None,False),runtime._friendly_reposition_order(
-                runtime.states[11],{},1.,runtime._server_orders.get(11,{})))
-            self.assertNotIn(11,runtime._friendly_repositions)
+        # Authored parking belongs to the task even when a current friendly
+        # refusal exists. There is no separate engine-side marker to cancel.
+        from test_player_combat_stop import Scene
+        for phase in ('waiting', 'queue'):
+            scene = Scene(admitted=False)
+            scene.raw_order.update(parking_phase=phase, combat_mode='route',
+                move_position=(20., 0., -30.), face_position=(20., 0., -30.))
+            scene.candidate.update(line='friendly_blocked', mechanical='reachable')
+            result = scene.apply(1.)
+            self.assertEqual((20., 0., -30.), result['move_position'])
+            self.assertEqual((20., 0., -30.), result['face_position'])
+            self.assertIsNone(scene.owner._physical_recovery)
+            self.assertFalse(scene.owner.stop_allowed)
+        self.assertFalse(hasattr(self.runtime, '_friendly_reposition_order'))
 
     def test_blocked_friendly_lane_repositions_through_safe_driver(self):
         final_probes = []
@@ -12876,21 +12881,20 @@ class BotRuntimeTests(unittest.TestCase):
 
         now = 1.04
         runtime.update(.04, now, players=[player])
-        self.assertIn(11, runtime._friendly_repositions)
+        self.assertFalse(hasattr(runtime, '_friendly_repositions'))
         self.assertEqual(1, state['fire_seq'])
         start_position = self.module._position(state)
-        moved = False
+        initial_ammo = list(state['ammo_remaining'])
+        # This fixture exercises the engine's final gun consumer. A blocked
+        # shot cannot install a second movement owner beneath shared control;
+        # complete shared recovery/driver cases live in the worker suite.
         for index in range(1, 151):
-            runtime.update(
-                .04, now + .04 * index, players=[player])
-            if self.module._distance(
-                    start_position, self.module._position(state)) > 0.05:
-                moved = True
-                break
-
-        self.assertTrue(moved)
-        self.assertEqual(1, state['fire_seq'])
-        self.assertTrue(final_probes)
+            runtime.update(.04, now + .04 * index, players=[player])
+            self.assertEqual(start_position, self.module._position(state))
+            self.assertEqual(initial_ammo, state['ammo_remaining'])
+            self.assertEqual(1, state['fire_seq'])
+            self.assertFalse(state.get('local_combat_manoeuvre'))
+        self.assertFalse(hasattr(runtime, '_mark_friendly_reposition'))
 
     def test_blocked_reposition_expires_without_crossing_native_gate(self):
         command = {
@@ -12945,28 +12949,18 @@ class BotRuntimeTests(unittest.TestCase):
 
         now = 1.04
         runtime.update(.04, now, players=[player])
-        self.assertIn(11, runtime._friendly_repositions)
+        self.assertFalse(hasattr(runtime, '_friendly_repositions'))
         initial_position = self.module._position(state)
         initial_ammo = list(state['ammo_remaining'])
-        deadline = runtime._friendly_repositions[11]['deadline']
-        self.assertLessEqual(deadline-now, self.module.FRIENDLY_REPOSITION_MAX_SECONDS)
-        expired = False
-        for index in range(1, int(math.ceil((deadline-now)/.04))+3):
+        for index in range(1, 201):
             runtime.update(.04, now + .04 * index, players=[player])
             self.assertEqual(initial_position, self.module._position(state))
             self.assertEqual(initial_ammo, state['ammo_remaining'])
             self.assertEqual(0, state['fire_seq'])
-            if 11 not in runtime._friendly_repositions:
-                self.assertGreaterEqual(now+.04*index,deadline)
-                expired = True
-                self.assertEqual('timeout',state['_friendly_reposition_last_terminal']['outcome'])
-                break
-            self.assertEqual(deadline,runtime._friendly_repositions[11]['deadline'])
-
-        self.assertTrue(expired)
-        self.assertEqual(initial_position, self.module._position(state))
-        self.assertEqual(0, state['fire_seq'])
-        self.assertEqual(initial_ammo, state['ammo_remaining'])
+            self.assertFalse(state.get('local_combat_manoeuvre'))
+        # Time passing cannot manufacture another side-step or bypass the
+        # same final friendly/collision refusal.
+        self.assertNotIn('_friendly_reposition_retry', state)
 
     def test_friendly_lane_fail_closed_without_blocker_does_not_reposition(self):
         verdicts = [
@@ -13011,9 +13005,9 @@ class BotRuntimeTests(unittest.TestCase):
         player = _admit_player(player)
 
         runtime.update(.04, 1.0, players=[player])
-        self.assertNotIn(11, runtime._friendly_repositions)
+        self.assertFalse(hasattr(runtime, '_friendly_repositions'))
         runtime.update(.04, 1.04, players=[player])
-        self.assertNotIn(11, runtime._friendly_repositions)
+        self.assertFalse(hasattr(runtime, '_friendly_repositions'))
         self.assertEqual(0, state['fire_seq'])
 
     def test_unavailable_native_launch_origin_stops_without_reposition(self):
@@ -13061,7 +13055,7 @@ class BotRuntimeTests(unittest.TestCase):
         }])
 
         self.assertEqual(0, state['fire_seq'])
-        self.assertNotIn(11, runtime._friendly_repositions)
+        self.assertFalse(hasattr(runtime, '_friendly_repositions'))
         self.assertEqual([], lane_calls)
 
     def test_spg_exact_friendly_lane_is_checked_before_atomic_fire(self):
@@ -13162,8 +13156,8 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual(0, blocked['fire_seq'])
         self.assertNotIn(11, runtime._artillery_intents)
         self.assertNotIn(11, runtime._artillery_reproofs)
-        destination = runtime._friendly_repositions[11]['destination']
-        state['x'], state['y'], state['z'] = destination
+        self.assertFalse(hasattr(runtime, '_friendly_repositions'))
+        self.assertEqual((0., 0., 0.), self.module._position(state))
         fired = bot_state_rows.bots(runtime.update(.15, 1.15, players=[player])[0])[0]
         self.assertEqual(1, fired['fire_seq'])
         self.assertEqual(2, len(probes))
@@ -17541,7 +17535,7 @@ class BotRuntimeTests(unittest.TestCase):
             self.assertIn('frozen=True', output.getvalue())
             self.assertIn('strategic_goal=(0.0, 0.0, 200.0)', output.getvalue())
 
-    def test_motion_diagnostic_nonempty_gun_angle_rejections_use_simulation_time(self):
+    def test_motion_diagnostic_omits_retired_gun_angle_rejection_clock(self):
         from contextlib import redirect_stdout
         self.runtime.battle_start(self.start)
         state=self.runtime.states[11]
@@ -17552,7 +17546,8 @@ class BotRuntimeTests(unittest.TestCase):
         with redirect_stdout(output):
             self.runtime._finish_motion_stall(state,False,False,position,100.0)
         row=_motion_rows(output.getvalue())[0]
-        self.assertEqual([8.0,0.0],[r['seconds_left'] for r in row['gun_angle_rejected']])
+        self.assertNotIn('gun_angle_rejected', row)
+        self.assertEqual([0., 0.], row['controls']['motion'])
         self.assertNotIn('_motion_stall_pending',state)
 
     def test_navigation_receipt_is_bounded_and_does_not_query_world(self):
@@ -17664,7 +17659,8 @@ class BotRuntimeTests(unittest.TestCase):
         line = next(line for line in output.getvalue().splitlines()
                     if line.startswith('[Offline LAN 0.9.22] BOT MOTION '))
         row = _motion_rows(output.getvalue())[0]
-        self.assertEqual(5.0,row['gun_angle_rejected'][0]['seconds_left'])
+        self.assertNotIn('gun_angle_rejected', row)
+        self.assertEqual([0., 0.], row['controls']['motion'])
         self.assertNotIn('_motion_stall_pending',state)
 
     def test_update_passes_control_stages_to_bounded_motion_diagnostic(self):

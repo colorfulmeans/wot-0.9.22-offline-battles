@@ -68,7 +68,7 @@ class PointRecoveryTests(unittest.TestCase):
         self.assertEqual(3, len(scene.probes))
         self.assertFalse(order['fire_allowed'])
 
-    def test_all_checked_positions_fail_once_then_route_reacquires_only_after_real_change(self):
+    def test_all_positions_fail_then_changed_geometry_requires_a_new_positive_probe(self):
         scene = self.scene([dict(status='blocked')] * 45)
         result = None
         for tick in range(15):
@@ -85,6 +85,10 @@ class PointRecoveryTests(unittest.TestCase):
         self.assertEqual(count, len(scene.probes))
         scene.position((1., 0., 0.))
         result = scene.apply(2.)
+        self.assertFalse(scene.owner.combat_owned)
+        self.assertTrue(scene.owner.physical_recovery_pending())
+        scene.runtime.point_recovery_probe = lambda *args: dict(status='clear')
+        result = scene.apply(2.1)
         self.assertTrue(scene.owner.combat_owned)
         self.assertTrue(scene.owner.stop_allowed)
         self.assertIsNotNone(scene.owner._physical_recovery)

@@ -116,17 +116,14 @@ class PhysicalReviewCoverageTests(unittest.TestCase):
         self.assertFalse(hasattr(scene.policy, 'search_authority'))
 
     def test_new_scope_must_complete_its_own_observations(self):
-        for change in ('source', 'shell', 'entity', 'sample', 'new_target', 'blocker', 'reset'):
+        for change in ('shell', 'entity', 'sample', 'new_target', 'blocker', 'reset'):
             with self.subTest(change=change):
                 scene = self.scene(points=9)
                 scene.prime()
                 self.assertEqual('firing_position', scene.tick(0.)['action'])
                 for target in (1, 2):
                     scene.move_target(target, 1)
-                if change == 'source':
-                    scene.frame['position'] = (1., 0., 0.)
-                    scene.frame['pose'] = ('source', 1)
-                elif change == 'shell':
+                if change == 'shell':
                     scene.frame['shells'][0]['signature'] = ('ap', 2)
                 elif change == 'entity':
                     scene.frame['targets'][1]['sample_identity'] = ('native_entity', ('bot', 2), 2)
@@ -145,6 +142,40 @@ class PhysicalReviewCoverageTests(unittest.TestCase):
                 self.assertNotEqual('firing_position', result['action'], (change, result))
                 self.assertFalse(hasattr(scene.policy, 'search_authority'))
                 self.assertFalse(scene.policy.apply_order({})['fire_allowed'])
+
+    def test_source_translation_preserves_inspection_not_a_current_obstruction_or_shot(self):
+        scene = self.scene(points=9)
+        scene.prime()
+        first = scene.tick(0.)
+        self.assertEqual('firing_position', first['action'])
+        inspected = dict(scene.policy._physical_review['observed'])
+        scene.frame['position'] = (1., 0., 0.)
+        scene.frame['pose'] = ('source', 1)
+        # An unavailable new ray cannot inherit the old blocker's authority.
+        for sample in range(9):
+            scene.value(0, target=1, sample=sample, armor='unknown', line='unknown',
+                        mechanical='unknown', reason='entity_geometry_unavailable')
+        result = scene.tick(.1, background=False)
+        refreshed = scene.policy.current_row(first['candidate'])
+        self.assertIsNot(first['candidate'], refreshed)
+        self.assertNotEqual(first['candidate']['pose_stamp'], refreshed['pose_stamp'])
+        self.assertEqual(('unknown', 'unknown'), (refreshed['line'], refreshed['armor']))
+        self.assertNotEqual('firing_position', result['action'], result)
+        self.assertEqual(inspected, scene.policy._physical_review['observed'])
+        self.assertFalse(scene.policy.apply_order({})['fire_allowed'])
+        self.assertFalse(scene.policy._all_failed((0,)))
+        # A newly measured obstruction may use the already visited queue,
+        # while its actual row remains stamped to the translated source.
+        for sample in range(9):
+            scene.value(0, target=1, sample=sample, armor='passed', line='friendly_blocked',
+                        blocker=dict(blocker_kind='bot', blocker_id=12, blocker_team=1))
+        for tick in range(1, 12):
+            result = scene.tick(.1 + tick * .05, background=False)
+            if result['action'] == 'firing_position':
+                break
+        self.assertEqual('firing_position', result['action'], result)
+        self.assertEqual(scene.frame['pose'], result['candidate']['solution']['source_pose'])
+        self.assertFalse(scene.policy.apply_order({})['fire_allowed'])
 
 
 if __name__ == '__main__':

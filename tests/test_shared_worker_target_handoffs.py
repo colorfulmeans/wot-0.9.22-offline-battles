@@ -9,13 +9,13 @@ original handoff cases retain their real clock and bounded wait.
 import copy
 import unittest
 
-from shared_multi_bot_scene import MultiBotScene
+from test_shared_bot_friendly_recovery import RecoveryWorld
 from gui.mods.offline_lan_0922.vehicle_control.attack_policy import ATOMIC_WALL_SECONDS
 
 
 class SharedWorkerTargetHandoffTests(unittest.TestCase):
     def scene_with_proved_target(self):
-        scene = MultiBotScene()
+        scene = RecoveryWorld()
         scene.setUp()
         self.addCleanup(scene.doCleanups)
         scene.configure_workers(6, diverse=False)
@@ -64,16 +64,21 @@ class SharedWorkerTargetHandoffTests(unittest.TestCase):
         # assuming a partial scan is an early relocation certificate.
         for unused in range(200):
             scene.step()
-            if 11 in engine._friendly_repositions:
+            phase = binding.combat_stop._physical_recovery
+            if phase is not None and phase.get('goal') is not None and binding.combat_stop.stop_allowed:
                 break
             self.assertEqual(source, tuple(binding.state['position']))
             self.assertEqual(committed, binding.state['fire_seq'])
             self.assertFalse(hasattr(binding.attack_policy, 'search_started'))
         self.assertEqual('firing_position', binding.attack_policy.decision['action'])
-        marker = engine._friendly_repositions[11]
-        self.assertEqual(14, marker['target_id'])
-        self.assertEqual((14, 'bot', 12), marker['identity'][:3])
-        self.assertGreater(marker['deadline'], scene.now)
+        marker = binding.combat_stop._physical_recovery
+        self.assertIsNotNone(marker)
+        self.assertEqual(('bot', 14), marker['target'])
+        self.assertEqual(marker['candidate']['key'], marker['key'])
+        self.assertEqual('friendly_blocked', marker['candidate']['line'])
+        self.assertIsNotNone(marker['goal'])
+        self.assertFalse(marker['ready'])
+        self.assertFalse(hasattr(engine, '_friendly_repositions'))
         self.assertFalse(hasattr(binding.attack_policy, 'search_started'),
                           'A real friendly blocker is not an armour failure.')
         return scene, binding, marker
@@ -93,7 +98,7 @@ class SharedWorkerTargetHandoffTests(unittest.TestCase):
         for frame in scene.frames[5:]:
             for channel in ('foreground', 'background'):
                 self.assertLessEqual(frame['counts'].get((11, channel, 'candidate'), 0), 2)
-        self.assertEqual((14, 'bot', 12), marker['identity'][:3])
+        self.assertEqual(('bot', 14), marker['target'])
         self.assertFalse(hasattr(binding.attack_policy, 'search_authority'))
         self.assertEqual(scene.initial_ammo[11][0] - 1, binding.gun.ammo[0])
         self.assertEqual(1, binding.state['fire_seq'])
@@ -109,7 +114,7 @@ class SharedWorkerTargetHandoffTests(unittest.TestCase):
             scene.step()
             self.assertEqual('stationary_alternatives_pending',
                              binding.attack_policy.decision['reason'])
-            self.assertNotIn(11, scene.engine._friendly_repositions)
+            self.assertFalse(binding.combat_stop.physical_recovery_active())
             # A prior real obstruction is history, not current movement
             # authority once the ally has left the shot lane.
             self.move_actor(scene, 12, (0., 0., -25.))
@@ -123,7 +128,7 @@ class SharedWorkerTargetHandoffTests(unittest.TestCase):
         self.move_actor(scene, 14, (-16., 0., 26.))
         for unused in range(200):
             scene.step()
-            self.assertNotIn(11, scene.engine._friendly_repositions)
+            self.assertFalse(binding.combat_stop.physical_recovery_active())
             self.assertNotIn('_gun_angle_adjustment', binding.state)
             self.assertEqual(source, tuple(binding.state['position']))
             self.assertEqual(ammo, tuple(binding.gun.ammo))
@@ -146,13 +151,13 @@ class SharedWorkerTargetHandoffTests(unittest.TestCase):
         scene.step()
         self.assertEqual('stationary_alternatives_pending',
                          binding.attack_policy.decision['reason'])
-        self.assertNotIn(11, scene.engine._friendly_repositions)
+        self.assertFalse(binding.combat_stop.physical_recovery_active())
         self.set_armor(scene, 15, 30.)
         self.move_actor(scene, 15, (-5., 0., 5.))
         scene.next_plan = 0.
         for unused in range(200):
             scene.step()
-            self.assertNotIn(11, scene.engine._friendly_repositions)
+            self.assertFalse(binding.combat_stop.physical_recovery_active())
             self.assertFalse(hasattr(binding.attack_policy, 'search_started'))
             if binding.attack_policy.current_target_key() == ('bot', 15):
                 break
@@ -175,7 +180,8 @@ class SharedWorkerTargetHandoffTests(unittest.TestCase):
 
     def test_nearer_macro_hint_cannot_cancel_or_restart_retained_recovery(self):
         scene, binding, marker = self.scene_with_friendly_recovery()
-        original = copy.deepcopy(marker)
+        original = {name: copy.deepcopy(marker[name])
+                    for name in ('key', 'target', 'started', 'goal', 'destinations')}
         route = copy.deepcopy(binding.state['route'])
         self.move_actor(scene, 15, (-5., 0., 5.))
         scene.next_plan = 0.
@@ -191,15 +197,15 @@ class SharedWorkerTargetHandoffTests(unittest.TestCase):
             self.assertIn(decision['action'], ('firing_position', 'wait'))
             if decision['action'] == 'wait':
                 self.assertEqual('stationary_alternatives_pending', decision['reason'])
-            self.assertIs(marker, scene.engine._friendly_repositions.get(11),
+            self.assertIs(marker, binding.combat_stop._physical_recovery,
                           'The raw macro hint cancelled the retained shared recovery.')
-            self.assertEqual(original, marker,
-                             'A hint change must not renew the existing recovery deadline.')
+            self.assertEqual(original, {name: marker[name] for name in original},
+                             'A hint change must not replace the checked goal or restart its task.')
             self.assertEqual(route, binding.state['route'])
             command = scene.engine._decision_cache[11][3]
-            self.assertEqual('friendly_lane_reposition', command['combat_mode'])
+            self.assertEqual('gun_angle_adjust', command['combat_mode'])
             self.assertEqual(14, command['target_id'])
-            self.assertEqual(marker['destination'], command['move_position'])
+            self.assertEqual(marker['goal'], command['move_position'])
 
     def test_actual_shared_replacement_retires_previous_recovery(self):
         scene, binding, marker = self.scene_with_friendly_recovery()
@@ -213,15 +219,13 @@ class SharedWorkerTargetHandoffTests(unittest.TestCase):
             # The fresh contact's real native frontier may finish on the
             # following callback. It cannot cancel the old movement owner
             # before the replacement actually qualifies.
-            self.assertIs(marker, scene.engine._friendly_repositions.get(11))
+            self.assertIs(marker, binding.combat_stop._physical_recovery)
         self.assertEqual(('bot', 15), binding.attack_policy.current_target_key())
         self.assertEqual('aim', binding.attack_policy.decision['action'])
-        self.assertNotIn(11, scene.engine._friendly_repositions)
-        event = binding.state['_friendly_reposition_event']
-        # The shared phase now retires its own exact marker once the native
-        # replacement is proved, before the old physical target-change hook.
-        self.assertEqual('verified_shot', event['outcome'])
-        self.assertEqual(marker['identity'], event['marker']['identity'])
+        self.assertFalse(binding.combat_stop.physical_recovery_active())
+        # The verified replacement retires the same shared task directly.
+        # No engine-side target-centre marker survives the handoff.
+        self.assertFalse(hasattr(scene.engine, '_friendly_repositions'))
         self.assertEqual(('bot', 15), binding.combat_stop._intent_target)
         self.assertIsNone(binding.combat_stop._physical_recovery)
         candidate = binding.attack_policy.decision['candidate']
@@ -234,7 +238,7 @@ class SharedWorkerTargetHandoffTests(unittest.TestCase):
         binding.set_mission('hold_position')
         scene.step()
         self.assertEqual('hold_position', binding._mission['action'])
-        self.assertNotIn(11, scene.engine._friendly_repositions)
+        self.assertFalse(binding.combat_stop.physical_recovery_active())
         self.assertFalse(binding.combat_stop.active)
         self.assertEqual(0., binding.state['speed'])
         self.assertFalse(binding._last_order.get('fire_allowed'))
@@ -245,8 +249,94 @@ class SharedWorkerTargetHandoffTests(unittest.TestCase):
         scene.next_plan = 0.
         scene.step()
         self.assertNotEqual(('bot', 14), binding.attack_policy.current_target_key())
-        self.assertNotIn(11, scene.engine._friendly_repositions)
+        self.assertFalse(binding.combat_stop.physical_recovery_active())
         self.assertNotEqual(14, binding.state.get('target_id'))
+
+    def test_arrived_point_still_blocked_by_allies_fails_without_restarting_motion(self):
+        scene, binding, phase = self.scene_with_friendly_recovery()
+        source = phase['goal']
+        target = tuple(scene.engine.states[14]['position'])
+        committed, ammo = binding.state['fire_seq'], tuple(binding.gun.ammo)
+        episode = binding.combat_stop._episode
+        self.move_actor(scene, 11, source)
+        # Two real native ally bodies now cover the previously checked lane.
+        # Keep their external poses fixed while the complete worker executes;
+        # no current-row result, candidate or arrival outcome is prescribed.
+        for actor in (15, 16):
+            scene.engine.states[actor].update(alive=False, health=0.)
+        terminal = None
+        for tick in range(100):
+            self.move_actor(scene, 12, (target[0] - 1.7, 0., target[2] - 7.))
+            self.move_actor(scene, 13, (target[0] + 1.7, 0., target[2] - 7.))
+            self.move_actor(scene, 14, target)
+            scene.step()
+            owner = binding.combat_stop
+            if tick == 0:
+                self.assertIs(phase, owner._physical_recovery)
+                self.assertTrue(phase['checking'])
+                self.assertFalse(phase['ready'])
+                self.assertEqual('point_recovery_arrived_recheck', owner.receipt['reason'])
+            self.assertEqual(committed, binding.state['fire_seq'])
+            self.assertEqual(ammo, tuple(binding.gun.ammo))
+            self.assertFalse(phase['ready'])
+            self.assertEqual(episode, owner._episode)
+            if owner.receipt.get('status') == 'released':
+                terminal = dict(owner.receipt)
+            if terminal is not None:
+                self.assertFalse(owner.physical_recovery_active())
+        self.assertIsNotNone(terminal)
+        self.assertEqual('point_recovery_no_checked_position', terminal['reason'])
+        self.assertEqual('task', terminal['movement_owner'])
+        self.assertTrue(any(row[1] == 11 and row[4] == 'friendly_blocked'
+                            for row in scene.evaluations))
+
+    def test_actor_death_retires_the_shared_recovery_and_gun_lease(self):
+        scene, binding, unused_phase = self.scene_with_friendly_recovery()
+        committed = binding.state['fire_seq']
+        frozen = {key: copy.deepcopy(value) for key, value in
+                  scene.engine._pending_launch_keys.items() if key[0] == 11}
+        self.assertTrue(frozen)
+        binding.state.update(alive=False, health=0.)
+        scene.step()
+        self.assertTrue(binding.closed)
+        self.assertNotIn(11, scene.engine._actor_controls)
+        self.assertIsNone(binding.combat_stop._physical_recovery)
+        self.assertIsNone(binding._gun_handoff)
+        self.assertFalse(binding.state.get('_combat_movement_owner'))
+        self.assertFalse(binding.state.get('local_combat_manoeuvre'))
+        self.assertEqual(committed, binding.state['fire_seq'])
+        self.assertEqual(frozen, {key: value for key, value in
+                         scene.engine._pending_launch_keys.items() if key[0] == 11})
+
+    def test_reused_actor_gets_a_new_binding_without_the_dead_recovery(self):
+        scene, binding, phase = self.scene_with_friendly_recovery()
+        binding.state.update(alive=False, health=0.)
+        scene.step()
+        self.assertTrue(binding.closed)
+        binding.state.update(alive=True, health=binding.state['max_health'])
+        scene.step()
+        replacement = scene.engine._actor_controls[11]
+        self.assertIsNot(binding, replacement)
+        self.assertFalse(replacement.closed)
+        self.assertIsNot(phase, replacement.combat_stop._physical_recovery)
+        binding.close()
+        self.assertIs(replacement, scene.engine._actor_controls[11])
+        self.assertFalse(replacement.closed)
+
+    def test_next_round_binding_survives_an_old_idempotent_close(self):
+        scene, binding, phase = self.scene_with_friendly_recovery()
+        previous_identity = binding._identity
+        scene.engine.battle_start(dict(round_id=scene.engine.round_id + 1,
+            map='01_karelia', bot_authority_id=1, bot_skill_mode='brutal',
+            bots=scene.manifest))
+        replacement = scene.engine._control_for(scene.engine.states[11])
+        self.assertTrue(binding.closed)
+        self.assertIsNot(binding, replacement)
+        self.assertNotEqual(previous_identity, replacement._identity)
+        self.assertIsNot(phase, replacement.combat_stop._physical_recovery)
+        binding.close()
+        self.assertIs(replacement, scene.engine._actor_controls[11])
+        self.assertFalse(replacement.closed)
 
 
 if __name__ == '__main__':

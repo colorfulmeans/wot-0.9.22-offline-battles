@@ -70,18 +70,34 @@ class TrafficPivotHandoffTests(unittest.TestCase):
         # The shared CombatStop performs a bounded native-point preview only
         # after the normal in-place laying attempt proves stalled.
         from test_player_combat_stop import Scene
-        scene=Scene()
+        scene=Scene(admitted=False)
+        scene.raw_order.update(combat_mode='route', target_id=None,
+            target_kind=None, move_position=(20., 0., -30.),
+            face_position=(20., 0., -30.), throttle_override=None,
+            aim_position=None, fire_allowed=False)
         scene.candidate.update(mechanical='hull_laying',line='clear',
             key=(0,('bot',2),0,'penetration'),sample=0)
-        scene.runtime.point_recovery_probe=lambda c,p,n:dict(status='clear',fire_permission=False)
+        statuses=iter(('pending', 'clear'))
+        scene.runtime.point_recovery_probe=lambda c,p,n:dict(
+            status=next(statuses),fire_permission=False)
         laying=scene.apply(0.)
         self.assertEqual('native_lay',scene.owner.receipt['reason'])
         self.assertEqual('engage',laying['combat_mode'])
-        recovered=scene.apply(10.)
+        # Failed rotation ends its own movement authority. Translation must
+        # earn a checked destination even when the failure pose is unchanged.
+        for now in (10., 10.1):
+            released=scene.apply(now)
+            self.assertEqual('route',released['combat_mode'])
+            self.assertEqual((20.,0.,-30.),released['move_position'])
+            self.assertFalse(scene.owner.stop_allowed)
+        recovered=scene.apply(10.2)
         self.assertEqual('gun_angle_adjust',recovered['combat_mode'])
         self.assertNotEqual(scene.target['position'],recovered['move_position'])
         self.assertFalse(recovered['fire_allowed'])
         self.assertIsNotNone(scene.owner._physical_recovery)
+        self.assertEqual('route',scene.apply(16.3)['combat_mode'])
+        self.assertFalse(scene.owner.stop_allowed)
+        self.assertIsNone(scene.owner._physical_recovery)
         self.assertFalse(hasattr(self.runtime,'_gun_angle_order'))
 
     def test_clear_guard_releases_only_an_unconsumed_handoff(self):

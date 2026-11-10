@@ -89,6 +89,28 @@ class CaptureFireHandoffTests(unittest.TestCase):
         self.assertEqual(2, scene.runtime.weapon.target['network_id'])
         self.assertEqual(29, sum(scene.battle._gun_state.ammo))
 
+    def test_unadmitted_probe_is_not_a_movement_owner_for_gun_handoff(self):
+        scene = self.scene()
+        scene.runtime.set_mission('capture_base', {})
+        for unused in range(10):
+            scene.tick()
+            if scene.runtime._gun_handoff is not None:
+                break
+        runtime = scene.runtime
+        self.assertIsNotNone(runtime._gun_handoff)
+        candidate = runtime.attack_policy.decision['candidate']
+        command = copy.deepcopy(runtime._last_order)
+        self.assertTrue(runtime._gun_handoff_preserves_controls(candidate, command))
+        # Exercise the permission predicate with an unadmitted query marker;
+        # this does not claim to create a checked physical recovery task.
+        pending = dict(admitted=False, goal=None, identity=('bot', 5))
+        with mock.patch.object(runtime.combat_stop, '_physical_recovery', pending):
+            self.assertTrue(runtime.combat_stop.physical_recovery_pending())
+            self.assertFalse(runtime.combat_stop.physical_recovery_active())
+            self.assertTrue(runtime._gun_handoff_preserves_controls(candidate, command))
+            self.assertEqual(command, runtime._last_order)
+        self.assertFalse(scene.launches())
+
     def test_original_parking_hold_keeps_face_and_controls_through_gun_handoff(self):
         scene = self.scene()
         original = scene.runtime._mission_order

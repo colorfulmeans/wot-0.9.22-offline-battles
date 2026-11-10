@@ -355,6 +355,9 @@ class EmbeddedSharedImportOrderTests(unittest.TestCase):
         runtime.features = frozenset(('drive', 'fire'))
         runtime._mission = {}
         runtime._mission_brakes = lambda: False
+        runtime.siege_capable = lambda: False
+        runtime.gun = types.ModuleType('embedded_movement_gun')
+        runtime.gun.shot_index = 0
         target = dict(kind='bot', id=12, network_id=12, visible=True,
                       alive=True, health=1000, position=(200., 0., -110.))
         runtime.visible_targets = lambda: [target]
@@ -374,7 +377,7 @@ class EmbeddedSharedImportOrderTests(unittest.TestCase):
         runtime, owner, target, route = self.combat_movement_fixture()
         policy = runtime.attack_policy
         blocked = dict(target=target, armor='unknown', line='world_blocked',
-            mechanical='unknown', solution=dict(yaw=0.), mode='penetration')
+            mechanical='unknown', solution=dict(yaw=0.), mode='penetration', shell_index=0)
         policy.decision = dict(action='firing_position', candidate=blocked)
         runtime.now = 1.
         accepted = owner.accept(route)
@@ -419,29 +422,43 @@ class EmbeddedSharedImportOrderTests(unittest.TestCase):
         self.assertNotIn('_combat_movement_owner', runtime.state)
         self.assertEqual(route, released)
 
-    def test_legitimate_recovery_admission_and_explicit_exit_on_python27(self):
+    def test_current_native_lay_admission_and_explicit_exit_on_python27(self):
         runtime, owner, target, route = self.combat_movement_fixture()
         candidate = dict(target=target, armor='unknown', line='clear',
-            mechanical='mechanical_limited', solution=dict(yaw=1.), mode='penetration')
+            mechanical='hull_laying', solution=dict(yaw=1., needs_hull=True),
+            mode='penetration', shell_index=0)
         runtime.attack_policy.decision = dict(action='firing_position', candidate=candidate)
         runtime.now = 1.
         admitted = owner.resolve(owner.accept(route), runtime.now)
         self.assertTrue(owner.combat_owned)
         # finish consumes the existing recovery driver's output; this fixture
         # does not claim to generate or physically execute that recovery.
-        recovery = dict(admitted, combat_mode='advance_contact',
+        recovery = dict(admitted, combat_mode='gun_angle_adjust',
                         move_position=(8., 0., 3.), throttle_override=None)
         owner.finish(recovery)
         runtime.attack_policy.decision = dict(action='wait', candidate=None)
         runtime.now = 2.
         continued = owner.finish(owner.resolve(owner.accept(route), runtime.now))
         self.assertEqual((8., 0., 3.), continued['move_position'])
-        self.assertEqual('advance_contact', continued['combat_mode'])
+        self.assertEqual('gun_angle_adjust', continued['combat_mode'])
         self.assertTrue(owner.stop_allowed)
         travel = dict(route, combat_mode='team_return_base')
         runtime.now = 3.
         self.assertEqual(travel, owner.finish(owner.resolve(owner.accept(travel), runtime.now)))
         self.assertFalse(owner.combat_owned)
+        self.assertNotIn('_combat_movement_owner', runtime.state)
+
+    def test_uncertified_mechanical_candidate_keeps_route_on_python27(self):
+        runtime, owner, target, route = self.combat_movement_fixture()
+        candidate = dict(target=target, armor='unknown', line='clear',
+            mechanical='mechanical_limited', solution=dict(yaw=1.),
+            mode='penetration', shell_index=0)
+        runtime.attack_policy.decision = dict(action='firing_position', candidate=candidate)
+        runtime.now = 1.
+        actual = owner.finish(owner.resolve(owner.accept(route), runtime.now))
+        self.assertEqual(route, actual)
+        self.assertFalse(owner.combat_owned)
+        self.assertFalse(owner.stop_allowed)
         self.assertNotIn('_combat_movement_owner', runtime.state)
 
 

@@ -76,28 +76,33 @@ class SharedTargetExecutionOwnershipTests(unittest.TestCase):
     def test_macro_initial_target_motion_cannot_retire_other_targets_friendly_recovery(self):
         scene, initial, unused_executable = self.scene()
         scene.vehicle(3, (15., 0., 50.), team=1)
-        # The native frontier first completes stationary alternatives. Only
-        # its real physical blocker receipt may create the existing escape.
+        # A real blocker enters the same-point recovery. The new owner must
+        # prove a particular destination before the driver may consume it.
         for unused in range(20):
             scene.tick(.1)
-            if scene.runtime.actor_id in scene.runtime.engine._friendly_repositions:
+            phase = scene.runtime.combat_stop._physical_recovery
+            if phase is not None and phase.get('goal') is not None:
                 break
         policy = scene.runtime.attack_policy
         self.assertEqual('firing_position', policy.decision['action'])
         self.assertEqual(('bot', 14), policy.decision['candidate']['target_key'])
         self.assertEqual('friendly_blocked', policy.decision['candidate']['line'])
         self.assertEqual('passed', policy.decision['candidate']['armor'])
-        marker = copy.deepcopy(scene.runtime.engine._friendly_repositions[scene.runtime.actor_id])
         owner = scene.runtime.combat_stop
         episode = owner.receipt['episode']
         physical = owner._physical_recovery
+        self.assertIsNotNone(physical)
+        self.assertIsNotNone(physical['goal'])
+        marker = copy.deepcopy(physical)
+        self.assertEqual(policy.decision['candidate']['key'], physical['key'])
+        self.assertFalse(hasattr(scene.runtime.engine, '_friendly_repositions'))
         scene.pose(initial, (0., 0., 360.))
         scene.runtime._strategic_due = 0.
         scene.tick(.1)
-        self.assertIn(scene.runtime.actor_id, scene.runtime.engine._friendly_repositions,
-                      self.receipt(scene))
-        current = scene.runtime.engine._friendly_repositions[scene.runtime.actor_id]
-        for field in ('identity', 'target_id', 'started_at', 'deadline', 'destination'):
+        current = owner._physical_recovery
+        self.assertIsNotNone(current, self.receipt(scene))
+        for field in ('identity', 'target', 'key', 'sample', 'shell_index',
+                      'mode', 'started', 'goal'):
             self.assertEqual(marker[field], current[field], field)
         # The unrelated enemy's new pose can invalidate a policy query and
         # temporarily remove move_request. The accepted physical task, not
@@ -105,9 +110,9 @@ class SharedTargetExecutionOwnershipTests(unittest.TestCase):
         self.assertEqual(episode, owner.receipt['episode'])
         self.assertIs(physical, owner._physical_recovery)
         self.assertEqual(('bot', 14), physical['target'])
-        self.assertEqual('friendly_lane_reposition', scene.runtime._last_order['combat_mode'])
+        self.assertEqual('gun_angle_adjust', scene.runtime._last_order['combat_mode'])
         self.assertEqual(14, scene.runtime._last_order['target_id'])
-        self.assertEqual(marker['destination'], scene.runtime._last_order['move_position'])
+        self.assertEqual(marker['goal'], scene.runtime._last_order['move_position'])
         self.assertFalse(scene.applied_order()['fire_allowed'])
         self.assertFalse(scene.launches())
         self.assertFalse(hasattr(policy, 'search_started'))

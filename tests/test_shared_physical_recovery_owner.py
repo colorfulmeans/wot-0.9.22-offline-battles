@@ -94,7 +94,7 @@ class PhysicalRecoveryOwnershipTests(unittest.TestCase):
         self.assertEqual(goal, result['move_position'])
         self.assertEqual('gun_angle_adjust', result['combat_mode'])
 
-    def test_new_physical_context_can_retry_but_old_target_cooldown_cannot_block_it(self):
+    def test_new_physical_context_rechecks_before_it_can_acquire_movement(self):
         for retry_at in (1., 18.):
             with self.subTest(retry_at=retry_at):
                 scene = self.scene(['blocked'] * 40)
@@ -105,6 +105,10 @@ class PhysicalRecoveryOwnershipTests(unittest.TestCase):
                 self.assertFalse(scene.owner.stop_allowed)
                 scene.position((1., 0., 0.))
                 scene.apply(retry_at)
+                self.assertFalse(scene.owner.physical_recovery_active())
+                self.assertTrue(scene.owner.physical_recovery_pending())
+                scene.runtime.point_recovery_probe = lambda *args: dict(status='clear')
+                scene.apply(retry_at + .1)
                 self.assertTrue(scene.owner.physical_recovery_active())
                 self.assertIsNone(scene.owner._failed_recovery)
 
@@ -171,39 +175,37 @@ class PhysicalRecoveryOwnershipTests(unittest.TestCase):
         self.assertEqual(result, rear)
         self.assertNotIn('_rear_aim_episode', scene.state)
 
-    def test_friendly_reposition_retains_one_marker_during_sample_changes(self):
+    def test_friendly_recovery_retains_one_checked_point_during_sample_changes(self):
         scene = self.scene()
         scene.candidate.update(mechanical='reachable', line='friendly_blocked',
             blocker=dict(blocker_kind='bot', blocker_id=5, blocker_team=1,
                 blocker_position=(0., 0., 12.), blocker_radius=2.))
         scene.apply(0.)
-        marker = scene.runtime.engine._friendly_repositions[1]
+        marker = scene.owner._physical_recovery
+        goal = marker['goal']
         scene.stationary()
         for now in (.1, .2, .3):
             result = scene.apply(now)
             self.assertNotEqual('native_lay', scene.owner.receipt['reason'])
-            self.assertIs(marker, scene.runtime.engine._friendly_repositions[1])
-            final, expired = scene.runtime.engine._friendly_reposition_order(
-                scene.state, {2: scene.target}, now, result)
-            self.assertFalse(expired)
-            self.assertEqual(marker['destination'], final['move_position'])
+            self.assertIs(marker, scene.owner._physical_recovery)
+            self.assertEqual(goal, result['move_position'])
+            self.assertEqual(scene.candidate['key'], marker['key'])
+            self.assertFalse(result['fire_allowed'])
 
     def test_failed_friendly_escape_releases_route_without_restarting_same_lane(self):
         scene = self.scene()
         scene.candidate.update(mechanical='reachable', line='friendly_blocked',
             blocker=dict(blocker_kind='bot', blocker_id=5, blocker_team=1,
                 blocker_position=(0., 0., 12.), blocker_radius=2.))
-        initial = scene.apply(0.)
-        marker = scene.runtime.engine._friendly_repositions[1]
-        unused, expired = scene.runtime.engine._friendly_reposition_order(
-            scene.state, {2: scene.target}, marker['deadline'], initial)
-        self.assertTrue(expired)
-        for now in (marker['deadline'] + .1, marker['deadline'] + 10.):
+        scene.apply(0.)
+        scene.apply(6.)
+        self.assertIsNone(scene.owner._physical_recovery)
+        for now in (6.1, 16.):
             result = scene.apply(now)
             self.assertFalse(scene.owner.stop_allowed)
             self.assertEqual('route', result['combat_mode'])
             self.assertEqual((20., 0., -30.), result['move_position'])
-            self.assertNotIn(1, scene.runtime.engine._friendly_repositions)
+            self.assertIsNone(scene.owner._physical_recovery)
 
 
 class CombatCircleArrivalTests(unittest.TestCase):

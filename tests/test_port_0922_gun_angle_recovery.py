@@ -142,7 +142,7 @@ class NativeGunAndPointRecoveryTests(unittest.TestCase):
         self.assertTrue(phase['checking'])
         self.assertFalse(stopped['fire_allowed'])
 
-    def test_material_source_motion_reopens_a_failed_point_task(self):
+    def test_material_source_motion_requires_a_new_checked_destination(self):
         scene = self.scene(['blocked'] * 40)
         for tick in range(30):
             scene.apply(tick * .1)
@@ -152,8 +152,13 @@ class NativeGunAndPointRecoveryTests(unittest.TestCase):
         scene.position((.4, 0., 0.))
         self.assertEqual('route', scene.apply(3.)['combat_mode'])
         scene.position((1., 0., 0.))
-        scene.apply(3.1)
+        self.assertEqual('route', scene.apply(3.1)['combat_mode'])
+        self.assertFalse(scene.owner.stop_allowed)
+        scene.runtime.point_recovery_probe = lambda *args: dict(status='clear')
+        result = scene.apply(3.2)
+        self.assertEqual('gun_angle_adjust', result['combat_mode'])
         self.assertTrue(scene.owner.stop_allowed)
+        self.assertFalse(result['fire_allowed'])
 
     def test_real_priority_travel_does_not_receive_combat_translation(self):
         for mode in ('team_return_base', 'withdraw', 'base_defense'):
@@ -176,21 +181,23 @@ class NativeGunAndPointRecoveryTests(unittest.TestCase):
         self.assertEqual('route', result['combat_mode'])
         self.assertIsNone(scene.owner._physical_recovery)
 
-    def test_friendly_lane_reposition_uses_full_throttle_and_expires(self):
-        self.runtime._friendly_repositions[11] = dict(
-            target_id=28, target_kind='bot', destination=(0., 0., 10.), deadline=5.,
-            fire_range=400., shell_index=0)
-        order, expired = self.runtime._friendly_reposition_order(
-            self.state, {28: self.target}, 2., self.runtime._server_orders.get(11, {}))
-        self.assertFalse(expired)
-        self.assertEqual(1.0, order['throttle_override'])
+    def test_friendly_lane_recovery_uses_the_same_checked_point_and_stall_exit(self):
+        scene = self.scene(admitted=False)
+        scene.candidate.update(line='friendly_blocked', mechanical='reachable')
+        order = scene.apply(2.)
+        phase = scene.owner._physical_recovery
+        self.assertEqual('gun_angle_adjust', order['combat_mode'])
+        self.assertEqual(scene.candidate['key'], phase['key'])
+        self.assertEqual(phase['goal'], order['move_position'])
+        self.assertIsNone(order['throttle_override'])
         self.assertFalse(order['fire_allowed'])
-        self.assertEqual((None, True), self.runtime._friendly_reposition_order(
-            self.state, {28: self.target}, 5., self.runtime._server_orders.get(11, {})))
+        self.assertEqual('route', scene.apply(8.1)['combat_mode'])
+        self.assertFalse(scene.owner.stop_allowed)
+        self.assertFalse(hasattr(self.runtime, '_friendly_reposition_order'))
 
     def test_failed_pair_feedback_does_not_hide_other_shooters_or_visible_contact(self):
         runtime = self.runtime
-        self.state['_gun_angle_rejected'] = {('human', 2): 9.}
+        self.state['_gun_angle_refusal'] = ('human', 2)
         runtime.states[11] = self.state
         runtime._radio_network = type('Radio', (), {
             'summaries': lambda unused, pairs, now, include_sources=False: tuple(

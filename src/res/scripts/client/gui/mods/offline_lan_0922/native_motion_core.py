@@ -445,7 +445,6 @@ class NativeMotion(object):
                 if kind == 3:
                     state['_drowned'] = True
                 state['target_kind'] = state['target_id'] = None
-                self.runtime._friendly_repositions.pop(bot_id, None)
             elif kind == 5:
                 self.runtime._invalidate_realised_motion(bot_id, value)
             elif kind == 6:
