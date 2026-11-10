@@ -335,7 +335,7 @@ class CombatStop(object):
         # The player's driving intervention is distinct from worker tactics
         # and the native siege mode request/echo protocol.
         return (self.can_request_movement and
-                getattr(self.runtime, 'actor_kind', 'human') == 'human' and
+                getattr(self.runtime, 'actor_kind', None) == 'human' and
                 not self.runtime.siege_capable() and (
             mode in ('route', 'advance', 'advance_contact') or
             mode == 'engage' and order.get('throttle_override') != 0. and

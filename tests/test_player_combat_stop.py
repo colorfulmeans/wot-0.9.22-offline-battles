@@ -308,6 +308,7 @@ class OriginalOwnershipBoundaryTests(unittest.TestCase):
 
     def test_ordinary_advance_admits_full_native_review_and_current_shot_stop(self):
         scene = Scene(admitted=False)
+        scene.runtime.actor_kind = 'human'
         other = dict(scene.target, id=3, network_id=3)
         scene.runtime._targets += (other,)
         scene.raw_order.update(combat_mode='advance', move_position=(17., 0., 31.),

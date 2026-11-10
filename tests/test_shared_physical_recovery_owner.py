@@ -16,8 +16,6 @@ from gui.mods.offline_lan_0922.ai.driver import WAYPOINT_ARRIVAL_RADIUS
 class PhysicalRecoveryOwnershipTests(unittest.TestCase):
     def scene(self, statuses=None, admitted=True):
         scene = Scene(admitted=admitted)
-        # Isolate the downstream consumer from authored-route confirmation.
-        scene.owner._route_requires_confirmation = lambda order: False
         scene.raw_order.update(combat_mode='route', target_kind=None, target_id=None,
             move_position=(20., 0., -30.), throttle_override=None,
             aim_position=None, fire_allowed=False)

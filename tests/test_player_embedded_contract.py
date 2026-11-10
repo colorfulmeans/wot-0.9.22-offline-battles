@@ -375,6 +375,7 @@ class EmbeddedSharedImportOrderTests(unittest.TestCase):
 
     def test_route_candidate_and_pending_combat_keep_one_owner_on_python27(self):
         runtime, owner, target, route = self.combat_movement_fixture()
+        runtime.actor_kind = 'human'
         policy = runtime.attack_policy
         blocked = dict(target=target, armor='unknown', line='world_blocked',
             mechanical='unknown', solution=dict(yaw=0.), mode='penetration', shell_index=0)
@@ -429,6 +430,7 @@ class EmbeddedSharedImportOrderTests(unittest.TestCase):
 
     def test_current_native_lay_admission_and_explicit_exit_on_python27(self):
         runtime, owner, target, route = self.combat_movement_fixture()
+        runtime.actor_kind = 'human'
         candidate = dict(target=target, armor='passed', line='clear',
             mechanical='hull_laying', solution=dict(yaw=1., needs_hull=True),
             mode='penetration', shell_index=0, key=(0, ('bot', 12), 0, 'penetration'))
@@ -458,6 +460,7 @@ class EmbeddedSharedImportOrderTests(unittest.TestCase):
 
     def test_uncertified_mechanical_candidate_keeps_route_on_python27(self):
         runtime, owner, target, route = self.combat_movement_fixture()
+        runtime.actor_kind = 'human'
         candidate = dict(target=target, armor='unknown', line='clear',
             mechanical='mechanical_limited', solution=dict(yaw=1.),
             mode='penetration', shell_index=0)

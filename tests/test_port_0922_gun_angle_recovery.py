@@ -28,9 +28,6 @@ class NativeGunAndPointRecoveryTests(unittest.TestCase):
 
     def scene(self, statuses=None, admitted=True):
         scene = Scene(admitted=admitted)
-        # Exercise the original recovery consumer with an already eligible
-        # tactical order; the player-route gate has separate report tests.
-        scene.owner._route_requires_confirmation = lambda order: False
         scene.raw_order.update(combat_mode='route', target_id=None,
             target_kind=None, move_position=(20., 0., -30.),
             throttle_override=None, aim_position=None, fire_allowed=False)

@@ -173,6 +173,7 @@ class LiveReportLivenessTests(unittest.TestCase):
 class StableRouteAttackTests(unittest.TestCase):
     def scene(self):
         scene = Scene(admitted=False)
+        scene.runtime.actor_kind = 'human'
         scene.raw_order.update(combat_mode='route', move_position=(20., 0., -30.),
                                throttle_override=None, fire_allowed=False)
         scene.candidate.update(key=(0, ('bot', 2), 0, 'penetration'),

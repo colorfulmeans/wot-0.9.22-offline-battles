@@ -65,9 +65,6 @@ class FriendlyManoeuvreTests(unittest.TestCase):
     def scene(self, status='clear'):
         from test_player_combat_stop import Scene
         scene = Scene(admitted=False)
-        # Exercise the original recovery consumer with an already eligible
-        # tactical order; the player-route gate has separate report tests.
-        scene.owner._route_requires_confirmation = lambda order: False
         scene.raw_order.update(combat_mode='route', target_kind=None,
             target_id=None, move_position=(20., 0., -30.),
             face_position=(20., 0., -30.), throttle_override=None,

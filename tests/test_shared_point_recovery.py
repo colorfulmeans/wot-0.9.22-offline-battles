@@ -14,8 +14,6 @@ from test_player_combat_ownership import OwnershipScene
 class PointRecoveryTests(unittest.TestCase):
     def scene(self, outcomes=None):
         scene = Scene()
-        # Isolate the downstream consumer from authored-route confirmation.
-        scene.owner._route_requires_confirmation = lambda order: False
         scene.raw_order.update(combat_mode='route', target_id=None, target_kind=None,
             move_position=(20., 0., -30.), throttle_override=None,
             aim_position=None, fire_allowed=False)

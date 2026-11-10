@@ -127,6 +127,9 @@ class Report141918Scene(OwnershipScene):
         self.assertTrue(self.control.toggle(), self.control.last_control_failure)
         self.addCleanup(self.control.close)
         self.runtime = self.control.runtime
+        # The report starts in an existing HE reload/aim task. Isolate that
+        # downstream handoff; the later AT7 report covers the cold route gate.
+        self.runtime.combat_stop._route_requires_confirmation = lambda order: False
         self.admission = self.control._admission()
         self.runtime.state['route'] = dict(id=ROUTE_ID,
             waypoints=[(SOURCE_POSITION[0], SOURCE_POSITION[2], False),
