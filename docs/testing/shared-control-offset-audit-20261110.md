@@ -86,7 +86,7 @@ and applies the normal obstruction checks to the refreshed ray. The
 native-observation regression reproduces that release and requires one
 handoff followed by a real HE launch with the completed ranking.
 
-### Delivered Windows test ZIP
+### Windows retest of the HE handoff
 
 `wot_PR119_1d45aa54_Windows_2026-11-11.zip` uses runtime
 `1d45aa54a8809d2affd637393214e968bbd10270` and build identity
@@ -107,6 +107,49 @@ in 4.891 seconds. All 12 local launches matched the server, with no
 late front-vehicle refusals and empty visible/worker exception trails.
 The later handoff in this capture was for enemy 7 with AP.
 Report `wot-error-report-20261111-191748-abfd2a01065b.zip`.
+
+### HE return after two consecutive fallback rounds
+
+The return to the lowest stocked penetration shell now counts
+committed HE rounds by the mode of their accepted trigger. A
+penetrating HE round resets the consecutive fallback count. A
+single-shot gun uses the lowest stocked penetration shell for the load
+after the second consecutive fallback round. A clip or burst gun
+finishes the mounted clip once that threshold is reached. A still-valid
+complete failure certificate for the lowest penetration shell defers
+the change, and stock exhaustion still selects a stocked shell.
+
+The last native trigger can stage NEXT for its confirmed HE fallback
+mode, and the native gun promotes it only on the actual reload
+boundary. A refused trigger releases that provisional setting and
+spends no round. An existing manual selection retains its own
+ownership. The code uses the current trigger and committed burst
+receipts with no extra armour scan at the trigger.
+
+Regressions exercise a penetrating HE round between fallback rounds,
+continued penetration across a full clip, two fallback rounds
+followed by penetration in the remainder of the same clip, a refused
+second fallback trigger, actual burst tails, and the cached complete
+failure proof that defers the lowest-shell return.
+
+The delivered `wot_PR119_845d87b3_Windows_2026-11-11.zip` contains
+runtime `845d87b378be5a26886c285c2e7cd5e1281bbc8a` with identity
+`local-qa-845d87b3`. It uses the same verified x64 launcher, server and
+native resources. All 263 bundled client modules matched the runtime
+source. All 39 local player-control and report-regression test files
+passed. [Runtime Tests 43012626933](https://github.com/colorfulmeans/wot-0.9.22-offline-battles/actions/runs/43012626933).
+
+The T 24 acceptance run started from a fresh extraction of that ZIP
+with the same stationary-target setup. The log excluded the blocked
+samples on enemy 2 and compared the four clear points. Sample 8 won
+with estimated blast damage 80. The other three scored 0. Both HE
+rounds used sample 8. The first trigger kept HE with zero preceding
+fallback rounds. The second trigger had one prior committed fallback
+round and began the AP reload after its own commit. The third
+projectile was AP. All 16 local projectiles matched the server, and the
+visible and worker exception trails were empty. The capture contains
+no repeated HE takeover and no late front-vehicle refusal.
+Report `wot-error-report-20261111-193538-ba5271e3f0c1.zip`.
 
 ## Follow-up for the 15:47 T 24 report — native fire receipts and ammunition return
 

@@ -210,6 +210,16 @@ class HEVerificationFlowTests(unittest.TestCase):
         self.tick(scene)
         self.assertEqual((0, 3, 1), (gun.shot_index, gun.clip, gun.pending_index))
 
+    def test_two_round_he_burst_promotes_ap_only_after_its_final_commit(self):
+        scene, target = self.scene(clip=2, burst=2, armor=300.)
+        gun = scene.battle._gun_state
+        self.run_until_shots(scene)
+        self.assertEqual((0, 1, 1), (gun.shot_index, gun.clip, gun.pending_index))
+        self.assertTrue(scene.advance())
+        self.assertEqual([0, 0], [shot['shell_index'] for shot in scene.launches()])
+        self.assertEqual((1, 0, None), (gun.shot_index, gun.clip, gun.pending_index))
+        self.assertGreater(gun.reload_time, 0.)
+
     def test_single_he_does_not_probe_ap_before_executing_fallback(self):
         scene, target = self.scene(layered=True)
         scene.set_he(piercing=1.)
