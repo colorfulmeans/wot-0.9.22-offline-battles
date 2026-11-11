@@ -346,10 +346,13 @@ class StableRouteAttackTests(unittest.TestCase):
         for step in range(40):
             if step == 17:
                 front = scene.eligible_enemy(60, armor=300.)
-                scene.pose(front, (1.3, -.7, 21.))
+                scene.pose(front, (1.3, -.4, 21.))
                 scene.runtime._strategic_due = 0.
-            scene.native_position((step * .14, 0., 0.))
-            scene.battle._local_speed = 1.12
+            # Small source motion can preserve a failed plate result while
+            # its exact foreground lane still needs a new observation.
+            travel = min(step, 16) * .14 + max(0, step - 16) * .008
+            scene.native_position((travel, 0., 0.))
+            scene.battle._local_speed = 1.12 if step < 17 else .064
             order = scene.tick(.125)
             if step < 16:
                 self.assertEqual('route', order['combat_mode'])

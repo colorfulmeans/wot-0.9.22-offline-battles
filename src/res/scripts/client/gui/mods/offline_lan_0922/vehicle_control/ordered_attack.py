@@ -140,7 +140,14 @@ class OrderedAttack(object):
         target_jobs = [job for job in jobs if job[0][1] == self.target]
         preferred = self.sample if self.he_sample is None else self.he_sample
         target_jobs.sort(key=lambda job: job[3] != preferred)
-        action, row = self._inspect(policy, now, target_jobs)
+        combat = getattr(policy.runtime, 'combat_stop', None)
+        route_review = combat is not None and combat.can_review_route_attack()
+        previous = policy.decision.get('candidate') or {}
+        refresh = None
+        if (route_review and previous.get('target_key') == self.target and
+                combat._route_attackable(previous)):
+            refresh = (shell['index'], self.target, previous['sample'], 'penetration')
+        action, row = self._inspect(policy, now, target_jobs, refresh)
         if action == 'aim':
             self.he_sample = row['sample']
             return self._aim(policy, now, row, 'current_shell_verified')
@@ -148,9 +155,8 @@ class OrderedAttack(object):
             return policy._choose(action, 'ordered_he_hull_lay', row)
         if action == 'native_lay':
             return policy._choose('firing_position', 'unverified_points_obstructed', row)
-        combat = getattr(policy.runtime, 'combat_stop', None)
         impact = None
-        if combat is not None and combat.can_review_route_attack():
+        if route_review:
             # The same fresh impact can qualify a stop and retain it while
             # the tank settles and the remaining points are reviewed.
             impact = next((current for job in target_jobs
@@ -276,16 +282,20 @@ class OrderedAttack(object):
                 row.get('mechanical') == 'hull_laying' and row.get('armor') == 'unknown' and
                 row.get('stationary_pending') == 'stationary_native_projection_unavailable')
 
-    def _inspect(self, policy, now, jobs):
+    def _inspect(self, policy, now, jobs, refresh=None):
         current = [policy._current(job, require_line=True) for job in jobs]
         for row in current:
             if policy._executable_current(row):
                 return 'aim', row
+        # A cached armour failure can finish the penetration sweep. The
+        # previously clear contact still needs its own fresh lane check.
+        priority = refresh or policy.selected
         pending = [index for index, (job, row) in enumerate(zip(jobs, current))
                    if not self._can_lay(policy, row, 'penetration') and
                    not policy._executable(row) and
-                   self._negative_evidence(policy, job, row) is None]
-        pending.sort(key=lambda index: (jobs[index][0] != policy.selected,
+                   (job[0] == refresh and not policy._reviewed(row, 'penetration') or
+                    self._negative_evidence(policy, job, row) is None)]
+        pending.sort(key=lambda index: (jobs[index][0] != priority,
                                        (index - self.cursor) % len(jobs)))
         for index in pending:
             if policy._used['foreground'] >= policy.foreground_budget:
