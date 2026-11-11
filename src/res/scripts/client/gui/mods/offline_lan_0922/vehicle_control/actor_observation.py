@@ -71,21 +71,28 @@ class PlayerObservation(object):
 
     def physical_motion(self):
         owner, runtime = self.owner, self.runtime
-        critical = runtime.current_source().get('critical')
+        entity = self.source_entity()
         records = getattr(owner, '_records', {})
         record = records.get(getattr(runtime, '_local_record_key', None))
         if record is None:
             record = next((row for row in records.values() if row.get('local')), None)
-        if record is not None:
-            critical = (record.get('state') or {}).get('critical')
-        if not isinstance(critical, dict) or 'destroyed' not in critical:
-            raise ValueError('native critical observation is unavailable')
-        destroyed = tuple(sorted(str(name) for name in critical['destroyed']))
+        record = record or {}
+        critical = next((state for state in (
+            record.get('critical_state'), (record.get('state') or {}).get('critical'),
+            (runtime.current_source() or {}).get('critical'))
+            if isinstance(state, dict) and 'destroyed' in state), None)
+        if critical is None:
+            # Before the first damage payload the local repair path reads the
+            # same live entity set. The set is allocated on first damage.
+            destroyed = getattr(entity, '_destroyed_devices', None) or ()
+        else:
+            destroyed = critical['destroyed']
         airborne = owner._local_airborne
         if not isinstance(airborne, bool):
             raise ValueError('native support state is unavailable')
-        return (destroyed, airborne, owner._local_speed, owner._local_turn_speed,
-                owner._local_vertical_speed, int(self.source_entity().siegeState))
+        return (tuple(sorted(str(name) for name in destroyed)), airborne,
+                owner._local_speed, owner._local_turn_speed,
+                owner._local_vertical_speed, int(entity.siegeState))
 
     def physical_params(self):
         return getattr(self.owner, '_local_physics', None)

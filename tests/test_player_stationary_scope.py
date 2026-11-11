@@ -9,6 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src/res/scripts/client'))
 from gui.mods.offline_lan_0922 import ballistics, shot_geometry
 from gui.mods.offline_lan_0922.vehicle_control import stationary_scope
+from gui.mods.offline_lan_0922.vehicle_control.actor_observation import PlayerObservation
 from player_native_fixtures import descriptor
 
 
@@ -123,6 +124,22 @@ class StationaryScopeTests(unittest.TestCase):
         self.assertEqual('fixed_support_envelope', result['proof_type'])
         self.assertIsNotNone(result['dependencies'])
         self.assertTrue(stationary_scope.current(scene.runtime, scene.frame, result))
+
+    def test_player_motion_reads_canonical_damage_before_the_pose_record(self):
+        scene = ScopeScene()
+        scene.record['critical_state'] = dict(destroyed=['engineHealth'])
+        self.assertEqual('fixed_support_envelope', scene.assess()['proof_type'])
+
+    def test_player_motion_reads_live_devices_before_a_network_damage_payload(self):
+        scene = ScopeScene()
+        scene.record['state'].clear()
+        scene.source.clear()
+        motion = PlayerObservation(scene.runtime)
+        self.assertEqual((), motion.physical_motion()[0])
+        scene.entity._destroyed_devices = {'rightTrackHealth'}
+        self.assertEqual(('rightTrackHealth',), motion.physical_motion()[0])
+        scene.source['critical'] = dict(destroyed=['engineHealth'])
+        self.assertEqual(('engineHealth',), motion.physical_motion()[0])
 
     def test_destroyed_engine_does_not_delete_slope_roll_or_other_yaw_pitch_travel(self):
         for relief in ('slope', 'roll', 'yaw_curve'):
