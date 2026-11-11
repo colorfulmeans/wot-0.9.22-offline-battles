@@ -165,7 +165,7 @@ class OrderedAttack(object):
         samples = set(job[3] for job in target_jobs if self._clear_failure(policy,
             self._negative_evidence(policy, job, policy._current(job, require_line=True))))
         if not samples:
-            return policy._choose('navigate', 'ordered_he_no_clear_lane')
+            return self._no_he_contact(policy, (row,), 'ordered_he_no_clear_lane')
         fallback = [job for job in policy._jobs('he_fallback', shell['index'])
                     if job[0][1] == self.target and job[3] in samples]
         fallback.sort(key=lambda job: job[3] != preferred)
@@ -225,11 +225,23 @@ class OrderedAttack(object):
                                       min(fresh, key=policy._he_order))
             return policy._recover_incomplete(now, 'he_damage_comparison_pending')
         if best is None:
-            return policy._choose('navigate', 'ordered_he_no_clear_contact')
+            return self._no_he_contact(policy, rows, 'ordered_he_no_clear_contact')
         self.he_sample = best['sample']
         if policy._executable(best, mode):
             return self._aim(policy, now, best, 'current_he_fallback_contact', tuple(rows))
         return policy._choose('firing_position', 'ordered_he_hull_lay', best)
+
+    @staticmethod
+    def _no_he_contact(policy, rows, reason):
+        # A known wreck, world or friendly lane can still enter the existing
+        # finite recovery. It cannot qualify a fresh route attack. A live
+        # front enemy is merely an excluded point.
+        blocked = next((row for row in rows if row is not None and
+                        row.get('line') in ('friendly_blocked', 'world_blocked') and
+                        isinstance(row.get('solution'), dict)), None)
+        if blocked is not None:
+            return policy._choose('firing_position', 'he_fallback_obstructed', blocked)
+        return policy._choose('navigate', reason)
 
     @staticmethod
     def _can_lay(policy, row, mode):

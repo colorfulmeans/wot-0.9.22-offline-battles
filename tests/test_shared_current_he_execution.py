@@ -325,8 +325,7 @@ class SharedCurrentHEExecutionTests(unittest.TestCase):
             self.assertFalse(hasattr(policy, 'search_started'))
             self.assertFalse(scene.applied_order()['fire_allowed'])
             self.assertFalse(scene.launches())
-        self.assertEqual(('navigate', 'ordered_he_no_clear_lane'),
-                         (policy.decision['action'], policy.decision['reason']))
+        self.assertEqual('firing_position', policy.decision['action'])
         self.assertEqual(ammo, scene.battle._gun_state.ammo)
 
     def test_real_mechanical_limit_does_not_inherit_the_previous_he_fire_authority(self):
