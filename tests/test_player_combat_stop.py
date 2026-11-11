@@ -50,6 +50,7 @@ class Scene:
             grid=SimpleNamespace(_proof_deferred=False))
         self.policy = SimpleNamespace(decision={}, rows={}, selected=None,
             _executable=AttackPolicy._executable,
+            _attack_result=AttackPolicy._attack_result,
             _needs_firing_position=AttackPolicy._needs_firing_position,
             _planned_evidence=AttackPolicy._planned_evidence,
             _plannable=AttackPolicy._plannable,
@@ -63,6 +64,9 @@ class Scene:
             self.policy, candidate)
         self.policy.current_row = lambda candidate, require_line=True: (
             candidate if candidate.get('fresh', True) else None)
+        self.policy._rows_for = lambda mode, shell, fresh_line: [
+            row for row in self.policy.rows.values() if row.get('mode') == mode and
+            row.get('shell_index') == shell and self.policy.current_row(row) is not None]
         self.runtime = SimpleNamespace(engine=engine, state=self.state,
             gun=SimpleNamespace(shot_index=0, clip_size=3, clip=3), actor_id=1,
             owner=SimpleNamespace(_local_siege_aim_pitch=0., _local_siege_pending=None,
@@ -887,6 +891,99 @@ class SiegeOriginalOwnershipTests(unittest.TestCase):
             solution=dict(point=(0., 10., 80.), yaw=yaw, hull_yaw=yaw,
                 siege_correction=pitch, hydraulic_pitch=pitch, needs_hydraulic=True,
                 siege_aim=True, source_verified=False, reachable=False))
+
+    def test_route_release_needs_a_new_clear_point_and_two_seconds(self):
+        scene = Scene(siege=siege_mechanics.DISABLED, admitted=False)
+        scene.raw_order.update(combat_mode='route', move_position=(0., 0., 60.),
+                               target_id=None, target_kind=None, face_position=(0., 0., 60.),
+                               throttle_override=None, aim_position=None, fire_allowed=False)
+        scene.candidate.update(key=(0, ('bot', 2), 0, 'penetration'),
+                               line='clear', mechanical='mechanical_limited')
+        scene.decide('firing_position')
+        for moment in (0., .5, 1., 1.5):
+            self.assertEqual(scene.raw_order, scene.apply(moment))
+        scene.apply(2.)
+        self.assertTrue(scene.owner.waiting_for_siege())
+        scene.native_mode(siege_mechanics.ENABLED)
+        scene.decide('wait', candidate=False, reason='stationary_alternatives_pending')
+        scene.apply(3.)
+        result = scene.apply(3. + MECHANICAL_STALL_SECONDS)
+        self.assertEqual(scene.raw_order['move_position'], result['move_position'])
+        self.assertFalse(scene.owner.combat_owned)
+        self.assertFalse(result['fire_allowed'])
+        scene.native_mode(siege_mechanics.SWITCHING_OFF)
+        scene.decide('firing_position')
+        self.assertEqual(scene.raw_order, scene.apply(9.5))
+        scene.native_mode(siege_mechanics.DISABLED)
+        for moment in (10., 10.5, 11., 11.5, 12.):
+            self.assertEqual(scene.raw_order, scene.apply(moment))
+        self.assertIsNone(scene.owner._route_confirmation)
+        other = dict(scene.candidate, key=(0, ('bot', 2), 1, 'penetration'))
+        scene.policy.rows[other['key']] = other
+        for moment in (12.5, 13., 13.5, 14.):
+            self.assertEqual(scene.raw_order, scene.apply(moment))
+        scene.apply(14.5)
+        self.assertTrue(scene.owner.waiting_for_siege())
+        self.assertEqual(other['key'], scene.owner._siege_point['key'])
+
+    def test_blocked_laying_point_keeps_the_same_siege_engagement(self):
+        scene = Scene(siege=siege_mechanics.ENABLED)
+        scene.candidate.update(key=(0, ('bot', 2), 0, 'penetration'), line='clear')
+        self.motion(scene)
+        scene.runtime._siege_aim_candidate['key'] = scene.candidate['key']
+        scene.apply(0.)
+        self.assertIsNotNone(scene.owner.pivot)
+        episode = scene.owner._episode
+        scene.runtime._siege_aim_candidate = None
+        scene.candidate.update(line='friendly_blocked')
+        scene.policy.retained_lay_candidate = lambda key, now: dict(
+            status='blocked', candidate=scene.candidate)
+        result = scene.apply(.2)
+        self.assertFalse(result['fire_allowed'])
+        self.assertIsNone(scene.owner.pivot)
+        self.assertTrue(scene.owner.combat_owned)
+        self.assertTrue(self.desired(scene, result))
+        self.assertEqual(episode, scene.owner._episode)
+        self.assertEqual('siege_point_review', scene.owner.receipt['reason'])
+
+    def test_siege_review_does_not_release_on_an_old_clock_during_reload(self):
+        scene = Scene(siege=siege_mechanics.ENABLED)
+        scene.decide('wait', candidate=False, reason='stationary_alternatives_pending')
+        scene.apply(1.)
+        scene.candidate.update(line='clear')
+        scene.decide('aim')
+        scene.apply(5.)
+        scene.decide('wait', candidate=False, reason='stationary_alternatives_pending')
+        scene.apply(8.)
+        self.assertTrue(scene.owner.combat_owned)
+        scene.policy.frame['reloading'] = True
+        scene.apply(15.)
+        self.assertTrue(scene.owner.combat_owned)
+        scene.policy.frame['reloading'] = False
+        scene.apply(22.)
+        self.assertFalse(scene.owner.combat_owned)
+
+    def test_temporary_siege_inverse_loss_waits_during_reload(self):
+        scene = Scene(siege=siege_mechanics.ENABLED)
+        scene.candidate.update(key=(0, ('bot', 2), 0, 'penetration'), line='clear')
+        self.motion(scene)
+        scene.runtime._siege_aim_candidate['key'] = scene.candidate['key']
+        scene.apply(0.)
+        self.assertIsNotNone(scene.owner.pivot)
+        scene.runtime._siege_aim_candidate = None
+        scene.candidate.update(mechanical='mechanical_limited')
+        scene.policy.retained_lay_candidate = lambda key, now: dict(
+            status='blocked', candidate=scene.candidate, mechanical='mechanical_limited')
+        scene.policy.frame['reloading'] = True
+        scene.apply(8.)
+        self.assertTrue(scene.owner.combat_owned)
+        self.assertEqual('native_pivot_geometry_pending', scene.owner.receipt['reason'])
+        scene.policy.frame['reloading'] = False
+        scene.apply(8.1)
+        self.assertTrue(scene.owner.combat_owned)
+        scene.apply(14.)
+        self.assertFalse(scene.owner.combat_owned)
+        self.assertEqual('native_pivot_geometry_stalled', scene.owner.receipt['reason'])
 
     def test_established_combat_enters_siege_without_requiring_another_point_proof(self):
         for clip in (1, 3, 6):

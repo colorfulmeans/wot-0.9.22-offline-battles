@@ -53,22 +53,24 @@ class ActualSiegeAim(object):
 
     def _selected(self, frame, preferred):
         policy = self.runtime.attack_policy
-        if isinstance(preferred, dict):
-            return preferred
-        # A resumable all-point stationary certificate must finish while its
-        # observed source stays still. There is no need to physically visit
-        # every sample just to classify the current finite-TD domain.
-        if ((policy.decision or {}).get('reason') == 'stationary_domain_review_pending'):
+        held = self.runtime.combat_stop.receipt.get('selected')
+        if preferred is not None:
+            preferred = policy.current_row(preferred, require_line=True)
+            if (preferred is not None and preferred.get('line') == 'clear' and
+                    preferred.get('shell_index') == frame['loaded'] and
+                    preferred.get('target_key') == held):
+                return preferred
+        # A known obstruction does not own the actuator while other points
+        # are being reviewed. Lay only a presently clear point and keep the
+        # independent armour and trigger checks on the actual barrel.
+        rows = policy._rows_for('penetration', frame['loaded'], fresh_line=True)
+        rows = [row for row in rows if row.get('line') == 'clear' and
+                row.get('target_key') == held and
+                row.get('armor') != 'failed' and row.get('scope') != 'excluded' and
+                isinstance(row.get('solution'), dict) and policy._needs_firing_position(row)]
+        if not rows:
             return None
-        retained = policy.rows.get(policy.selected)
-        if (retained is not None and retained.get('shell_index') == frame['loaded'] and
-                policy._needs_firing_position(retained)):
-            return retained
-        rows = [row for row in policy.rows.values()
-                if row.get('shell_index') == frame['loaded'] and
-                row.get('mode') == 'penetration' and isinstance(row.get('solution'), dict) and
-                policy._needs_firing_position(row)]
-        return min(rows, key=policy._penetration_order) if rows else None
+        return min(rows, key=policy._penetration_order)
 
     def _motion_source(self, frame, hydraulic, solution, shell):
         """At most six calls to the installed flat-body inverse contract."""
@@ -150,6 +152,10 @@ class ActualSiegeAim(object):
             correction = (float(solution['hydraulic_pitch']) if solution.get('stationary_plan')
                           and 'hydraulic_pitch' in solution else reach['hydraulic_pitch'])
             needs_hull = bool(solution.get('needs_hull') or reach.get('needs_hull'))
+            if (needs_hull and self.runtime.attack_policy.decision.get('reason') ==
+                    'stationary_domain_review_pending'):
+                self.receipt.update(reason='stationary_hull_review_pending')
+                return None
             limits = _field(_field(frame['descriptor'], 'gun'), 'turretYawLimits')
             turret = reach['local_yaw'] if limits is None else max(float(limits[0]),
                 min(float(limits[1]), reach['local_yaw']))

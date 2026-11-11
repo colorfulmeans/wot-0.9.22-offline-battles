@@ -443,7 +443,7 @@ class TriggerAdmission(object):
             policy.admission_failed(context.get('candidate'), reason, blocker)
 
     def prepare(self, context, entity, gun, raw_ray, dispersion, source_shot,
-                now, range_origin=None):
+                now, range_origin=None, artillery_launch=None):
         if not context.get('automatic'):
             return self._result('rejected', 'auto_not_owned')
         if self.physical.trigger_active():
@@ -462,8 +462,16 @@ class TriggerAdmission(object):
             if roster is None:
                 return self._result('pending', 'auto_collision_geometry_unknown')
             roster_signature = tuple(row['signature'] for row in roster)
-            perfect, velocity = self._scattered_velocity(candidate, gun, raw_ray[1], dispersion, source_shot)
-            origin = tuple(round_scalar(value) for value in raw_ray[0])
+            if artillery_launch is not None and solution['artillery']:
+                # The worker has already proved this dispersed artillery arc.
+                # Review the same launch that its physical gun will commit.
+                perfect = False
+                origin = tuple(round_scalar(value) for value in artillery_launch['origin'])
+                velocity = tuple(round_scalar(value) for value in artillery_launch['velocity'])
+            else:
+                perfect, velocity = self._scattered_velocity(
+                    candidate, gun, raw_ray[1], dispersion, source_shot)
+                origin = tuple(round_scalar(value) for value in raw_ray[0])
             gravity = round_scalar(float(source_shot['gravity']))
             maximum = round_scalar(float(source_shot['maxDistance']))
             range_origin = tuple(round_scalar(value) for value in (

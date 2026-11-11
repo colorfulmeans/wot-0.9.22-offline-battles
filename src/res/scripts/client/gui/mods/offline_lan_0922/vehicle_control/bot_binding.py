@@ -663,16 +663,24 @@ class BotControlBinding(MissionControl, CombatControl):
                 return dict(status='pending', reason='auto_source_unavailable')
             context.update(automatic=True, generation=self.control_generation,
                            shell_index=gun.shot_index)
+            sequence = int(state.get('fire_seq', 0)) + 1
+            if launch_receipt is not None and (
+                    launch_receipt.get('fire_seq') != sequence or
+                    launch_receipt.get('shell_index') != gun.shot_index):
+                return dict(status='pending', reason='auto_artillery_launch_changed')
             source_shot = bot_fittings.project_shot(
                 self.source_descriptor(), gun.shots[gun.shot_index], state.get('critical'))
             raw_ray = self.mutable_shot_ray()
             verdict = self._admission().prepare(
                 context, entity, gun, raw_ray, self.native_dispersion_angle(),
-                source_shot, self.now, range_origin=state['position'])
+                source_shot, self.now, range_origin=state['position'],
+                artillery_launch=launch_receipt)
             if verdict['status'] != 'ready':
                 return verdict
-            token, scatter = verdict['token'], gun.last_scatter
-            sequence = int(state.get('fire_seq', 0)) + 1
+            token = verdict['token']
+            scatter = (gun.last_scatter if launch_receipt is None else
+                (launch_receipt['fire_seq'], launch_receipt['shot_yaw'],
+                 launch_receipt['shot_pitch']))
             if scatter is None or scatter[0] != sequence:
                 return dict(status='pending', reason='auto_scatter_unavailable')
             proof = token['proof']

@@ -7,6 +7,7 @@ from being used as a controlled BOT's physical source.
 import contextlib
 import io
 import math
+import struct
 from types import SimpleNamespace
 import unittest
 from unittest import mock
@@ -378,6 +379,13 @@ class ActorBindingTests(unittest.TestCase):
         self.assertIsNone(self.binding.artillery_selection.current)
 
 
+class NativeFloatVector(native._Vector):
+    def __setattr__(self, name, value):
+        if name in ('x', 'y', 'z'):
+            value, = struct.unpack('<f', struct.pack('<f', value))
+        super().__setattr__(name, value)
+
+
 class WorkerFirstEdgeAdmissionTests(unittest.TestCase):
     """The real shared BSP/native-plate proof with a worker source binding."""
 
@@ -670,6 +678,7 @@ class WorkerFirstEdgeAdmissionTests(unittest.TestCase):
 
     def test_bot_publish_freezes_first_edge_and_retries_without_resampling(self):
         from gui.mods.offline_lan_0922 import combat_rules
+        self.battle._runtime.math.Vector3 = NativeFloatVector
         self.assertTrue(self.fire(), self.binding._admission().receipt)
         launch = self.engine._pending_launches[0]
         proof = self.engine._control_launch_proofs[(7, 11, 1)]
@@ -821,18 +830,18 @@ class WorkerFirstEdgeAdmissionTests(unittest.TestCase):
     def test_spg_keeps_native_high_arc_and_same_deterministic_launch_sample(self):
         from gui.mods.offline_lan_0922.projectile_wire import round_scalar
         sample = self.high_arc_sample()
-        proposal = self.prepare(sample)
+        receipt = self.prove_high_arc(sample)
+        proposal = self.prepare(receipt)
         self.assertEqual('ready', proposal['status'], proposal)
-        self.assertIs(sample, proposal['artillery_receipt'])
+        self.assertIs(receipt, proposal['artillery_receipt'])
         self.assertEqual(sample['shot_yaw'], proposal['shot_yaw'])
         self.assertEqual(sample['shot_pitch'], proposal['shot_pitch'])
         self.assertEqual(tuple(round_scalar(value) for value in sample['origin']), proposal['origin'])
         self.assertIsNone(self.binding.validate_trigger(proposal, self.scene.now))
         self.assertEqual([], self.observer_reads)
 
-    def test_spg_actual_native_commit_publishes_the_same_proved_high_arc(self):
-        from gui.mods.offline_lan_0922 import artillery_controller, combat_rules
-        sample = self.high_arc_sample()
+    def prove_high_arc(self, sample):
+        from gui.mods.offline_lan_0922 import artillery_controller
         # Use the original exact launch queue against the real fixture BSP,
         # including the ridge. No fabricated successful SPG receipt.
         controller = artillery_controller.ArtilleryController()
@@ -847,6 +856,12 @@ class WorkerFirstEdgeAdmissionTests(unittest.TestCase):
             controller.advance(self.scene.now, 32, self.battle._artillery_arc_probe)
             self.scene.fixture.now += .03
         self.assertIsNotNone(receipt, controller.status(self.state, self.target, 0, self.scene.now))
+        return receipt
+
+    def test_spg_actual_native_commit_publishes_the_same_proved_high_arc(self):
+        from gui.mods.offline_lan_0922 import combat_rules
+        self.battle._runtime.math.Vector3 = NativeFloatVector
+        receipt = self.prove_high_arc(self.high_arc_sample())
         for unused in range(60):
             self.binding.now = self.scene.now
             with contextlib.redirect_stdout(io.StringIO()):

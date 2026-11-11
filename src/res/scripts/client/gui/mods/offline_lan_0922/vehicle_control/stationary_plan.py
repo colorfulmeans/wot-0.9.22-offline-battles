@@ -199,14 +199,14 @@ class StationaryPlanner(object):
         if hydraulic is not None and old is not None and old[-1] is not None:
             previous = dict(old[-1])
             if (planning_pose[2:] == old[1][2:] and
-                    _same_point(planning_pose[0], old[1][0], 1.e-6) and
+                    _same_point(planning_pose[0], old[1][0], NATIVE_ANGLE_TOLERANCE) and
                     _same_point(planning_pose[1], old[1][1], _POSITION_EPSILON) and
                     _same_point(position, old[2], _POSITION_EPSILON) and
                     _same_point(mounted_position, old[3], _POSITION_EPSILON) and
                     all(hydraulic[key] == previous.get(key) for key in hydraulic
                     if key not in ('body', 'position', 'correction')) and
-                    abs(hydraulic['correction'] - previous['correction']) <= 1.e-6 and
-                    _same_point(hydraulic['body'], previous['body'], 1.e-6) and
+                    abs(hydraulic['correction'] - previous['correction']) <= NATIVE_ANGLE_TOLERANCE and
+                    _same_point(hydraulic['body'], previous['body'], NATIVE_ANGLE_TOLERANCE) and
                     _same_point(hydraulic['position'], previous['position'], _POSITION_EPSILON)):
                 planning_pose, position, mounted_position = old[1:4]
                 hydraulic = previous

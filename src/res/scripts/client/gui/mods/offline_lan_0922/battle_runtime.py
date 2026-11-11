@@ -25798,17 +25798,22 @@ class BattleRuntime(SharedBattleGeometry):
                     any(math.isnan(value) or math.isinf(value)
                         for value in origin)):
                 return False
-            horizontal = math.cos(shot_pitch)
-            direction = (
-                math.sin(shot_yaw) * horizontal,
-                math.sin(shot_pitch),
-                math.cos(shot_yaw) * horizontal)
-            length = math.sqrt(sum(component * component
-                                   for component in direction))
-            if length <= 0.000001:
-                return False
-            velocity = tuple(
-                component * speed / length for component in direction)
+            if control_proof is not None:
+                # The admitted first edge already owns the velocity observed
+                # through the engine vector. Its angles identify that draw.
+                velocity = control_proof['velocity']
+            else:
+                horizontal = math.cos(shot_pitch)
+                direction = (
+                    math.sin(shot_yaw) * horizontal,
+                    math.sin(shot_pitch),
+                    math.cos(shot_yaw) * horizontal)
+                length = math.sqrt(sum(component * component
+                                       for component in direction))
+                if length <= 0.000001:
+                    return False
+                velocity = tuple(
+                    component * speed / length for component in direction)
         if control_proof is not None:
             from .projectile_wire import round_scalar
             if (control_proof['fire_seq'] != shot_seq or
@@ -25817,7 +25822,7 @@ class BattleRuntime(SharedBattleGeometry):
                     control_proof['shot_pitch'] != shot_pitch or
                     tuple(round_scalar(value) for value in origin) !=
                         tuple(control_proof['origin']) or
-                    tuple(round_scalar(value) for value in velocity) !=
+                    is_spg and tuple(round_scalar(value) for value in velocity) !=
                         tuple(control_proof['velocity']) or
                     round_scalar(gravity) != control_proof['gravity'] or
                     round_scalar(maximum) != control_proof['max_distance']):

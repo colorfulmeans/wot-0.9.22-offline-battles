@@ -147,7 +147,6 @@ class CombatControl(object):
         """Current enabled-mode actuator input, never a mode-entry gate."""
         candidate = self._siege_aim_candidate
         if (candidate is None or not self._live() or self._mission_brakes() or
-                self._stationary_review_wait() or
                 self.attack_policy.decision.get('action') not in
                     ('aim', 'preaim', 'wait', 'firing_position') or
                 int(getattr(self.entity, 'siegeState', 0)) != siege_mechanics.ENABLED or
@@ -169,7 +168,6 @@ class CombatControl(object):
         """
         if (entity is not self.entity or not self._live() or
                 'fire' not in self.features or self._mission_brakes() or
-                self._stationary_review_wait() or
                 not self.weapon.owned() or self.state is None or
                 self._siege_pending is not None or
                 int(getattr(entity, 'siegeState', 0)) != siege_mechanics.ENABLED or
@@ -211,7 +209,7 @@ class CombatControl(object):
                 int(getattr(self.entity, 'siegeState', 0)) != siege_mechanics.ENABLED):
             self.siege_aim.reset()
             return
-        if (self._mission_brakes() or self._stationary_review_wait() or
+        if (self._mission_brakes() or
                 not self.combat_stop.combat_owned or
                 self.attack_policy.decision.get('action') not in
                     ('aim', 'preaim', 'wait', 'firing_position')):
