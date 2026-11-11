@@ -224,7 +224,7 @@ class CombatCircleArrivalTests(unittest.TestCase):
                 if scene.runtime.combat_stop.combat_owned:
                     break
             self.assertTrue(owner.stop_allowed, owner.receipt)
-            self.assertGreaterEqual(scene.now - start, 5.)
+            self.assertGreaterEqual(scene.now - start, 2.)
             self.assertNotIn('capture_area', scene.original_order())
             self.assertEqual('route', scene.original_order()['combat_mode'])
 

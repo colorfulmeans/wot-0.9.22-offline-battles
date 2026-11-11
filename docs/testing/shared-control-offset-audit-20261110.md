@@ -1,5 +1,78 @@
 # PR119 control-offset correction — November 10, 2026
 
+## Follow-up for the 15:47 T 24 report — native fire receipts and ammunition return
+
+The single-shot Škoda T 24 report `wot-error-report-20261111-154736-4f1e0a10cc53.zip`
+ran `d5a9ff9f` / `colorfulmeans-42955381063-1`. It first handed off
+at 15:42:33.438 and fired at 15:42:53.357. It recorded 21 front-vehicle
+refusals and 21 native calls without a receipt. The stock HD #1513
+`PlayerAvatar.shoot` starts its acknowledgement timer and its two-second
+gun-command deadline after the local mailbox returns, including after a
+refusal. The old rejection cleanup cancelled the timer alone. The
+new cleanup restores the pre-call deadline for that same rejected
+mailbox, fenced to the Avatar, generation and local projectile sequence.
+Exact CPython 2.7 bytecode inspection and a regression cover both waits.
+The detailed diagnostic checkbox adds the early missing-context reason,
+same-point refresh refusal and stock gun/HUD state for a silent return.
+
+- Ordinary player route acquisition requires two seconds of continuous
+  attackable evidence. The no-HE handoff starts its independent five-second
+  cooldown. The change is at the existing combat admission boundary.
+- The five whitelisted HESH pairs review the held target's penetration
+  points and take its first executable point. A completed failed HESH
+  review uses one fallback point on that target. Ordinary HE uses a
+  single point for both its penetration trial and fallback.
+- High-penetration and HE single-shot loads queue the lowest stocked
+  penetration shell for the reload after two committed rounds. Clip
+  and burst guns change at the native full reload after the current clip.
+  Existing, still-valid complete negative evidence for the lowest shell
+  defers that return. The next load uses current cached evidence and the
+  existing geometry tolerance. It issues no fresh armour queries at
+  the trigger. An empty stock or a complete current-shell failure can
+  still select a replacement before the quota.
+
+### Windows HD #1513 evidence
+
+[Windows build 42987574283](https://github.com/colorfulmeans/wot-0.9.22-offline-battles/actions/runs/42987574283)
+built runtime `3dc4132c72e5e6c7a3f7207545aa3983ae53cc3b`.
+Artifact `13841156147` carries build `colorfulmeans-42987574283-1`.
+An independent download passed all ZIP checks, x64 launcher inspection
+and the comparison of 263 packaged Python 2.7 client modules with the
+runtime source. The following sessions used the downloaded launcher.
+
+- T 24, `_75mm_Skoda_A18`, 17/17/16, Mittengard team 2. After a slow
+  opening around parked allies, the first qualifying handoff completed
+  in 2.005 seconds and led to an AP launch 3.424 seconds later. The
+  report contains 38 matching local and server launches and eight
+  physical front-vehicle refusals. The first refusal at 16:48:35.033
+  reached the next native check at 16:48:35.391. The next committed AP
+  shot followed at 16:48:40.970 after further blocked/pending points.
+  No attempt returned without a receipt in this capture.
+  Report `wot-error-report-20261111-165102-bd0400ab00e0.zip`.
+- T 24, same gun and stock, Mittengard team 1. The native test command
+  loaded APCR while control was released, then the normal control loop
+  admitted after 2.020 seconds and fired after another 0.637 seconds.
+  The actual sequence was APCR, APCR, AP. A second control activation
+  with HE produced HE, HE, AP. The two HE launches both used target 24
+  and sample 0. All six were received by the server.
+  Report `wot-error-report-20261111-165723-e79f8ba283bb.zip`.
+
+- AT 7, `QF_6_pounder_Mk_V_AT`, ten rounds per clip and 40/40/40
+  stock, Mittengard team 1. Route confirmation completed in 2.023
+  seconds. The native APCR launch followed 2.462 seconds later.
+  The server recorded ten APCR rounds before the reload and one AP
+  round from the next clip. The capture ends after the test stopped
+  automatic control. Report `wot-error-report-20261111-170514-b9a35684ac43.zip`.
+
+The visible and worker exception trails contain headers only in all
+three captures. The Windows battles exercised the ordinary HE and
+penetration return paths. The five HESH identities, the scoped fallback
+and the expiry of the lowest-shell failure proof were exercised by
+the native-observation regressions. The first full CI run found two
+files that still expected the old five-second route handoff. The
+follow-up adjusts those fixtures and preserves their control and
+capture assertions.
+
 ## Follow-up for the 11:28 AT 7 and 11:44 Škoda T 24 reports
 
 Both reports identify `5d82c2b2` / `colorfulmeans-42894631616-1` and

@@ -188,8 +188,8 @@ ORDERED_USES = (
     (
         'scripts/client/Avatar.pyc',
         'PlayerAvatar.shoot',
-        ('base', 'vehicle_shoot', '_PlayerAvatar__startWaitingForShot',
-         '_PlayerAvatar__shotWaitingTimerID', '_PlayerAvatar__gunReloadCommandWaitEndTime'),
+        ('_PlayerAvatar__gunReloadCommandWaitEndTime', '_PlayerAvatar__shotWaitingTimerID',
+         'base', 'vehicle_shoot', '_PlayerAvatar__startWaitingForShot'),
         'shoot mailbox starts the native acknowledgement wait synchronously',
     ),
     (
