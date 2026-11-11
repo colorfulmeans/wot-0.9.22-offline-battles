@@ -11,6 +11,24 @@ class OrderedPlayerAttackTests(unittest.TestCase):
         scene.policy.ordered = OrderedAttack()
         return scene
 
+    def test_equal_penetration_damage_order_qualifies_a_distinct_higher_load(self):
+        scene = self.scene(targets=1, points=1, he=False)
+        first, second = scene.frame['shells']
+        first.update(piercing=200., nominal_damage=500.)
+        second.update(piercing=200., nominal_damage=400.)
+        scene.frame['loaded'] = 1
+        decision = scene.tick(0., background=False)
+        self.assertEqual(('switch_shell', 0), (decision['action'], decision['shell_index']))
+
+        scene.frame['loaded'] = 0
+        scene.move_target(1, 1.)
+        scene.passed(0)
+        scene.tick(.1, background=False)
+        scene.policy.ordered.shot_committed(0)
+        plan, reason = scene.policy.next_at_edge(trigger=dict(shell_index=0))
+        self.assertEqual((1, 'higher_penetration_cycle_finished'),
+                         (plan['shell_index'], reason))
+
     def test_native_block_keeps_other_green_point_of_same_target(self):
         scene = self.scene(targets=3, points=2)
         scene.passed(0, target=1, sample=0)

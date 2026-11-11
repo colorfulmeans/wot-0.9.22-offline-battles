@@ -244,6 +244,8 @@ _ZH = {
     'The server did not accept that map.': u'服务器未接受该地图。',
     'Select a valid vehicle in the garage, then click Battle! again.': u'请在车库选择有效车辆，然后再次点击战斗按钮。',
     'Vehicle supplies are updating. Try starting again in a moment.': u'车辆补给正在更新，请稍后再点击开始战斗。',
+    'Select one of the eight mobile combat test vehicles in the garage.': u'请在车库选择移动交战测试阵容中的车辆。',
+    'Mount the mobile combat test gun in the garage: %s': u'请先在车库安装移动交战测试所需的火炮：%s',
     'You left the LAN room. Click Battle! to join again.': u'已离开局域网房间。点击战斗按钮可重新加入。',
     'waiting for roster': u'等待玩家列表',
     'Requesting Bot tier preset...': u'正在申请电脑等级设置...',

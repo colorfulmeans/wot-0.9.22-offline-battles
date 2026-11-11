@@ -2437,7 +2437,15 @@ class BattleState:
                  team_size=15,
                  receipt_state_path=None, team1_size=None, team2_size=None,
                  bot_tier_mode='random', bot_lineup=None,
-                 bot_skill_mode=None, bot_excluded_vehicles=None, bot_tactics_path=None):
+                 bot_skill_mode=None, bot_excluded_vehicles=None, bot_tactics_path=None,
+                 mobile_test=False):
+        self.mobile_test = bool(mobile_test)
+        if self.mobile_test:
+            from gui.mods.offline_lan_0922 import mobile_combat_test
+            map_name = mobile_combat_test.MAP
+            team1_size = team2_size = 15
+            bot_lineup = mobile_combat_test.lineup()
+            bot_excluded_vehicles = None
         self.map_option = map_name
         self.map_name = self._choose_map()
         self.client_build = None
@@ -3055,14 +3063,19 @@ class BattleState:
         occupied = {1: set(), 2: set()}
         plan = []
         automatic = []
+        from gui.mods.offline_lan_0922.bot_fitting_data import CLASSES
+
+        def available_slots(participant, team):
+            return [slot for slot in self._team_slots(team) if slot not in occupied[team]
+                    and (not self.mobile_test or
+                         self._lineup_pins_vehicle(team, slot, participant.vehicle,
+                                                   CLASSES.get(participant.vehicle)))]
         for participant in players:
             requested = self._requested_team_for_player(participant)
             if requested == 0:
                 automatic.append(participant)
                 continue
-            available = [
-                slot for slot in self._team_slots(requested)
-                if slot not in occupied[requested]]
+            available = available_slots(participant, requested)
             if not available:
                 return None
             slot = (participant.slot if not self.lineup_locked and participant.team == requested and
@@ -3072,7 +3085,7 @@ class BattleState:
         for participant in automatic:
             candidates = [
                 team for team in (1, 2)
-                if len(occupied[team]) < self.team_sizes[team]]
+                if available_slots(participant, team)]
             if not candidates:
                 return None
             smallest = min(len(occupied[team]) for team in candidates)
@@ -3080,9 +3093,7 @@ class BattleState:
                 team for team in candidates
                 if len(occupied[team]) == smallest]
             team = random.choice(candidates)
-            slot = next(
-                value for value in self._team_slots(team)
-                if value not in occupied[team])
+            slot = available_slots(participant, team)[0]
             occupied[team].add(slot)
             plan.append((participant, team, slot))
         return plan
@@ -4139,7 +4150,12 @@ class BattleState:
                             classes=policy.required(row,pinned))
                         return None,'bot_class_pool_empty'
             try:
-                proposed_tactics = bot_tactics.load(self.bot_tactics_path)
+                if self.mobile_test:
+                    from gui.mods.offline_lan_0922 import mobile_combat_test
+                    requested_map = mobile_combat_test.MAP
+                    proposed_tactics = mobile_combat_test.tactics()
+                else:
+                    proposed_tactics = bot_tactics.load(self.bot_tactics_path)
                 from gui.mods.offline_lan_0922.bot_fittings import validate_profile
                 validate_profile(proposed_tactics)
             except bot_tactics.TacticsError as error:
@@ -7131,6 +7147,13 @@ class BattleState:
                 BattleState._validate_bot_ammo_transition(previous, shot)
                 return BattleState._validate_bot_ammo_transition(shot, current)
             if loaded != burst_shell or loaded != expected_loaded:
+                if battle_review_diagnostics.combat_detail_enabled():
+                    battle_review_diagnostics.validation_event('bot_firing_shell_transition_unproven',
+                        bot=current.get('id'), previous_loaded=previous_loaded,
+                        expected_loaded=expected_loaded, loaded=loaded, burst_shell=burst_shell,
+                        previous_pending=previous_pending, pending=pending,
+                        previous_clip=previous_clip, clip=clip, next_shell=next_shell,
+                        before=before, after=after, fire_delta=fire_delta)
                 raise ValueError("bot loaded shell changed while firing")
             if (expected_clip < 0 or loaded >= len(expected) or
                     expected[loaded] < fire_delta):
@@ -10580,16 +10603,24 @@ class BattleState:
                 'resolved_time_ms': resolved_time_ms,
             }
             record["_mission_kill_events"] = []
+            settled = True
             for proposal in effects:
                 try:
                     self._apply_projectile_effect_observed(record, proposal, 'terminal_commit')
                 except Exception as error:
+                    settled = False
                     # Contain this victim's failure; other independently
                     # validated direct/splash contacts still need a result.
                     _server_log(
                         "PROJECTILE EFFECT failed id=%s target=%s:%s error=%s: %s" %
                         (projectile_id, proposal["target_kind"],
                          proposal["target_id"], type(error).__name__, error))
+            from gui.mods.offline_lan_0922.bot_fitting_data import CLASSES
+            if CLASSES.get(record.get('source_vehicle')) == 'SPG':
+                # The queued impact precedes the health events for presentation,
+                # but the ammo observer needs the completed settlement.
+                impact_event['artillery_ammo'] = dict(known=settled,
+                    direct=bool(record.get('_ammo_hit')), damage=record.get('_ammo_damage', 0))
             self._bot_ammo_terminal(record)
             self._finalize_projectile_mission_health(record)
             self._record_projectile_piercing(
@@ -17604,7 +17635,8 @@ def run_server(host, port, map_name, max_players,
                team1_size=None, team2_size=None,
                bot_tier_mode="random", bot_lineup=None,
                bot_skill_mode=None,
-               vehicle_overlay_root=None, bot_excluded_vehicles=None, bot_tactics_path=None):
+               vehicle_overlay_root=None, bot_excluded_vehicles=None, bot_tactics_path=None,
+               mobile_test=False):
     if receipt_state_path is None:
         receipt_state_path = _default_result_receipt_state_path(port)
     state = BattleState(map_name=map_name, max_players=max_players,
@@ -17615,7 +17647,7 @@ def run_server(host, port, map_name, max_players,
                         bot_lineup=bot_lineup,
                         bot_skill_mode=bot_skill_mode,
                         bot_excluded_vehicles=bot_excluded_vehicles,
-                        bot_tactics_path=bot_tactics_path)
+                        bot_tactics_path=bot_tactics_path, mobile_test=mobile_test)
     if vehicle_overlay_root:
         try:
             overlay = VehicleOverlayStore(vehicle_overlay_root)

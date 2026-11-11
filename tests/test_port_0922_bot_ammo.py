@@ -14,6 +14,7 @@ sys.path.insert(0, str(PORT_ROOT / 'server'))
 sys.path.insert(0, str(PORT_ROOT / 'src/res/scripts/client'))
 
 from lan_battle_server import BattleState  # noqa: E402
+from gui.mods.offline_lan_0922.vehicle_control.bot_binding import BotControlBinding  # noqa: E402
 from gui.mods.offline_lan_0922.vehicle_control.strategy import BotPlanner  # noqa: E402
 from effective_params_fixture import bot_default_crew_factors  # noqa: E402
 
@@ -300,6 +301,38 @@ class BotAmmunitionTests(unittest.TestCase):
         with self.assertRaisesRegex(
                 ValueError, 'inventory is not conserved'):
             BattleState._validate_bot_ammo_transition(previous, invalid)
+
+    def test_worker_queues_next_type_without_relabeling_last_clip_shot(self):
+        descriptor = _descriptor(60, (3, .2))
+        gun = self.runtime_module._BotGunState(descriptor)
+        gun.clip, gun.elapsed, gun.reload_kind = 1, 2., 'intra'
+        ammo = self.runtime_module._BotAmmoState(descriptor, _profile())
+        state = dict(id=11, x=0., y=0., z=0., fire_seq=0, burst_shell_index=0)
+        engine = types.SimpleNamespace(round_id=7, states={11: state},
+                                      _gun_states={11: gun}, _ammo_states={11: ammo})
+        binding = BotControlBinding(types.SimpleNamespace(), engine, 11)
+        binding.reload_factor = lambda: 1.
+        binding._queued_shell = 2
+        binding._publish_weapon()
+        previous = dict(state)
+
+        self.assertTrue(ammo.consume_loaded())
+        self.assertTrue(gun.fire())
+        state['fire_seq'] = 1
+        binding.shot_committed(dict(shot_seq=1, shell_index=0))
+        pending = dict(state)
+        self.assertEqual((0, 2, 0, True), tuple(pending[key] for key in
+            ('shell_index', 'next_shell_index', 'clip', 'ammo_reload_pending')))
+        self.assertTrue(BattleState._validate_bot_ammo_transition(previous, pending))
+
+        gun.tick(2.)
+        index = binding.physical_shell_request()
+        reload_kind = gun.complete_reload(1., ammo.planned_rounds())
+        ammo.stage(index, reload_kind is not None, reload_kind == 'full')
+        binding._publish_weapon()
+        self.assertEqual((2, 3, False), (state['shell_index'], state['clip'],
+                                        state['ammo_reload_pending']))
+        self.assertTrue(BattleState._validate_bot_ammo_transition(pending, state))
 
     def test_server_accepts_planned_fallback_when_shot_exhausts_shell(self):
         identity = {

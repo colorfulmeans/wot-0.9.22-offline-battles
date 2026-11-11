@@ -140,6 +140,31 @@ class Scene:
 
 
 class OriginalOwnershipBoundaryTests(unittest.TestCase):
+    def test_departed_target_transfers_existing_engagement_without_route_confirmation(self):
+        scene = Scene()
+        previous = scene.owner._episode
+        target = dict(scene.target, id=3, network_id=3, position=(0., 0., 70.), z=70.)
+        scene.runtime._targets = (target,)
+        scene.raw_order.update(combat_mode='route', move_position=(20., 0., 40.))
+        scene.candidate.update(target=target, line='clear', target_key=('bot', 3))
+        scene.decide('aim')
+        result = scene.apply(.1)
+        self.assertTrue(scene.owner.combat_owned)
+        self.assertEqual(previous, scene.owner._episode)
+        self.assertEqual(3, result['target_id'])
+        self.assertIsNone(scene.owner._route_confirmation)
+
+    def test_siege_review_without_completed_work_releases_original_route(self):
+        scene = Scene(siege=siege_mechanics.ENABLED)
+        scene.raw_order.update(combat_mode='route', move_position=(0., 0., 60.))
+        scene.decide('wait', candidate=False, reason='stationary_alternatives_pending')
+        scene.policy.rows['pending'] = dict(stationary_progress_token=(1, 0, 0, 0))
+        scene.apply(1.)
+        scene.policy.rows['pending']['stationary_progress_token'] = (100, 0, 0, 0)
+        result = scene.apply(1. + MECHANICAL_STALL_SECONDS)
+        self.assertFalse(scene.owner.combat_owned)
+        self.assertEqual('siege_stationary_review_stalled', scene.owner.receipt['reason'])
+        self.assertEqual((0., 0., 60.), result['move_position'])
     def test_visible_contact_without_native_task_proposal_preserves_route(self):
         scene = Scene(admitted=False)
         scene.raw_order.update(target_id=None, target_kind=None, combat_mode='route',

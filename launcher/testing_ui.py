@@ -18,10 +18,11 @@ SCENES = (
     ('equipment_baseline', 'Equipment control: baseline', '装备对照：无加成'),
     ('equipment_matrix', 'Equipment control: varied fittings', '装备对照：不同配置'),
     ('rewards', 'Earnings test: stationary targets', '收益测试：静止目标'),
+    ('mobile_combat', 'Mobile combat test (15 vs 15)', '移动交战测试（15 对 15）'),
 )
 ENV_KEYS = ('WOT_OFFLINE_EQUIPMENT_TEST', 'WOT_OFFLINE_ROOF_CRUSH_TEST',
             'WOT_OFFLINE_ROOF_SHOT_DROP', 'WOT_OFFLINE_COLLISION_DIAGNOSTICS',
-            'WOT_OFFLINE_PLAYER_AUTOCONTROL')
+            'WOT_OFFLINE_PLAYER_AUTOCONTROL', 'WOT_OFFLINE_MOBILE_COMBAT_TEST')
 
 
 def environment(settings, diagnostics=False, single=True):
@@ -36,6 +37,7 @@ def environment(settings, diagnostics=False, single=True):
         'equipment_matrix': '4', 'rewards': '3'}.get(scene, '0')
     result['WOT_OFFLINE_ROOF_CRUSH_TEST'] = '1' if scene == 'drop' else '0'
     result['WOT_OFFLINE_ROOF_SHOT_DROP'] = result['WOT_OFFLINE_ROOF_CRUSH_TEST']
+    result['WOT_OFFLINE_MOBILE_COMBAT_TEST'] = '1' if scene == 'mobile_combat' else '0'
     result['WOT_OFFLINE_COLLISION_DIAGNOSTICS'] = '1' if settings.get('collision') else '0'
     result['WOT_OFFLINE_DIAGNOSTICS'] = '1' if (
         diagnostics or settings.get('logs') or settings.get('collision') or settings.get('control') or scene != 'normal') else '0'

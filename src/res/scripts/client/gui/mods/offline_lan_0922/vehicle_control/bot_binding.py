@@ -45,7 +45,7 @@ class _BotGunObservation(object):
 
     @property
     def shot_index(self):
-        return int(self.runtime._native_ammo().loaded)
+        return self.runtime.physical_shell_request()
 
     @property
     def pending_index(self):
@@ -207,10 +207,9 @@ class BotControlBinding(MissionControl, CombatControl):
         self.siege_aim = ActualSiegeAim(self)
         self.attack_policy = AttackPolicy(self)
         ammo = self.engine._ammo_states.get(self.actor_id)
-        if ammo is not None and int(ammo.next) != int(ammo.loaded):
-            # Authority snapshots publish the user's NEXT input. The native
-            # worker's prepare operation consumes the *current load*, so
-            # retain NEXT as an input until the actual full-reload edge.
+        if (ammo is not None and int(ammo.next) != int(ammo.loaded) and
+                not (ammo.reload_pending and self.gun.clip == 0)):
+            # Outside a full reload the next type is still a queued input.
             self._queued_shell = int(ammo.next)
             ammo.stage(ammo.loaded, False)
 
@@ -466,8 +465,9 @@ class BotControlBinding(MissionControl, CombatControl):
         return _critical_factor(self.state, self.source_descriptor(), 'reload')
 
     def physical_shell_request(self):
-        """A queued NEXT does not replace an already loaded/loading round."""
-        return int(self._native_ammo().loaded)
+        """Supply the committed plan during a full reload."""
+        ammo = self._native_ammo()
+        return int(ammo.next if ammo.reload_pending and self.gun.clip == 0 else ammo.loaded)
 
     def _publish_weapon(self):
         state, gun, ammo = self.state, self.gun, self._native_ammo()
@@ -510,6 +510,10 @@ class BotControlBinding(MissionControl, CombatControl):
             name = 'CURRENT_SHELLS'
         if name == 'CURRENT_SHELLS':
             self._queued_shell = None
+            if gun.clip == 0 and ammo.reload_pending:
+                ammo.stage(selected, False)
+                self._publish_weapon()
+                return int(ammo.next) == selected
             if selected == int(ammo.loaded):
                 ammo.stage(selected, False)
                 self._publish_weapon()
@@ -717,6 +721,7 @@ class BotControlBinding(MissionControl, CombatControl):
         context = self._trigger_context or {}
         pending = pending or dict(player_control=context)
         self.attack_policy.shot_committed(event, pending)
+        self._artillery_shot_committed(event, sequence)
         proposal = self._trigger_proposal
         if proposal is not None and sequence == proposal['fire_seq']:
             self._admission().committed(proposal['token'])
@@ -735,9 +740,9 @@ class BotControlBinding(MissionControl, CombatControl):
                     # input at the same full-load edge, not a later ready tick.
                     queued = int(ammo.next)
                 if queued is not None and 0 <= queued < len(ammo.remaining) and ammo.remaining[queued] > 0:
-                    ammo.restore(dict(ammo_remaining=list(ammo.remaining),
-                        shell_index=queued, next_shell_index=queued,
-                        ammo_reload_pending=True))
+                    # The shot receipt still belongs to the consumed type.
+                    # Prepare promotes the plan when the full load completes.
+                    ammo.stage(queued, False)
                 self._queued_shell = None
                 plan = context.get('load_plan')
                 lease = self._owned_next_shell

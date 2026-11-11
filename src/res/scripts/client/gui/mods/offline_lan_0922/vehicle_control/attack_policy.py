@@ -11,7 +11,7 @@ import math
 
 from .actor_observation import observation
 from .evaluation_budget import EvaluationBudget
-from .ordered_attack import OrderedAttack
+from .ordered_attack import OrderedAttack, shell_order
 import time
 
 from .. import ballistics, combat_rules, gun_pitch_limits, shot_geometry
@@ -77,8 +77,7 @@ def _combat_signature(runtime):
 
 
 def _shell_rank(shell):
-    return (0 if shell.get('is_he') else 1,
-            float(shell['piercing']), int(shell['index']))
+    return (0 if shell.get('is_he') else 1,) + shell_order(shell)
 
 
 def limited_traverse(descriptor):
@@ -1021,6 +1020,8 @@ class AttackPolicy(object):
                     (not consumable or self._executable_current(row, 'he_fallback'))]
         if not rows:
             return None
+        if shell_index is None:
+            return min(rows, key=lambda row: (shell_order(row['shell']), self._he_order(row)))
         return min(rows, key=self._he_order)
 
     def _he_order(self, row):
@@ -1573,7 +1574,8 @@ class AttackPolicy(object):
         if frame is None or self._frame_invalid:
             details['proof_changes'] = ('observation',)
             return details
-        details['ranked_stock'] = tuple((shell['index'], shell.get('is_he'), shell.get('piercing'))
+        details['ranked_stock'] = tuple((shell['index'], shell.get('is_he'), shell.get('piercing'),
+                                        shell.get('nominal_damage'))
             for shell in sorted(frame['shells'], key=_shell_rank)
             if frame['ammo'][shell['index']] > 0 and not shell.get('unavailable'))
         if reason == 'higher_rank_pending':
@@ -3026,6 +3028,7 @@ class NativeAttackEvaluator(object):
                     gun_identity, shell_identity, native_shell.get('kind'))
                 shells.append(dict(index=index, is_he=combat_rules.is_he(shot),
                                    piercing=piercing, shot=shot,
+                                   nominal_damage=combat_rules.shell_nominal_damage(shot),
                                    gun_identity=gun_identity, shell_identity=shell_identity,
                                    validation_mode=validation,
                                    signature=_shell_signature(index, shot)))
@@ -3042,7 +3045,9 @@ class NativeAttackEvaluator(object):
         scene = self._scene_stamp()
         planning_pose = _planning_pose(pose)
         ordered = getattr(getattr(runtime, 'attack_policy', None), 'ordered', None) is not None
-        if ordered:
+        siege_capable = getattr(runtime, 'siege_capable', None)
+        stable_planning_pose = ordered or bool(callable(siege_capable) and siege_capable())
+        if stable_planning_pose:
             previous = getattr(self, '_planning_anchor', None)
             if _same_native_planning_pose(previous, planning_pose):
                 planning_pose = previous
@@ -3051,6 +3056,7 @@ class NativeAttackEvaluator(object):
             weapon_identity=tuple(observation(runtime).weapon_identity()),
             combat_signature=combat_signature,
             source=source, pose=pose, planning_pose=planning_pose, ordered=ordered,
+            stable_planning_pose=stable_planning_pose,
             position=pose[0], body=body, origin=origin,
             descriptor=descriptor, entity=entity, loaded=int(gun.shot_index),
             ammo=tuple(gun.ammo), clip=int(gun.clip), clip_size=int(gun.clip_size),
@@ -3451,7 +3457,8 @@ class NativeAttackEvaluator(object):
                             not self.scope_current(frame, row.get('scope_proof'))):
                         return False
             current_pose = _planning_pose(native_source_pose(self.runtime))
-            same_pose = (current_pose == frame['planning_pose'] or frame.get('ordered') and
+            same_pose = (current_pose == frame['planning_pose'] or
+                         frame.get('stable_planning_pose', frame.get('ordered')) and
                          _same_native_planning_pose(frame['planning_pose'], current_pose))
             if (not same_pose or
                     self.runtime.gun.shot_index != frame['loaded'] or

@@ -1378,7 +1378,9 @@ class LANSession(object):
 
     @staticmethod
     def _fixture_map():
-        from . import equipment_test, roof_crush_test
+        from . import equipment_test, mobile_combat_test, roof_crush_test
+        if mobile_combat_test.enabled():
+            return mobile_combat_test.MAP
         if roof_crush_test.enabled():
             return roof_crush_test.MAP
         if equipment_test.enabled():
@@ -2269,6 +2271,20 @@ class LANSession(object):
             self._status_notifier(tr(
                 'Vehicle supplies are updating. Try starting again in a moment.'))
             return False
+        from . import mobile_combat_test
+        if mobile_combat_test.enabled():
+            from CurrentVehicle import g_currentVehicle
+            item = g_currentVehicle.item
+            descriptor = None if item is None else item.descriptor
+            vehicle = None if descriptor is None else descriptor.type.name
+            if vehicle not in mobile_combat_test.LOADOUTS:
+                self._status_notifier(tr('Select one of the eight mobile combat test vehicles in the garage.'))
+                return False
+            required = mobile_combat_test.LOADOUTS[vehicle][0]
+            if descriptor.gun.name != required:
+                self._status_notifier(tr('Mount the mobile combat test gun in the garage: %s') % required)
+                return False
+            map_name = mobile_combat_test.MAP
         # select_vehicle and start share the transport's ordered send queue.
         # Never start with an older loadout after a failed garage projection.
         if not self._publish_selected_vehicle():

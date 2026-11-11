@@ -45,7 +45,9 @@ def plan(vehicle, tier, overrides=None):
     equipment = equipment or {'rookie':'none','regular':'single','veteran':'standard','elite':'improved'}[tier]
     if development=='stock' and equipment!='none':
         raise ValueError('Stock development only allows no equipment')
-    from . import equipment_test
+    from . import equipment_test, mobile_combat_test
+    if mobile_combat_test.enabled() and vehicle in mobile_combat_test.LOADOUTS:
+        result['modules']['gun'] = mobile_combat_test.LOADOUTS[vehicle][0]
     return equipment_test.fitting(vehicle, result)
 
 

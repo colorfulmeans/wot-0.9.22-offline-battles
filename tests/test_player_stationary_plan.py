@@ -221,6 +221,29 @@ class StationaryPlanTests(unittest.TestCase):
         self.assertGreater(len(set(line_stamps)), 1)
         self.assertGreater(len(set(tokens)), 1)
 
+    def test_nearby_moving_peer_keeps_completed_static_checks(self):
+        scene = self.scene(bearing=2.8)
+        friend = scene.vehicle(43, (6.2, 0., 0.), team=1)
+        counts, epochs = [], []
+        for tick in range(20):
+            scene.pose(friend, (6.2, 0., tick * .01))
+            frame, shell, target, raw = scene.plan_frame()
+            result = scene.planner.project(frame, shell, target, raw, scene.now, 'foreground')
+            epochs.append(scene.planner._epoch_serial)
+            counts.append(len(scene.planner._arcs))
+            if result['status'] == 'proved':
+                break
+            self.assertTrue(result['progressing'], result)
+            scene.fixture.now += .11
+        self.assertEqual('proved', result['status'], result)
+        self.assertGreater(len(set(epochs)), 1)
+        self.assertEqual(sorted(counts), counts)
+        self.assertTrue(scene.planner.current(frame, result))
+        scene.pose(friend, (3.7, 0., 0.))
+        self.assertFalse(scene.planner.current(frame, result))
+        unused, blocked = scene.plan()
+        self.assertEqual('stationary_peer_rotation_blocked', blocked['reason'])
+
     def test_new_peer_entering_any_stationary_arc_retires_old_safety_receipt(self):
         scene = self.scene(bearing=1.5, around_center=False)
         friend = scene.vehicle(43, (35., 0., 35.), team=1)

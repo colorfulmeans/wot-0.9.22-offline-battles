@@ -3865,10 +3865,7 @@ class BattleRuntime(SharedBattleGeometry):
             if not self._worker_mode:
                 self._runtime.compatibility.set_control_mode_listener(
                     self._on_control_mode_changed)
-                self._gun_state = gun_mechanics.GunState(
-                    descriptor, self._local_loadout(descriptor),
-                    ammo_layout=self._local_ammo_layout(),
-                    shell_order=self._garage_loadout_snapshot()['shell_order'])
+                self._gun_state = self._new_local_gun_state(descriptor)
                 self._log_local_ammo(self._gun_state)
                 self._log_effective_parameters(descriptor)
                 self._gun_last_tick = self._clock()
@@ -8293,6 +8290,19 @@ class BattleRuntime(SharedBattleGeometry):
         shells = self._garage_loadout_snapshot()['shells']
         return None if shells is None else dict(shells)
 
+    def _new_local_gun_state(self, descriptor):
+        from . import mobile_combat_test
+        layout = self._local_ammo_layout()
+        order = self._garage_loadout_snapshot()['shell_order']
+        if mobile_combat_test.enabled():
+            counts = mobile_combat_test.ammunition(descriptor, descriptor.type.name)
+            if counts is not None:
+                layout = dict((int(_field(_field(shot, 'shell'), 'compactDescr')), count)
+                              for shot, count in zip(_field(descriptor.gun, 'shots'), counts))
+                order = ()
+        return gun_mechanics.GunState(descriptor, self._local_loadout(descriptor),
+                                      ammo_layout=layout, shell_order=order)
+
     def _log_effective_parameters(self, descriptor):
         """Print the values this battle actually uses for the player's tank.
 
@@ -8933,10 +8943,7 @@ class BattleRuntime(SharedBattleGeometry):
         descriptor = entity.typeDescriptor
         state = self._gun_state
         if state is None:
-            state = gun_mechanics.GunState(
-                descriptor, self._local_loadout(descriptor),
-                ammo_layout=self._local_ammo_layout(),
-                shell_order=self._garage_loadout_snapshot()['shell_order'])
+            state = self._new_local_gun_state(descriptor)
             self._gun_state = state
         now = self._clock() if now is None else float(now)
         if self._gun_last_tick is None:
@@ -14178,6 +14185,10 @@ class BattleRuntime(SharedBattleGeometry):
         control = getattr(self, '_player_control', None)
         if control is not None:
             control.shot_terminal(event)
+        if self._worker_mode and self._bots is not None and event.get('shooter_kind') == 'bot':
+            control = getattr(self._bots, '_actor_controls', {}).get(event.get('shooter_id'))
+            if control is not None:
+                control.artillery_shot_terminal(event)
         projectile_id = event.get('projectile_id')
         if projectile_id is None:
             raise RuntimeError('projectile terminal event has no id')

@@ -686,11 +686,92 @@ class CombatControl(object):
                            force=at_trigger, plan=plan)
         return plan if applied else None
 
+    def _artillery_ammo_policy(self):
+        gun = self.gun
+        mounted = getattr(self, '_artillery_ammo', None)
+        if mounted is None or mounted[0] is not gun:
+            from ..ammo_policy import ShotPolicy
+            from ..combat_rules import legacy_shot
+            profile = dict(self.state.get('profile') or {}, clip_size=gun.clip_size)
+            profile['shells'] = [dict(legacy_shot(shot).get('shell') or {}, index=index)
+                                 for index, shot in enumerate(gun.shots)]
+            policy = ShotPolicy(profile)
+            policy.phase = policy.desired = int(gun.shot_index)
+            mounted = self._artillery_ammo = (gun, policy)
+        return mounted[1]
+
+    def _artillery_shot_committed(self, event, sequence):
+        if (self.state is None or (self.state.get('profile') or {}).get('class_tag') != 'SPG' or
+                'fire' not in self.features):
+            return
+        policy = self._artillery_ammo_policy()
+        position = event.get('launch_pose') or self.state['position']
+        target = getattr(getattr(self, 'artillery_selection', None), 'current', None)
+        policy.inventory = tuple(self.gun.ammo)
+        policy.launch(sequence, int(event['shell_index']), sequence, 1,
+                      dict(x=position[0], z=position[2]), target)
+
+    def artillery_shot_terminal(self, event):
+        mounted = getattr(self, '_artillery_ammo', None)
+        if mounted is None or mounted[0] is not self.gun:
+            return
+        result = event.get('artillery_ammo')
+        if result is None and event.get('outcome') != 'expired':
+            return
+        policy = mounted[1]
+        sequence = event.get('shot_seq')
+        if sequence not in policy.by_seq:
+            return
+        result = result or {}
+        policy.resolve(sequence, bool(result.get('direct')), result.get('damage', 0),
+                       False, known=result.get('known') is True)
+        if combat_detail_enabled():
+            combat_detail(self, 'artillery_ammo_settlement', self.actor_id, self.now,
+                sequence, lambda: dict(shot=sequence, result=result, desired=policy.desired,
+                                      loaded=int(self.gun.shot_index), target=policy.target))
+
+    def _apply_artillery_shell(self):
+        gun = self.gun
+        if (self._manual_shell is not None or observation(self).trigger_active() or
+                observation(self).fire_intent_active()):
+            return
+        policy = self._artillery_ammo_policy()
+        position = self.state['position']
+        selection = getattr(self, 'artillery_selection', None)
+        policy.context(dict(x=position[0], z=position[2]), getattr(selection, 'current', None))
+        index = policy.choose(dict(ammo_remaining=tuple(gun.ammo)))
+        loaded = int(gun.shot_index)
+        if index != policy.phase and policy.desired == policy.phase and policy.pending:
+            # The backup cycle is complete locally. Let its last shot reach
+            # the server before changing the physical load in that checkpoint.
+            return
+        if index == loaded or not 0 <= index < len(gun.ammo) or gun.ammo[index] <= 0:
+            return
+        lease = self._owned_next_shell
+        if gun.pending_index is not None:
+            if (lease is None or lease['gun'] is not gun or lease['index'] != gun.pending_index or
+                    gun.pending_index == index):
+                return
+        setting = ('NEXT_SHELLS' if gun.clip_size > 1 and gun.clip > 0 and gun.ammo[loaded] > 0
+                   else 'CURRENT_SHELLS')
+        accepted = self._shell_setting(setting, index)
+        if accepted and setting == 'NEXT_SHELLS' and gun.pending_index == index:
+            self._owned_next_shell = dict(gun=gun, index=index, identity=self._binding(), plan=None)
+        elif accepted and setting == 'CURRENT_SHELLS':
+            self._owned_next_shell = None
+        self._record_shell('request', setting, index, accepted, 'artillery_settled_shots',
+                           force=accepted)
+        if combat_detail_enabled():
+            combat_detail(self, 'artillery_ammo_request', self.actor_id, self.now,
+                (loaded, index, setting, accepted), lambda: dict(loaded=loaded,
+                    requested=index, setting=setting, accepted=accepted, clip=gun.clip))
+
     def _apply_shell_intent(self):
         if not self._live() or self._mission_brakes() or 'fire' not in self.features:
             return
-        if (not self.combat_stop.active and
-                (self.state.get('profile') or {}).get('class_tag') != 'SPG'):
+        if (self.state.get('profile') or {}).get('class_tag') == 'SPG':
+            return self._apply_artillery_shell()
+        if not self.combat_stop.active:
             return
         decision = self.attack_policy.decision
         action = decision.get('action')
@@ -801,6 +882,15 @@ class CombatControl(object):
             if getattr(self, 'artillery_selection', None) is None:
                 self.artillery_selection = ArtillerySelection()
             order = self.artillery_selection.select(self, order, now)
+            if combat_detail_enabled():
+                selection = self.artillery_selection
+                receipt = selection.receipt
+                combat_detail(self, 'artillery_target_review', self.actor_id, now,
+                    (receipt.get('status'), receipt.get('reason'), receipt.get('target')),
+                    lambda: dict(selection=receipt, mode=order.get('combat_mode'),
+                        fire_allowed=order.get('fire_allowed'), loaded=int(self.gun.shot_index),
+                        targets=tuple((key, row.get('status'), row.get('reason'),
+                                       row.get('exception')) for key, row in sorted(selection.rows.items()))))
         order = self.combat_stop.accept(order)
         self._gun_handoff = None
         if 'fire' in self.features:

@@ -107,6 +107,16 @@ class TestingPanelTests(unittest.TestCase):
         self.assertEqual('0', network['WOT_OFFLINE_EQUIPMENT_TEST'])
         self.assertEqual('0', testing_ui.environment({})['WOT_OFFLINE_PLAYER_AUTOCONTROL'])
 
+    def test_mobile_scene_does_not_turn_on_the_detailed_combat_logs(self):
+        settings = dict(scene='mobile_combat', logs=False)
+        single = testing_ui.environment(settings)
+        self.assertEqual('1', single['WOT_OFFLINE_MOBILE_COMBAT_TEST'])
+        self.assertEqual('0', single['WOT_OFFLINE_COMBAT_DIAGNOSTICS'])
+        self.assertEqual('1', testing_ui.environment(dict(settings, logs=True))[
+            'WOT_OFFLINE_COMBAT_DIAGNOSTICS'])
+        self.assertEqual('0', testing_ui.environment(settings, single=False)[
+            'WOT_OFFLINE_MOBILE_COMBAT_TEST'])
+
     def test_disabling_control_closes_panel_and_submits_exactly_one_stop(self):
         panel = self.panel()
         self.launch(panel)

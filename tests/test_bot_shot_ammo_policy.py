@@ -137,7 +137,7 @@ class AmmoPolicyTests(unittest.TestCase):
         self.shot(hit=False); self.shot(hit=True); self.shot(hit=False)
         self.assertEqual(0, p.desired)
         self.shot(hit=False)
-        self.assertEqual(0, p.desired)  # Two HE types form one stage.
+        self.assertEqual(1, p.desired)
 
     def test_artillery_splash_damage_resets_miss_streak(self):
         p = self.setup_policy(profile(('HIGH_EXPLOSIVE',)*2, arty=True))
@@ -181,11 +181,14 @@ class AmmoPolicyTests(unittest.TestCase):
     def test_batchat_artillery_backup_returns_only_at_magazine_end(self):
         p = self.setup_policy(profile(('HIGH_EXPLOSIVE',)*2, clip=3, arty=True))
         self.shot(hit=False); self.shot(hit=False)
-        self.assertEqual(0,p.choose(self.state))
-        self.state['ammo_remaining'][0] = 0
+        self.assertEqual(1, p.choose(self.state))
+        # The weapon queues that decision at the full-reload edge.
+        self.shot(hit=True)
         for i in range(3):
             self.assertEqual(1, p.choose(self.state)); self.shot(shell=1, hit=True)
-        self.assertEqual(1, p.choose(self.state))  # No empty-stock return.
+        self.assertEqual(0, p.choose(self.state))
+        self.state['ammo_remaining'][0] = 0
+        self.assertEqual(1, p.choose(self.state))
 
     def test_exhausted_backup_skipped_and_single_or_empty_inventory(self):
         p = self.setup_policy()

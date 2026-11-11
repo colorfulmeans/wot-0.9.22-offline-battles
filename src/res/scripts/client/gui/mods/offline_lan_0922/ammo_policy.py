@@ -92,6 +92,14 @@ def ordered(profile, remaining=None):
 
 
 def stages(profile, remaining=None):
+    if remaining is not None and profile.get('class_tag') == 'SPG':
+        # A fitted rack can contain both HE identities even when the default
+        # allocation would choose one. Preserve the original main/backup order.
+        nation = str(profile.get('vehicle_name', '')).split(':')[0]
+        return sorted((shell for shell in profile.get('shells', ()) if is_he(shell)
+                       and int(shell['index']) < len(remaining) and remaining[int(shell['index'])] > 0),
+                      key=lambda shell: (nation+':'+shell.get('name', '') in GOLD_SHELLS,
+                                         int(shell['index'])))
     shells = ordered(profile)
     if 'ammo_ratios' in profile:
         pass
@@ -210,6 +218,8 @@ class ShotPolicy(object):
     def _same_phase(self, left, right):
         if left == right:
             return True
+        if self.profile.get('class_tag') == 'SPG':
+            return False
         rows = dict((int(s['index']), s) for s in self.profile.get('shells', ()))
         return left in rows and right in rows and is_he(rows[left]) and is_he(rows[right])
 

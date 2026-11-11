@@ -31,11 +31,16 @@ SUPPORT_SAMPLES_PER_TICK = 12
 WALL_SECONDS_PER_TICK = .004
 PROJECTION_ITERATIONS = 12
 _POSITION_EPSILON = .0001
+_PEER_DEPENDENCY = 11
 _WALL_CLOCK = getattr(time, 'perf_counter', time.time)
 
 
 def _angle(value):
     return (float(value) + math.pi) % (2. * math.pi) - math.pi
+
+
+def _same_point(first, second, tolerance):
+    return all(abs(a - b) <= tolerance for a, b in zip(first, second))
 
 
 def _pending(reason, progressing=False):
@@ -188,6 +193,23 @@ class StationaryPlanner(object):
         if motion[5] in (1, 3):
             raise _Deferred('stationary_mode_transition_pending')
         hydraulic = active_hydraulic_pose(runtime, frame)
+        planning_pose = frame.get('planning_pose', frame['pose'])
+        position, mounted_position = _point(frame['position']), _point(frame['pose'][6])
+        old = self._epoch
+        if hydraulic is not None and old is not None and old[-1] is not None:
+            previous = dict(old[-1])
+            if (planning_pose[2:] == old[1][2:] and
+                    _same_point(planning_pose[0], old[1][0], 1.e-6) and
+                    _same_point(planning_pose[1], old[1][1], _POSITION_EPSILON) and
+                    _same_point(position, old[2], _POSITION_EPSILON) and
+                    _same_point(mounted_position, old[3], _POSITION_EPSILON) and
+                    all(hydraulic[key] == previous.get(key) for key in hydraulic
+                    if key not in ('body', 'position', 'correction')) and
+                    abs(hydraulic['correction'] - previous['correction']) <= 1.e-6 and
+                    _same_point(hydraulic['body'], previous['body'], 1.e-6) and
+                    _same_point(hydraulic['position'], previous['position'], _POSITION_EPSILON)):
+                planning_pose, position, mounted_position = old[1:4]
+                hydraulic = previous
         hydraulic_stamp = tuple(sorted(hydraulic.items())) if hydraulic is not None else None
         pivot = _pivot(descriptor, runtime)
         for name in ('chassis', 'hull', 'turret', 'gun'):
@@ -250,8 +272,7 @@ class StationaryPlanner(object):
         cap = _finite(params['rotSpd'])
         if cap <= 0.:
             raise _Deferred('stationary_rotation_actuator_unavailable')
-        return (frame['identity'], frame.get('planning_pose', frame['pose']),
-                _point(frame['position']), _point(frame['pose'][6]),
+        return (frame['identity'], planning_pose, position, mounted_position,
                 frame.get('scene'), motion,
                 tuple(sorted(pivot.items())), mounted_box, bounds, shape, cap,
                 peer_stamp, id(sensor), native_scene, native_support, debris_stamp,
@@ -417,13 +438,18 @@ class StationaryPlanner(object):
     def _slice(self, frame, source, first, last, offset, peers, cap, now, deadline,
                hydraulic=None):
         key = (float(first), float(last), float(offset))
+        position, body = _point(frame['position']), _point(frame['body'])
+        start = vehicle_physics.track_pivot_position(position, body[0], first, offset)
+        shape = tuple(self.runtime.state['collision_shape'])
+        fraction = tank_collision.rotation_fraction(start, first, last, shape, peers,
+                                                     pivot_offset=offset)
+        if _finite(fraction) < 1.:
+            raise _Deferred('stationary_peer_rotation_blocked')
         if key in self._arcs:
             return self._arcs[key]
         self._budget(now, deadline)
         if self._slices <= 0:
             raise _Deferred('stationary_probe_budget_pending', True)
-        position, body = _point(frame['position']), _point(frame['body'])
-        start = vehicle_physics.track_pivot_position(position, body[0], first, offset)
         middle = first + _angle(last - first) * .5
         observations = []
         for angle in (middle, last):
@@ -431,16 +457,11 @@ class StationaryPlanner(object):
             plane = self._support(frame, at, angle, now, deadline)
             self._same_support(source, plane)
             observations.append(plane)
-        state, bounds = self.runtime.state, tuple(self.runtime.geometry._arena_bounds)
-        shape = tuple(state['collision_shape'])
+        bounds = tuple(self.runtime.geometry._arena_bounds)
         swept = vehicle_physics.track_pivot_sweep_bounds(start, first, last, offset, shape[0], shape[1])
         if (swept[0] < bounds[0] or swept[1] < bounds[1] or
                 swept[2] > bounds[2] or swept[3] > bounds[3]):
             raise _Deferred('stationary_arena_rotation_blocked')
-        fraction = tank_collision.rotation_fraction(start, first, last, shape, peers,
-                                                     pivot_offset=offset)
-        if _finite(fraction) < 1.:
-            raise _Deferred('stationary_peer_rotation_blocked')
         self._budget(now, deadline)
         self._slices -= 1
         pitch, roll = vehicle_physics.ground_pose_for_yaw(body[1], body[2], body[0], first)
@@ -478,9 +499,25 @@ class StationaryPlanner(object):
         try:
             dependencies, pivot, peers, cap = self._dependencies(frame)
             if dependencies != self._epoch:
+                if self._epoch is not None and combat_detail_enabled():
+                    names = ('weapon', 'planning_pose', 'position', 'native_position',
+                             'scene', 'motion', 'pivot', 'mounted_box', 'bounds',
+                             'shape', 'rotation_limit', 'peers', 'sensor', 'collision',
+                             'support', 'debris', 'hydraulic')
+                    changed = tuple(name for name, before, after in
+                                    zip(names, self._epoch, dependencies) if before != after)
+                    combat_detail(self.runtime, 'stationary_dependency_reset',
+                        self.runtime.actor_id, now, changed,
+                        lambda: dict(fields=changed, epoch=self._epoch_serial,
+                                     support=len(self._supports), arcs=len(self._arcs),
+                                     plans=len(self._plans)))
+                peer = _PEER_DEPENDENCY
+                if (self._epoch is None or self._epoch[:peer] != dependencies[:peer] or
+                        self._epoch[peer + 1:] != dependencies[peer + 1:]):
+                    self._supports, self._arcs = {}, {}
                 self._epoch = dependencies
                 self._epoch_serial += 1
-                self._supports, self._arcs, self._plans = {}, {}, {}
+                self._plans = {}
             key = (shell['signature'], target['key'], target['pose'], target['velocity'],
                    tuple(raw_prediction['sample_point']))
             # Far moving targets no longer restart static arc work. Their
@@ -492,11 +529,15 @@ class StationaryPlanner(object):
             if key in self._plans:
                 return self._plans[key]
             self._budget(now, deadline)
-            hydraulic = active_hydraulic_pose(self.runtime, frame)
-            proposal = self._project_point(frame, shell, target, raw_prediction, pivot, hydraulic)
-            support_frame = dict(frame, body=hydraulic['body']) if hydraulic is not None else frame
+            hydraulic = dict(dependencies[-1]) if dependencies[-1] is not None else None
+            planned = frame
+            if frame.get('stable_planning_pose'):
+                planned = dict(frame, body=dependencies[1][0], origin=dependencies[1][1],
+                    position=dependencies[2], pose=frame['pose'][:6] + (dependencies[3],))
+            proposal = self._project_point(planned, shell, target, raw_prediction, pivot, hydraulic)
+            support_frame = dict(planned, body=hydraulic['body']) if hydraulic is not None else planned
             support_body = support_frame['body']
-            source = self._support(frame, frame['position'], support_body[0], now, deadline)
+            source = self._support(support_frame, support_frame['position'], support_body[0], now, deadline)
             if (abs(source['pitch'] - support_body[1]) > NATIVE_ANGLE_TOLERANCE or
                     abs(source['roll'] - support_body[2]) > NATIVE_ANGLE_TOLERANCE):
                 raise _Deferred('stationary_source_support_disagrees')
@@ -515,7 +556,7 @@ class StationaryPlanner(object):
             if hydraulic is not None:
                 self._budget(now, deadline)
                 endpoint = proposal['projected_frame']['position']
-                hydraulic_receipt = self._hydraulic_sweep(frame, endpoint, proposal['flat_body'],
+                hydraulic_receipt = self._hydraulic_sweep(planned, endpoint, proposal['flat_body'],
                     hydraulic['correction'], endpoint, proposal['flat_body'],
                     proposal['hydraulic_pitch'], hydraulic)
             # A projected negative can only join the global domain after
@@ -523,7 +564,7 @@ class StationaryPlanner(object):
             if self._dependencies(frame)[0] != dependencies:
                 raise _Deferred('stationary_observations_changed')
             proof = dict(proved=True, kind='native_stationary_point_plan',
-                dependencies=dependencies, source_pose=frame.get('planning_pose', frame['pose']),
+                dependencies=dependencies, source_pose=dependencies[1],
                 source_support=source, pivot=dict(pivot), pivot_offset=proposal['pivot_offset'],
                 arc=tuple(receipts), support_resolution=DESTRUCTIBLE_POSE_MAX_ANGLE_STEP * .5,
                 projected_position=proposal['projected_frame']['position'],

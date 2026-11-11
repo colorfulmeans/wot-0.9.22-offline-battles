@@ -302,6 +302,10 @@ def main():
         if not loopback_only:
             _ensure_windows_firewall_rule(SERVER_PORT)
         tactics_options = {}
+        if loopback_only:
+            from gui.mods.offline_lan_0922 import mobile_combat_test
+            if mobile_combat_test.enabled():
+                tactics_options['mobile_test'] = True
         if os.environ.get('WOT_0922_BOT_TACTICS_PATH'):
             tactics_options['bot_tactics_path'] = os.environ['WOT_0922_BOT_TACTICS_PATH']
         run_server(

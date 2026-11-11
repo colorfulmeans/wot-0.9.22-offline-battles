@@ -1,10 +1,15 @@
 """One mounted shell and one target at a time for ordinary player auto fire."""
 
+def shell_order(shell):
+    return (float(shell['piercing']), float(shell.get('nominal_damage', 0.)),
+            int(shell['index']))
+
+
 def stocked(frame, explosive):
     return sorted((shell for shell in frame['shells']
                    if shell['is_he'] == explosive and not shell.get('unavailable')
                    and frame['ammo'][shell['index']] > 0),
-                  key=lambda shell: (shell['piercing'], shell['index']))
+                   key=shell_order)
 
 
 class OrderedAttack(object):
@@ -70,7 +75,8 @@ class OrderedAttack(object):
             return None, 'shell_descriptor_pending'
         penetration = stocked(frame, False)
         lowest = penetration[0] if penetration else None
-        higher = lowest is not None and not shell['is_he'] and lowest['piercing'] < shell['piercing']
+        higher = (lowest is not None and not shell['is_he'] and
+                  shell_order(lowest)[:2] < shell_order(shell)[:2])
         magazine = frame['clip_size'] > 1 or frame.get('burst_count', 1) > 1
         remaining = min(frame['clip'], frame['ammo'][loaded])
         last_trigger = (trigger is not None and trigger.get('shell_index') == loaded and
@@ -483,7 +489,7 @@ class OrderedAttack(object):
                for row in frame['shells']):
             return policy._recover_incomplete(now, 'ordered_reserve_descriptor_pending')
         higher = [row for row in stocked(frame, False)
-                  if row['piercing'] > shell['piercing']]
+                  if shell_order(row)[:2] > shell_order(shell)[:2]]
         if higher:
             if frame['clip_size'] > 1 and frame['clip'] > 0 and policy.reload_authority is None:
                 policy._grant_early_reload(now, 'ordered_penetration_exhausted')

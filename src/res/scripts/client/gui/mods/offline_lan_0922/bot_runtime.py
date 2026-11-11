@@ -1641,6 +1641,10 @@ def _bot_ammo_categories(profile, shell_count):
 
 def _bot_ammo_distribution(descriptor, profile, shell_count):
     from gui.mods.offline_lan_0922.ammo_policy import allocation
+    from gui.mods.offline_lan_0922 import mobile_combat_test
+    test_ammo = mobile_combat_test.ammunition(descriptor, profile.get('vehicle_name'))
+    if test_ammo is not None:
+        return test_ammo
     profile = dict(profile)
     clip = _value(_value(descriptor, 'gun', {}), 'clip', (1,)) or (1,)
     profile['clip_size'] = max(1, int(clip[0]))

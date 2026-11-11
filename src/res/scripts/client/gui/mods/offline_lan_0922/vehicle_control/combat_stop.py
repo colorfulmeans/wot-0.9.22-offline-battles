@@ -89,6 +89,7 @@ class CombatStop(object):
         self.cooldown_until = float('-inf')
         self._route_attack = False
         self._last_attackable_at = None
+        self._review_progress = None
         self._capture_lay = None
         self._capture_lay_retry = {}
         state = getattr(self.runtime, 'state', None)
@@ -110,11 +111,12 @@ class CombatStop(object):
         hint = _key(dict(kind=initial.get('target_kind'), id=initial.get('target_id')))
         mode = order.get('combat_mode')
         state = runtime.state or {}
-        retained = bool(self.combat_owned and mode in _ORDINARY_MODES + ('hold', 'base_capture', 'base_screen') and
-                        self._intent_target in visible)
-        selected = self._intent_target if retained else (min(visible,
+        retained = bool(self.combat_owned and visible and
+                        mode in _ORDINARY_MODES + ('hold', 'base_capture', 'base_screen'))
+        previous_target = self._intent_target
+        selected = previous_target if retained and previous_target in visible else (min(visible,
             key=lambda key: ordinary_initial_key(state['position'], visible[key]))
-            if hint in visible else hint)
+            if visible and (retained or hint in visible) else hint)
         self.active = bool('fire' in runtime.features and
             (state.get('profile') or {}).get('class_tag') != 'SPG' and
             (mode in _COMBAT_MODES + ('route', 'hold', 'base_capture', 'base_screen') or retained) and
@@ -149,6 +151,18 @@ class CombatStop(object):
             not explicit_travel)
         self.combat_owned = bool(self.active and retained)
         self.stop_allowed = bool(self.combat_owned and self.can_request_movement)
+        if self.combat_owned and previous_target not in visible:
+            # A departing target retires its own lay, not the engagement.
+            self._intent_target = selected
+            self._motion_order = self._failed_recovery = None
+            self._review_progress = None
+            self.pivot = runtime._native_hull_laying = None
+            self._last_attackable_at = runtime.now
+            if combat_detail_enabled():
+                combat_detail(runtime, 'combat_target_handoff', runtime.actor_id,
+                    runtime.now, (previous_target, selected),
+                    lambda: dict(previous=previous_target, next_target=selected,
+                                 episode=self._episode))
         phase = self._physical_recovery
         if (not self.can_request_movement or phase is not None and (
                 phase.get('target') not in visible or
@@ -159,6 +173,7 @@ class CombatStop(object):
         if not self.combat_owned:
             self._route_attack = False
             self._last_attackable_at = None
+            self._review_progress = None
             self._intent_target = None
             self._motion_order = None
             self._route_task = dict((name, copy.deepcopy(order.get(name)))
@@ -716,6 +731,7 @@ class CombatStop(object):
         self._route_confirmation = None
         self._route_attack = False
         self._last_attackable_at = None
+        self._review_progress = None
         self._intent_target = self._motion_order = None
         self.runtime._last_navigation = dict(action='firing_position',
             status='failed', reason=reason, owner='shared_combat',
@@ -1078,11 +1094,34 @@ class CombatStop(object):
             continued = self._continue_laying(order, now)
             if continued is not None:
                 return continued
+        stationary_wait = policy.stationary_review_wait()
+        siege_review = stationary_wait and runtime.siege_capable()
+        he_review = decision.get('reason') in (
+            'ordered_he_penetration_pending', 'he_damage_comparison_pending')
+        review = 'siege' if siege_review else 'he' if he_review else None
+        reviewing = False
+        if review is not None:
+            if siege_review:
+                # An epoch number only records invalidation. Count work that
+                # survived it, not a new serial on every unchanged pose.
+                work = max([0] + [sum(row['stationary_progress_token'][1:])
+                    for row in getattr(policy, 'rows', {}).values()
+                    if row.get('stationary_progress_token')])
+            else:
+                work = (getattr(policy, 'he_comparison', None) or {}).get('observed', 0)
+            old = self._review_progress
+            if old is None or old[0] != review or work > old[1]:
+                self._review_progress = (review, work, now)
+            reviewing = now - self._review_progress[2] < MECHANICAL_STALL_SECONDS
+            if siege_review and not reviewing:
+                return self._release_to_route(order, now, 'siege_stationary_review_stalled')
+        else:
+            self._review_progress = None
         if self._route_attack:
             proposal = self._proposal()
             if self._route_attackable(proposal):
                 self._last_attackable_at = now
-            elif (action != 'trigger_active' and
+            elif (not reviewing and action != 'trigger_active' and
                     not (policy.frame or {}).get('reloading') and
                     now - self._last_attackable_at >= ATTACK_LOSS_GRACE_SECONDS):
                 return self._release_to_route(order, now, 'route_attack_opportunity_lost')
@@ -1090,7 +1129,7 @@ class CombatStop(object):
                 return dict(self._stop(order, 'route_attack_recheck', now,
                     tuple(runtime.state['position'])), stable_hull_face=True,
                     fire_allowed=False, aim_position=None)
-        if policy.stationary_review_wait():
+        if stationary_wait:
             # Existing local recovery is not reset or restarted by a multi-
             # frame point review. Its unchanged consumer keeps its own lease.
             if ((self._motion_order is not None and

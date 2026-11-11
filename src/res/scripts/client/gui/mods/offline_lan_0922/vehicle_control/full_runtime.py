@@ -1142,6 +1142,7 @@ class FullPlayerRuntime(MissionControl, CombatControl):
             self.attack_policy.reset()
         if getattr(self, 'artillery_selection', None) is not None:
             self.artillery_selection.reset()
+        self._artillery_ammo = None
         self.combat_stop.reset()
         self.siege_aim.reset()
         self._siege_aim_candidate = None
@@ -1986,6 +1987,7 @@ class FullPlayerRuntime(MissionControl, CombatControl):
         # lease. Comparing indices alone would mistake it for our setting.
         self._manual_shell_epoch += 1
         self._owned_next_shell = None
+        self._artillery_ammo = None
         if self.active and self.gun is gun:
             pending = self.owner._local_player_burst or self.owner._local_fire_intent
             name = 'NEXT_SHELLS' if code == getattr(settings, 'NEXT_SHELLS', None) else 'CURRENT_SHELLS'
@@ -2119,6 +2121,7 @@ class FullPlayerRuntime(MissionControl, CombatControl):
                     self._manual_shell = None
             if self.active and self.attack_policy is not None:
                 self.attack_policy.shot_committed(event, pending)
+                self._artillery_shot_committed(event, committed)
                 gun = self.gun
                 if final and gun is not None and gun.clip == 0 and gun.reload_time > 0.:
                     burst = pending.get('player_burst') or {}
@@ -2156,6 +2159,10 @@ class FullPlayerRuntime(MissionControl, CombatControl):
         return row
 
     def shot_terminal(self, event):
+        player_id = getattr(getattr(self.owner, 'client', None), 'player_id', None)
+        if (event.get('shooter_kind') == 'player' and
+                player_id is not None and event.get('shooter_id') == player_id):
+            self.artillery_shot_terminal(event)
         identity = event.get('projectile_id')
         row = self._recent_projectiles.get(identity)
         if row is not None:

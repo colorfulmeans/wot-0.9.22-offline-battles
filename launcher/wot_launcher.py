@@ -3564,6 +3564,8 @@ class LauncherWindow(object):
         scene_flags = ('WOT_OFFLINE_EQUIPMENT_TEST', 'WOT_OFFLINE_ROOF_CRUSH_TEST',
                        'WOT_OFFLINE_ROOF_SHOT_DROP')
         scene = tuple(os.environ.get(key, '0') for key in scene_flags) if loopback_only else ()
+        if loopback_only and os.environ.get('WOT_OFFLINE_MOBILE_COMBAT_TEST') == '1':
+            scene += ('mobile_combat',)
         built_in_tactics = self._diagnostic_entry or any(value != '0' for value in scene)
         requested_context = {
             "game_root": os.path.normcase(os.path.realpath(
@@ -4115,7 +4117,8 @@ def main(argv=None):
     # A normal entry must not inherit a stale diagnostic setting from a shell.
     if core.SERVE_FLAG not in argv:
         os.environ['WOT_OFFLINE_DIAGNOSTICS'] = ('1' if '--diagnostics' in argv else '0')
-        for name in ('WOT_OFFLINE_EQUIPMENT_TEST', 'WOT_OFFLINE_ROOF_CRUSH_TEST', 'WOT_OFFLINE_ROOF_SHOT_DROP'):
+        for name in ('WOT_OFFLINE_EQUIPMENT_TEST', 'WOT_OFFLINE_ROOF_CRUSH_TEST',
+                     'WOT_OFFLINE_ROOF_SHOT_DROP', 'WOT_OFFLINE_MOBILE_COMBAT_TEST'):
             os.environ[name] = '0'
     if '--verify-style-editor' in argv:
         index = argv.index('--verify-style-editor')

@@ -17,9 +17,20 @@ import test_player_limited_traverse as fixtures
 from gui.mods.offline_lan_0922.battle_runtime import _LANInputSender
 from gui.mods.offline_lan_0922.gun_mechanics import GunState
 from gui.mods.offline_lan_0922.vehicle_control import attack_policy
+from gui.mods.offline_lan_0922.vehicle_control.full_runtime import FullPlayerRuntime
 
 
 class FullShellSettingsTests(unittest.TestCase):
+    def test_artillery_settlement_uses_the_wire_player_identity(self):
+        runtime = FullPlayerRuntime(SimpleNamespace(client=SimpleNamespace(player_id=7)))
+        runtime.actor_id = 1000007
+        runtime.artillery_shot_terminal = mock.Mock()
+        impact = dict(shooter_kind='player', shooter_id=7, shot_seq=3,
+                      artillery_ammo=dict(known=True, direct=False, damage=0))
+        runtime.shot_terminal(dict(impact, shooter_id=8))
+        runtime.shot_terminal(impact)
+        runtime.artillery_shot_terminal.assert_called_once_with(impact)
+
     def scene(self, clip=6, burst=3, third=False):
         scene = fixtures.TraverseScene()
         scene.setUp()
