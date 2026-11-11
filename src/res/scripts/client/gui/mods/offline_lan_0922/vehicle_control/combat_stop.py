@@ -353,6 +353,11 @@ class CombatStop(object):
             _distance(self.runtime.state['position'], _point(order['move_position'])) >
                 WAYPOINT_ARRIVAL_RADIUS))
 
+    def can_review_route_attack(self):
+        return self.can_request_movement and (
+            self._route_attack or not self.combat_owned and
+            self._route_requires_confirmation(self.task_order))
+
     def _confirmed_route_attack(self, candidate, now):
         if candidate is None or candidate.get('key') is None:
             self._route_confirmation = None

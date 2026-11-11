@@ -334,6 +334,46 @@ class StableRouteAttackTests(unittest.TestCase):
         self.assertEqual('native_lay', owner.receipt['reason'])
         self.assertEqual('hull_laying', policy.decision['candidate']['mechanical'])
 
+    def test_route_he_keeps_ownership_while_clear_points_are_still_being_compared(self):
+        scene = self.moving_scene((0., 0., 0.), limited=False, clip=1)
+        scene.set_he(piercing=1.)
+        target = scene.eligible_enemy(50, armor=30.)
+        scene.pose(target, (0., 0., 42.))
+        policy, owner = scene.runtime.attack_policy, scene.runtime.combat_stop
+        # A busy callback can only fit the normal foreground probes.
+        policy.atomic_time_budget = 0.
+        saw_blocker = False
+        for step in range(40):
+            if step == 17:
+                front = scene.eligible_enemy(60, armor=300.)
+                scene.pose(front, (1.3, -.7, 21.))
+                scene.runtime._strategic_due = 0.
+            scene.native_position((step * .14, 0., 0.))
+            scene.battle._local_speed = 1.12
+            order = scene.tick(.125)
+            if step < 16:
+                self.assertEqual('route', order['combat_mode'])
+            else:
+                self.assertTrue(owner.combat_owned, (step, owner.receipt, policy.status()))
+                self.assertEqual(1, owner._episode)
+            saw_blocker = saw_blocker or any(
+                row.get('reason') == 'planned_front_vehicle' and
+                row['blocker']['actor_key'] == ('bot', 60) for row in policy.rows.values())
+            self.assertFalse(scene.launches())
+        self.assertTrue(saw_blocker)
+
+        scene.battle._local_speed = 0.
+        for unused in range(25):
+            scene.tick(.125)
+            self.assertTrue(owner.combat_owned, owner.receipt)
+            if scene.launches():
+                break
+        self.assertEqual(1, owner._episode)
+        self.assertEqual([0], [shot['shell_index'] for shot in scene.launches()])
+        self.assertEqual(('bot', 50), policy.decision['candidate']['target_key'])
+        self.assertEqual('he_fallback', policy.decision['candidate']['mode'])
+        self.assertEqual(0, policy.he_comparison['pending'])
+
     def moving_scene(self, position, limited, clip):
         scene = OwnershipScene()
         scene.setUp()

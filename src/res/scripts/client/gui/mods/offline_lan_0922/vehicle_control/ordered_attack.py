@@ -149,16 +149,15 @@ class OrderedAttack(object):
         if action == 'native_lay':
             return policy._choose('firing_position', 'unverified_points_obstructed', row)
         combat = getattr(policy.runtime, 'combat_stop', None)
-        if (combat is not None and not combat.combat_owned and
-                combat._route_requires_confirmation(combat.task_order)):
-            # A known direct HE impact can qualify a stop while the tank
-            # moves. Finishing the target's penetration and damage ranking
-            # is still required before the first launch.
+        impact = None
+        if combat is not None and combat.can_review_route_attack():
+            # The same fresh impact can qualify a stop and retain it while
+            # the tank settles and the remaining points are reviewed.
             impact = next((current for job in target_jobs
                            for current in (policy._current(job, require_line=True),)
                            if current is not None and current.get('route_he_contact') and
                            combat._route_attackable(current)), None)
-            if impact is not None:
+            if impact is not None and (action != 'complete' or not combat.combat_owned):
                 return policy._choose('preaim', 'ordered_he_route_contact', impact)
         if action != 'complete':
             return policy._recover_incomplete(now, 'ordered_he_penetration_pending', (row,) if row else ())
@@ -169,9 +168,9 @@ class OrderedAttack(object):
         fallback = [job for job in policy._jobs('he_fallback', shell['index'])
                     if job[0][1] == self.target and job[3] in samples]
         fallback.sort(key=lambda job: job[3] != preferred)
-        return self._rank_he_fallback(policy, now, fallback)
+        return self._rank_he_fallback(policy, now, fallback, impact)
 
-    def _rank_he_fallback(self, policy, now, jobs):
+    def _rank_he_fallback(self, policy, now, jobs, impact):
         mode = 'he_fallback'
 
         def complete(row):
@@ -221,8 +220,9 @@ class OrderedAttack(object):
             fresh = [row for row, job in options if row is policy._current(job, require_line=True)
                      and (policy._executable(row, mode) or row.get('he_route_review'))]
             if fresh:
-                return policy._choose('preaim', 'he_damage_comparison_pending',
-                                      min(fresh, key=policy._he_order))
+                impact = min(fresh, key=policy._he_order)
+            if impact is not None:
+                return policy._choose('preaim', 'he_damage_comparison_pending', impact)
             return policy._recover_incomplete(now, 'he_damage_comparison_pending')
         if best is None:
             return self._no_he_contact(policy, rows, 'ordered_he_no_clear_contact')

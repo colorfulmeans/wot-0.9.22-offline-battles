@@ -3737,11 +3737,14 @@ class NativeAttackEvaluator(object):
                 self._point_scope(frame, shell, target, predicted, result)
                 combat = getattr(self.runtime, 'combat_stop', None)
                 if ((mode != 'penetration' and not ordered_he) or not route_lay or
-                        result.get('scope') == 'excluded' or combat is None or
-                        not combat._route_requires_confirmation(combat.task_order) or
-                        combat.combat_owned):
+                        result.get('scope') == 'excluded' or combat is None):
                     return reported
-                # Observe the ideal ray's plate while the route still drives.
+                review = (combat.can_review_route_attack() if ordered_he else
+                          not combat.combat_owned and
+                          combat._route_requires_confirmation(combat.task_order))
+                if not review:
+                    return reported
+                # Observe the ideal ray's plate through the route handoff.
                 # Mechanical reach remains hull_laying; this cannot fire or
                 # bypass the native actuator's rotation checks after admission.
                 if ordered_he:
