@@ -21,14 +21,23 @@ class OrderedAttack(object):
         self.cursor = 0
         self.committed_shell = None
         self.committed_rounds = 0
+        self.he_fallback_rounds = 0
+        self.he_clip_return = False
 
-    def load_started(self, shell_index):
+    def load_started(self, shell_index, new_load=False):
         if self.committed_shell != shell_index:
             self.committed_shell, self.committed_rounds = shell_index, 0
+            self.he_fallback_rounds = 0
+            new_load = True
+        if new_load:
+            self.he_clip_return = False
 
-    def shot_committed(self, shell_index):
+    def shot_committed(self, shell_index, mode=None, magazine=False):
         self.load_started(shell_index)
         self.committed_rounds += 1
+        self.he_fallback_rounds = self.he_fallback_rounds + 1 if mode == 'he_fallback' else 0
+        if magazine and self.he_fallback_rounds >= 2:
+            self.he_clip_return = True
 
     def _sync(self, frame, shell):
         self.load_started(shell['index'])
@@ -53,7 +62,7 @@ class OrderedAttack(object):
         if self.target not in live:
             self.target, self.sample, self.he_sample = None, None, None
 
-    def next_load(self, policy):
+    def next_load(self, policy, trigger=None):
         frame = policy.frame
         loaded = frame['loaded']
         shell = next((row for row in frame['shells'] if row['index'] == loaded), None)
@@ -69,10 +78,20 @@ class OrderedAttack(object):
         lowest = penetration[0] if penetration else None
         if lowest is None or (not shell['is_he'] and lowest['piercing'] >= shell['piercing']):
             return None, 'keep_mounted_shell'
-        # NEXT is promoted by the native gun only when the current load is
-        # spent. For a single shot, arm it ahead of the second real commit.
+        # The native gun promotes NEXT at the reload boundary. The final
+        # trigger's shot mode is available before its cartridge is consumed.
         magazine = frame['clip_size'] > 1 or frame.get('burst_count', 1) > 1
-        if not magazine and (self.committed_shell != loaded or self.committed_rounds < 1):
+        same_shell = self.committed_shell == loaded
+        if shell['is_he']:
+            if not (same_shell and self.he_clip_return):
+                if (trigger is None or trigger.get('mode') != 'he_fallback' or
+                        trigger.get('shell_index') != loaded):
+                    return None, 'keep_mounted_shell'
+                rounds = min(frame['clip'], frame['ammo'][loaded], frame.get('burst_count', 1))
+                streak = self.he_fallback_rounds if same_shell else 0
+                if streak + rounds < 2:
+                    return None, 'keep_mounted_shell'
+        elif not magazine and (not same_shell or self.committed_rounds < 1):
             return None, 'keep_mounted_shell'
         if self._still_failed(policy, lowest['index']):
             return None, 'ordered_lowest_penetration_still_failed'

@@ -73,11 +73,19 @@ class CombatControl(object):
                             combat_owned=self.combat_stop.combat_owned))
                 return None
             token = self.generation
-            load_plan = self._apply_next_shell(at_trigger=True)
+            load_plan = self._apply_next_shell(at_trigger=True, trigger=candidate)
             if not self._live(token):
                 if trace_combat:
                     combat_detail(self, 'auto_trigger_context', self.actor_id, self.now,
                         'owner_changed_after_next', lambda: dict(candidate=candidate['key']))
+                return None
+            lease = self._owned_next_shell or {}
+            if (load_plan is None and (lease.get('plan') or {}).get('trigger_only') and
+                    self.gun.pending_index == lease['index'] and
+                    min(self.gun.clip, self.gun.ammo[self.gun.shot_index]) <= self.gun.burst_count):
+                if trace_combat:
+                    combat_detail(self, 'auto_trigger_context', self.actor_id, self.now,
+                        'he_next_queue_release_pending', lambda: dict(candidate=candidate['key']))
                 return None
             # Motion integration and native gun laying happen after the
             # policy selected this intention. Refresh that same sample at
@@ -87,6 +95,7 @@ class CombatControl(object):
                     policy.decision.get('candidate') is not candidate or
                     policy.decision.get('action') != 'aim' or
                     not self.combat_stop.contains(candidate.get('target'))):
+                self._discard_trigger_next_shell(load_plan)
                 if trace_combat:
                     combat_detail(self, 'auto_trigger_context', self.actor_id, self.now,
                         'same_point_refresh_refused' if solution is None else 'attack_intention_changed',
@@ -561,6 +570,12 @@ class CombatControl(object):
             self._record_shell('queue_release', 'NEXT_SHELLS', lease['index'], True,
                                reason, force=at_trigger, plan=lease.get('plan'))
 
+    def _discard_trigger_next_shell(self, plan):
+        lease = self._owned_next_shell
+        if (plan is not None and plan.get('trigger_only') and lease is not None and
+                lease.get('plan') is plan):
+            self._release_next_shell('he_trigger_refused', required=False, at_trigger=True)
+
     def _prepare_next_shell(self, now):
         policy, gun = self.attack_policy, self.gun
         frame = policy.frame
@@ -575,7 +590,7 @@ class CombatControl(object):
             policy.background(now)
         self._apply_next_shell()
 
-    def _apply_next_shell(self, at_trigger=False):
+    def _apply_next_shell(self, at_trigger=False, trigger=None):
         if (not self._live() or self._mission_brakes() or 'fire' not in self.features or
                 not self.combat_stop.active):
             return
@@ -603,7 +618,7 @@ class CombatControl(object):
         if at_trigger:
             # Use only the prepared plan; a new scan belongs to background work.
             plan, reason = ((None, 'observation_changed') if stale_frame else
-                            policy.next_at_edge(queued=(lease or {}).get('plan')))
+                            policy.next_at_edge(queued=(lease or {}).get('plan'), trigger=trigger))
             index = plan['shell_index'] if plan is not None else None
             if combat_detail_enabled():
                 combat_detail(self, 'next_at_last_trigger', self.actor_id, self.now, reason,
@@ -612,6 +627,8 @@ class CombatControl(object):
                         ranking_status=policy.next_status, coverage=policy.background_coverage,
                         committed_with_shell=(policy.ordered.committed_rounds
                                               if policy.ordered is not None else None),
+                        he_fallback_streak=(policy.ordered.he_fallback_rounds
+                                            if policy.ordered is not None else None),
                         previous_plan=((lease or {}).get('plan') or {}).get('key')))
         else:
             index, plan, reason = policy.next_shell, policy.next_plan, policy.next_status

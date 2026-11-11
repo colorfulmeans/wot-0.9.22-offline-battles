@@ -4,7 +4,6 @@ All cases run the original planner, native point evaluation, PlayerControl and
 actual battle.shoot/GunState accounting. Native geometry and actuator observations
 come from OwnershipScene; this is not a Windows physics or timing play test.
 """
-import copy
 import unittest
 
 from test_player_combat_ownership import OwnershipScene
@@ -61,17 +60,11 @@ class HandoffAmmunitionTests(unittest.TestCase):
         scene.runtime._strategic_due = 0.
         gun, policy = scene.battle._gun_state, scene.runtime.attack_policy
         initial_ammo = tuple(gun.ammo)
-        queued_plan = None
         for unused in range(100):
             scene.tick()
             self.assertFalse(hasattr(policy, 'search_started'))
             self.assertEqual(0, gun.shot_index)
-            if policy.next_plan is not None and not scene.launches():
-                self.assertEqual((1, 'he_finished_lowest_penetration'),
-                                 (policy.next_shell, policy.next_status))
-                self.assertIsNone(policy.next_plan['key'])
-                if gun.pending_index == 1:
-                    queued_plan = copy.deepcopy(policy.next_plan)
+            self.assertIsNone(gun.pending_index)
             if scene.launches():
                 break
         self.assertEqual(1, len(scene.launches()), scene.runtime.status())
@@ -83,13 +76,9 @@ class HandoffAmmunitionTests(unittest.TestCase):
         # The current HE contact and the next AP load have independent plans.
         self.assertEqual((0, 'he_fallback'),
             (policy.decision['candidate']['shell_index'], policy.decision['candidate']['mode']))
-        self.assertIsNotNone(queued_plan, 'the inventory NEXT must be queued before this trigger')
-        self.assertEqual(1, queued_plan['shell_index'])
-        self.assertEqual(1, gun.pending_index)
-        # A source/point recheck may put the current NEXT proof back in the
-        # pending state. The already queued gun setting and accepted burst
-        # remain physical facts; a tail must not select/rewrite either plan.
-        at_trigger_plan = copy.deepcopy(policy.next_plan)
+        self.assertEqual(1, policy.ordered.he_fallback_rounds)
+        # Every physical tail uses the accepted trigger's HE mode. The
+        # next load becomes eligible once those rounds have committed.
         self.assertIsNotNone(scene.battle._local_player_burst)
         for tail in (1, 2):
             # Advance the real committed trigger clock and fire its physical
@@ -99,8 +88,8 @@ class HandoffAmmunitionTests(unittest.TestCase):
             self.assertEqual(initial_ammo[0] - tail - 1, gun.ammo[0])
             self.assertEqual(initial_ammo[1], gun.ammo[1])
             self.assertEqual(0, gun.shot_index)
-            self.assertEqual(1, gun.pending_index)
-            self.assertEqual(at_trigger_plan, policy.next_plan)
+            self.assertIsNone(gun.pending_index)
+            self.assertEqual(tail + 1, policy.ordered.he_fallback_rounds)
         launches = scene.launches()
         self.assertEqual([0, 1, 2], [row['burst_index'] for row in launches])
         self.assertEqual([3, 3, 3], [row['burst_count'] for row in launches])
@@ -110,6 +99,10 @@ class HandoffAmmunitionTests(unittest.TestCase):
         self.assertEqual(3, gun.clip)
         self.assertEqual(3, scene.control.shot_commits)
         self.assertIsNone(scene.battle._local_player_burst)
+        scene.tick()
+        self.assertEqual((0, 3, 1), (gun.shot_index, gun.clip, gun.pending_index))
+        self.assertEqual((1, 'he_finished_lowest_penetration'),
+                         (policy.next_shell, policy.next_status))
 
     def test_role_range_cannot_filter_the_nearest_current_he_target(self):
         scene = self.scene(player_id=2)
@@ -122,7 +115,6 @@ class HandoffAmmunitionTests(unittest.TestCase):
         gun, policy = scene.battle._gun_state, scene.runtime.attack_policy
         initial_ammo = tuple(gun.ammo)
         saw_current = False
-        saw_next_plan = False
         # Drive the real bounded CURRENT comparison and actual trigger. No
         # planner output, navigation receipt or firing gate is replaced.
         for unused in range(100):
@@ -147,20 +139,17 @@ class HandoffAmmunitionTests(unittest.TestCase):
                                  (candidate['contact'], candidate['mechanical'], candidate['line']))
                 self.assertEqual((5, 500.),
                     (scene.applied_order()['target_id'], scene.applied_order()['fire_range']))
-            if policy.next_plan is not None:
-                saw_next_plan = True
-                self.assertEqual((1, 'he_finished_lowest_penetration'),
-                                 (policy.next_shell, policy.next_status))
+            self.assertIsNone(policy.next_plan)
             if scene.launches():
                 break
         self.assertTrue(saw_current, policy.status())
-        self.assertTrue(saw_next_plan, 'NEXT completes independently of the first CURRENT result')
         self.assertEqual(1, len(scene.launches()), scene.runtime.status())
         self.assertEqual(5, scene.runtime.weapon.target['network_id'])
         self.assertEqual([0], [row['shell_index'] for row in scene.launches()])
         self.assertEqual((initial_ammo[0] - 1, initial_ammo[1]), tuple(gun.ammo))
         self.assertEqual(2, gun.clip)
-        self.assertEqual(1, gun.pending_index)
+        self.assertIsNone(gun.pending_index)
+        self.assertEqual(1, policy.ordered.he_fallback_rounds)
 
     def test_driver_margin_refusal_stays_positive_until_original_target_can_fire(self):
         scene = self.scene(clip=1, limited=True)

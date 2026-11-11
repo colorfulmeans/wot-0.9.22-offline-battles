@@ -857,6 +857,8 @@ class _PlayerBehaviorEngine(shared_runtime.BotRuntime):
         controller = runtime.controller
         trigger_shell = runtime.gun.shot_index
         accepted = controller.issue_automatic_trigger(context, runtime.now)
+        if not accepted:
+            runtime._discard_trigger_next_shell(context.get('load_plan'))
         runtime._sync_weapon_observation()
         if combat_detail_enabled():
             reason = 'accepted' if accepted else controller.last_fire_failure or 'native_trigger_no_receipt'

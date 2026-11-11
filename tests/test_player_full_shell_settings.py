@@ -177,7 +177,7 @@ class FullShellSettingsTests(unittest.TestCase):
         self.assertEqual([(scene.settings.CURRENT_SHELLS, 102)],
             [call for call in scene.setting_calls if call[0] == scene.settings.CURRENT_SHELLS])
 
-    def test_current_ordinary_he_commits_twice_before_inventory_next_ap(self):
+    def test_current_ordinary_he_fallback_commits_twice_before_inventory_next_ap(self):
         scene = self.scene(clip=1, burst=1, third=True)
         runtime, gun = scene.runtime, scene.battle._gun_state
         he = gun.shots[2]
@@ -197,7 +197,6 @@ class FullShellSettingsTests(unittest.TestCase):
         scene.setting_calls[:] = []
         before = list(gun.ammo)
         scene.rotator_enabled = True
-        queued_while_loading = False
         ap_loading_after_he = False
         for unused in range(160):
             self.tick_weapon(scene)
@@ -211,10 +210,8 @@ class FullShellSettingsTests(unittest.TestCase):
             elif len(launches) == 1:
                 self.assertEqual(2, launches[0]['shell_index'])
                 self.assertEqual(2, gun.shot_index)
-                if gun.reload_time > 0. and gun.pending_index == 0:
-                    queued_while_loading = True
-                    self.assertEqual('he_finished_lowest_penetration', runtime.attack_policy.next_status)
-                    self.assertIsNone(runtime.attack_policy.next_plan['key'])
+                self.assertIsNone(gun.pending_index)
+                self.assertEqual(1, runtime.attack_policy.ordered.he_fallback_rounds)
             elif len(launches) == 2:
                 self.assertEqual(0, gun.shot_index)
                 if not ap_loading_after_he:
@@ -222,7 +219,6 @@ class FullShellSettingsTests(unittest.TestCase):
                     ap_loading_after_he = True
             if len(launches) >= 3:
                 break
-        self.assertTrue(queued_while_loading, scene.trace[-3:])
         self.assertTrue(ap_loading_after_he, scene.trace[-3:])
         self.assertEqual([2, 2, 0], [shot['shell_index'] for shot in scene.launches()])
         self.assertEqual([before[0] - 1, before[1], before[2] - 2], gun.ammo)

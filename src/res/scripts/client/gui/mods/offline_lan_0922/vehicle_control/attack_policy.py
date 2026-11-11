@@ -1444,12 +1444,16 @@ class AttackPolicy(object):
             groups[-1][1].append(row)
         return groups
 
-    def next_at_edge(self, native_fence=True, queued=None):
+    def next_at_edge(self, native_fence=True, queued=None, trigger=None):
         if self.ordered is not None and self.frame is not None and not self.frame.get('artillery'):
             if self._frame_invalid:
                 return None, 'observation_changed'
-            index, reason = self.ordered.next_load(self)
-            return (dict(shell_index=index, key=None) if index is not None else None), reason
+            index, reason = self.ordered.next_load(self, trigger)
+            plan = dict(shell_index=index, key=None) if index is not None else None
+            if (plan is not None and reason == 'he_finished_lowest_penetration' and
+                    not self.ordered.he_clip_return):
+                plan['trigger_only'] = True
+            return plan, reason
         plan = self.next_plan
         current = self.current_row(plan)
         if plan is None:
@@ -1623,7 +1627,7 @@ class AttackPolicy(object):
 
     def load_started(self, shell_index, plan=None):
         if self.ordered is not None:
-            self.ordered.load_started(shell_index)
+            self.ordered.load_started(shell_index, new_load=True)
         if self._magazine is not None and self._magazine[0] != shell_index:
             self._clear_fallback()
             self._lay_recovery = None
@@ -2592,7 +2596,15 @@ class AttackPolicy(object):
 
     def shot_committed(self, event, pending):
         if self.ordered is not None and event.get('shell_index') is not None:
-            self.ordered.shot_committed(int(event['shell_index']))
+            shell_index = int(event['shell_index'])
+            context = (pending.get('player_control') or
+                       (pending.get('player_burst') or {}).get('player_control') or {})
+            candidate = context.get('candidate') or {}
+            mode = (candidate.get('mode') if context.get('automatic') and
+                    candidate.get('shell_index') == shell_index else None)
+            frame = self.frame or {}
+            magazine = frame.get('clip_size', 1) > 1 or frame.get('burst_count', 1) > 1
+            self.ordered.shot_committed(shell_index, mode, magazine)
         # Hit, miss, zero damage and penetration results are deliberately not
         # inputs. Only the physical group's first/final commit bounds its lock.
         if int(event.get('burst_index', 0)) == 0:

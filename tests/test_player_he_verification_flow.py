@@ -7,6 +7,7 @@ These tests cannot establish real Windows frame pacing or BigWorld physics.
 import math
 from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 from test_player_combat_ownership import OwnershipScene
 from test_player_fire_admission_complete import BoxTester
@@ -80,6 +81,12 @@ class HEVerificationFlowTests(unittest.TestCase):
                 return
         self.fail('no actual projectile: %r' % scene.runtime.status())
 
+    @staticmethod
+    def move_target_with_armor(scene, target, armor, offset):
+        for name in ('chassis', 'hull', 'turret', 'gun'):
+            getattr(target.typeDescriptor, name).materials[0].armor = armor
+        scene.pose(target, (20. + offset, 0., 40.))
+
     def test_ordinary_he_first_point_success_launches_without_loading_another_shell(self):
         scene, target = self.scene()
         gun, policy = scene.battle._gun_state, scene.runtime.attack_policy
@@ -118,6 +125,66 @@ class HEVerificationFlowTests(unittest.TestCase):
         self.assertIn(candidate['sample'], he_samples)
         self.assertFalse(any(row['mode'] == 'he_fallback' for row in policy.rows.values()))
 
+    def test_single_he_returns_to_ap_after_two_consecutive_fallback_rounds(self):
+        scene, target = self.scene(armor=300.)
+        gun, policy = scene.battle._gun_state, scene.runtime.attack_policy
+        gun.shots[1].piercingPower = (800., 800.)
+        scene.battle.client.effective_params['gun']['shots'][1]['source_shot'][
+            'piercingPower'] = gun.shots[1].piercingPower
+        sequence = (('he_fallback', 300., 1), ('penetration', 10., 0),
+                    ('penetration', 10., 0), ('he_fallback', 300., 1),
+                    ('he_fallback', 300., 0))
+        for number, (mode, armor, streak) in enumerate(sequence, 1):
+            self.move_target_with_armor(scene, target, armor, number * .4)
+            self.run_until_shots(scene, count=number)
+            self.assertEqual(mode, policy.decision['candidate']['mode'])
+            self.assertEqual(streak, policy.ordered.he_fallback_rounds)
+            self.assertIsNone(gun.pending_index)
+            self.assertEqual(int(number == len(sequence)), gun.shot_index)
+        self.run_until_shots(scene, count=6)
+        self.assertEqual([0, 0, 0, 0, 0, 1],
+                         [shot['shell_index'] for shot in scene.launches()])
+
+    def test_refused_second_fallback_does_not_keep_its_next_shell(self):
+        scene, target = self.scene(armor=300.)
+        gun, policy = scene.battle._gun_state, scene.runtime.attack_policy
+        self.run_until_shots(scene)
+        with mock.patch.object(scene.battle._avatar, 'shoot') as refused:
+            for unused in range(100):
+                self.tick(scene)
+                if refused.called:
+                    break
+            self.assertTrue(refused.called, policy.status())
+        self.assertEqual(1, len(scene.launches()))
+        self.assertEqual(1, policy.ordered.he_fallback_rounds)
+        self.assertEqual((0, None), (gun.shot_index, gun.pending_index))
+        self.assertIsNone(scene.runtime._owned_next_shell)
+        self.move_target_with_armor(scene, target, 10., .4)
+        self.run_until_shots(scene, count=2)
+        self.assertEqual('penetration', policy.decision['candidate']['mode'])
+        self.assertEqual(0, policy.ordered.he_fallback_rounds)
+        self.assertEqual((0, None), (gun.shot_index, gun.pending_index))
+
+    def test_penetrating_he_keeps_its_shell_after_a_full_clip(self):
+        scene, target = self.scene(clip=3)
+        gun, policy = scene.battle._gun_state, scene.runtime.attack_policy
+        self.run_until_shots(scene, count=5)
+        self.assertEqual([0] * 5, [shot['shell_index'] for shot in scene.launches()])
+        self.assertEqual((0, None), (gun.shot_index, gun.pending_index))
+        self.assertEqual(0, policy.ordered.he_fallback_rounds)
+
+    def test_he_clip_finishes_with_he_after_qualifying_for_the_next_ap_load(self):
+        scene, target = self.scene(clip=4, armor=300.)
+        gun, policy = scene.battle._gun_state, scene.runtime.attack_policy
+        self.run_until_shots(scene, count=2)
+        self.assertTrue(policy.ordered.he_clip_return)
+        self.move_target_with_armor(scene, target, 10., .4)
+        self.run_until_shots(scene, count=3)
+        self.assertEqual('penetration', policy.decision['candidate']['mode'])
+        self.assertEqual((0, 1), (gun.shot_index, gun.pending_index))
+        self.run_until_shots(scene, count=5)
+        self.assertEqual([0, 0, 0, 0, 1], [shot['shell_index'] for shot in scene.launches()])
+
     def test_he_magazine_failure_falls_back_without_discarding_clip_or_next_ap(self):
         scene, target = self.scene(clip=6, burst=3, armor=300.)
         gun, policy = scene.battle._gun_state, scene.runtime.attack_policy
@@ -129,19 +196,19 @@ class HEVerificationFlowTests(unittest.TestCase):
         self.run_until_shots(scene, observe=observe)
         self.assertEqual('current_he_fallback_contact', policy.decision['reason'])
         self.assertEqual('he_fallback', policy.decision['candidate']['mode'])
-        self.assertEqual((1, 'he_finished_lowest_penetration'), (policy.next_shell, policy.next_status))
-        self.assertIsNone(policy.next_plan['key'])
-        next_key = policy.next_plan['key']
-        for unused in range(2):
+        self.assertIsNone(policy.next_plan)
+        for streak in (2, 3):
             self.assertTrue(scene.advance())
-            self.assertEqual(next_key, policy.next_plan['key'])
-            self.assertEqual(1, gun.pending_index)
+            self.assertEqual(streak, policy.ordered.he_fallback_rounds)
+            self.assertIsNone(gun.pending_index)
         self.assertEqual([0, 1, 2], [shot['burst_index'] for shot in scene.launches()])
         self.assertEqual(1, len(set(shot['burst_group_seq'] for shot in scene.launches())))
         self.assertEqual([0, 0, 0], [shot['shell_index'] for shot in scene.launches()])
         self.assertEqual((initial[0] - 3, initial[1]), tuple(gun.ammo))
         self.assertEqual(3, gun.clip)
         self.assertEqual(3, scene.control.shot_commits)
+        self.tick(scene)
+        self.assertEqual((0, 3, 1), (gun.shot_index, gun.clip, gun.pending_index))
 
     def test_single_he_does_not_probe_ap_before_executing_fallback(self):
         scene, target = self.scene(layered=True)
@@ -354,7 +421,8 @@ class HEVerificationFlowTests(unittest.TestCase):
         self.assertEqual(2, scene.runtime.weapon.target['network_id'])
         self.assertEqual([0, 0], [shot['shell_index'] for shot in scene.launches()])
         self.assertEqual((initial[0] - 2, initial[1]), tuple(gun.ammo))
-        self.assertEqual(1, gun.shot_index)
+        self.assertEqual(0, gun.shot_index)
+        self.assertEqual(1, policy.ordered.he_fallback_rounds)
         scene.runtime.set_mission('return_base', {})
         for unused in range(30):
             self.tick(scene)
@@ -380,11 +448,8 @@ class HEVerificationFlowTests(unittest.TestCase):
                     scene.control.update(.1, scene.now)
                     self.assertFalse(scene.launches())
                     self.assertEqual(0, gun.shot_index)
-                    if policy.next_shell == 1 and gun.pending_index == 1:
-                        break
-                expected = None if clip == 1 else 1
-                self.assertEqual(expected, policy.next_shell, policy.status())
-                self.assertEqual(expected, gun.pending_index)
+                    self.assertIsNone(gun.pending_index)
+                self.assertIsNone(policy.next_shell, policy.status())
                 saw_ap_loading = []
 
                 def observe():
