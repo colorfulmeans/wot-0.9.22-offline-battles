@@ -221,6 +221,9 @@ class CombatStop(object):
         mode = current.get('mode', 'penetration')
         if policy._executable(current, mode):
             return current
+        if decision.get('action') == 'preaim' and (
+                current.get('route_he_contact') or mode == 'he_fallback' and current.get('he_route_review')):
+            return current if self._route_attackable(current) else None
         if (decision.get('action') != 'firing_position' or
                 not policy._needs_firing_position(current)):
             return None
@@ -358,8 +361,9 @@ class CombatStop(object):
         # selected sample follows a plate or moves to another proved plate.
         key = candidate['key']
         target = candidate['target']
+        mode = 'he' if (candidate.get('shell') or {}).get('is_he') else key[-1]
         signature = (_key(target), target.get('engine_id'), self.runtime.gun,
-                     key[0], key[-1])
+                      key[0], mode)
         previous = self._route_confirmation
         if (previous is None or previous[0] != signature or
                 not 0. <= now - previous[2] <= ATTACK_OBSERVATION_GAP_SECONDS):
@@ -373,16 +377,23 @@ class CombatStop(object):
         if candidate is None or candidate.get('shell_index') != self.runtime.gun.shot_index:
             return False
         mode = candidate.get('mode', 'penetration')
-        if self.runtime.attack_policy._plannable(candidate, mode):
+        policy = self.runtime.attack_policy
+        if policy._plannable(candidate, mode):
+            return True
+        if candidate.get('line') != 'clear':
+            return False
+        if candidate.get('route_he_contact') and candidate.get('mechanical') == 'reachable':
             return True
         # This proves the plate and the ideal lane even though the present
         # gun cannot lay there. The existing native actuator still has to
         # prove and execute the actual turn after the route hands over.
         refusal = candidate.get('stationary_pending') or ''
+        proved = (candidate.get('contact') is True and candidate.get('expected_damage') is not None
+                  if mode == 'he_fallback' else candidate.get('armor') == 'passed' or
+                  candidate.get('route_he_contact') or candidate.get('route_he_damage', 0.) > 0.)
         return ('blocked' not in refusal and 'actuator_unavailable' not in refusal and
-                candidate.get('line') == 'clear' and candidate.get('mechanical') == 'hull_laying' and
-                mode == 'penetration' and
-                (candidate.get('armor') == 'passed' or candidate.get('route_he_damage', 0.) > 0.) and
+                candidate.get('mechanical') == 'hull_laying' and
+                proved and
                 self._lay_solution(candidate) is not None)
 
     def _route_lay_can_retry(self, proposal):

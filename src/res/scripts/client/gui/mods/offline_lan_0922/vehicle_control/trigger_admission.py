@@ -14,7 +14,8 @@ from .. import ballistics, combat_rules, projectile_runtime, shot_geometry
 from ..projectile_wire import round_scalar
 from .attack_policy import (PENETRATION_FACTOR_65, _distance_sq, _mechanical,
                             _point, native_source_pose, native_target_pose,
-                            native_geometry_complete, native_lane_geometry_complete)
+                            native_geometry_complete, native_lane_geometry_complete,
+                            native_chord_candidates, native_hostile_roster)
 from .actor_observation import observation
 
 
@@ -23,7 +24,6 @@ MAX_PROOF_CHORDS = 334
 PROBE_INTERVAL = .05
 FULL_PROOF_INTERVAL = .5
 COMPLETED_PROOF_TTL = .2
-MAX_COLLISION_ROSTER = 30
 
 
 def barrel_path(origin, direction, shot, point):
@@ -179,59 +179,13 @@ class TriggerAdmission(object):
         return None, target, solution
 
     def _collision_roster(self, target, velocity, now):
-        from ..entities.remote_vehicle import vehicle_target_bounds_at_matrix
-        owner, runtime, rows = self.owner, self.control.runtime, []
-        observed = dict((row.get('engine_id'), row) for row in runtime.visible_targets())
-        policy = getattr(runtime, 'attack_policy', None)
-        measurements = getattr(getattr(policy, 'evaluator', None), 'observations', {})
-        bot = getattr(runtime, 'actor_kind', 'human') == 'bot'
-        for record in owner._records.values():
-            if (self.physical.owns_record(record) or record.get('tombstone') or not record.get('ready') or
-                    (record.get('engine_id') not in observed if bot else not record.get('spot_visible')) or
-                    int((record.get('state') or {}).get('team', 0)) == self.physical.actor_team):
-                continue
-            other = owner._server_entity(record.get('engine_id'))
-            if other is None or not getattr(other, 'isStarted', False) or not other.isAlive():
-                continue
-            if not native_geometry_complete(other):
-                return None
-            if len(rows) >= MAX_COLLISION_ROSTER:
-                return None
-            signature, body, chassis = native_target_pose(owner, other, record)
-            raw = observed.get(other.id, {})
-            key = (raw.get('kind'), raw.get('network_id', raw.get('id')))
-            sample = measurements.get(key)
-            measured = (sample[2] if sample is not None and 0. <= now - sample[0] <= .35
-                        else raw.get('velocity', (0., 0., 0.)))
-            speed = tuple(velocity) if other is target else _point(measured)
-            bounds = vehicle_target_bounds_at_matrix(other, body, owner._runtime.math,
-                                                      chassis_matrix=chassis)
-            if bounds is None:
-                return None
-            rows.append(dict(target=other, record=record, body=body, chassis=chassis,
-                             velocity=speed, bounds=bounds,
-                             actor_key=(raw.get('kind') or
-                                 ('bot' if record.get('kind') == 'bot' else 'human'),
-                                 raw.get('network_id', record.get('network_id'))),
-                             team=int((record.get('state') or {}).get(
-                                 'team', record.get('team', 0))),
-                             signature=(other.id, signature, speed)))
-        rows.sort(key=lambda row: row['target'].id)
-        return rows
+        return native_hostile_roster(self.control.runtime, now, target, velocity)
 
     def _contact(self, proof, first, last, first_time, last_time, centre=False):
         """Find the first native collision, preserving material traversal."""
         from ..entities.remote_vehicle import collide_vehicle_at_matrix
-        owner, candidates, best = self.owner, [], None
-        for row in proof['roster']:
-            velocity = row['velocity']
-            start = tuple(first[index] - velocity[index] * first_time for index in range(3))
-            end = tuple(last[index] - velocity[index] * last_time for index in range(3))
-            length = math.sqrt(_distance_sq(start, end))
-            entry = shot_geometry.segment_box_entry_distance(start, end, row['bounds'])
-            if entry is not None and length > 0.:
-                candidates.append((entry / length, row, start, end, length))
-        candidates.sort(key=lambda item: item[0])
+        owner, best = self.owner, None
+        candidates = native_chord_candidates(proof['roster'], first, last, first_time, last_time)
         for broad_fraction, row, start, end, length in candidates:
             if best is not None and broad_fraction > best['fraction']:
                 break

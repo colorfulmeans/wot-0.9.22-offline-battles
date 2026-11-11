@@ -92,7 +92,7 @@ class HEVerificationFlowTests(unittest.TestCase):
         self.assertEqual((initial[0] - 1, initial[1]), tuple(gun.ammo))
         self.assertEqual(1, scene.control.shot_commits)
 
-    def test_ordinary_he_first_point_failure_fires_current_he_before_next_ap(self):
+    def test_ordinary_he_first_point_failure_finds_a_penetrating_point_on_the_same_vehicle(self):
         scene, target = self.scene(layered=True)
         gun, policy = scene.battle._gun_state, scene.runtime.attack_policy
         initial = tuple(gun.ammo)
@@ -110,12 +110,16 @@ class HEVerificationFlowTests(unittest.TestCase):
         self.assertEqual([0], [shot['shell_index'] for shot in scene.launches()])
         self.assertEqual((initial[0] - 1, initial[1]), tuple(gun.ammo))
         self.assertEqual(1, scene.control.shot_commits)
-        # The same native target has a penetrable upper HE point. Ordinary
-        # HE must finish its chosen lower point instead of scanning to it.
-        self.assertEqual({0}, he_samples)
+        candidate = policy.decision['candidate']
+        self.assertEqual(('bot', 5), candidate['target_key'])
+        self.assertEqual('penetration', candidate['mode'])
+        self.assertNotEqual(0, candidate['sample'])
+        self.assertIn(0, he_samples)
+        self.assertIn(candidate['sample'], he_samples)
+        self.assertFalse(any(row['mode'] == 'he_fallback' for row in policy.rows.values()))
 
     def test_he_magazine_failure_falls_back_without_discarding_clip_or_next_ap(self):
-        scene, target = self.scene(clip=6, burst=3, layered=True)
+        scene, target = self.scene(clip=6, burst=3, armor=300.)
         gun, policy = scene.battle._gun_state, scene.runtime.attack_policy
         initial = tuple(gun.ammo)
         def observe():
@@ -141,6 +145,7 @@ class HEVerificationFlowTests(unittest.TestCase):
 
     def test_single_he_does_not_probe_ap_before_executing_fallback(self):
         scene, target = self.scene(layered=True)
+        scene.set_he(piercing=1.)
         gun, policy = scene.battle._gun_state, scene.runtime.attack_policy
         # AP's later upper sample can penetrate, but AP is only reviewed
         # after it physically loads.
@@ -238,7 +243,7 @@ class HEVerificationFlowTests(unittest.TestCase):
                 self.assertEqual(1, scene.control.shot_commits)
                 scene.doCleanups()
 
-    def test_whitelisted_hesh_exhausts_current_plates_then_uses_one_fallback_point(self):
+    def test_whitelisted_hesh_compares_fallback_only_after_the_current_plate_sweep(self):
         scene, target = self.scene(armor=300., hesh=HESH_PAIRS[0])
         policy = scene.runtime.attack_policy
         self.run_until_shots(scene)
@@ -248,7 +253,31 @@ class HEVerificationFlowTests(unittest.TestCase):
                   if row['mode'] == 'penetration' and row['armor'] == 'failed'}
         self.assertEqual(set(policy.frame['targets'][0]['samples']), points)
         self.assertGreater(len(points), 1)
-        self.assertEqual(1, sum(row['mode'] == 'he_fallback' for row in policy.rows.values()))
+        fallback = [row for row in policy.rows.values() if row['mode'] == 'he_fallback']
+        self.assertEqual(points, {row['sample'] for row in fallback})
+        self.assertEqual(max(row['expected_damage'] for row in fallback),
+                         policy.decision['candidate']['expected_damage'])
+
+    def test_native_he_fallback_chooses_the_largest_blast_on_the_current_vehicle(self):
+        scene, target = self.scene(layered=True)
+        scene.set_he(piercing=1.)
+        policy = scene.runtime.attack_policy
+        self.run_until_shots(scene)
+        rows = [row for row in policy.rows.values() if row['mode'] == 'he_fallback']
+        candidate = policy.decision['candidate']
+        self.assertEqual(('bot', 5), candidate['target_key'])
+        self.assertEqual('he_fallback', candidate['mode'])
+        self.assertEqual(max(row['expected_damage'] for row in rows), candidate['expected_damage'])
+        self.assertGreater(candidate['expected_damage'], min(row['expected_damage'] for row in rows))
+
+    def test_fallback_scores_blast_when_only_nominal_penetration_could_pass(self):
+        scene, target = self.scene(armor=98.5)
+        policy = scene.runtime.attack_policy
+        self.run_until_shots(scene)
+        candidate = policy.decision['candidate']
+        self.assertEqual(('failed', 'he_fallback'), (candidate['armor'], candidate['mode']))
+        self.assertEqual(0., candidate['expected_damage'])
+        self.assertEqual([0], [shot['shell_index'] for shot in scene.launches()])
 
     def test_native_unknown_does_not_authorize_switch_then_geometry_recovers(self):
         scene, target = self.scene(layered=True)

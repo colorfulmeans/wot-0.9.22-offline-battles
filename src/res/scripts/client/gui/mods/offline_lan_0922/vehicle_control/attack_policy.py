@@ -44,6 +44,7 @@ _WALL_CLOCK = getattr(time, 'perf_counter', time.time)
 # budget is unknown, not an armour failure or a silently truncated universe.
 ATOMIC_MAX_JOBS = 30 * 3 * 9
 ATOMIC_MAX_CHORDS_PER_JOB = int(math.ceil(ballistics.PROJECTILE_MAX_FLIGHT_SECONDS / .12))
+MAX_COLLISION_ROSTER = 30
 HE = 'HIGH_EXPLOSIVE'
 
 
@@ -254,6 +255,69 @@ def native_target_pose(owner, target, record=None):
                        for name in ('chassis', 'hull', 'turret', 'gun')),
                  record.get('geometry_revision'), record.get('armor_revision'))
     return signature, body, chassis
+
+
+def native_hostile_roster(runtime, now, target=None, velocity=None, bounds_cache=None):
+    """Observe the visible hostiles that can intercept an ideal or native ray."""
+    from ..entities.remote_vehicle import vehicle_target_bounds_at_matrix
+    owner, physical = runtime.owner, observation(runtime)
+    observed = dict((row.get('engine_id'), row) for row in runtime.visible_targets())
+    policy = getattr(runtime, 'attack_policy', None)
+    measurements = getattr(getattr(policy, 'evaluator', None), 'observations', {})
+    bot = getattr(runtime, 'actor_kind', 'human') == 'bot'
+    rows = []
+    for record in owner._records.values():
+        if (physical.owns_record(record) or record.get('tombstone') or not record.get('ready') or
+                (record.get('engine_id') not in observed if bot else not record.get('spot_visible')) or
+                int((record.get('state') or {}).get('team', 0)) == physical.actor_team):
+            continue
+        other = owner._server_entity(record.get('engine_id'))
+        if other is None or not getattr(other, 'isStarted', False) or not other.isAlive():
+            continue
+        if not native_geometry_complete(other) or len(rows) >= MAX_COLLISION_ROSTER:
+            return None
+        signature, body, chassis = native_target_pose(owner, other, record)
+        raw = observed.get(other.id, {})
+        key = raw.get('kind'), raw.get('network_id', raw.get('id'))
+        sample = measurements.get(key)
+        measured = (sample[2] if sample is not None and 0. <= now - sample[0] <= .35
+                    else raw.get('velocity', (0., 0., 0.)))
+        speed = tuple(velocity) if other is target else _point(measured)
+        cached = bounds_cache.get(other.id) if bounds_cache is not None else None
+        if cached is not None and cached[0] == signature:
+            bounds = cached[1]
+        else:
+            bounds = vehicle_target_bounds_at_matrix(other, body, owner._runtime.math,
+                chassis_matrix=chassis, require_complete=bounds_cache is not None)
+            if bounds is None:
+                return None
+            if bounds_cache is not None:
+                bounds_cache[other.id] = signature, bounds
+        rows.append(dict(target=other, record=record, body=body, chassis=chassis,
+                         velocity=speed, bounds=bounds,
+                         actor_key=(raw.get('kind') or
+                             ('bot' if record.get('kind') == 'bot' else 'human'),
+                             raw.get('network_id', record.get('network_id'))),
+                         team=int((record.get('state') or {}).get(
+                             'team', record.get('team', 0))),
+                         signature=(other.id, signature, speed)))
+    rows.sort(key=lambda row: row['target'].id)
+    return rows
+
+
+def native_chord_candidates(roster, first, last, first_time, last_time):
+    """Order broad-phase entries in the same relative motion frame."""
+    candidates = []
+    for row in roster:
+        velocity = row['velocity']
+        start = tuple(first[index] - velocity[index] * first_time for index in range(3))
+        end = tuple(last[index] - velocity[index] * last_time for index in range(3))
+        entry = shot_geometry.segment_box_entry_distance(start, end, row['bounds'])
+        if entry is not None:
+            length = math.sqrt(_distance_sq(start, end))
+            if length > 0.:
+                candidates.append((entry / length, row, start, end, length))
+    return sorted(candidates, key=lambda item: item[0])
 
 
 class AttackPolicy(object):
@@ -478,14 +542,18 @@ class AttackPolicy(object):
         return row
 
     @staticmethod
+    def _attack_result(row, mode):
+        if mode == 'he_fallback':
+            return row.get('contact') is True and row.get('expected_damage') is not None
+        return row.get('armor') == 'passed'
+
+    @staticmethod
     def _executable(row, mode='penetration'):
         if row is None or row.get('line') != 'clear' or row.get('mechanical') != 'reachable':
             return False
         if not isinstance(row.get('solution'), dict):
             return False
-        if mode == 'he_fallback':
-            return row.get('contact') is True and row.get('expected_damage') is not None
-        return row.get('armor') == 'passed'
+        return AttackPolicy._attack_result(row, mode)
 
     def _executable_current(self, row, mode='penetration'):
         """Current gun consumption is separate from the global armour domain."""
@@ -689,7 +757,8 @@ class AttackPolicy(object):
         geometry = _ranking_geometry(self.frame, target)
         if self._reviewed(row, mode):
             if (geometry is not None and not row.get('stationary_plan') and
-                    not row.get('scope_proof') and not row.get('review_pending') and
+                    (not row.get('scope_proof') or row.get('he_route_review')) and
+                    not row.get('review_pending') and
                     (row['line'] == 'clear' or _rank_independent_of_traffic(row))):
                 self._next_rows[key] = (geometry, row)
             else:
@@ -918,7 +987,8 @@ class AttackPolicy(object):
         return min(rows, key=self._he_order)
 
     def _he_order(self, row):
-        evidence = row if self._executable(row, 'he_fallback') else self._planned_evidence(row)
+        evidence = (row if self._executable(row, 'he_fallback') or row.get('he_route_review')
+                    else self._planned_evidence(row))
         return (-float(evidence['expected_damage']), self._intent_order(row['key']),
                 _shell_rank(row['shell']), repr(row['target_key']), repr(row['sample']))
 
@@ -1332,10 +1402,11 @@ class AttackPolicy(object):
             return False
         if row.get('line') in ('friendly_blocked', 'world_blocked', 'enemy_blocked', 'vehicle_blocked'):
             return True
-        if row.get('line') != 'clear' or row.get('mechanical') != 'reachable':
+        he_route = row.get('he_route_review') and row.get('mode') == mode
+        if row.get('line') != 'clear' or (row.get('mechanical') != 'reachable' and not he_route):
             return False
         if mode == 'he_fallback':
-            return row.get('contact') is True
+            return row.get('contact') is True or he_route and row.get('contact') is False
         return row.get('armor') in ('passed', 'failed')
 
     def _ranked_penetration(self, groups, exclude=None):
@@ -1700,26 +1771,30 @@ class AttackPolicy(object):
 
     def _ordered_point_slice(self, jobs, now):
         """Complete more of the current target within the existing native budget."""
-        if (not jobs or not self.frame.get('ordered') or
-                now < self._atomic_at + ATOMIC_CLOSE_INTERVAL or not self.atomic_time_budget or
-                not self._optional_work_budget(now).atomic(self._work_actor())):
+        if not jobs or not self.frame.get('ordered') or not self.atomic_time_budget:
             return
-        self._atomic_at = now
-        self._used['atomic'] = 0
-        started = self.atomic_clock()
-        deadline = started + self.atomic_time_budget
-        self.evaluator.atomic_deadline, self.evaluator.atomic_clock = deadline, self.atomic_clock
-        if not self.evaluator.begin_atomic(self.frame, jobs, now):
-            return
+        if self._atomic_frame is not self.frame:
+            if (now < self._atomic_at + ATOMIC_CLOSE_INTERVAL or
+                    not self._optional_work_budget(now).atomic(self._work_actor())):
+                return
+            self._atomic_at = now
+            self._used['atomic'] = 0
+            self._atomic_started = self.atomic_clock()
+            self._atomic_deadline = self._atomic_started + self.atomic_time_budget
+            self.evaluator.atomic_deadline = self._atomic_deadline
+            self.evaluator.atomic_clock = self.atomic_clock
+            if not self.evaluator.begin_atomic(self.frame, jobs, now):
+                return
+            self._atomic_frame = self.frame
         try:
             for job in jobs:
-                if self.atomic_clock() >= deadline or self._used['atomic'] >= ATOMIC_CANDIDATES:
+                if self.atomic_clock() >= self._atomic_deadline or self._used['atomic'] >= ATOMIC_CANDIDATES:
                     break
                 yield self._evaluate(job, now, 'atomic')
         finally:
             self._atomic_receipt = dict(self.evaluator.atomic_receipt,
                 status='ordered_target_review', evaluations=self._used['atomic'],
-                elapsed_ms=(self.atomic_clock() - started) * 1000.)
+                elapsed_ms=(self.atomic_clock() - self._atomic_started) * 1000.)
 
     def _grant_early_reload(self, now, reason):
         # Qualification survives physical movement. The next clip's point
@@ -1951,6 +2026,10 @@ class AttackPolicy(object):
             ordered = self.ordered
             front_blocks = {key: block for key, block in self._admission_blocks.items()
                             if block.get('front_geometry')} if same_geometry_identity and ordered else {}
+            held_he_ranking = {}
+            if same_geometry_identity and ordered and ordered.loaded_he:
+                held_he_ranking = {key: row for key, row in self._next_rows.items()
+                                   if key[:2] == (frame['loaded'], ordered.target)}
             atomic_at = self._atomic_at
             next_edge_at = self._next_edge_at
             trials = self._single_point_trials
@@ -1967,6 +2046,7 @@ class AttackPolicy(object):
             if same_weapon and ordered is not None:
                 self.ordered = ordered
                 self._admission_blocks = front_blocks
+                self._next_rows.update(held_he_ranking)
             if same_weapon:
                 # A siege/descriptor transition changes every geometric
                 # proof, not an already qualified fallback or laying task.
@@ -2093,9 +2173,11 @@ class AttackPolicy(object):
                         checked=len(self.ordered.covered), targets=tuple(self.ordered.order),
                         loaded=loaded, clip=frame['clip'], proposed=result.get('shell_index'),
                         candidate=(result.get('candidate') or {}).get('key'),
+                         he_comparison=self.he_comparison,
                         points=tuple((row['sample'], row['mode'], row['line'], row['armor'],
                                       row.get('reason'), (row.get('blocker') or {}).get('actor_key'),
-                                      row.get('mechanical'), row.get('stationary_pending'))
+                                       row.get('mechanical'), row.get('stationary_pending'),
+                                       (self._planned_evidence(row) or row).get('expected_damage'))
                                      for row in self.rows.values() if row['shell_index'] == loaded and
                                      row['target_key'] == self.ordered.target)))
             return result
@@ -2575,7 +2657,7 @@ class AttackPolicy(object):
                 self.decision.get('reason') in ('stationary_domain_review_pending',
                                               'stationary_alternatives_pending',
                                               'ordered_current_target_pending',
-                                              'ordered_he_point_wait',
+                                              'ordered_he_penetration_pending',
                                               'he_damage_comparison_pending') and
                 self.frame is not None)
 
@@ -2689,6 +2771,7 @@ class NativeAttackEvaluator(object):
         self.jobs = {}
         self.predictions = {}
         self.armour_rays = {}
+        self.hostile_bounds = {}
         self.cache_observations = dict(armour_batches=0, armour_ray_reuses=0)
         self._identity = None
         self._at = None
@@ -2833,6 +2916,7 @@ class NativeAttackEvaluator(object):
             self.jobs.clear()
             self.predictions.clear()
             self.armour_rays.clear()
+            self.hostile_bounds.clear()
             self.cache_observations = dict(armour_batches=0, armour_ray_reuses=0)
             self._identity = identity
         # Admission changes revoke policy authority, not identical physical
@@ -2949,21 +3033,36 @@ class NativeAttackEvaluator(object):
         return int(math.floor(value / PROJECTILE_BROADPHASE_RADIUS))
 
     @classmethod
-    def _lane_region(cls, path):
+    def _lane_region(cls, path, flight):
         # Every chord is contained in its path's box. Expand it by the same
         # radius as the shared lane resolver before quantising outwards.
         radius = PROJECTILE_BROADPHASE_RADIUS
         return tuple(cls._cell(bound(point[axis] for point in path) + padding)
-                     for axis in (0, 2) for bound, padding in ((min, -radius), (max, radius)))
+                     for axis in (0, 2) for bound, padding in ((min, -radius), (max, radius))) + (flight,)
 
-    @staticmethod
-    def lane_stamp(frame, region):
+    @classmethod
+    def _lane_hostiles(cls, frame, region):
+        cache = frame['hostile_regions']
+        if region not in cache:
+            x0, x1, z0, z1, flight = region
+            roster = frame['hostile_roster']
+            cache[region] = None if roster is None else tuple(row for row in roster if all(
+                cls._cell(row['bounds'][0][axis] + min(0., row['velocity'][axis] * flight)) <= upper and
+                cls._cell(row['bounds'][1][axis] + max(0., row['velocity'][axis] * flight)) >= lower
+                for axis, lower, upper in ((0, x0, x1), (2, z0, z1))))
+        return cache[region]
+
+    @classmethod
+    def lane_stamp(cls, frame, region):
         cached = frame['lane_regions'].get(region)
         if cached is None:
-            x0, x1, z0, z1 = region
+            x0, x1, z0, z1, unused_flight = region
             blockers = tuple(row for row in frame['blockers']
                              if x0 <= row[0] <= x1 and z0 <= row[1] <= z1)
             cached = frame['scene'], frame['lane_missing'], frame['debris'], blockers
+            if 'hostile_roster' in frame:
+                hostiles = cls._lane_hostiles(frame, region)
+                cached += (None if hostiles is None else tuple(row['signature'] for row in hostiles),)
             frame['lane_regions'][region] = cached
         return cached
 
@@ -2980,6 +3079,16 @@ class NativeAttackEvaluator(object):
             debris = frame['observed_at']
         frame.update(blockers=blockers, lane_missing=missing, debris=debris, lane_regions={},
                      line_revision=(frame['scene'], blockers, missing, debris))
+        if frame.get('ordered') and not frame.get('artillery') and frame.get('targets'):
+            try:
+                hostiles = native_hostile_roster(self.runtime, frame['observed_at'],
+                                                 bounds_cache=self.hostile_bounds)
+            except (AttributeError, TypeError, ValueError, RuntimeError, KeyError,
+                    IndexError, OverflowError):
+                hostiles = None
+            frame.update(hostile_roster=hostiles, hostile_regions={})
+            frame['line_revision'] += (None if hostiles is None else
+                                       tuple(row['signature'] for row in hostiles),)
 
     def _dynamic_stamp(self):
         owner = self.owner
@@ -2994,9 +3103,7 @@ class NativeAttackEvaluator(object):
                 state = record.get('state') or {}
                 alive = bool(other.isAlive() and state.get('alive', True))
                 team = int(state.get('team', record.get('team', 0)))
-                # This frontier tests allies and wrecks. The selected enemy
-                # already has its own geometry stamp. Other live enemies are
-                # tested against the real scattered path at first admission.
+                # Hostile rays have their own velocity-aware lane stamp.
                 if alive and team != int(observation(self.runtime).actor_team):
                     continue
                 if not native_geometry_complete(other):
@@ -3013,7 +3120,59 @@ class NativeAttackEvaluator(object):
     def invalidate_line(self, key):
         job = self.jobs.get(key[:3])
         if job is not None:
-            job.update(cursor=0, done=False, blocked=None, lane=None)
+            job.update(cursor=0, done=False, blocked=None, lane=None, front=None)
+
+    def _planned_front_refusal(self, frame, predicted, target, job, channel):
+        """Prove first contact on the intended ray before granting attack ownership."""
+        from ..entities.remote_vehicle import collide_vehicle_at_matrix
+        region = predicted['line_region']
+        roster = self._lane_hostiles(frame, region)
+        if roster is None:
+            return dict(line='unknown', reason='front_vehicle_geometry_unavailable')
+        if all(row['target'] is target['entity'] for row in roster):
+            return None
+        stamp = tuple(row['signature'] for row in roster)
+        proof = job.get('front')
+        if proof is None or proof['stamp'] != stamp:
+            proof = job['front'] = dict(stamp=stamp, cursor=0, done=False, refusal=None)
+        path = predicted['path']
+        chords = len(path) - 1
+        step = predicted['flight'] / chords
+        owner = self.owner
+        while not proof['done'] and proof['cursor'] < chords and self._budgets[channel] > 0:
+            if channel == 'atomic' and self.atomic_clock() >= self.atomic_deadline:
+                break
+            index = proof['cursor']
+            first, last = path[index:index + 2]
+            best, fraction = None, float('inf')
+            self._budgets[channel] -= 1
+            if channel == 'atomic':
+                self.atomic_receipt['front_chords'] = self.atomic_receipt.get('front_chords', 0) + 1
+            for entry, row, start, end, length in native_chord_candidates(
+                    roster, first, last, index * step, (index + 1) * step):
+                if entry > fraction:
+                    break
+                hits = collide_vehicle_at_matrix(row['target'], row['body'],
+                    owner._vector(start), owner._vector(end), owner._runtime.math,
+                    chassis_matrix=row['chassis'])
+                if hits:
+                    contact = min(float(hit.dist) for hit in hits) / length
+                    if not 0. <= contact <= 1.:
+                        return dict(line='unknown', reason='front_vehicle_geometry_unavailable')
+                    if contact < fraction:
+                        best, fraction = row, contact
+            proof['cursor'] += 1
+            if best is not None:
+                proof['done'] = True
+                if best['target'] is not target['entity']:
+                    point = tuple(first[i] + (last[i] - first[i]) * fraction for i in range(3))
+                    proof['refusal'] = dict(line='enemy_blocked', reason='planned_front_vehicle',
+                        blocker=dict(kind='vehicle', actor_key=best['actor_key'],
+                                     vehicle_id=best['target'].id, team=best['team'],
+                                     hostile=True, point=point))
+        if not proof['done'] and proof['cursor'] < chords:
+            return dict(line='pending', reason='front_vehicle_proof_pending', review_pending=True)
+        return proof['refusal']
 
     def cancel_point_recovery(self):
         """A retired movement task cannot donate its hypothetical ray work."""
@@ -3220,7 +3379,8 @@ class NativeAttackEvaluator(object):
             scene = self._scene_stamp()
             if scene != frame['scene']:
                 return False
-            live = dict(scene=scene, observed_at=self.runtime.now)
+            live = dict(scene=scene, observed_at=self.runtime.now, ordered=frame.get('ordered'),
+                        artillery=frame.get('artillery'), targets=frame['targets'])
             self._observe_lanes(live)
             if rows is None and live['line_revision'] != frame['line_revision']:
                 return False
@@ -3301,7 +3461,7 @@ class NativeAttackEvaluator(object):
                 shell_index=shell['index'], source_verified=False,
                 _aim_token=(id(entity), id(entity.typeDescriptor), samples[sample]))
             result = dict(path=path, reach=reach, solution=solution, sample_point=sample_point,
-                          line_region=self._lane_region(path),
+                          line_region=self._lane_region(path, flight),
                           direction=direction, flight=flight)
             self.predictions[key] = stamp, result
             return result
@@ -3374,21 +3534,24 @@ class NativeAttackEvaluator(object):
                       penetration_factor=PENETRATION_FACTOR_65,
                       contact=None, expected_damage=None)
         return dict(penetration=penetration, retained=retained, distance=distance,
-                    first_distance=first_distance, direction=direction, seed=(first, last, hits))
+                    armor_contact=contact, first_distance=first_distance,
+                    direction=direction, seed=(first, last, hits))
 
-    def _he_damage(self, shell, target, geometry):
+    def _he_damage(self, shell, target, geometry, allow_penetration=True):
         owner, entity, shot = self.owner, target['entity'], shell['shot']
         result = dict(geometry['penetration'])
         first, last, hits = geometry['seed']
         direction = geometry['direction']
         distance, retained = geometry['distance'], geometry['retained']
-        nominal = combat_rules.resolve_armor_contact(shot, distance, retained,
-                                                     penetration_factor=1.)
         rolled = combat_rules.shell_nominal_damage(shot)
-        if nominal is not None and nominal['layer'] == 'structural' and nominal['result'] == 2:
-            result.update(contact=True, expected_damage=float(rolled))
-            return result
-        impact_distance = (float(nominal['distance']) if nominal is not None else
+        contact = geometry.get('armor_contact')
+        if allow_penetration:
+            contact = combat_rules.resolve_armor_contact(shot, distance, retained,
+                                                         penetration_factor=1.)
+            if contact is not None and contact['layer'] == 'structural' and contact['result'] == 2:
+                result.update(contact=True, expected_damage=float(rolled))
+                return result
+        impact_distance = (float(contact['distance']) if contact is not None else
                            geometry['first_distance'])
         impact = tuple(float(first[index]) + direction[index] * impact_distance
                        for index in range(3))
@@ -3457,7 +3620,8 @@ class NativeAttackEvaluator(object):
                             (predicted.get('reach') or {}).get('status') != 'reachable'):
                         return reported
                     if 'line_region' not in predicted:
-                        predicted = dict(predicted, line_region=self._lane_region(predicted['path']))
+                        predicted = dict(predicted, line_region=self._lane_region(
+                            predicted['path'], predicted['flight']))
                     result = dict(status='proved', proof=proof, armor='unknown',
                         line='unknown', mechanical='reachable', contact=None,
                         expected_damage=None, reason='stationary_armour_pending')
@@ -3560,13 +3724,19 @@ class NativeAttackEvaluator(object):
                                       'friendly_blocked' if friendly else 'lane_geometry_unavailable'),
                               blocker=dict(verdict or {}))
                 return reported
+            if 'hostile_roster' in frame:
+                refusal = self._planned_front_refusal(frame, predicted, target, job, channel)
+                if refusal is not None:
+                    result.update(refusal)
+                    return reported
             result['line'] = 'clear'
             route_lay = reach['status'] == 'hull_laying'
+            ordered_he = frame.get('ordered') and shell.get('is_he')
             if reach['status'] != 'reachable':
                 result['reason'] = reach['reason']
                 self._point_scope(frame, shell, target, predicted, result)
                 combat = getattr(self.runtime, 'combat_stop', None)
-                if (mode != 'penetration' or not route_lay or
+                if ((mode != 'penetration' and not ordered_he) or not route_lay or
                         result.get('scope') == 'excluded' or combat is None or
                         not combat._route_requires_confirmation(combat.task_order) or
                         combat.combat_owned):
@@ -3574,6 +3744,8 @@ class NativeAttackEvaluator(object):
                 # Observe the ideal ray's plate while the route still drives.
                 # Mechanical reach remains hull_laying; this cannot fire or
                 # bypass the native actuator's rotation checks after admission.
+                if ordered_he:
+                    result['he_route_review'] = True
             if job['armour'] is None:
                 if channel == 'atomic':
                     if (self.atomic_clock() >= self.atomic_deadline or
@@ -3590,13 +3762,22 @@ class NativeAttackEvaluator(object):
             if job['armour'] is None:
                 result['reason'] = 'native_armour_unknown'
                 return reported
-            he_lay = (route_lay and job['armour']['penetration']['armor'] == 'failed' and
-                      (ammunition_validation.shell_mode(shell) == ammunition_validation.SINGLE_POINT or
-                       shell.get('is_he') and frame.get('ordered')))
+            if ordered_he and mode == 'penetration':
+                contact = job['armour'].get('armor_contact') or {}
+                if contact.get('layer') == 'structural' and combat_rules.he_radius(shot) > 0.:
+                    result['route_he_contact'] = True
+            if (ordered_he and mode == 'he_fallback' and
+                    job['armour']['penetration']['armor'] == 'passed'):
+                result.update(job['armour']['penetration'], reason='he_penetration_reopened')
+                return reported
+            he_lay = (route_lay and not ordered_he and
+                      job['armour']['penetration']['armor'] == 'failed' and
+                      ammunition_validation.shell_mode(shell) == ammunition_validation.SINGLE_POINT)
             if mode == 'he_fallback' or he_lay:
                 blast_stamp = frame['scene'], frame['debris']
                 if job['he'] is None or job['he'][0] != blast_stamp:
-                    damage = self._he_damage(shell, target, job['armour'])
+                    damage = self._he_damage(shell, target, job['armour'],
+                                             allow_penetration=not ordered_he)
                     if damage.get('contact') is True:
                         job['he'] = (blast_stamp, damage)
                 else:

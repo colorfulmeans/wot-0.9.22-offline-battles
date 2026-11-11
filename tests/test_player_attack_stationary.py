@@ -177,8 +177,8 @@ class NativeStationaryCombatTests(unittest.TestCase):
             for material in getattr(other.typeDescriptor, name).materials.values():
                 material.armor = 10000.
         scene.set_he(1.)
-        # Full HESH penetration review stays on the held target. The other
-        # target's yaw domain cannot delay its single fallback contact.
+        # The held target owns both the full HESH penetration review and
+        # the blast ranking. The other target's yaw domain cannot delay it.
         descriptor = scene.entity.typeDescriptor
         descriptor.name = descriptor.type.name = 'uk:GB83_FV4005'
         descriptor.gun.name = '_183mm_AT_Gun'
@@ -190,7 +190,8 @@ class NativeStationaryCombatTests(unittest.TestCase):
         for unused in range(120):
             scene.tick()
             candidate = policy.decision.get('candidate')
-            if candidate is not None and candidate.get('mode') == 'he_fallback':
+            if (policy.decision['action'] == 'aim' and candidate is not None and
+                    candidate.get('mode') == 'he_fallback'):
                 self.assertEqual(('bot', 42), candidate['target_key'])
                 key = candidate['key'][:3] + ('penetration',)
                 proof = policy.rows[key]
@@ -200,8 +201,11 @@ class NativeStationaryCombatTests(unittest.TestCase):
                 self.assertEqual(set(policy.frame['targets'][0]['samples']),
                     {row['sample'] for row in policy.rows.values()
                      if row['mode'] == 'penetration' and row['armor'] == 'failed'})
-                self.assertEqual({candidate['key']}, {row['key'] for row in policy.rows.values()
-                    if row['mode'] == 'he_fallback'})
+                fallback = [row for row in policy.rows.values() if row['mode'] == 'he_fallback']
+                self.assertEqual(set(policy.frame['targets'][0]['samples']),
+                                 {row['sample'] for row in fallback})
+                self.assertEqual(max(row['expected_damage'] for row in fallback),
+                                 candidate['expected_damage'])
                 qualified = copy.deepcopy(proof)
             self.assertFalse(hasattr(policy, 'search_started'))
             self.assertEqual(0, scene.battle._gun_state.shot_index)

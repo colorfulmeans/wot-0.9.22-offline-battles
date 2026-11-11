@@ -283,15 +283,56 @@ class StableRouteAttackTests(unittest.TestCase):
                         self.assertEqual('route', order['combat_mode'])
                 owner = scene.runtime.combat_stop
                 self.assertEqual(2., owner.receipt['confirmation_seconds'])
-                self.assertEqual('native_lay', owner.receipt['reason'])
                 candidate = scene.runtime.attack_policy.decision['candidate']
                 self.assertEqual('hull_laying', candidate['mechanical'])
                 if he:
+                    self.assertTrue(owner.combat_owned)
+                    self.assertEqual('ordered_he_route_contact',
+                                     scene.runtime.attack_policy.decision['reason'])
                     self.assertEqual('failed', candidate['armor'])
-                    self.assertGreater(candidate['route_he_damage'], 0.)
-                    self.assertIsNone(candidate['contact'])
+                    self.assertTrue(candidate['route_he_contact'])
+                    self.assertFalse(order['fire_allowed'])
                 else:
+                    self.assertEqual('native_lay', owner.receipt['reason'])
                     self.assertEqual('passed', candidate['armor'])
+
+    def test_front_vehicle_cancels_confirmation_until_the_ideal_lane_reopens(self):
+        scene = self.moving_scene((0., 0., 0.), limited=True, clip=10)
+        scene.set_he(piercing=100.)
+
+        def point(distance):
+            return math.sin(.7) * distance, 0., math.cos(.7) * distance
+
+        target = scene.eligible_enemy(50, armor=30.)
+        scene.pose(target, point(45.))
+        policy = scene.runtime.attack_policy
+        owner = scene.runtime.combat_stop
+        saw_native_block = False
+        for step in range(47):
+            if step == 4:
+                front = scene.eligible_enemy(60, armor=300.)
+                scene.pose(front, point(18.))
+                scene.runtime._strategic_due = 0.
+            if step == 30:
+                scene.pose(front, point(65.))
+            scene.native_position((step * .01, 0., 0.))
+            scene.battle._local_speed = .08
+            order = scene.tick(.125)
+            self.assertEqual(('bot', 50), policy.ordered.target)
+            self.assertFalse(scene.launches())
+            if 4 <= step < 30:
+                self.assertIsNone(owner._route_confirmation)
+                saw_native_block = saw_native_block or any(
+                    row.get('line') == 'enemy_blocked' and row.get('reason') == 'planned_front_vehicle' and
+                    row['blocker']['actor_key'] == ('bot', 60) for row in policy.rows.values())
+            if step < 46:
+                self.assertFalse(owner.combat_owned)
+                self.assertEqual('route', order['combat_mode'])
+        self.assertTrue(saw_native_block)
+        self.assertTrue(owner.combat_owned)
+        self.assertEqual(2., owner.receipt['confirmation_seconds'])
+        self.assertEqual('native_lay', owner.receipt['reason'])
+        self.assertEqual('hull_laying', policy.decision['candidate']['mechanical'])
 
     def moving_scene(self, position, limited, clip):
         scene = OwnershipScene()

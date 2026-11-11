@@ -195,14 +195,15 @@ class SharedCurrentHEExecutionTests(unittest.TestCase):
         self.add_better(scene)
         scene.pose(scene.initial, (22., 0., 40.))
         scene.observe_control()
-        self.assert_current(scene, first['key'])
-        current = scene.runtime.attack_policy.decision['candidate']
+        self.assertFalse(scene.applied_order()['fire_allowed'])
+        current = self.acquire(scene)
+        self.assert_current(scene, current['key'])
         self.assertNotEqual(first['pose_stamp'], current['pose_stamp'])
         self.assertNotEqual(first['solution']['point'], current['solution']['point'])
         self.assertEqual(22., current['target']['position'][0])
         self.assertFalse(scene.launches())
 
-    def test_dead_current_target_requires_a_new_single_point(self):
+    def test_dead_current_target_requires_a_new_target_review(self):
         scene = self.scene()
         self.acquire(scene)
         self.add_better(scene)
@@ -324,7 +325,8 @@ class SharedCurrentHEExecutionTests(unittest.TestCase):
             self.assertFalse(hasattr(policy, 'search_started'))
             self.assertFalse(scene.applied_order()['fire_allowed'])
             self.assertFalse(scene.launches())
-        self.assertEqual('firing_position', policy.decision['action'])
+        self.assertEqual(('navigate', 'ordered_he_no_clear_lane'),
+                         (policy.decision['action'], policy.decision['reason']))
         self.assertEqual(ammo, scene.battle._gun_state.ammo)
 
     def test_real_mechanical_limit_does_not_inherit_the_previous_he_fire_authority(self):

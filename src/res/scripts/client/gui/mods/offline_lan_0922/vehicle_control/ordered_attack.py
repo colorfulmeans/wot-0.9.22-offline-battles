@@ -1,8 +1,5 @@
 """One mounted shell and one target at a time for ordinary player auto fire."""
 
-from . import ammunition_validation
-
-
 def stocked(frame, explosive):
     return sorted((shell for shell in frame['shells']
                    if shell['is_he'] == explosive and not shell.get('unavailable')
@@ -18,7 +15,6 @@ class OrderedAttack(object):
         self.loaded_he = False
         self.sample = None
         self.he_sample = None
-        self.he_fallback = False
         self.he_identity = None
         self.covered = set()
         self.checked_lanes = set()
@@ -49,14 +45,13 @@ class OrderedAttack(object):
                 self.target = None
                 self.sample = None
             self.loaded, self.loaded_he = shell['index'], shell['is_he']
-            self.he_sample, self.he_fallback = None, False
+            self.he_sample = None
             self.he_identity = None
             self.covered.clear()
             self.checked_lanes.clear()
             self.cursor = 0
         if self.target not in live:
             self.target, self.sample, self.he_sample = None, None, None
-            self.he_fallback = False
 
     def next_load(self, policy):
         frame = policy.frame
@@ -98,9 +93,10 @@ class OrderedAttack(object):
         return policy._choose(action, reason, shell_index=shell['index'],
                               early_reload=policy.frame['clip'] > 0 and policy.frame['ammo'][self.loaded] > 0)
 
-    def _aim(self, policy, now, row, reason):
+    def _aim(self, policy, now, row, reason, ranking=()):
         fence = getattr(policy.evaluator, 'fence_next', None)
-        if row['observed_at'] == now and callable(fence) and not fence(policy.frame, (row,), False):
+        if ((row['observed_at'] == now or any(proof['observed_at'] == now for proof in ranking)) and
+                callable(fence) and not fence(policy.frame, ranking or (row,), False)):
             policy.rows.clear()
             policy.selected = None
             policy._frame_invalid = True
@@ -133,65 +129,107 @@ class OrderedAttack(object):
         return policy._choose('firing_position', 'current_penetration_after_stationary_turn', row)
 
     def _current_he(self, policy, now, shell, jobs):
+        policy.he_comparison = dict(total=0, observed=0, pending=0)
         if self.target is None:
             self.target = self.order[0]
         target = next(row for row in policy.frame['targets'] if row['key'] == self.target)
         identity = target.get('sample_identity')
         if identity != self.he_identity:
-            self.he_sample, self.he_fallback = None, False
+            self.he_sample = None
             self.he_identity = identity
         target_jobs = [job for job in jobs if job[0][1] == self.target]
-        if not target_jobs:
-            return policy._choose('wait', 'ordered_he_point_unavailable')
-        if self.he_sample is None:
-            points = [job[3] for job in target_jobs]
-            self.he_sample = self.sample if self.sample in points else points[0]
-            self.he_fallback = False
-        full = ammunition_validation.shell_mode(shell) == ammunition_validation.FULL
-        if full:
-            # HESH exceptions review only the held enemy. Prefer an already
-            # selected point, then use the existing mounted-shell frontier.
-            target_jobs.sort(key=lambda job: job[0] != policy.selected)
-            action, row = self._inspect(policy, now, target_jobs)
-            if action == 'aim':
-                return self._aim(policy, now, row, 'current_shell_verified')
-            if action == 'firing_position':
-                return policy._choose(action, 'ordered_he_hull_lay', row)
-            if action == 'native_lay':
-                return policy._choose('firing_position', 'unverified_points_obstructed', row)
-            if action == 'complete' and self._clear_failure(policy, row):
-                self.he_sample = row['sample']
-            elif (row is not None and row.get('line') in ('friendly_blocked', 'world_blocked') and
-                    isinstance(row.get('solution'), dict)):
-                return policy._choose('firing_position', 'he_fallback_obstructed', row)
-            else:
-                return policy._recover_incomplete(now, 'ordered_he_penetration_pending', (row,) if row else ())
-        modes = ('he_fallback',) if full or self.he_fallback else ('penetration', 'he_fallback')
-        for mode in modes:
-            job = next((job for job in policy._jobs(mode, shell['index'])
-                        if job[0][1:3] == (self.target, self.he_sample)), None)
-            if job is None:
-                return policy._choose('wait', 'ordered_he_point_unavailable')
+        preferred = self.sample if self.he_sample is None else self.he_sample
+        target_jobs.sort(key=lambda job: job[3] != preferred)
+        action, row = self._inspect(policy, now, target_jobs)
+        if action == 'aim':
+            self.he_sample = row['sample']
+            return self._aim(policy, now, row, 'current_shell_verified')
+        if action == 'firing_position':
+            return policy._choose(action, 'ordered_he_hull_lay', row)
+        if action == 'native_lay':
+            return policy._choose('firing_position', 'unverified_points_obstructed', row)
+        combat = getattr(policy.runtime, 'combat_stop', None)
+        if (combat is not None and not combat.combat_owned and
+                combat._route_requires_confirmation(combat.task_order)):
+            # A known direct HE impact can qualify a stop while the tank
+            # moves. Finishing the target's penetration and damage ranking
+            # is still required before the first launch.
+            impact = next((current for job in target_jobs
+                           for current in (policy._current(job, require_line=True),)
+                           if current is not None and current.get('route_he_contact') and
+                           combat._route_attackable(current)), None)
+            if impact is not None:
+                return policy._choose('preaim', 'ordered_he_route_contact', impact)
+        if action != 'complete':
+            return policy._recover_incomplete(now, 'ordered_he_penetration_pending', (row,) if row else ())
+        samples = set(job[3] for job in target_jobs if self._clear_failure(policy,
+            self._negative_evidence(policy, job, policy._current(job, require_line=True))))
+        if not samples:
+            return policy._choose('navigate', 'ordered_he_no_clear_lane')
+        fallback = [job for job in policy._jobs('he_fallback', shell['index'])
+                    if job[0][1] == self.target and job[3] in samples]
+        fallback.sort(key=lambda job: job[3] != preferred)
+        return self._rank_he_fallback(policy, now, fallback)
+
+    def _rank_he_fallback(self, policy, now, jobs):
+        mode = 'he_fallback'
+
+        def complete(row):
+            return policy._reviewed(row, mode) or policy._he_contact_failed(row)
+
+        def ranking_row(job):
             row = policy._current(job, require_line=True)
-            if not policy._plannable(row, mode) and not policy._reviewed(row, mode):
-                if policy._used['foreground'] < policy.foreground_budget:
-                    row = policy._evaluate(job, now, 'foreground')
-            if policy._executable(row, mode):
-                reason = 'current_he_fallback_contact' if mode == 'he_fallback' else 'current_shell_verified'
-                return self._aim(policy, now, row, reason)
-            if self._can_lay(policy, row, mode):
-                return policy._choose('firing_position', 'ordered_he_hull_lay', row)
-            if self._unproved_hull_lay(row):
-                return policy._choose('firing_position', 'unverified_points_obstructed', row)
-            if (row is not None and row.get('line') in ('friendly_blocked', 'world_blocked') and
-                    isinstance(row.get('solution'), dict)):
-                return policy._choose('firing_position', 'he_fallback_obstructed', row)
-            if (mode == 'penetration' and row is not None and row.get('line') == 'clear'
-                    and row.get('mechanical') == 'reachable' and row.get('armor') == 'failed'):
-                self.he_fallback = True
-                continue
-            return policy._recover_incomplete(now, 'ordered_he_point_wait', (row,) if row else ())
-        return policy._choose('wait', 'ordered_he_point_wait')
+            return row if complete(row) else policy._next_row(job)
+
+        def ready(row):
+            return policy._executable(row, mode) or self._can_lay(policy, row, mode)
+
+        pending = [job for job in jobs if not complete(ranking_row(job))]
+        for job in pending:
+            if policy._used['foreground'] >= policy.foreground_budget:
+                break
+            policy._evaluate(job, now, 'foreground')
+        for unused in policy._ordered_point_slice(tuple(job for job in pending
+                if not complete(ranking_row(job))), now):
+            pass
+        rows = [ranking_row(job) for job in jobs]
+        options = [(row, job) for row, job in zip(rows, jobs) if ready(row)]
+        if options:
+            best, job = min(options, key=lambda option: policy._he_order(option[0]))
+            current = policy._current(job, require_line=True)
+            if current is not best and policy._used['foreground'] < policy.foreground_budget:
+                policy._evaluate(job, now, 'foreground')
+                rows = [ranking_row(job) for job in jobs]
+                options = [(row, job) for row, job in zip(rows, jobs) if ready(row)]
+        reopened = next((row for job in jobs for row in (policy._current(job, require_line=True),)
+                         if row is not None and row.get('line') == 'clear' and
+                         row.get('armor') == 'passed'), None)
+        if reopened is not None:
+            # A fresh observation can reopen a plate whose failed ranking
+            # had survived a small change in geometry.
+            key = reopened['key'][:3] + ('penetration',)
+            policy._next_rows.pop(key, None)
+            policy.rows.pop(key, None)
+            return policy._recover_incomplete(now, 'ordered_he_penetration_pending')
+        reviewed = sum(complete(row) for row in rows)
+        policy.he_comparison = dict(total=len(rows), observed=reviewed,
+                                    pending=len(rows) - reviewed)
+        best, job = min(options, key=lambda option: policy._he_order(option[0])) if options else (None, None)
+        if reviewed < len(rows) or best is not None and best is not policy._current(job, require_line=True):
+            # A proved contact can qualify the route stop while the remaining
+            # contacts are being compared. Only the completed ranking can fire.
+            fresh = [row for row, job in options if row is policy._current(job, require_line=True)
+                     and (policy._executable(row, mode) or row.get('he_route_review'))]
+            if fresh:
+                return policy._choose('preaim', 'he_damage_comparison_pending',
+                                      min(fresh, key=policy._he_order))
+            return policy._recover_incomplete(now, 'he_damage_comparison_pending')
+        if best is None:
+            return policy._choose('navigate', 'ordered_he_no_clear_contact')
+        self.he_sample = best['sample']
+        if policy._executable(best, mode):
+            return self._aim(policy, now, best, 'current_he_fallback_contact', tuple(rows))
+        return policy._choose('firing_position', 'ordered_he_hull_lay', best)
 
     @staticmethod
     def _can_lay(policy, row, mode):
@@ -202,7 +240,7 @@ class OrderedAttack(object):
         return (policy._executable(policy._planned_evidence(row), mode) or
                 'blocked' not in refusal and 'actuator_unavailable' not in refusal and
                 row.get('line') == 'clear' and row.get('mechanical') == 'hull_laying' and
-                (row.get('armor') == 'passed' or row.get('route_he_damage', 0.) > 0.))
+                policy._attack_result(row, mode))
 
     @staticmethod
     def _negative_evidence(policy, job, row):

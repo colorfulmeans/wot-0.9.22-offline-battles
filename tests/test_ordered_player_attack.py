@@ -28,6 +28,42 @@ class OrderedPlayerAttackTests(unittest.TestCase):
             self.assertEqual([], scene.calls)
         self.assertEqual('enemy_blocked', scene.policy.rows[first['key']]['line'])
 
+    def test_he_uses_the_first_clear_penetration_on_the_held_vehicle(self):
+        scene = self.scene(targets=2, points=4, he_validation='single_point')
+        scene.frame['loaded'] = 2
+        scene.value(2, sample=0, line='enemy_blocked', armor='unknown')
+        scene.passed(2, sample=2)
+        scene.value(2, sample=3, line='pending', armor='unknown')
+        scene.passed(2, target=2)
+        for step in range(4):
+            decision = scene.tick(float(step), background=False)
+            if decision['action'] == 'aim':
+                break
+        self.assertEqual((2, ('bot', 1), 2, 'penetration'), decision['candidate']['key'])
+        self.assertEqual({(2, ('bot', 1), 'penetration')},
+                         {(row[2], row[3], row[5]) for row in scene.calls})
+        self.assertEqual({0, 1, 2}, {row[4] for row in scene.calls})
+
+    def test_he_waits_for_the_best_unblocked_blast_on_the_same_vehicle(self):
+        scene = self.scene(targets=2, points=4, he_validation='single_point')
+        scene.frame['loaded'] = 2
+        scene.value(2, sample=1, line='enemy_blocked', armor='unknown')
+        scene.he(9., sample=0)
+        scene.he(900., sample=1)
+        scene.he(32., sample=2)
+        scene.value(2, sample=3, mode='he_fallback', line='pending')
+        scene.he(800., target=2)
+        for step in range(5):
+            decision = scene.tick(float(step), background=False)
+            self.assertNotEqual('aim', decision['action'])
+        self.assertEqual(dict(total=3, observed=2, pending=1), scene.policy.he_comparison)
+        scene.he(15., sample=3)
+        decision = scene.tick(5., background=False)
+        self.assertEqual((2, ('bot', 1), 2, 'he_fallback'), decision['candidate']['key'])
+        self.assertEqual(32., decision['candidate']['expected_damage'])
+        self.assertEqual({('bot', 1)}, {row[3] for row in scene.calls})
+        self.assertEqual({0, 2, 3}, {row[4] for row in scene.calls if row[5] == 'he_fallback'})
+
     def test_a_complete_shell_sweep_precedes_reload_and_he_stays_on_c(self):
         scene = self.scene(clips=6, targets=3, points=1)
         scene.value(0, target=2, line='world_blocked', armor='unknown')

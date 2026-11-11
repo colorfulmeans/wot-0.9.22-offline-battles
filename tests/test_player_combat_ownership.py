@@ -409,7 +409,10 @@ class OriginalCombatOwnershipTests(unittest.TestCase):
             self.assertFalse(hasattr(policy, 'search_started'),
                 'an already loaded HE clip does not need the eight-second gate')
             candidate = policy.decision.get('candidate')
-            if candidate and candidate.get('mode') == 'he_fallback':
+            if policy.decision['action'] == 'preaim':
+                self.assertFalse(scene.applied_order()['fire_allowed'])
+            if (policy.decision['action'] == 'aim' and candidate and
+                    candidate.get('mode') == 'he_fallback'):
                 saw_fallback = True
                 self.assertIn(policy.decision['reason'],
                     ('current_he_fallback_contact', 'current_he_clip_fallback',
