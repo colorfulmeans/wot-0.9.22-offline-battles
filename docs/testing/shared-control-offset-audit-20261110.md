@@ -22,6 +22,46 @@ Bot rounds across 27 vehicles and zero server Bot projectile terminals. UDES
 - The waiting-for-a-new-point and accepted-confirmation receipts are under
   **Collect detailed diagnostic logs**.
 
+### Replacement Windows test package
+
+Runtime `cf111cec6e086fcfae9d73cae58ffa516b42b57e` builds as
+`local-qa-siege-r4` in `wot_PR119_cf111cec_Windows_2026-11-12.zip`.
+The first follow-up package rejected a valid, certified hydraulic aim if the
+unlaid barrel's line was still unknown. The replacement admits the current
+stationary plan for laying after the review finishes, skips a currently
+blocked point, and keeps the exact pose and physical firing checks.
+
+The replacement was run through the launcher on Windows HD #1513, on the
+same Redshire 15 vs 15 preset with UDES 03 in team 2 and a 13/13/14 rack.
+The round ended by capture at 04:00:15. The launcher report is
+`wot-error-report-20261112-040041-7cd6aef8cded.zip`.
+
+- The worker submitted 282 rounds from 27 Bots. The accepted 278 matched
+  the server echo, terminal and visible tracer by actor and shot sequence.
+  The terminals include 214 impacts, 64 misses and nine artillery rounds.
+  The four other sequences were suppressed after server-confirmed shooter
+  death. They are Bot/sequence 1/9, 1/10, 5/3 and 18/8.
+- UDES 03 took over after 2.031 seconds of confirmation and entered siege.
+  It fired eight automatic rounds with eight server terminal receipts while
+  remaining in that engagement. The eighth fired HE at PFM-42 #3 at
+  03:58:05.574, penetrated and applied 492 damage. It then resumed the
+  route when the review of the next obstructed contact stalled. This round
+  had one entry and one exit. The preceding run and the reentry regression
+  cover later two-second confirmations.
+- All 912 tests in the 36 player test files passed using the repository's
+  isolated runner. The 89 shared-owner checks passed on the reference
+  backend, as did the diagnostic mode and launcher panel suites. All 264
+  client modules compiled under CPython 2.7.18. The package passed x64
+  launcher and nested archive checks. It contains 306 stored mod members
+  and 267 matching staged server sources.
+- The first follow-up CI also flagged three Bot reload cases in
+  `test_port_0922_actor_binding.py`. The three assertions reproduce on
+  the incoming `da3c8db5` tree. They cover a completed load and fire in the
+  same slice, queued-shell promotion and exhausted-stock promotion. The
+  full-suite result retains those failures for separate follow-up.
+
+### Earlier runs in this correction
+
 The intermediate Windows run in
 `wot-error-report-20261112-032842-2c1315d4984d.zip` recorded 216 accepted Bot
 projectiles with matching terminal receipts, including seven artillery rounds.
@@ -30,7 +70,7 @@ death. UDES 03 penetrated PFM-42 #4 at 03:23:54.831 and #3 at 03:24:02.840
 in the same siege engagement. A later temporary inverse loss while loading
 prompted the final reload and point-retention correction.
 
-The final Windows HD #1513 run used `local-qa-siege-r3` at runtime commit
+The earlier Windows HD #1513 run used `local-qa-siege-r3` at runtime commit
 `9223d245b0d0c70479f17c0c55ac9bab12315a2d`. The launcher exported
 `wot-error-report-20261112-033432-cb9e72b899b8.zip` after the round ended by
 base capture at 03:33:57. The room used the same 29 Bots and player UDES 03 in
