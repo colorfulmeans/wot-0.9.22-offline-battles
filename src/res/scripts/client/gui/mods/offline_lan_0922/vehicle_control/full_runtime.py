@@ -2171,6 +2171,9 @@ class FullPlayerRuntime(MissionControl, CombatControl):
     def fire_rejected(self, reason, *unused_args):
         self._last_fire_failure = str(reason)
 
+    def trigger_terminated(self, context):
+        self._discard_trigger_next_shell(context.get('load_plan'))
+
     def status(self):
         state = self.state or {}
         policy = self.attack_policy.status() if self.attack_policy is not None else {}

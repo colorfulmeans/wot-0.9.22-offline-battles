@@ -525,12 +525,13 @@ class ReportAmmunitionTests(unittest.TestCase):
         self.pose(scene, .02)
         scene.tick(.25, background=False)
         calls = list(scene.calls)
-        self.assertEqual((None, 'ordered_lowest_penetration_still_failed'), policy.next_at_edge())
+        self.assertEqual((None, 'ordered_lowest_penetration_still_failed'),
+                         policy.next_at_edge(trigger=policy.decision['candidate']))
         self.assertEqual(calls, scene.calls)
         self.pose(scene, .30)
         scene.tick(.375, background=False)
         calls = list(scene.calls)
-        self.assertEqual(0, policy.next_at_edge()[0]['shell_index'])
+        self.assertEqual(0, policy.next_at_edge(trigger=policy.decision['candidate'])[0]['shell_index'])
         self.assertEqual(calls, scene.calls)
 
     def test_manual_current_ap_clears_loaded_he_fallback_and_recovers_ap(self):

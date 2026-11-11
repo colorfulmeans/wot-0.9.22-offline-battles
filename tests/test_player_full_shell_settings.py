@@ -254,6 +254,28 @@ class FullShellSettingsTests(unittest.TestCase):
                                   (scene.settings.NEXT_SHELLS, 101)], scene.setting_calls)
                 scene.doCleanups()
 
+    def test_manual_high_penetration_clip_cannot_return_on_reload_before_any_shot(self):
+        for stock in (6, 10):
+            with self.subTest(stock=stock):
+                scene = self.scene(clip=6, burst=3)
+                gun = scene.battle._gun_state
+                gun.ammo[1] = stock
+                gun.shots[1].piercingPower = (1200., 1000.)
+                scene.battle.client.effective_params['gun']['shots'][1][
+                    'source_shot']['piercingPower'] = gun.shots[1].piercingPower
+                setting = scene.battle._sender.change_vehicle_setting
+                vehicle = scene.battle._server.vehicle_id
+                self.assertTrue(setting(vehicle, scene.settings.CURRENT_SHELLS, 102))
+                for unused in range(240):
+                    self.tick_weapon(scene)
+                    if gun.clip == gun.clip_size:
+                        break
+                self.assertEqual((1, 6, None), (gun.shot_index, gun.clip, gun.pending_index))
+                self.assertFalse(scene.launches())
+                self.assertFalse(setting(vehicle, scene.settings.RELOAD_PARTIAL_CLIP, 0))
+                self.assertEqual((1, 6, None), (gun.shot_index, gun.clip, gun.pending_index))
+                scene.doCleanups()
+
     def test_manual_current_he_to_ap_finishes_and_fires_ap_twice(self):
         scene = self.scene(clip=1, burst=1, third=True)
         gun = scene.battle._gun_state

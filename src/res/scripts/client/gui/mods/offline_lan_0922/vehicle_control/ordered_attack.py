@@ -69,18 +69,25 @@ class OrderedAttack(object):
         if shell is None:
             return None, 'shell_descriptor_pending'
         penetration = stocked(frame, False)
+        lowest = penetration[0] if penetration else None
+        higher = lowest is not None and not shell['is_he'] and lowest['piercing'] < shell['piercing']
+        magazine = frame['clip_size'] > 1 or frame.get('burst_count', 1) > 1
+        remaining = min(frame['clip'], frame['ammo'][loaded])
+        last_trigger = (trigger is not None and trigger.get('shell_index') == loaded and
+                        0 < remaining <= frame.get('burst_count', 1))
+        if (higher and frame['ammo'][loaded] > 0 and not last_trigger and
+                (magazine or frame['ammo'][loaded] > frame['clip'])):
+            return None, 'keep_mounted_shell'
         if frame['ammo'][loaded] <= frame['clip']:
             reserve = [row for row in penetration if row['index'] != loaded]
             if not reserve and not shell['is_he']:
                 reserve = stocked(frame, True)
             if reserve:
                 return reserve[0]['index'], 'mounted_stock_exhausted'
-        lowest = penetration[0] if penetration else None
-        if lowest is None or (not shell['is_he'] and lowest['piercing'] >= shell['piercing']):
+        if lowest is None or not (shell['is_he'] or higher):
             return None, 'keep_mounted_shell'
         # The native gun promotes NEXT at the reload boundary. The final
         # trigger's shot mode is available before its cartridge is consumed.
-        magazine = frame['clip_size'] > 1 or frame.get('burst_count', 1) > 1
         same_shell = self.committed_shell == loaded
         if shell['is_he']:
             if not (same_shell and self.he_clip_return):
@@ -262,6 +269,7 @@ class OrderedAttack(object):
         # finite recovery. It cannot qualify a fresh route attack. A live
         # front enemy is merely an excluded point.
         blocked = next((row for row in rows if row is not None and
+                        not row.get('scatter_blocked') and
                         row.get('line') in ('friendly_blocked', 'world_blocked') and
                         isinstance(row.get('solution'), dict)), None)
         if blocked is not None:
@@ -272,6 +280,9 @@ class OrderedAttack(object):
     def _can_lay(policy, row, mode):
         if row is None or row.get('line') in ('enemy_blocked', 'vehicle_blocked',
                                              'friendly_blocked', 'world_blocked'):
+            return False
+        combat = getattr(policy.runtime, 'combat_stop', None)
+        if getattr(combat, 'capture_hold', lambda: False)() and not combat.capture_can_lay(row):
             return False
         refusal = row.get('stationary_pending') or ''
         return (policy._executable(policy._planned_evidence(row), mode) or
@@ -302,6 +313,13 @@ class OrderedAttack(object):
                 row.get('stationary_pending') == 'stationary_native_projection_unavailable')
 
     def _inspect(self, policy, now, jobs, refresh=None):
+        combat = getattr(policy.runtime, 'combat_stop', None)
+        capture = getattr(combat, 'capture_hold', lambda: False)()
+
+        def capture_excluded(row):
+            return (capture and row is not None and row.get('line') == 'clear' and
+                    row.get('mechanical') == 'hull_laying' and not combat.capture_can_lay(row))
+
         current = [policy._current(job, require_line=True) for job in jobs]
         for row in current:
             if policy._executable_current(row):
@@ -345,14 +363,20 @@ class OrderedAttack(object):
             return 'navigation_owned', None
         evidence = [self._negative_evidence(policy, job, row)
                     for job, row in zip(jobs, current)]
+        if (any(capture_excluded(row) for row in current) and
+                all(proof is not None or capture_excluded(row)
+                    for proof, row in zip(evidence, current))):
+            return 'navigation_owned', None
         clear = next((row for row in evidence if self._clear_failure(policy, row)), None)
         blocked = next((row for row in current if row is not None and
+                        not row.get('scatter_blocked') and
                         row.get('line') in ('friendly_blocked', 'world_blocked') and
                         isinstance(row.get('solution'), dict)), None)
         if not all(evidence):
             if any(row and row.get('stationary_progress') for row in current):
                 return 'stationary_wait', None
-            lay = next((row for row in current if self._unproved_hull_lay(row)), None)
+            lay = next((row for row in current if self._unproved_hull_lay(row) and
+                        (not capture or combat.capture_can_lay(row))), None)
             if lay is not None:
                 return 'native_lay', lay
             return 'wait', blocked
@@ -436,7 +460,8 @@ class OrderedAttack(object):
             return policy._choose('wait', 'current_shot_navigation_owned')
         recovery = next((policy._current(job, require_line=True) for job in jobs
                          if job[0] == policy.selected), None)
-        if recovery and recovery.get('line') in ('friendly_blocked', 'world_blocked'):
+        if (recovery and not recovery.get('scatter_blocked') and
+                recovery.get('line') in ('friendly_blocked', 'world_blocked')):
             reason = ('current_penetration_obstructed' if recovery.get('armor') == 'passed'
                       else 'unverified_points_obstructed')
             return policy._choose('firing_position', reason, recovery,

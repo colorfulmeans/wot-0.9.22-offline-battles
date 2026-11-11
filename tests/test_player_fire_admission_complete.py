@@ -814,15 +814,19 @@ class AutomaticFireAdmissionTests(AutomaticFireScene):
             self.assertEqual('auto_world_blocked', self.control.last_fire_failure)
             self.assertEqual('scatter',self.admission.receipt['blocker']['ray_stage'])
             policy=self.runtime.attack_policy
-            self.assertEqual('clear',policy.rows[self.candidate['key']]['line'])
-            self.assertNotIn(self.candidate['key'],policy._admission_blocks)
-            self.assertEqual(self.candidate['key'],policy.selected)
-            self.step()
+            key = self.candidate['key']
+            self.assertEqual('world_blocked', policy.rows[key]['line'])
+            self.assertIsNone(policy.selected)
+            self.step(.3)
+            self.lay()
+            self.assertEqual('world_blocked', policy.rows[key]['line'])
             self.assertFalse(self.fire())
             self.assertIs(candidate, self.admission.pending)
             self.assert_unspent()
             self.world[:] = []
-            self.step()
+            self.step(.3)
+            self.lay()
+            self.assertEqual('clear', policy.rows[key]['line'])
             self.assertTrue(self.fire(), self.admission.receipt)
 
     def test_scattered_miss_proves_allies_beyond_the_target_plane(self):

@@ -15,6 +15,7 @@ from __future__ import division
 import math
 
 from .actor_observation import observation
+from ..native_input_diagnostics import combat_detail, combat_detail_enabled
 import time
 
 from .. import arena_boundary, ballistics, shot_geometry, tank_collision, vehicle_physics
@@ -538,7 +539,12 @@ class StationaryPlanner(object):
                                         len(self._arcs), len(self._plans))
             return result
         except (AttributeError, TypeError, ValueError, KeyError, IndexError,
-                RuntimeError, OverflowError, ZeroDivisionError):
+                RuntimeError, OverflowError, ZeroDivisionError) as error:
+            if combat_detail_enabled():
+                runtime = self.runtime
+                combat_detail(runtime, 'stationary_projection', runtime.actor_id, now,
+                    type(error).__name__, lambda: dict(shell=shell['index'], target=target['key'],
+                        channel=channel, error=str(error)[:200]))
             return _pending('stationary_native_projection_unavailable')
 
     def current(self, frame, proof):

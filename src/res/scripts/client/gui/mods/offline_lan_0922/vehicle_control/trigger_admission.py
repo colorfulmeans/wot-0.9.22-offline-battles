@@ -21,6 +21,7 @@ from .actor_observation import observation
 
 WORLD_CHORDS_PER_ATTEMPT = 24
 MAX_PROOF_CHORDS = 334
+NEAR_WORLD_DISTANCE = 25.
 PROBE_INTERVAL = .05
 FULL_PROOF_INTERVAL = .5
 COMPLETED_PROOF_TTL = .2
@@ -319,12 +320,10 @@ class TriggerAdmission(object):
                 proof['done'] = True
                 break
             if hit is not None:
-                if centre or _distance_sq(hit, path[0]) <= 25. ** 2:
+                if centre or _distance_sq(hit, path[0]) <= NEAR_WORLD_DISTANCE ** 2:
                     proof['refusal'] = 'auto_world_blocked'
-                    # A clear real barrel may still have an obstructed
-                    # *scattered* ray. Preserve that distinction for the
-                    # combat owner: one sampled miss is not evidence that
-                    # the selected centre aim point needs a new position.
+                    # A scattered obstruction affects this shot trajectory,
+                    # independently of the selected point's centre ray.
                     proof['blocker'] = dict(kind='world', point=hit,
                                             ray_stage='centre' if centre else 'scatter')
                     break
@@ -360,7 +359,7 @@ class TriggerAdmission(object):
         return self._lane(proof['path'], splash)
 
     @staticmethod
-    def _launch_path(origin, velocity, gravity, maximum):
+    def _launch_path(origin, velocity, gravity, maximum, near_limit=None):
         try:
             origin, velocity = _point(origin), _point(velocity)
             gravity, maximum = float(gravity), float(maximum)
@@ -379,9 +378,64 @@ class TriggerAdmission(object):
             travelled += math.sqrt(_distance_sq(first, last))
             path.append(_point(last))
             times.append(actual)
-            if terminal:
+            if terminal or near_limit is not None and _distance_sq(origin, last) > near_limit ** 2:
                 break
         return tuple(path), tuple(times)
+
+    def _shot_draw(self, gun):
+        key = (self.owner._generation, self.control.control_generation,
+               id(gun), gun.shot_index, tuple(gun.ammo), gun.clip)
+        if self.pending is None or self.pending['weapon_key'] != key:
+            self.pending = dict(weapon_key=key, draw=_ScatterDraw(), proof=None,
+                restarts=0, penetration_factor=round_scalar(combat_rules.sample_penetration_factor()))
+        return self.pending
+
+    def _scattered_velocity(self, token, gun, direction, dispersion, shot):
+        perfect = bool(getattr(self.control.runtime, 'actor_kind', 'human') == 'human' and
+                       self.owner._config and self.owner._config.get('perfect_accuracy', False))
+        direction = token['draw'].scatter(self.owner, gun, direction, perfect, dispersion)
+        return perfect, tuple(round_scalar(value * float(shot['speed'])) for value in direction)
+
+    def recheck_world_scatter(self, row, now):
+        """Re-observe a refused point without laying the gun or issuing a trigger."""
+        try:
+            gun = self.control.runtime.gun
+            if gun.shot_index != row['shell_index'] or self.physical.trigger_active():
+                return None
+            solution = row['solution']
+            effective = self.owner._accepted_local_effective_params()
+            shot = effective['gun']['shots'][gun.shot_index]['source_shot']
+            target = self._target(dict(target=row['target']))
+            dispersion = self.physical.native_dispersion_angle()
+            if target is None or dispersion is None:
+                return None
+            origin, direction = solution['origin'], solution['direction']
+            # Use the exact observed muzzle when it is already laid at this
+            # point. Otherwise review the current intended ray with the same
+            # sampled dispersion, leaving the final proof to admission.
+            actual = self.physical.mutable_shot_ray()
+            if actual and _distance_sq(_point(actual[1]), direction) <= 1.e-10:
+                origin, direction = _point(actual[0]), _point(actual[1])
+            origin = tuple(round_scalar(value) for value in origin)
+            token = self._shot_draw(gun)
+            unused, velocity = self._scattered_velocity(token, gun, direction, dispersion, shot)
+            path, times = self._launch_path(origin, velocity, round_scalar(float(shot['gravity'])),
+                round_scalar(float(shot['maxDistance'])), near_limit=NEAR_WORLD_DISTANCE)
+            if len(path) < 2 or len(path) > WORLD_CHORDS_PER_ATTEMPT + 1:
+                return None
+            roster = self._collision_roster(target, solution['velocity'], now)
+            if roster is None:
+                return None
+            scene = self._scene()
+            proof = dict(path=path, times=times, cursor=0, stage=1, done=False,
+                         refusal=None, roster=roster, target_queries=0, shot=shot)
+            self._advance(proof, WORLD_CHORDS_PER_ATTEMPT)
+            if token is self.pending and self._scene() == scene:
+                return proof['done'] and proof['refusal'] is None
+        except (AttributeError, TypeError, ValueError, KeyError, IndexError,
+                RuntimeError, OverflowError, ZeroDivisionError):
+            pass
+        return None
 
     def _feedback(self, context, reason, blocker=None):
         policy = getattr(self.control.runtime, 'attack_policy', None)
@@ -403,22 +457,13 @@ class TriggerAdmission(object):
                     self.pending = None
                 self._feedback(context, reason)
                 return self._result('rejected' if self.terminal_reason(reason) else 'pending', reason)
-            key = (self.owner._generation, self.control.control_generation,
-                   id(gun), gun.shot_index, tuple(gun.ammo), gun.clip)
-            candidate = self.pending
-            if candidate is None or candidate['weapon_key'] != key:
-                candidate = dict(weapon_key=key, draw=_ScatterDraw(), proof=None,
-                    restarts=0, penetration_factor=round_scalar(combat_rules.sample_penetration_factor()))
-                self.pending = candidate
+            candidate = self._shot_draw(gun)
             roster = self._collision_roster(target, solution['velocity'], now)
             if roster is None:
                 return self._result('pending', 'auto_collision_geometry_unknown')
             roster_signature = tuple(row['signature'] for row in roster)
-            perfect = bool(getattr(self.control.runtime, 'actor_kind', 'human') == 'human' and
-                           self.owner._config and self.owner._config.get('perfect_accuracy', False))
-            direction = candidate['draw'].scatter(self.owner, gun, raw_ray[1], perfect, dispersion)
+            perfect, velocity = self._scattered_velocity(candidate, gun, raw_ray[1], dispersion, source_shot)
             origin = tuple(round_scalar(value) for value in raw_ray[0])
-            velocity = tuple(round_scalar(value * float(source_shot['speed'])) for value in direction)
             gravity = round_scalar(float(source_shot['gravity']))
             maximum = round_scalar(float(source_shot['maxDistance']))
             range_origin = tuple(round_scalar(value) for value in (

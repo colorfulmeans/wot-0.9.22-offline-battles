@@ -85,7 +85,7 @@ class CombatControl(object):
                     min(self.gun.clip, self.gun.ammo[self.gun.shot_index]) <= self.gun.burst_count):
                 if trace_combat:
                     combat_detail(self, 'auto_trigger_context', self.actor_id, self.now,
-                        'he_next_queue_release_pending', lambda: dict(candidate=candidate['key']))
+                        'trigger_next_queue_release_pending', lambda: dict(candidate=candidate['key']))
                 return None
             # Motion integration and native gun laying happen after the
             # policy selected this intention. Refresh that same sample at
@@ -574,7 +574,7 @@ class CombatControl(object):
         lease = self._owned_next_shell
         if (plan is not None and plan.get('trigger_only') and lease is not None and
                 lease.get('plan') is plan):
-            self._release_next_shell('he_trigger_refused', required=False, at_trigger=True)
+            self._release_next_shell('trigger_refused', required=False, at_trigger=True)
 
     def _prepare_next_shell(self, now):
         policy, gun = self.attack_policy, self.gun

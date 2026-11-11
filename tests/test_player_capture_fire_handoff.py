@@ -155,6 +155,29 @@ class CaptureFireHandoffTests(unittest.TestCase):
         self.run_until_shots(scene)
         self.assertEqual(2, scene.runtime.weapon.target['network_id'])
 
+    def test_capture_can_turn_for_the_selected_alternative_with_native_pivot_geometry(self):
+        scene = self.scene(limited=True)
+        scene.battle._local_physics = dict(rotationIsAroundCenter=True)
+        scene.pose(scene.battle._runtime.bigworld.entities[2], (65., 0., 85.))
+        scene.runtime.set_mission('capture_base', {})
+        for unused in range(35):
+            scene.tick()
+            if scene.battle._sender.turn > .01:
+                break
+        self.assertGreater(scene.battle._sender.turn, .01)
+        self.assertEqual(2, scene.applied_order()['target_id'])
+        self.assertEqual(5, scene.runtime.combat_stop.task_order['initial_target_hint']['target_id'])
+        self.assertFalse(scene.runtime.combat_stop.stop_allowed)
+        self.assertEqual(0., scene.battle._sender.forward)
+        self.assertFalse(scene.launches())
+
+        # Publish the native pose reached by the requested in-place turn.
+        scene.native_position((45., 0., 45.), yaw=.45)
+        self.run_until_shots(scene)
+        self.assertEqual(2, scene.runtime.weapon.target['network_id'])
+        self.assertEqual(0., scene.battle._sender.forward)
+        self.assertTrue(scene.runtime.combat_stop.capture_hold())
+
     def test_loaded_he_clip_fallback_uses_gun_handoff_without_eight_second_search(self):
         scene = self.scene(clip=3, soft_armor=30.)
         scene.set_he(piercing=1.)

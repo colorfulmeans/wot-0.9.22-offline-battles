@@ -36,6 +36,7 @@ ATOMIC_ARMOUR_BATCHES = 32
 ATOMIC_CANDIDATES = 48
 NEXT_EDGE_WALL_SECONDS = .004
 NEXT_EDGE_CANDIDATES = 8
+SCATTER_RECHECK_INTERVAL = .25
 NATIVE_LINE_RETRY_REASONS = ('auto_front_vehicle', 'auto_lane_geometry_unknown',
                              'auto_world_geometry_unknown')
 _WALL_CLOCK = getattr(time, 'perf_counter', time.time)
@@ -349,6 +350,7 @@ class AttackPolicy(object):
         self.rows = {}
         self._next_rows = {}
         self._admission_blocks = {}
+        self._scatter_blocks = {}
         self._lay_recovery = None
         self._physical_review = None
         self.selected = None
@@ -503,6 +505,11 @@ class AttackPolicy(object):
         row = self.rows.get(key)
         if row is None or row.get('pose_stamp') != self._stamp(self.frame, shell, target):
             return None
+        scatter = self._scatter_blocks.get(key[:3])
+        if scatter is not None:
+            return self._scatter_blocked_row(row, scatter)
+        if row.get('scatter_blocked'):
+            return None
         if (require_line and row.get('line_stamp') !=
                 self._line_stamp(self.frame, row.get('line_region'))):
             if key == self.selected and combat_detail_enabled():
@@ -525,6 +532,8 @@ class AttackPolicy(object):
         """Completed observations may rank a later load, never a current shot."""
         row = self._current(job, require_line=True)
         key, shell, target, unused, mode = job
+        if key[:3] in self._scatter_blocks:
+            return row
         if self._reviewed(row, mode):
             return row
         cached = self._next_rows.get(key)
@@ -586,6 +595,32 @@ class AttackPolicy(object):
         # must not erase this bounded retry on the very next observation.
         return (previous == stamp or (blocked['reason'] in NATIVE_LINE_RETRY_REASONS and
                 previous[0] == stamp[0] and previous[2:] == stamp[2:]))
+
+    @staticmethod
+    def _scatter_blocked_row(row, block):
+        if row.get('scatter_blocked'):
+            return row
+        return dict(row, line='world_blocked', reason='auto_world_blocked',
+                    blocker=block['blocker'], scatter_blocked=True, stationary_plan=None,
+                    stationary_progress=False, route_he_contact=False, he_route_review=False)
+
+    def _review_scatter_block(self, row, now):
+        key = row['key'][:3]
+        block = self._scatter_blocks.get(key)
+        if block is None:
+            return row
+        if now >= block['retry_at']:
+            block['retry_at'] = now + SCATTER_RECHECK_INTERVAL
+            admission = getattr(getattr(self.runtime, 'controller', None), 'trigger_admission', None)
+            if (row['line'] == 'clear' and admission is not None and
+                    admission.recheck_world_scatter(row, now) is True):
+                self._scatter_blocks.pop(key, None)
+                if combat_detail_enabled():
+                    runtime = self.runtime
+                    combat_detail(runtime, 'scatter_point_review', runtime.actor_id, now,
+                        'reopened', lambda: dict(key=key, blocker=block['blocker']))
+                return row
+        return self._scatter_blocked_row(row, block)
 
     def _front_geometry(self, key):
         target = next((row for row in self.frame['targets'] if row['key'] == key), None)
@@ -738,6 +773,8 @@ class AttackPolicy(object):
             for field in ('penetration_threshold', 'penetration_factor'):
                 if field in previous:
                     row[field] = previous[field]
+        if self._scatter_blocks:
+            row = self._review_scatter_block(row, now)
         observations = (row, row.get('stationary_plan'))
         for observation in observations:
             if isinstance(observation, dict) and observation.get('expected_damage') is not None:
@@ -1450,8 +1487,10 @@ class AttackPolicy(object):
                 return None, 'observation_changed'
             index, reason = self.ordered.next_load(self, trigger)
             plan = dict(shell_index=index, key=None) if index is not None else None
-            if (plan is not None and reason == 'he_finished_lowest_penetration' and
-                    not self.ordered.he_clip_return):
+            if plan is not None and (
+                    reason == 'higher_penetration_cycle_finished' or
+                    reason == 'he_finished_lowest_penetration' and not self.ordered.he_clip_return or
+                    reason == 'mounted_stock_exhausted' and trigger is not None and queued is None):
                 plan['trigger_only'] = True
             return plan, reason
         plan = self.next_plan
@@ -2030,6 +2069,7 @@ class AttackPolicy(object):
             ordered = self.ordered
             front_blocks = {key: block for key, block in self._admission_blocks.items()
                             if block.get('front_geometry')} if same_geometry_identity and ordered else {}
+            scatter_blocks = self._scatter_blocks if same_geometry_identity and ordered else {}
             held_he_ranking = {}
             if same_geometry_identity and ordered and ordered.loaded_he:
                 held_he_ranking = {key: row for key, row in self._next_rows.items()
@@ -2050,6 +2090,7 @@ class AttackPolicy(object):
             if same_weapon and ordered is not None:
                 self.ordered = ordered
                 self._admission_blocks = front_blocks
+                self._scatter_blocks = scatter_blocks
                 self._next_rows.update(held_he_ranking)
             if same_weapon:
                 # A siege/descriptor transition changes every geometric
@@ -2089,6 +2130,10 @@ class AttackPolicy(object):
         jobs = tuple(job for mode in ('penetration', 'he_fallback')
                      for job in self._jobs(mode))
         valid_keys = set(job[0] for job in jobs)
+        if self._scatter_blocks:
+            mounted_points = set(key[:3] for key in valid_keys if key[0] == frame['loaded'])
+            for key in set(self._scatter_blocks).difference(mounted_points):
+                self._scatter_blocks.pop(key, None)
         stamps = dict((job[0], self._stamp(frame, job[1], job[2])) for job in jobs)
         for key in list(self.rows):
             row = self.rows[key]
@@ -2470,6 +2515,17 @@ class AttackPolicy(object):
             return self.next_shell
         if self.ordered is not None:
             self._background_at = now
+            if self._scatter_blocks and not self.frame.get('trigger_active') and not self.frame.get('reloading'):
+                held = self.ordered.target if self.ordered.loaded_he else None
+                due = {key: block['retry_at'] for key, block in self._scatter_blocks.items()
+                       if now >= block['retry_at'] and (held is None or held == key[1])}
+                if due and self._optional_work_budget(now).background(self._work_actor(), 1):
+                    review = min(due, key=lambda key: (due[key], repr(key)))
+                    job = next((job for job in self._jobs(shell_index=review[0])
+                                if job[0][:3] == review), None)
+                    if job is not None:
+                        self._used['background'] = 0
+                        self._evaluate(job, now, 'background')
             self.next_plan, self.next_status = self.next_at_edge()
             self.next_shell = (self.next_plan or {}).get('shell_index')
             return self.next_shell
@@ -2551,11 +2607,24 @@ class AttackPolicy(object):
             return
         if (reason == 'auto_world_blocked' and
                 (blocker or {}).get('ray_stage') == 'scatter'):
-            # This actual trigger was refused, but the native centre ray
-            # and selected stationary aim point were not geometrically
-            # disproved. The next trigger still requires a complete fresh
-            # admission; do not invent a firing-position recovery or retire
-            # the otherwise valid selected point on one scattered path.
+            if self.ordered is not None:
+                # The penetration and blast modes share this physical sample.
+                # Keep the obstruction until a read-only trajectory recheck
+                # clears it. A green centre ray cannot reopen it.
+                key = row['key'][:3]
+                block = dict(blocker=dict(blocker),
+                             retry_at=self.frame['observed_at'] + SCATTER_RECHECK_INTERVAL)
+                self._scatter_blocks[key] = block
+                self.rows[row['key']] = self._scatter_blocked_row(row, block)
+                for mode in ('penetration', 'he_fallback'):
+                    self._next_rows.pop(key + (mode,), None)
+                if self.selected is not None and self.selected[:3] == key:
+                    self.selected = None
+                    self._current_he_execution = None
+                if combat_detail_enabled():
+                    runtime = self.runtime
+                    combat_detail(runtime, 'scatter_point_review', runtime.actor_id, runtime.now,
+                        'blocked', lambda: dict(key=key, blocker=block['blocker']))
             return
         classifications = dict(auto_friendly_lane='friendly_blocked',
             auto_friendly_splash='friendly_blocked', auto_world_blocked='world_blocked',

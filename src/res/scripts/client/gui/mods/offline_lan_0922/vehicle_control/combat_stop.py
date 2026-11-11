@@ -10,10 +10,12 @@ import copy
 import math
 
 from .actor_observation import observation
+from .native_drive import capture_pivot_allows
 
-from .. import siege_mechanics
+from .. import siege_mechanics, shot_geometry, vehicle_physics
 from .. import capture_orders
-from ..ai.driver import WAYPOINT_ARRIVAL_RADIUS
+from ..ai.driver import WAYPOINT_ARRIVAL_RADIUS, gun_yaw_limits
+from ..native_input_diagnostics import combat_detail, combat_detail_enabled
 from .native_aim import NATIVE_ANGLE_TOLERANCE
 from .target_selection import live_contact, ordinary_initial_key
 
@@ -87,6 +89,8 @@ class CombatStop(object):
         self.cooldown_until = float('-inf')
         self._route_attack = False
         self._last_attackable_at = None
+        self._capture_lay = None
+        self._capture_lay_retry = {}
         state = getattr(self.runtime, 'state', None)
         if state is not None:
             state.pop('_combat_movement_owner', None)
@@ -175,6 +179,11 @@ class CombatStop(object):
         admitted = (sorted(visible, key=lambda key: ordinary_initial_key(
             state['position'], visible[key])) if self.active else [])
         self.targets = tuple(visible[key] for key in admitted)
+        if self.capture_hold():
+            self._observe_capture_lay(runtime.now)
+        else:
+            self._capture_lay = None
+            self._capture_lay_retry.clear()
         # Priority is not a geometry/admission change. Reordering the same
         # original eligible enemies must not discard an otherwise current NEXT
         # proof. Committing movement must not invalidate its native evidence.
@@ -207,7 +216,84 @@ class CombatStop(object):
             _key(candidate.get('target') or {}) == primary and not self.explicit_travel)
         return bool(self.active and self.contains(candidate.get('target')) and
                     (self.can_request_movement or 'drive' not in self.runtime.features or
-                     stationary_primary))
+                     stationary_primary or self._capture_owns_aim(candidate)))
+
+    def capture_hold(self):
+        order, runtime = self.task_order, self.runtime
+        area = order.get('capture_area')
+        return bool(self.active and getattr(runtime, 'actor_kind', None) == 'human' and
+                    'drive' in runtime.features and not self.explicit_travel and
+                    area and order.get('combat_mode') in ('base_capture', 'engage') and
+                    order.get('throttle_override') == 0. and not order.get('parking_phase') and
+                    not runtime.state.get('airborne') and capture_orders.inside(runtime.state, area))
+
+    def _capture_owns_aim(self, candidate):
+        attempt = self._capture_lay
+        return bool(attempt is not None and self.capture_hold() and
+                    attempt['key'] == (candidate.get('shell_index'), candidate.get('target_key')))
+
+    def capture_can_lay(self, row):
+        if row is None or row.get('line') != 'clear' or row.get('mechanical') != 'hull_laying':
+            return False
+        runtime = self.runtime
+        key = row['shell_index'], row['target_key']
+        refusal = row.get('stationary_pending') or ''
+        if ('blocked' in refusal or 'actuator_unavailable' in refusal or
+                runtime.now < self._capture_lay_retry.get(key, float('-inf'))):
+            return False
+        solution = self._lay_solution(row)
+        if solution is None:
+            return False
+        params = observation(runtime).physical_params()
+        if not params or not isinstance(params.get('rotationIsAroundCenter'), bool):
+            # An original capture contact still has its existing native
+            # per-step rotation guard. A new contact needs pivot geometry.
+            hint = self.task_order.get('initial_target_hint') or self.task_order
+            return row['target_key'] == (hint.get('target_kind'), hint.get('target_id'))
+        if params['rotationIsAroundCenter']:
+            return True
+        if 'trackCenter' not in params or 'direction' not in solution:
+            return False
+        state = runtime.state
+        yaw = state['yaw']
+        low, high, limited = gun_yaw_limits(runtime.entity.typeDescriptor)
+        if not limited:
+            return False
+        local_yaw = shot_geometry.world_direction_to_local_gun_angles(
+            solution['direction'], yaw, state.get('pitch', 0.), state.get('roll', 0.))[0]
+        delta = _angle(local_yaw - (low + high) * .5)
+        offset = vehicle_physics.track_pivot_offset(params, 0., delta)
+        position = tuple(state['position'])
+        end = vehicle_physics.track_pivot_position(position, yaw, yaw + delta, offset)
+        area = self.task_order['capture_area']
+        centre = area['point']
+        allowed = capture_pivot_allows(((centre['x'], centre['z']), area['radius']),
+                                       position, end, offset, delta)
+        if not allowed and combat_detail_enabled():
+            combat_detail(runtime, 'capture_lay', runtime.actor_id, runtime.now,
+                'circle_arc_exceeds_radius', lambda: dict(key=row['key'], position=position,
+                    end=end, circle=area, delta=delta))
+        return allowed
+
+    def _observe_capture_lay(self, now):
+        attempt = self._capture_lay
+        if attempt is None:
+            return
+        decision = self.runtime.attack_policy.decision
+        if decision['action'] != 'firing_position':
+            return
+        state = self.runtime.state
+        if abs(_angle(state['yaw'] - attempt['yaw'])) >= NATIVE_ANGLE_TOLERANCE:
+            attempt.update(yaw=state['yaw'], progress_at=now)
+        if (now < state.get('_native_rotation_refused_until', 0.) or
+                now - attempt['progress_at'] >= MECHANICAL_STALL_SECONDS):
+            self._capture_lay_retry[attempt['key']] = now + MECHANICAL_STALL_SECONDS
+            self._capture_lay = None
+            if combat_detail_enabled():
+                runtime = self.runtime
+                combat_detail(runtime, 'capture_lay', runtime.actor_id, now,
+                    'native_rotation_refused' if now < state.get('_native_rotation_refused_until', 0.)
+                    else 'no_rotation_progress', lambda: dict(key=attempt['key'], yaw=state['yaw']))
 
     def _proposal(self):
         policy = self.runtime.attack_policy
@@ -359,7 +445,10 @@ class CombatStop(object):
             self._route_requires_confirmation(self.task_order))
 
     def _confirmed_route_attack(self, candidate, now):
+        previous = self._route_confirmation
         if candidate is None or candidate.get('key') is None:
+            if previous is not None:
+                self._record_route_confirmation(now, 'no_attackable_point', previous, None)
             self._route_confirmation = None
             return False
         # The same enemy and ammunition can remain attackable while the
@@ -369,14 +458,25 @@ class CombatStop(object):
         mode = 'he' if (candidate.get('shell') or {}).get('is_he') else key[-1]
         signature = (_key(target), target.get('engine_id'), self.runtime.gun,
                       key[0], mode)
-        previous = self._route_confirmation
         if (previous is None or previous[0] != signature or
                 not 0. <= now - previous[2] <= ATTACK_OBSERVATION_GAP_SECONDS):
+            if previous is not None:
+                reason = 'candidate_changed' if previous[0] != signature else 'observation_gap'
+                self._record_route_confirmation(now, reason, previous, key)
             previous = (signature, now, now)
         self._route_confirmation = (signature, previous[1], now)
         self.receipt.update(confirmation_since=previous[1],
                             confirmation_seconds=now - previous[1])
         return now - previous[1] >= ROUTE_ATTACK_CONFIRM_SECONDS
+
+    def _record_route_confirmation(self, now, reason, previous, key):
+        if combat_detail_enabled():
+            runtime = self.runtime
+            decision = runtime.attack_policy.decision
+            combat_detail(runtime, 'route_attack_confirmation', runtime.actor_id, now, reason,
+                lambda: dict(previous_target=previous[0][0], previous_shell=previous[0][3],
+                    confirmed=previous[2] - previous[1], next_point=key, mode=self.task_order.get('combat_mode'),
+                    action=decision.get('action'), decision=decision.get('reason')))
 
     def _route_attackable(self, candidate):
         if candidate is None or candidate.get('shell_index') != self.runtime.gun.shot_index:
@@ -517,21 +617,18 @@ class CombatStop(object):
         else:
             hint = self.task_order.get('initial_target_hint') or self.task_order
             primary = _key(dict(kind=hint.get('target_kind'), id=hint.get('target_id')))
-            capture_hull_lay = bool(
-                order.get('combat_mode') == 'base_capture' and
-                policy.decision.get('action') in ('aim', 'firing_position') and
-                proposal is not None and proposal.get('line') == 'clear' and
-                proposal.get('mechanical') == 'hull_laying')
-            if (self._intent_target == primary and
-                    (capture_hull_lay or order.get('combat_mode') != 'base_capture' and
-                     not order.get('capture_area')) and
+            if (self.capture_hold() and proposal is not None and
+                    proposal['target_key'] == self._intent_target and
+                    (self.capture_can_lay(proposal) or
+                     verified_shot is not None and self._capture_owns_aim(proposal))):
+                key = proposal['shell_index'], proposal['target_key']
+                if self._capture_lay is None or self._capture_lay['key'] != key:
+                    self._capture_lay = dict(key=key, yaw=runtime.state['yaw'], progress_at=now)
+                result.update(target_kind=key[1][0], target_id=key[1][1])
+            elif (self._intent_target == primary and order.get('combat_mode') != 'base_capture' and
+                    not order.get('capture_area') and
                     not order.get('parking_phase') and
                     (order.get('throttle_override') == 0. or 'drive' not in runtime.features)):
-                # The existing stationary task may lay its own primary gun
-                # inside its capture/parking constraints. This is a native
-                # policy proposal, not the macro hint taking translation.
-                # Another gun target still needs the controls-preserving
-                # handoff after the driver; it cannot acquire a hull turn.
                 result.update(target_kind=self._intent_target[0], target_id=self._intent_target[1])
         self._publish_owner()
         return result
@@ -613,6 +710,12 @@ class CombatStop(object):
             at=now, episode=self._episode)
         self.receipt.update(status='released', reason=reason,
             combat_owned=False, stop_allowed=False, movement_owner='task')
+        if combat_detail_enabled():
+            runtime = self.runtime
+            combat_detail(runtime, 'combat_route_release', runtime.actor_id, now, reason,
+                lambda: dict(episode=self._episode, point=(candidate or {}).get('key'),
+                    pose=tuple(runtime.state['position']), route_index=self.task_order.get('route_index'),
+                    reloading=bool((runtime.attack_policy.frame or {}).get('reloading'))))
         self._publish_owner()
         # The route was never replaced. Returning exactly its current task
         # order lets the original driver resume its saved route progress.

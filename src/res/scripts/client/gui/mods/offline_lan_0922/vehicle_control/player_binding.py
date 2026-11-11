@@ -1017,6 +1017,7 @@ class PlayerControl(object):
         if not isinstance(burst, dict):
             return
         context = burst.get('player_control') or {}
+        self._runtime_event('trigger_terminated', context)
         command_id = context.get('command')
         if command_id is not None:
             self.gateway.finish(command_id, 'failed', str(reason), self.owner._clock(),

@@ -44,6 +44,37 @@ class OrderedPlayerAttackTests(unittest.TestCase):
                          {(row[2], row[3], row[5]) for row in scene.calls})
         self.assertEqual({0, 1, 2}, {row[4] for row in scene.calls})
 
+    def test_scatter_refusal_uses_other_points_before_the_next_vehicle(self):
+        scene = self.scene(targets=2, points=2)
+        scene.passed(0, target=1, sample=0)
+        scene.passed(0, target=1, sample=1)
+        scene.passed(0, target=2)
+        scene.prime()
+        blocker = dict(kind='world', ray_stage='scatter', point=(0., 2., 10.))
+        first = scene.tick(0., background=False)['candidate']
+        self.assertEqual((0, ('bot', 1), 0, 'penetration'), first['key'])
+        scene.policy.admission_failed(first, 'auto_world_blocked', blocker)
+        second = scene.tick(.1, background=False)['candidate']
+        self.assertEqual((0, ('bot', 1), 1, 'penetration'), second['key'])
+        scene.policy.admission_failed(second, 'auto_world_blocked', blocker)
+        third = scene.tick(.2, background=False)['candidate']
+        self.assertEqual((0, ('bot', 2), 0, 'penetration'), third['key'])
+
+    def test_he_fallback_skips_the_same_physically_blocked_penetration_sample(self):
+        scene = self.scene(targets=2, points=2, he_validation='single_point')
+        scene.frame['loaded'] = 2
+        scene.passed(2, target=1, sample=0)
+        scene.he(100., target=1, sample=0)
+        scene.he(20., target=1, sample=1)
+        scene.he(200., target=2)
+        scene.prime()
+        first = scene.tick(0., background=False)['candidate']
+        self.assertEqual((2, ('bot', 1), 0, 'penetration'), first['key'])
+        scene.policy.admission_failed(first, 'auto_world_blocked',
+            dict(kind='world', ray_stage='scatter', point=(0., 2., 10.)))
+        decision = scene.tick(.1, background=False)
+        self.assertEqual((2, ('bot', 1), 1, 'he_fallback'), decision['candidate']['key'])
+
     def test_he_waits_for_the_best_unblocked_blast_on_the_same_vehicle(self):
         scene = self.scene(targets=2, points=4, he_validation='single_point')
         scene.frame['loaded'] = 2
