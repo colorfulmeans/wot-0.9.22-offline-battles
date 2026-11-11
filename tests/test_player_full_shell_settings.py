@@ -31,6 +31,28 @@ class FullShellSettingsTests(unittest.TestCase):
         runtime.shot_terminal(impact)
         runtime.artillery_shot_terminal.assert_called_once_with(impact)
 
+    def test_artillery_misses_queue_backup_at_the_real_magazine_boundary(self):
+        scene = self.scene(clip=3, burst=1)
+        runtime, gun = scene.runtime, scene.runtime.gun
+        for shot in gun.shots:
+            shot.shell.kind = 'HIGH_EXPLOSIVE'
+        runtime.state['profile']['class_tag'] = 'SPG'
+        runtime.artillery_selection = SimpleNamespace(current=('bot', 2))
+        gun.tick(gun.reload_time, True, 0., 0., 0., scene.entity.typeDescriptor)
+        for sequence in (1, 2):
+            self.assertTrue(gun.commit_fire())
+            runtime._artillery_shot_committed(dict(shell_index=0), sequence)
+            runtime.shot_terminal(dict(shooter_kind='player', shooter_id=1,
+                shot_seq=sequence, artillery_ammo=dict(known=True, direct=False, damage=0)))
+            runtime._apply_artillery_shell()
+            self.assertEqual(0, gun.shot_index)
+            self.assertEqual(None if sequence == 1 else 1, gun.pending_index)
+            gun.tick(gun.clip_reload, True, 0., 0., 0., scene.entity.typeDescriptor)
+
+        self.assertEqual([(scene.settings.NEXT_SHELLS, 102)], scene.setting_calls)
+        self.assertTrue(gun.commit_fire())
+        self.assertEqual((1, 0, None), (gun.shot_index, gun.clip, gun.pending_index))
+
     def scene(self, clip=6, burst=3, third=False):
         scene = fixtures.TraverseScene()
         scene.setUp()

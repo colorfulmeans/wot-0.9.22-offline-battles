@@ -1,5 +1,46 @@
 # PR119 control-offset correction — November 10, 2026
 
+## November 12 follow-up — Redshire moving battle, artillery, and siege
+
+### Test setup
+
+In the launcher Test tab, select **Mobile combat test (15 vs 15)** and start single player. Select a vehicle and the listed gun in the garage. The room places the player in its matching slot, with 29 Bots filling the other slots. The scenario sets the in-battle ammo rack for both player and Bots. It uses the stock gun capacities and leaves the garage rack in place.
+
+When the waiting room carries a stale **Starting** message after changing vehicles between rounds, leave it and join again before starting the next battle.
+
+| Vehicle | Per team | Gun | Rounds by shell type |
+| --- | ---: | --- | --- |
+| PFM-42 L-120 | 4 | 20 mm pvlvkan m/40 | AP 80, APCR 80, HE 80 |
+| AMX ELC | 4 | 90 mm D. 914 | AP 12, APCR 12, HE 12 |
+| UDES 03 | 2 | 10.5 cm kan UDES 03 | APCR 13, premium APCR 13, HE 14 |
+| FV215b (183) | 1 | 183 mm L4 | AP 6, HE 7, HESH 7 |
+| Type 4 Heavy | 1 | 15 cm 45 41st Year Type | HE 20, premium HE 20 |
+| O-Ho | 1 | 15 cm Howitzer Type 96 | AP 20, HEAT 20, HE 20 |
+| Object 261 | 1 | 180 mm B-1-P | HE 9, premium HE 9 |
+| Bat.-Châtillon 155 58 | 1 | Canon de 155 mm | HE 18, premium HE 18 |
+
+The Redshire preflight used the previous Windows HD #1513 package. The 20 mm PFM-42 drove and fired on the existing map routes. Object 261 landed a shell on the central moving line and killed two PFM-42s in the same splash. Bat.-Châtillon fired from the western rear position and received server impacts. The scenario splits the four PFM-42s on each team between the east and west corridors. AMX ELC runs the west and centre routes. UDES 03 uses the east ridge and the two Japanese heavies use the centre. All 12 scene route assignments were checked against the current Redshire navigation graph. The scene uses the existing route, waypoint, driving and capture contracts.
+
+The Object 261 retest assigned it to the east low ground near `(185, 468)`. The native arc check reported a ridge strike near `(244, 410)`, so the scene now uses only the existing rear and west parking areas. The ordinary map profile retains its parking areas.
+
+### Changes and receipts
+
+- The November 12 report `wot-error-report-20261112-000853-9bc3d539053d.zip` showed a fresh 2.039-second confirmation after an AMX ELC kill with another enemy still visible. Combat now passes to an eligible remaining enemy in the same engagement. First contact and reacquisition after genuine release use the existing two-second confirmation. The no-HE cooldown remains in force.
+- The same report showed a completed UDES 03 siege switch followed by 2 minutes 41 seconds with no movement until manual input. The stationary review repeatedly restarted on small native pose changes. The follow-up report `wot-error-report-20261112-015258-102d2a503637.zip` also showed nearby moving actors repeatedly invalidating completed terrain checks. The stationary planner anchors settled hydraulic observations at its existing position tolerance, retains completed static arc work, and checks actual nearby vehicle positions again before a planned turn. Exact native movement and trigger checks still run. A stalled review hands the hull back to the original task.
+- Ordinary ammunition candidates now use ascending penetration, then ascending listed damage within the same penetration. In an active engagement the mounted ammunition, current-target HE comparison, and last physical trigger still govern when the next type can load.
+- The v1.1.1 artillery result rule counts two settled rounds with neither an enemy direct hit nor enemy damage. A direct hit or damaging splash clears the miss streak. The alternate HE uses the existing native reload owner, at the full-magazine boundary on a clip gun. Regular HE reloads after two fired backup rounds on a single-shot gun or one completed backup magazine. A change of target or a position shift beyond the original tolerance clears accumulated misses. Projectile and settlement receipts use the server's shooter identity for both player and Bot.
+- In the follow-up report a Bot fired AP at the end of a magazine, while the same checkpoint already described its loaded shell as HE. The server rejected that shot. The worker now publishes the consumed AP and the next HE separately until the full load completes. The server still validates both inventory conservation and the physical firing shell.
+- Artillery target review, unfinished stationary review, and ambiguous ammunition transitions gain detail only when **Collect detailed diagnostic logs** is selected.
+
+### Windows HD #1513 verification
+
+The Windows package is `wot_PR119_4cb1b894_Windows_2026-11-12.zip`, with runtime `4cb1b8949be8b97e9c35fd86deaa00c58bbd7399` and build identity `local-qa-mobile-r7`. Its SHA-256 is `973277953E981F369DAA8312E2BD2C6901D7DA8A490E53A3C9614E5B980389BD`. The x64 launcher was rebuilt. The native client binaries and map data match the previous package byte for byte. The nested archives passed CRC checks. The game mod passed the stored-member validator with 306 members and 264 CPython 2.7 modules, and 267 staged server sources matched the worktree.
+
+- In the UDES 03 retest before the scene-only parking adjustment, it had a 13/13/14 rack. Siege was confirmed by 01:56:38.708, and its first shot reached the server at 01:56:45. The engagement remained owned while the selected ELC changed from Bot 6 to Bot 5. UDES 03 fired six rounds, recorded 1,791 damage and two kills, and later drove again without manual movement. The six launches had six terminal receipts. The Bot worker started 29 vehicles with the specified fittings, including all eight ELCs, and the server recorded a capture result. The report was `wot-error-report-20261112-020555-b1506e3a7358.zip`.
+- The final package ran Object 261 at 9/9 from the rear parking area near `(-58, 470)`. All four automatic shots matched server launch and settlement receipts. The first three were direct hits. The fourth had no direct hit but applied 525 splash damage, so regular HE remained selected. The server ended the match by capture at 02:12:10. The report `wot-error-report-20261112-021241-410834b424b2.zip` contains the 29 Bot racks, four Bot target handoffs, and no repeat of the Bot shell-boundary rejection or logged player/worker traceback.
+- The final round did not produce two qualifying artillery misses or a Bot artillery projectile receipt. The native shot and ammo receipt chain was observed for the player. The regression cases cover both the single-shot return and the Bat.-Châtillon's physical magazine boundary. The report retains the Bot arc review and fire-gate observations for follow-up.
+- The focused regression suite passed 572 cases, using the reference simulation backend where the external Python test runner needed it. The launcher suite passed 325 of 331 cases with six environment-dependent skips. All 36 testing-panel cases passed, including the unchecked-diagnostics scenario. The live rounds used the Windows native game and worker.
+
 ## November 11 follow-up — obstructed points, capture aiming, and high-penetration reload
 
 ### Reports reviewed
