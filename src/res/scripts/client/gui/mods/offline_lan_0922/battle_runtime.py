@@ -9808,18 +9808,47 @@ class BattleRuntime(SharedBattleGeometry):
         cancel()
         return True
 
+    def _native_shot_gate_observation(self):
+        avatar = self._avatar
+        provider = getattr(avatar, 'guiSessionProvider', None)
+        ammo = getattr(getattr(provider, 'shared', None), 'ammo', None)
+        can_shoot = getattr(ammo, 'canShoot', None)
+        try:
+            ready, reason = can_shoot() if callable(can_shoot) else (None, None)
+        except Exception:
+            ready, reason = None, 'observation_unavailable'
+        return dict(on_arena=getattr(avatar, '_PlayerAvatar__isOnArena', None),
+            gun_locked=getattr(avatar, 'isGunLocked', None),
+            hud_ready=ready, hud_reason=reason, native_clock=self._clock(),
+            shot_waiting=getattr(avatar, '_PlayerAvatar__shotWaitingTimerID', None) is not None,
+            reload_wait_until=getattr(avatar, '_PlayerAvatar__gunReloadCommandWaitEndTime', None))
+
     def _defer_cancel_native_shot_wait(self):
         """Cancel a synchronous rejection after PlayerAvatar starts waiting."""
         generation = self._generation
+        avatar = self._avatar
+        sequence = self._local_projectile_sequence
+        wait_timer = '_PlayerAvatar__shotWaitingTimerID'
+        reload_wait = '_PlayerAvatar__gunReloadCommandWaitEndTime'
+        previous_timer = getattr(avatar, wait_timer, None)
+        previous_deadline = getattr(avatar, reload_wait, None)
 
         def cancel_after_mailbox_returns():
-            if generation != self._generation:
+            if (generation != self._generation or avatar is not self._avatar or
+                    sequence != self._local_projectile_sequence):
                 return
             # A duplicate trigger while one canonical launch is pending must
             # not cancel the acknowledgement wait owned by the accepted shot.
             if isinstance(self._local_fire_intent, dict):
                 return
             try:
+                deadline = getattr(avatar, reload_wait, None)
+                if (previous_timer is None and getattr(avatar, wait_timer, None) is not None and
+                        previous_deadline is not None and deadline is not None and
+                        deadline > previous_deadline):
+                    # Stock shoot writes both waits even when the mailbox
+                    # refused. cancelWaitingForShot only clears the timer.
+                    setattr(avatar, reload_wait, previous_deadline)
                 self._cancel_native_shot_wait()
             except Exception as error:
                 self._fail(error)

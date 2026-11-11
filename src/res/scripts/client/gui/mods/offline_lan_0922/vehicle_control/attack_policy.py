@@ -1377,7 +1377,7 @@ class AttackPolicy(object):
         if self.ordered is not None and self.frame is not None and not self.frame.get('artillery'):
             if self._frame_invalid:
                 return None, 'observation_changed'
-            index, reason = self.ordered.next_load(self.frame)
+            index, reason = self.ordered.next_load(self)
             return (dict(shell_index=index, key=None) if index is not None else None), reason
         plan = self.next_plan
         current = self.current_row(plan)
@@ -1551,6 +1551,8 @@ class AttackPolicy(object):
         return plan, reason
 
     def load_started(self, shell_index, plan=None):
+        if self.ordered is not None:
+            self.ordered.load_started(shell_index)
         if self._magazine is not None and self._magazine[0] != shell_index:
             self._clear_fallback()
             self._lay_recovery = None
@@ -2507,6 +2509,8 @@ class AttackPolicy(object):
             self._current_he_execution = None
 
     def shot_committed(self, event, pending):
+        if self.ordered is not None and event.get('shell_index') is not None:
+            self.ordered.shot_committed(int(event['shell_index']))
         # Hit, miss, zero damage and penetration results are deliberately not
         # inputs. Only the physical group's first/final commit bounds its lock.
         if int(event.get('burst_index', 0)) == 0:
@@ -2755,10 +2759,15 @@ class NativeAttackEvaluator(object):
             key = (index, target_key, sample, mode)
             if (candidate['key'] != key or gun.shot_index != index or
                     gun.ammo[index] <= 0):
+                if combat_detail_enabled():
+                    receipt.update(gate='mounted_intention_changed', intended=index,
+                                   loaded=gun.shot_index)
                 return None
             raw = next((row for row in _combat_targets(runtime)
                         if row.get('alive', True) and _target_key(row) == target_key), None)
             if raw is None:
+                if combat_detail_enabled():
+                    receipt.update(gate='target_not_observed', target=target_key)
                 return None
             entity = physical.source_entity()
             descriptor = entity.typeDescriptor
@@ -2802,8 +2811,10 @@ class NativeAttackEvaluator(object):
                            source_pose=pose, target_pose=target['pose'])
             return dict(predicted['solution'], source_pose=pose, mode=mode)
         except (AttributeError, TypeError, ValueError, KeyError, IndexError,
-                RuntimeError, OverflowError, ZeroDivisionError):
+                RuntimeError, OverflowError, ZeroDivisionError) as error:
             receipt['reason'] = 'native_geometry_unavailable'
+            if combat_detail_enabled():
+                receipt['error_type'] = type(error).__name__
             return None
 
     def snapshot(self, now):
@@ -2878,6 +2889,7 @@ class NativeAttackEvaluator(object):
             position=pose[0], body=body, origin=origin,
             descriptor=descriptor, entity=entity, loaded=int(gun.shot_index),
             ammo=tuple(gun.ammo), clip=int(gun.clip), clip_size=int(gun.clip_size),
+            burst_count=int(getattr(gun, 'burst_count', 1)),
             reloading=float(gun.reload_time) > 0.,
             limited_traverse=limited_traverse(descriptor),
             trigger_active=observation(runtime).trigger_active(),

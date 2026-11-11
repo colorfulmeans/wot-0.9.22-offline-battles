@@ -188,8 +188,15 @@ ORDERED_USES = (
     (
         'scripts/client/Avatar.pyc',
         'PlayerAvatar.shoot',
-        ('base', 'vehicle_shoot', '_PlayerAvatar__startWaitingForShot'),
+        ('base', 'vehicle_shoot', '_PlayerAvatar__startWaitingForShot',
+         '_PlayerAvatar__shotWaitingTimerID', '_PlayerAvatar__gunReloadCommandWaitEndTime'),
         'shoot mailbox starts the native acknowledgement wait synchronously',
+    ),
+    (
+        'scripts/client/Avatar.pyc',
+        'PlayerAvatar.__startWaitingForShot',
+        ('_PlayerAvatar__shotWaitingTimerID', '_PlayerAvatar__gunReloadCommandWaitEndTime'),
+        'the rejected local mailbox must release both waits created by this method',
     ),
     (
         'scripts/client/Avatar.pyc',

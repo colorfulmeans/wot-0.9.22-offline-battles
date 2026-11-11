@@ -169,7 +169,7 @@ class NativeStationaryCombatTests(unittest.TestCase):
         self.assertTrue(policy._plannable(policy.decision['candidate']))
         self.assertFalse(scene.launches())
 
-    def test_he_current_sample_fallback_does_not_start_another_yaw_domain(self):
+    def test_whitelisted_hesh_fallback_does_not_start_another_targets_yaw_domain(self):
         scene = self.scene(limits=(-.1, .1), clip=6, burst=1, bearing=0., rate=.8)
         other = scene.vehicle(43, (math.sin(.8) * 40., 0., math.cos(.8) * 40.), team=2)
         self.admit_contacts(scene)
@@ -177,8 +177,8 @@ class NativeStationaryCombatTests(unittest.TestCase):
             for material in getattr(other.typeDescriptor, name).materials.values():
                 material.armor = 10000.
         scene.set_he(1.)
-        # HESH also uses one mounted point in ordinary player control. The
-        # other target's yaw domain cannot delay this legal contact shot.
+        # Full HESH penetration review stays on the held target. The other
+        # target's yaw domain cannot delay its single fallback contact.
         descriptor = scene.entity.typeDescriptor
         descriptor.name = descriptor.type.name = 'uk:GB83_FV4005'
         descriptor.gun.name = '_183mm_AT_Gun'
@@ -196,7 +196,12 @@ class NativeStationaryCombatTests(unittest.TestCase):
                 proof = policy.rows[key]
                 self.assertEqual(('clear', 'reachable', 'failed'),
                                  (proof['line'], proof['mechanical'], proof['armor']))
-                self.assertEqual({key[:3]}, {row['key'][:3] for row in policy.rows.values()})
+                self.assertEqual({('bot', 42)}, {row['target_key'] for row in policy.rows.values()})
+                self.assertEqual(set(policy.frame['targets'][0]['samples']),
+                    {row['sample'] for row in policy.rows.values()
+                     if row['mode'] == 'penetration' and row['armor'] == 'failed'})
+                self.assertEqual({candidate['key']}, {row['key'] for row in policy.rows.values()
+                    if row['mode'] == 'he_fallback'})
                 qualified = copy.deepcopy(proof)
             self.assertFalse(hasattr(policy, 'search_started'))
             self.assertEqual(0, scene.battle._gun_state.shot_index)

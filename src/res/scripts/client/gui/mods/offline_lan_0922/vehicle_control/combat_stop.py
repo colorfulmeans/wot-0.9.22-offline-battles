@@ -19,7 +19,8 @@ from .target_selection import live_contact, ordinary_initial_key
 
 
 MECHANICAL_STALL_SECONDS = 6.0
-ROUTE_ATTACK_CONFIRM_SECONDS = 5.0
+ROUTE_ATTACK_CONFIRM_SECONDS = 2.0
+NO_HE_COOLDOWN_SECONDS = 5.0
 ATTACK_OBSERVATION_GAP_SECONDS = .75
 ATTACK_LOSS_GRACE_SECONDS = 1.0
 RECOVERY_REOPEN_DISTANCE = .25
@@ -569,7 +570,7 @@ class CombatStop(object):
     def _release_to_route(self, order, now, reason):
         """Return actual motion ownership and preserve the failed geometry."""
         if reason == 'ordered_no_he':
-            self.cooldown_until = now + ROUTE_ATTACK_CONFIRM_SECONDS
+            self.cooldown_until = now + NO_HE_COOLDOWN_SECONDS
         phase = self._physical_recovery or {}
         failed_target = phase.get('target') or self._intent_target
         target = next((row for row in self.targets if _key(row) == failed_target), None)

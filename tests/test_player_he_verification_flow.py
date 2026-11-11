@@ -219,7 +219,7 @@ class HEVerificationFlowTests(unittest.TestCase):
         self.assertEqual(5, gun.clip)
         self.assertEqual(1, scene.control.shot_commits)
 
-    def test_all_five_hesh_pairs_use_the_same_single_point_for_current_fire(self):
+    def test_all_five_hesh_pairs_reach_the_penetrating_point_on_the_current_target(self):
         for pair in HESH_PAIRS:
             with self.subTest(pair=pair):
                 scene, target = self.scene(layered=True, hesh=pair)
@@ -228,13 +228,27 @@ class HEVerificationFlowTests(unittest.TestCase):
                 self.run_until_shots(scene)
                 candidate = policy.decision['candidate']
                 self.assertEqual('full', policy.frame['shells'][0]['validation_mode'])
-                self.assertEqual('he_fallback', candidate['mode'])
-                self.assertEqual(0, candidate['sample'])
-                self.assertEqual({0}, {row['sample'] for row in policy.rows.values()})
+                self.assertEqual('penetration', candidate['mode'])
+                self.assertNotEqual(0, candidate['sample'])
+                self.assertEqual(('bot', 5), candidate['target_key'])
+                self.assertTrue(any(row['sample'] == 0 and row['armor'] == 'failed'
+                                    for row in policy.rows.values()))
                 self.assertEqual([0], [shot['shell_index'] for shot in scene.launches()])
                 self.assertEqual((initial[0] - 1, initial[1]), tuple(gun.ammo))
                 self.assertEqual(1, scene.control.shot_commits)
                 scene.doCleanups()
+
+    def test_whitelisted_hesh_exhausts_current_plates_then_uses_one_fallback_point(self):
+        scene, target = self.scene(armor=300., hesh=HESH_PAIRS[0])
+        policy = scene.runtime.attack_policy
+        self.run_until_shots(scene)
+        self.assertEqual('he_fallback', policy.decision['candidate']['mode'])
+        self.assertEqual(('bot', 5), policy.decision['candidate']['target_key'])
+        points = {row['sample'] for row in policy.rows.values()
+                  if row['mode'] == 'penetration' and row['armor'] == 'failed'}
+        self.assertEqual(set(policy.frame['targets'][0]['samples']), points)
+        self.assertGreater(len(points), 1)
+        self.assertEqual(1, sum(row['mode'] == 'he_fallback' for row in policy.rows.values()))
 
     def test_native_unknown_does_not_authorize_switch_then_geometry_recovers(self):
         scene, target = self.scene(layered=True)
@@ -309,8 +323,9 @@ class HEVerificationFlowTests(unittest.TestCase):
         self.assertEqual(1, len(scene.launches()), 'a moved target must not consume the old aim')
         self.run_until_shots(scene, count=2)
         self.assertEqual(2, scene.runtime.weapon.target['network_id'])
-        self.assertEqual([0, 1], [shot['shell_index'] for shot in scene.launches()])
-        self.assertEqual((initial[0] - 1, initial[1] - 1), tuple(gun.ammo))
+        self.assertEqual([0, 0], [shot['shell_index'] for shot in scene.launches()])
+        self.assertEqual((initial[0] - 2, initial[1]), tuple(gun.ammo))
+        self.assertEqual(1, gun.shot_index)
         scene.runtime.set_mission('return_base', {})
         for unused in range(30):
             self.tick(scene)
@@ -326,6 +341,7 @@ class HEVerificationFlowTests(unittest.TestCase):
                 scene.set_he(piercing=1.)
                 gun, policy = scene.battle._gun_state, scene.runtime.attack_policy
                 initial = tuple(gun.ammo)
+                he_rounds = 2 if clip == 1 else clip
                 # Let the native frontier complete while the observed barrel
                 # has not yet followed its real aim source. No decision,
                 # ammunition receipt or readiness result is mocked.
@@ -337,25 +353,26 @@ class HEVerificationFlowTests(unittest.TestCase):
                     self.assertEqual(0, gun.shot_index)
                     if policy.next_shell == 1 and gun.pending_index == 1:
                         break
-                self.assertEqual(1, policy.next_shell, policy.status())
-                self.assertEqual(1, gun.pending_index)
+                expected = None if clip == 1 else 1
+                self.assertEqual(expected, policy.next_shell, policy.status())
+                self.assertEqual(expected, gun.pending_index)
                 saw_ap_loading = []
 
                 def observe():
                     launches = scene.launches()
-                    if len(launches) < clip:
+                    if len(launches) < he_rounds:
                         self.assertEqual(0, gun.shot_index)
                         self.assertIsNone(policy.reload_authority)
                     if gun.shot_index == 1 and gun.reload_time > 0.:
                         saw_ap_loading.append(scene.now)
                     self.assertFalse(hasattr(policy, 'search_started'))
 
-                self.run_until_shots(scene, count=clip + 1, steps=400, observe=observe)
-                self.assertEqual([0] * clip + [1],
+                self.run_until_shots(scene, count=he_rounds + 1, steps=400, observe=observe)
+                self.assertEqual([0] * he_rounds + [1],
                     [shot['shell_index'] for shot in scene.launches()])
                 self.assertTrue(saw_ap_loading, 'the actual AP load must start')
-                self.assertEqual((initial[0] - clip, initial[1] - 1), tuple(gun.ammo))
-                self.assertEqual(clip + 1, scene.control.shot_commits)
+                self.assertEqual((initial[0] - he_rounds, initial[1] - 1), tuple(gun.ammo))
+                self.assertEqual(he_rounds + 1, scene.control.shot_commits)
                 scene.doCleanups()
 
 

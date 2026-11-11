@@ -1,5 +1,7 @@
 """One mounted shell and one target at a time for ordinary player auto fire."""
 
+from . import ammunition_validation
+
 
 def stocked(frame, explosive):
     return sorted((shell for shell in frame['shells']
@@ -21,8 +23,19 @@ class OrderedAttack(object):
         self.covered = set()
         self.checked_lanes = set()
         self.cursor = 0
+        self.committed_shell = None
+        self.committed_rounds = 0
+
+    def load_started(self, shell_index):
+        if self.committed_shell != shell_index:
+            self.committed_shell, self.committed_rounds = shell_index, 0
+
+    def shot_committed(self, shell_index):
+        self.load_started(shell_index)
+        self.committed_rounds += 1
 
     def _sync(self, frame, shell):
+        self.load_started(shell['index'])
         live = [row['key'] for row in frame['targets']]
         self.order = [key for key in self.order if key in live]
         self.order.extend(key for key in live if key not in self.order)
@@ -45,21 +58,40 @@ class OrderedAttack(object):
             self.target, self.sample, self.he_sample = None, None, None
             self.he_fallback = False
 
-    def next_load(self, frame):
+    def next_load(self, policy):
+        frame = policy.frame
         loaded = frame['loaded']
         shell = next((row for row in frame['shells'] if row['index'] == loaded), None)
         if shell is None:
             return None, 'shell_descriptor_pending'
         penetration = stocked(frame, False)
-        if shell['is_he']:
-            if penetration:
-                return penetration[0]['index'], 'he_finished_lowest_penetration'
-        elif frame['ammo'][loaded] <= frame['clip']:
+        if frame['ammo'][loaded] <= frame['clip']:
             reserve = [row for row in penetration if row['index'] != loaded]
-            reserve = reserve or stocked(frame, True)
+            if not reserve and not shell['is_he']:
+                reserve = stocked(frame, True)
             if reserve:
                 return reserve[0]['index'], 'mounted_stock_exhausted'
-        return None, 'keep_mounted_shell'
+        lowest = penetration[0] if penetration else None
+        if lowest is None or (not shell['is_he'] and lowest['piercing'] >= shell['piercing']):
+            return None, 'keep_mounted_shell'
+        # NEXT is promoted by the native gun only when the current load is
+        # spent. For a single shot, arm it ahead of the second real commit.
+        magazine = frame['clip_size'] > 1 or frame.get('burst_count', 1) > 1
+        if not magazine and (self.committed_shell != loaded or self.committed_rounds < 1):
+            return None, 'keep_mounted_shell'
+        if self._still_failed(policy, lowest['index']):
+            return None, 'ordered_lowest_penetration_still_failed'
+        reason = 'he_finished_lowest_penetration' if shell['is_he'] else 'higher_penetration_cycle_finished'
+        return lowest['index'], reason
+
+    def _still_failed(self, policy, index):
+        clear_failure = False
+        for job in policy._jobs(shell_index=index):
+            evidence = self._negative_evidence(policy, job, policy._current(job, require_line=True))
+            if evidence is None:
+                return False
+            clear_failure = clear_failure or self._clear_failure(policy, evidence)
+        return clear_failure
 
     def _switch(self, policy, shell, reason):
         action = 'reload_clip' if policy.frame['clip_size'] > 1 else 'switch_shell'
@@ -108,11 +140,34 @@ class OrderedAttack(object):
         if identity != self.he_identity:
             self.he_sample, self.he_fallback = None, False
             self.he_identity = identity
+        target_jobs = [job for job in jobs if job[0][1] == self.target]
+        if not target_jobs:
+            return policy._choose('wait', 'ordered_he_point_unavailable')
         if self.he_sample is None:
-            points = [job[3] for job in jobs if job[0][1] == self.target]
+            points = [job[3] for job in target_jobs]
             self.he_sample = self.sample if self.sample in points else points[0]
             self.he_fallback = False
-        for mode in (('he_fallback',) if self.he_fallback else ('penetration', 'he_fallback')):
+        full = ammunition_validation.shell_mode(shell) == ammunition_validation.FULL
+        if full:
+            # HESH exceptions review only the held enemy. Prefer an already
+            # selected point, then use the existing mounted-shell frontier.
+            target_jobs.sort(key=lambda job: job[0] != policy.selected)
+            action, row = self._inspect(policy, now, target_jobs)
+            if action == 'aim':
+                return self._aim(policy, now, row, 'current_shell_verified')
+            if action == 'firing_position':
+                return policy._choose(action, 'ordered_he_hull_lay', row)
+            if action == 'native_lay':
+                return policy._choose('firing_position', 'unverified_points_obstructed', row)
+            if action == 'complete' and self._clear_failure(policy, row):
+                self.he_sample = row['sample']
+            elif (row is not None and row.get('line') in ('friendly_blocked', 'world_blocked') and
+                    isinstance(row.get('solution'), dict)):
+                return policy._choose('firing_position', 'he_fallback_obstructed', row)
+            else:
+                return policy._recover_incomplete(now, 'ordered_he_penetration_pending', (row,) if row else ())
+        modes = ('he_fallback',) if full or self.he_fallback else ('penetration', 'he_fallback')
+        for mode in modes:
             job = next((job for job in policy._jobs(mode, shell['index'])
                         if job[0][1:3] == (self.target, self.he_sample)), None)
             if job is None:
@@ -234,8 +289,8 @@ class OrderedAttack(object):
         self._sync(frame, shell)
         if frame['ammo'][shell['index']] <= 0 or (frame['clip_size'] > 1 and
                 frame['clip'] <= 0 and not frame.get('reloading')):
-            index, reason = self.next_load(frame)
-            index = shell['index'] if index is None and frame['ammo'][shell['index']] > 0 else index
+            index, reason = ((shell['index'], 'keep_mounted_shell') if frame['ammo'][shell['index']] > 0
+                             else self.next_load(policy))
             replacement = next((row for row in frame['shells'] if row['index'] == index), None)
             if replacement is not None:
                 return self._switch(policy, replacement, reason)

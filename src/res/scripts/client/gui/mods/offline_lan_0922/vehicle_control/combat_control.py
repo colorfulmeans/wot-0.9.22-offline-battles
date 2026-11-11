@@ -40,14 +40,23 @@ class CombatControl(object):
     def prepare_trigger_context(self, state, target, solution, launch_receipt=None):
         """Select one first-edge intention; physical bindings prove/commit it."""
         trace_combat = combat_detail_enabled()
-        if (not self._live() or self._mission_brakes() or
-                'fire' not in self.features or not state.get('gun_aligned') or
-                self.now < self.combat_stop.cooldown_until or
-                not self._siege_fire_ready()):
+        gate = None
+        if not self._live():
+            gate = 'control_unavailable'
+        elif self._mission_brakes():
+            gate = 'mission_brakes'
+        elif 'fire' not in self.features:
+            gate = 'fire_disabled'
+        elif not state.get('gun_aligned'):
+            gate = 'gun_not_aligned'
+        elif self.now < self.combat_stop.cooldown_until:
+            gate = 'combat_cooldown'
+        elif not self._siege_fire_ready():
+            gate = 'siege_not_ready'
+        if gate is not None:
             if trace_combat:
                 combat_detail(self, 'auto_trigger_context', self.actor_id, self.now,
-                    'trigger_context_unavailable',
-                    lambda: dict(aligned=state.get('gun_aligned'), shell=self.gun.shot_index))
+                    gate, lambda: dict(aligned=state.get('gun_aligned'), shell=self.gun.shot_index))
             return None
         candidate = self.attack_policy.decision.get('candidate')
         artillery = (state.get('profile') or {}).get('class_tag') == 'SPG'
@@ -60,7 +69,8 @@ class CombatControl(object):
                     combat_detail(self, 'auto_trigger_context', self.actor_id, self.now,
                         'attack_intention_unavailable',
                         lambda: dict(action=policy.decision['action'],
-                            candidate=(candidate or {}).get('key'), active=self.combat_stop.active))
+                            candidate=(candidate or {}).get('key'), active=self.combat_stop.active,
+                            combat_owned=self.combat_stop.combat_owned))
                 return None
             token = self.generation
             load_plan = self._apply_next_shell(at_trigger=True)
@@ -81,7 +91,7 @@ class CombatControl(object):
                     combat_detail(self, 'auto_trigger_context', self.actor_id, self.now,
                         'same_point_refresh_refused' if solution is None else 'attack_intention_changed',
                         lambda: dict(candidate=candidate['key'], refresh=getattr(
-                            policy.evaluator, 'trigger_refresh_receipt', {}).get('reason')))
+                            policy.evaluator, 'trigger_refresh_receipt', {})))
                 return None
         elif launch_receipt is not None:
             intent = self.engine._artillery_intents.get(state['id']) or {}
@@ -600,6 +610,8 @@ class CombatControl(object):
                     lambda: dict(loaded=gun.shot_index, clip=gun.clip, queued=gun.pending_index,
                         plan=(plan or {}).get('key'), shot_seq=self._last_committed_shot_seq,
                         ranking_status=policy.next_status, coverage=policy.background_coverage,
+                        committed_with_shell=(policy.ordered.committed_rounds
+                                              if policy.ordered is not None else None),
                         previous_plan=((lease or {}).get('plan') or {}).get('key')))
         else:
             index, plan, reason = policy.next_shell, policy.next_plan, policy.next_status

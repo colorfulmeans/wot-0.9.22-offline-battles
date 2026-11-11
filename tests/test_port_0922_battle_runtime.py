@@ -7548,6 +7548,33 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self._bot_factors_patch.start()
         self.addCleanup(self._bot_factors_patch.stop)
 
+    def test_rejected_native_shot_clears_its_new_command_wait(self):
+        runtime = _runtime()
+        battle = BattleRuntime(runtime)
+        wait = '_PlayerAvatar__shotWaitingTimerID'
+        deadline = '_PlayerAvatar__gunReloadCommandWaitEndTime'
+        avatar = types.SimpleNamespace(**{wait: None, deadline: 1.5})
+        avatar.cancelWaitingForShot = lambda: setattr(avatar, wait, None)
+        battle._avatar = avatar
+
+        def rejected_shot():
+            self.assertTrue(battle._defer_cancel_native_shot_wait())
+            # #1513 starts its two waits after the synchronous mailbox
+            # returns, including when the local launcher refused the shot.
+            setattr(avatar, wait, 7)
+            setattr(avatar, deadline, 4.)
+
+        rejected_shot()
+        runtime.bigworld.callbacks.pop(0)()
+        self.assertIsNone(getattr(avatar, wait))
+        self.assertEqual(1.5, getattr(avatar, deadline))
+
+        rejected_shot()
+        battle._local_projectile_sequence += 1
+        runtime.bigworld.callbacks.pop(0)()
+        self.assertEqual(7, getattr(avatar, wait))
+        self.assertEqual(4., getattr(avatar, deadline))
+
     def test_tab_mission_is_frozen_before_account_retirement_and_first_roster(self):
         from gui.mods.offline_lan_0922 import personal_campaign
         from test_port_0922_personal_campaign_battle import definition

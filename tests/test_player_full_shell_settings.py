@@ -177,7 +177,7 @@ class FullShellSettingsTests(unittest.TestCase):
         self.assertEqual([(scene.settings.CURRENT_SHELLS, 102)],
             [call for call in scene.setting_calls if call[0] == scene.settings.CURRENT_SHELLS])
 
-    def test_current_ordinary_he_finishes_loading_and_fires_before_inventory_next_ap(self):
+    def test_current_ordinary_he_commits_twice_before_inventory_next_ap(self):
         scene = self.scene(clip=1, burst=1, third=True)
         runtime, gun = scene.runtime, scene.battle._gun_state
         he = gun.shots[2]
@@ -207,25 +207,56 @@ class FullShellSettingsTests(unittest.TestCase):
                 self.assertEqual(before, gun.ammo)
                 self.assertNotIn(runtime.attack_policy.decision['action'],
                                  ('switch_shell', 'reload_clip'))
+                self.assertIsNone(gun.pending_index)
+            elif len(launches) == 1:
+                self.assertEqual(2, launches[0]['shell_index'])
+                self.assertEqual(2, gun.shot_index)
                 if gun.reload_time > 0. and gun.pending_index == 0:
                     queued_while_loading = True
                     self.assertEqual('he_finished_lowest_penetration', runtime.attack_policy.next_status)
                     self.assertIsNone(runtime.attack_policy.next_plan['key'])
-            elif len(launches) == 1:
-                self.assertEqual(2, launches[0]['shell_index'])
+            elif len(launches) == 2:
                 self.assertEqual(0, gun.shot_index)
                 if not ap_loading_after_he:
                     self.assertGreater(gun.reload_time, 0.)
                     ap_loading_after_he = True
-            if len(launches) >= 2:
+            if len(launches) >= 3:
                 break
         self.assertTrue(queued_while_loading, scene.trace[-3:])
         self.assertTrue(ap_loading_after_he, scene.trace[-3:])
-        self.assertEqual([2, 0], [shot['shell_index'] for shot in scene.launches()])
-        self.assertEqual([before[0] - 1, before[1], before[2] - 1], gun.ammo)
+        self.assertEqual([2, 2, 0], [shot['shell_index'] for shot in scene.launches()])
+        self.assertEqual([before[0] - 1, before[1], before[2] - 2], gun.ammo)
         self.assertEqual([(scene.settings.NEXT_SHELLS, 101)], scene.setting_calls)
         self.assertEqual([],
             [call for call in scene.setting_calls if call[0] == scene.settings.CURRENT_SHELLS])
+
+    def test_manual_high_penetration_returns_after_two_shots_or_one_complete_clip(self):
+        for clip, burst, high_rounds in ((1, 1, 2), (3, 1, 3), (6, 3, 6)):
+            with self.subTest(clip=clip, burst=burst):
+                scene = self.scene(clip=clip, burst=burst)
+                gun = scene.battle._gun_state
+                stock = tuple(gun.ammo)
+                gun.shots[1].piercingPower = (1200., 1000.)
+                scene.battle.client.effective_params['gun']['shots'][1][
+                    'source_shot']['piercingPower'] = gun.shots[1].piercingPower
+                self.assertTrue(scene.battle._sender.change_vehicle_setting(
+                    scene.battle._server.vehicle_id, scene.settings.CURRENT_SHELLS, 102))
+                self.assertEqual(1, gun.shot_index)
+                scene.rotator_enabled = True
+                for unused in range(320):
+                    self.tick_weapon(scene)
+                    scene.battle._advance_local_player_burst()
+                    launches = scene.launches()
+                    if len(launches) < high_rounds:
+                        self.assertEqual(1, gun.shot_index)
+                    if len(launches) >= high_rounds + burst:
+                        break
+                self.assertEqual([1] * high_rounds + [0] * burst,
+                                 [shot['shell_index'] for shot in scene.launches()])
+                self.assertEqual((stock[0] - burst, stock[1] - high_rounds), tuple(gun.ammo))
+                self.assertEqual([(scene.settings.CURRENT_SHELLS, 102),
+                                  (scene.settings.NEXT_SHELLS, 101)], scene.setting_calls)
+                scene.doCleanups()
 
     def test_manual_current_he_to_ap_finishes_and_fires_ap_twice(self):
         scene = self.scene(clip=1, burst=1, third=True)

@@ -5,6 +5,9 @@ admission fixture. World, friendly, armor, target and control changes affect
 the NEXT trigger. Physical actor/battle/gun failures are separate, explicit
 terminal events. These are engine-boundary tests, not Windows acceptance.
 """
+from contextlib import redirect_stdout
+from io import StringIO
+import os
 import unittest
 from unittest import mock
 
@@ -110,6 +113,31 @@ class PlayerBurstLivenessTests(unittest.TestCase):
         self._tail()
         self._next_denied_without_current_target()
         self.assertFalse(self.owner._records['bot:42']['spot_visible'])
+
+    def test_missing_target_refresh_details_follow_the_detailed_log_checkbox(self):
+        self.owner._records['bot:42']['spot_visible'] = False
+        for enabled in ('0', '1'):
+            output = StringIO()
+            with mock.patch.dict(os.environ, {'WOT_OFFLINE_COMBAT_DIAGNOSTICS': enabled}), \
+                    redirect_stdout(output):
+                self.assertFalse(self.fixture.fire())
+            self.assertEqual(enabled == '1', 'same_point_refresh_refused' in output.getvalue())
+            self.assertEqual(enabled == '1', 'target_not_observed' in output.getvalue())
+        self.fixture.assert_unspent()
+
+    def test_native_no_receipt_only_observes_stock_gates_with_detailed_logs(self):
+        with mock.patch.object(self.owner._avatar, 'shoot', return_value=None), \
+                mock.patch.object(self.owner, '_native_shot_gate_observation',
+                                  return_value={'hud_ready': False}) as observe:
+            for enabled in ('0', '1'):
+                output = StringIO()
+                with mock.patch.dict(os.environ, {'WOT_OFFLINE_COMBAT_DIAGNOSTICS': enabled}), \
+                        redirect_stdout(output):
+                    self.assertFalse(self.fixture.fire())
+                self.assertEqual(enabled == '1', 'native_trigger_no_receipt' in output.getvalue())
+                self.assertEqual(enabled == '1', '"hud_ready":false' in output.getvalue())
+        observe.assert_called_once_with()
+        self.fixture.assert_unspent()
 
     def test_target_pose_changes_after_head_tails_continue_next_trigger_rejects(self):
         self._head()

@@ -845,6 +845,8 @@ class _PlayerBehaviorEngine(shared_runtime.BotRuntime):
               launch_time_us=None):
         runtime = self.player_runtime
         if runtime.controller is None:
+            combat_detail(runtime, 'auto_trigger_context', runtime.actor_id, runtime.now,
+                'controller_unavailable', lambda: dict(shell=state.get('shell_index')))
             return False
         candidate = runtime.attack_policy.decision.get('candidate')
         solution = (candidate or {}).get('solution') or runtime.weapon.solution
@@ -857,12 +859,14 @@ class _PlayerBehaviorEngine(shared_runtime.BotRuntime):
         accepted = controller.issue_automatic_trigger(context, runtime.now)
         runtime._sync_weapon_observation()
         if combat_detail_enabled():
-            combat_detail(runtime, 'auto_native_trigger', runtime.actor_id, runtime.now,
-                'accepted' if accepted else controller.last_fire_failure or 'native_trigger_no_receipt',
+            reason = 'accepted' if accepted else controller.last_fire_failure or 'native_trigger_no_receipt'
+            combat_detail(runtime, 'auto_native_trigger', runtime.actor_id, runtime.now, reason,
                 lambda: dict(candidate=(candidate or {}).get('key'), shell=trigger_shell,
                     loaded_after=runtime.gun.shot_index,
                     trigger=controller.trigger_sequence, shot_seq=runtime._last_committed_shot_seq,
-                    pending=bool(getattr(runtime.owner, '_local_fire_intent', None))))
+                    pending=bool(getattr(runtime.owner, '_local_fire_intent', None)),
+                    native_gate=(runtime.owner._native_shot_gate_observation()
+                                 if reason == 'native_trigger_no_receipt' else None)))
         return bool(accepted)
 
 
