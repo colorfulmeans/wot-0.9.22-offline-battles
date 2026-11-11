@@ -1,5 +1,64 @@
 # PR119 control-offset correction — November 10, 2026
 
+## November 12 follow-up — Bot projectile publication and UDES 03 siege
+
+The 02:40:54 report from the Redshire 15 vs 15 scene contained 1,553 local
+Bot rounds across 27 vehicles and zero server Bot projectile terminals. UDES
+03 requested siege 11 times against the same PFM-42 after its last shot.
+
+- The worker commits and publishes the first round using the same trajectory
+  that passed its trigger checks. Direct fire retains the admitted velocity
+  from the engine vector. Artillery retains the already proved dispersed arc.
+  The launch identity, shell, muzzle and shot angles still fence the frozen
+  record. The server acknowledges and settles each accepted projectile.
+- A blocked laying point yields to the remaining review within the current
+  siege engagement. Native actuator and firing checks run for each usable
+  point. A temporary missing inverse during reload preserves the engagement
+  and starts the stall clock from current work once loading finishes.
+- After a real release, a new clear point needs two continuous seconds before
+  the next takeover. The previous failed point can qualify again after a
+  confirmed reopening or a material change in firing geometry. Siege aiming
+  and final fire admission still use the native mode and barrel observations.
+- The waiting-for-a-new-point and accepted-confirmation receipts are under
+  **Collect detailed diagnostic logs**.
+
+The intermediate Windows run in
+`wot-error-report-20261112-032842-2c1315d4984d.zip` recorded 216 accepted Bot
+projectiles with matching terminal receipts, including seven artillery rounds.
+Four additional local rounds were suppressed by server-confirmed vehicle
+death. UDES 03 penetrated PFM-42 #4 at 03:23:54.831 and #3 at 03:24:02.840
+in the same siege engagement. A later temporary inverse loss while loading
+prompted the final reload and point-retention correction.
+
+The final Windows HD #1513 run used `local-qa-siege-r3` at runtime commit
+`9223d245b0d0c70479f17c0c55ac9bab12315a2d`. The launcher exported
+`wot-error-report-20261112-033432-cb9e72b899b8.zip` after the round ended by
+base capture at 03:33:57. The room used the same 29 Bots and player UDES 03 in
+team 2 on Redshire, with the 13/13/14 battle rack.
+
+- The worker submitted 313 rounds from 24 Bots. The server acknowledged
+  310, and all 310 had a terminal receipt and a matching client tracer.
+  Of those, 262 registered an impact and 48 resolved as misses. Two were
+  artillery rounds. The remaining three local submissions were explicitly
+  suppressed after the shooter had already died on the server.
+- At 03:32:39.117 UDES 03 admitted PFM-42 #4 after 2.019 seconds of
+  confirmation. It entered siege, fired APCR at 03:32:43.868 and killed #4
+  with 110 actual damage. The next target review stayed in the same siege
+  engagement through reload. The run later returned to the route after a
+  real stall and confirmed a different target before the next siege entry.
+  All three player rounds had matching server terminal receipts.
+- The four observed route takeovers took 2.001–2.025 seconds. The same
+  sample on Bot #9 qualified again only after the hull advanced more than
+  nine metres following the preceding stall.
+
+The focused regression run passed 501 tests on the reference backend, and
+all 36 launcher testing-panel cases passed. The broader combined reference
+run reproduced a pre-existing order-dependent loading snapshot failure.
+That case passes in isolation on both trees. All 264 client sources
+compiled with CPython 2.7.18. The test package
+`wot_PR119_9223d245_Windows_2026-11-12.zip` passed x64 launcher, nested
+archive, 306 stored mod member and 267 staged server source checks.
+
 ## November 12 follow-up — Redshire moving battle, artillery, and siege
 
 ### Test setup
