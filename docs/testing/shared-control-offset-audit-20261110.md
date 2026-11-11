@@ -1,5 +1,29 @@
 # PR119 control-offset correction — November 10, 2026
 
+## November 11 follow-up — obstructed points, capture aiming, and high-penetration reload
+
+### Reports reviewed
+
+- The PFM-42 L-120 report, wot-error-report-20261111-205753-e481bcdbb401.zip, records its last HE round at 20:56:38.165. It then repeatedly refuses the same sample on enemy 14 after the near-world check of the sampled projectile trajectory, although the centre ray passes. The APCR selection at 20:57:31 was manual, after about 53 seconds without a shot. The refusal continued after the APCR load completed.
+- The follow-up archive wot-error-report-20261111-210357-e481bcdbb401.zip also contains the AMX ELC 90 mm round. The two-second route handoffs worked early in that round. Later the vehicle registered capture and stayed inside with no shot. The firing policy had a visible point with an ideal clear line, but the yaw check lacked a stationary projection and the protected capture order could withhold the alternate target from hull aiming.
+- The local intermediate build local-qa-36695638 identified the missing player critical-device observation and exposed a second circle problem. In wot-error-report-20261111-221954-ffc8a6dbf7f8.zip, the AMX ELC alternated between enemies 10 and 12 from 22:16:08 to 22:16:39, with opposite turn requests, zero throttle and zero shots. The last AP shot was at 22:15:50.400. Capture still completed at 22:17:44. The same archive records a manual APCR reload while 10 of 20 rounds remained in the PFM-42 clip. No low-penetration shell had been queued, and the native reload kept APCR.
+
+### Changes
+
+- The first confirmed near-world scatter refusal excludes that exact shell, vehicle and sample from both penetration and blast selection. A bounded read-only recheck uses the same scatter draw and actual ray probe. A clear result reopens the point. Other points on the same vehicle take priority before the penetration sweep advances to another vehicle. HE stays on the held vehicle, checks clear penetration points, then ranks blast damage there when needed.
+- Capture owns the parked position while the selected alternate target can use existing native hull aiming. Collision checks and the capture-circle boundary apply to each actual pivot. The protected turn keeps its target at the front of the review while observations refresh. A dead or unusable target can yield to another target. A stalled or refused rotation yields through a bounded retry. Stationary aiming reads the accepted local damage snapshot or the live entity devices before the first damage payload.
+- A high-penetration clip with stock can queue an automatic low-penetration return at its last physical trigger. A single-shot gun needs one prior committed high-penetration round and the next actual firing edge. A refused or aborted trigger retires its temporary request. The current low-penetration failure evidence can still defer return. HE penetration clears the fallback streak, and an HE clip follows its existing end-of-clip rule.
+- The route-to-combat gate still requires two continuous seconds of an actionable point. The changes enter through combat and loading, using the existing route, waypoint-arrival and capture-registration interfaces. Additional evidence for a missing stationary projection, a broken confirmation, route release, blocked-point reopening and an unsuccessful circle turn is recorded only with detailed diagnostics enabled.
+
+### Windows HD #1513 verification
+
+The tested archive is wot_PR119_cf1a01c3_Windows_2026-11-11.zip. It uses runtime cf1a01c37e792d0a518fb0898376e28eb086d607 and build identity local-qa-cf1a01c3. The SHA-256 is AD6B0C8FE8E569DBA46B420FFFECDCD7FA24C16EDCEA01709FB1A45C83E333CD. The QA bundle reuses the previous Windows launcher and native payload with the current gameplay bytecode. The outer and nested archives, x64 launcher and all 263 CPython 2.7 client modules were verified.
+
+- In Mittengard team 2, with the stationary-target preset and detailed diagnostics enabled, AMX ELC 90 mm recorded two route handoffs at 2.042 and 2.008 seconds while the gun was still unaligned. After manual APCR selection through the local test control, the first APCR shot reloaded APCR. The second APCR shot at 22:24:56.614 started an automatic AP reload.
+- Capture registered at 22:25:37.420. Seven AP shots during capture matched server projectile receipts. The capture rows kept zero throttle and one enemy, bot 3, when they named a gun target. The server recorded a capture win at 22:27:17. The final report is wot-error-report-20261111-222725-03b6e2be6619.zip. All 14 shots matched the server and the foreground and worker exception trails were empty.
+- The same report did not encounter the original near-world scatter refusal or the exact two-target circle oscillation. Deterministic native-geometry regressions exercise the first refusal, same-vehicle alternatives, obstruction clearance and the opposing-target turn. The opposing-target test failed on the previous implementation before passing with target retention.
+- The local test run passed 42 files. One worker case requires the matching simulation backend, which the external Windows Python process lacked. That worker case and the shared HE, physical-blocker and recovery suites passed on the reference backend, 40 tests in total. The packaged native client and worker ran the live match above.
+
 ## November 11 follow-up — current-target HE and front-vehicle admission
 
 The L-120 TD round in `wot-error-report-20261111-173700-f67e91ff6225.zip`
