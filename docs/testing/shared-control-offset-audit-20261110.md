@@ -151,6 +151,13 @@ visible and worker exception trails were empty. The capture contains
 no repeated HE takeover and no late front-vehicle refusal.
 Report `wot-error-report-20261111-193538-ba5271e3f0c1.zip`.
 
+The first PR test run exposed a wall-clock dependency in the 141918
+wreck regression. A slower runner paused during penetration review.
+The fixture now uses a repeatable native work clock to reach a
+partial blast comparison in the first callback, before admission.
+The route, turret, native reload, no-fire and wreck evidence
+assertions still run through the same production code.
+
 ## Follow-up for the 15:47 T 24 report — native fire receipts and ammunition return
 
 The single-shot Škoda T 24 report `wot-error-report-20261111-154736-4f1e0a10cc53.zip`

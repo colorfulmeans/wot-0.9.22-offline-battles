@@ -18,6 +18,7 @@ No order, policy decision, ready gate, or launch result is prescribed by a mock.
 import contextlib
 import copy
 import io
+from itertools import count
 import math
 import unittest
 
@@ -130,6 +131,11 @@ class Report141918Scene(OwnershipScene):
         # The report starts in an existing HE reload/aim task. Isolate that
         # downstream handoff; the later AT7 report covers the cold route gate.
         self.runtime.combat_stop._route_requires_confirmation = lambda order: False
+        # Give the cold penetration sweep and partial blast comparison a
+        # repeatable native work allowance. Battle and gun clocks still
+        # advance independently through the actual control callbacks.
+        work_steps = count()
+        self.runtime.attack_policy.atomic_clock = lambda: next(work_steps) * .00022
         self.admission = self.control._admission()
         self.runtime.state['route'] = dict(id=ROUTE_ID,
             waypoints=[(SOURCE_POSITION[0], SOURCE_POSITION[2], False),
@@ -251,6 +257,7 @@ class Report141918ControlRegressionTests(unittest.TestCase):
             route = copy.deepcopy(scene.runtime.state['route'])
             self.assertEqual({14: True}, scene.block_lane(False))
             admitted = False
+            saw_cold_comparison = False
             for unused in range(180):
                 row = scene.step_control()
                 owned = scene.runtime.combat_stop.combat_owned
@@ -260,9 +267,12 @@ class Report141918ControlRegressionTests(unittest.TestCase):
                 self.assert_task_and_domain(scene, row, combat_admitted=admitted)
                 if admitted:
                     self.assert_clear_hull_owner(scene, row)
+                else:
+                    saw_cold_comparison = True
                 if scene.launches():
                     break
             self.assertTrue(admitted)
+            self.assertTrue(saw_cold_comparison)
             self.assertEqual(1, len(scene.launches()), scene.runtime.status())
             self.assertGreater(scene.battle._gun_state.reload_time, 0.)
 
