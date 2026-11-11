@@ -1,5 +1,38 @@
 # PR119 control-offset correction — November 10, 2026
 
+## Follow-up for the 11:28 AT 7 and 11:44 Škoda T 24 reports
+
+Both reports identify `5d82c2b2` / `colorfulmeans-42894631616-1` and
+record zero player launches. The ten-round AT 7
+`QF_6_pounder_Mk_V_AT` in
+`wot-error-report-20261111-112828-ef1151939b8a.zip` had a clear
+penetrating ray for enemy 23, sample 5, which still needed a hull turn.
+The last route receipt recorded 0.557 seconds of confirmation. The
+single-shot turreted Škoda T 24 in
+`wot-error-report-20261111-114425-6fa3861491cd.zip` had a clear,
+penetrating and mechanically reachable AP point on enemy 23, sample 7,
+at 11:44:00. Both switched to automatic capture travel before the
+five-second confirmation could complete. The travel-mode transition
+suspended combat review in both reports.
+
+On a moving source, the mounted-shell firing sweep repeatedly revisited
+the first obstructed contact as the exact muzzle changed. The existing
+bounded foreground review now rotates across mounted-shell points before
+movement admission, with the current positive ray first on the next
+observation. A clear, penetrating ray can qualify while its hull still
+needs to turn. Automatic travel to the capture circle participates in
+the same confirmation, retaining the original destination up to
+handoff. The five-second gate and native firing checks apply at their
+respective stages. The detailed checkbox records each sample's mechanical
+result and stationary projection reason.
+
+Full control-loop regressions use a ten-round limited gun and a
+single-shot turreted gun behind an obstructed nearer enemy. They require
+the original travel order during confirmation, one combat handoff after
+five seconds and a real native AP launch after aiming. A capture-route
+case crosses from its authored route into capture travel during the
+same confirmation while the tank remains outside the circle.
+
 ## Follow-up for the 02:25 AT7 report — mounted shell and same-target points
 
 `wot-error-report-20261111-022506-022abba6ab9f.zip` showed an admitted

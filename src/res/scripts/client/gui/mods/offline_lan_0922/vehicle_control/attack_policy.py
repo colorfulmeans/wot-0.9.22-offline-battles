@@ -711,10 +711,13 @@ class AttackPolicy(object):
         self._used[channel] += 1
         return row
 
-    def _frontier(self, now):
-        jobs = self._jobs(shell_index=self.frame['loaded'])
+    def _frontier(self, now, jobs=None, accepts=None):
+        if jobs is None:
+            jobs = self._jobs(shell_index=self.frame['loaded'])
         if not jobs:
             return None
+        if accepts is None:
+            accepts = self._executable_current
         # A background NEXT plan cannot take over the currently loaded gun.
         # Only a current intention or the load which actually began may lead.
         plan_key = self.selected or (self.loading_plan or {}).get('key')
@@ -730,14 +733,14 @@ class AttackPolicy(object):
                              job[0][1:3] == plan_key[1:3]), None)
         if selected_job is not None:
             row = self._current(selected_job, require_line=True)
-            if self._executable_current(row):
+            if accepts(row):
                 return row
         # A green point already proved by foreground or background work
         # needs no other sample to be inspected before it can be used.
         for job in jobs:
             if job is not selected_job:
                 row = self._current(job, require_line=True)
-                if self._executable_current(row):
+                if accepts(row):
                     return row
         # Refresh a retained point first, but never let one pending point
         # prevent all other points or enemies from receiving a budget slice.
@@ -760,7 +763,7 @@ class AttackPolicy(object):
             if (row is None or not projected_complete and
                     (row.get('armor') in ('pending', 'unknown') or row.get('line') != 'clear')):
                 row = self._evaluate(job, now, 'foreground')
-            if self._executable_current(row):
+            if accepts(row):
                 return row
         return None
 
@@ -2089,7 +2092,8 @@ class AttackPolicy(object):
                         loaded=loaded, clip=frame['clip'], proposed=result.get('shell_index'),
                         candidate=(result.get('candidate') or {}).get('key'),
                         points=tuple((row['sample'], row['mode'], row['line'], row['armor'],
-                                      row.get('reason'), (row.get('blocker') or {}).get('actor_key'))
+                                      row.get('reason'), (row.get('blocker') or {}).get('actor_key'),
+                                      row.get('mechanical'), row.get('stationary_pending'))
                                      for row in self.rows.values() if row['shell_index'] == loaded and
                                      row['target_key'] == self.ordered.target)))
             return result

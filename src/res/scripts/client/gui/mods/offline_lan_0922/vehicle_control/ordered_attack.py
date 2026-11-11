@@ -77,6 +77,29 @@ class OrderedAttack(object):
         policy.reload_authority = None
         return policy._choose('aim', reason, row)
 
+    def _retain_target(self, row):
+        self.target, self.sample = row['target_key'], row['sample']
+        self.covered.clear()
+        self.checked_lanes.clear()
+        self.order.remove(self.target)
+        self.order.insert(0, self.target)
+
+    def _route_opportunity(self, policy, now, jobs, combat):
+        # While the route owns the hull, observe an attackable ray across
+        # the same mounted shell's targets. A new driving pose must not
+        # restart the first enemy's whole point review on every callback.
+        def attackable(row):
+            return (policy._executable_current(row) or
+                    (combat._route_attackable(row) and combat._route_lay_can_retry(row)))
+
+        row = policy._frontier(now, jobs, attackable)
+        if row is None:
+            return None
+        self._retain_target(row)
+        if policy._executable_current(row):
+            return self._aim(policy, now, row, 'current_shell_verified')
+        return policy._choose('firing_position', 'current_penetration_after_stationary_turn', row)
+
     def _current_he(self, policy, now, shell, jobs):
         if self.target is None:
             self.target = self.order[0]
@@ -227,6 +250,14 @@ class OrderedAttack(object):
         groups = dict((key, []) for key in self.order)
         for job in jobs:
             groups[job[0][1]].append(job)
+        combat = getattr(policy.runtime, 'combat_stop', None)
+        confirming = (combat is not None and not combat.combat_owned and
+                      combat._route_requires_confirmation(combat.task_order))
+        if confirming:
+            result = self._route_opportunity(policy, now,
+                tuple(job for key in self.order for job in groups[key]), combat)
+            if result is not None:
+                return result
         obstructed = None
         navigation_owned = False
         for key in self.order:
@@ -244,10 +275,7 @@ class OrderedAttack(object):
             if row is not None and action != 'wait':
                 self.sample = row['sample']
             if action == 'aim':
-                self.covered.clear()
-                self.checked_lanes.clear()
-                self.order.remove(key)
-                self.order.insert(0, key)
+                self._retain_target(row)
                 return self._aim(policy, now, row, 'current_shell_verified')
             if action == 'firing_position':
                 return policy._choose(action, 'current_penetration_after_stationary_turn', row)
@@ -257,9 +285,7 @@ class OrderedAttack(object):
                 navigation_owned = True
                 continue
             if action in ('wait', 'stationary_wait'):
-                combat = getattr(policy.runtime, 'combat_stop', None)
-                if (row is not None and combat is not None and not combat.combat_owned and
-                        combat._route_requires_confirmation(combat.task_order)):
+                if row is not None and confirming:
                     # The existing route gate can report a checked blocked
                     # point without granting it movement or ending this pass.
                     return policy._choose('firing_position', 'unverified_points_obstructed', row)

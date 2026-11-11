@@ -128,13 +128,18 @@ class CombatStop(object):
         self.explicit_travel = explicit_travel
         self.active = bool(self.active and
             (mode not in _TRAVEL_MODES or mode == 'team_attack') and not explicit_travel)
-        if mode == 'base_capture' and order.get('throttle_override') != 0.:
-            self.active = False
+        capture_travel = mode == 'base_capture' and order.get('throttle_override') != 0.
+        automatic_approach = bool(capture_travel and order.get('capture_objective') and
+            not order.get('capture_area') and not mission.get('explicit') and
+            not order.get('team_command') and 'drive' in runtime.features and
+            getattr(runtime, 'actor_kind', None) == 'human' and not runtime.siege_capable())
+        if capture_travel:
+            self.active = self.active and automatic_approach
         # A capture/parking hold may legitimately fire without donating its
         # translation to combat. Likewise fire-only control cannot move the
         # vehicle, but may operate the gun/mode after original admission.
         self.can_request_movement = bool(self.active and 'drive' in runtime.features and
-            mode in _ORDINARY_MODES and not order.get('parking_phase') and
+            (mode in _ORDINARY_MODES or automatic_approach) and not order.get('parking_phase') and
             not order.get('capture_area') and not mission.get('capture_started') and
             not explicit_travel)
         self.combat_owned = bool(self.active and retained)
@@ -338,7 +343,7 @@ class CombatStop(object):
         return (self.can_request_movement and
                 getattr(self.runtime, 'actor_kind', None) == 'human' and
                 not self.runtime.siege_capable() and (
-            mode in ('route', 'advance', 'advance_contact') or
+            mode in ('route', 'advance', 'advance_contact', 'base_capture') or
             mode == 'engage' and order.get('throttle_override') != 0. and
             order.get('move_position') is not None and
             _distance(self.runtime.state['position'], _point(order['move_position'])) >

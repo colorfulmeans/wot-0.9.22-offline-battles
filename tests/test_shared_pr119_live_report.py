@@ -291,6 +291,75 @@ class StableRouteAttackTests(unittest.TestCase):
                 else:
                     self.assertEqual('passed', candidate['armor'])
 
+    def moving_scene(self, position, limited, clip):
+        scene = OwnershipScene()
+        scene.setUp()
+        self.addCleanup(scene.doCleanups)
+        scene.configure(limited=limited, clip=clip, burst=1)
+        scene.position = position
+        scene.native_position(position)
+        install_plan_observations(scene)
+        return scene
+
+    def assert_moving_handoff_and_launch(self, scene, task_modes, bearing, dx=0., dz=.01):
+        x, y, z = scene.position
+        target = scene.eligible_enemy(50, armor=30.)
+        scene.pose(target, (x + math.sin(bearing) * 45., y, z + math.cos(bearing) * 45.))
+        owner = scene.runtime.combat_stop
+        initial_clip = scene.battle._gun_state.clip
+        observed_modes = []
+        for step in range(105):
+            position = (x + step * dx, y, z + step * dz)
+            scene.native_position(position)
+            scene.battle._local_speed = math.hypot(dx, dz) / .125
+            order = scene.tick(.125)
+            self.assertFalse(scene.launches())
+            self.assertEqual(initial_clip, scene.battle._gun_state.clip)
+            mode = owner.task_order['combat_mode']
+            if not observed_modes or observed_modes[-1] != mode:
+                observed_modes.append(mode)
+            if owner.stop_allowed:
+                self.assertGreaterEqual(owner.receipt['confirmation_seconds'], 5.)
+                self.assertEqual('engage', order['combat_mode'])
+                break
+            self.assertEqual(mode, order['combat_mode'])
+        else:
+            self.fail(scene.runtime.attack_policy.status())
+        self.assertEqual(task_modes, tuple(observed_modes))
+        self.assertEqual(('bot', 50), owner.receipt['selected'])
+        if bearing > .15:
+            candidate = scene.runtime.attack_policy.decision['candidate']
+            self.assertEqual('hull_laying', candidate['mechanical'])
+            self.assertEqual('clear', candidate['line'])
+            self.assertFalse(scene.runtime.state['gun_aligned'])
+        scene.native_position(position, yaw=bearing)
+        scene.battle._local_speed = 0.
+        for unused in range(35):
+            scene.tick(.125)
+            if scene.launches():
+                break
+        self.assertEqual(1, len(scene.launches()), scene.runtime.attack_policy.status())
+        self.assertEqual(0, scene.launches()[0]['shell_index'])
+        self.assertEqual(50, scene.runtime.weapon.target['network_id'])
+        self.assertEqual(initial_clip - 1, scene.battle._gun_state.clip)
+
+    def test_moving_vehicle_checks_clear_enemy_beyond_nearest_blocked_enemy(self):
+        for limited, clip, bearing in ((True, 10, .05), (True, 10, .7), (False, 1, .05)):
+            with self.subTest(clip=clip, bearing=bearing), contextlib.redirect_stdout(io.StringIO()):
+                scene = self.moving_scene((0., 0., 0.), limited, clip)
+                closest = scene.eligible_enemy(5, armor=30.)
+                scene.pose(closest, (-7., 0., 14.))
+                scene.world[:] = [((-7., -5., 3.), (-1., 8., 8.))]
+                self.assert_moving_handoff_and_launch(scene, ('route',), bearing)
+
+    def test_automatic_capture_approach_keeps_confirming_before_circle_entry(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            scene = self.moving_scene((33., 0., 40.), limited=True, clip=10)
+            self.assert_moving_handoff_and_launch(
+                scene, ('route', 'base_capture'), .7, dx=.04, dz=0.)
+            self.assertFalse(scene.runtime.combat_stop.task_order.get('capture_area'))
+            self.assertTrue(scene.runtime.combat_stop.task_order.get('capture_objective'))
+
     def test_full_runtime_drives_before_sustained_current_proof(self):
         scene = OwnershipScene()
         with contextlib.redirect_stdout(io.StringIO()):
