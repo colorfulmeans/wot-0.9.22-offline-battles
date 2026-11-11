@@ -416,9 +416,13 @@ class OrderedAttack(object):
                 tuple(job for key in self.order for job in groups[key]), combat)
             if result is not None:
                 return result
+        # An admitted circle turn outlives transient point refreshes. Finish
+        # reviewing its target before checking vehicles on the opposite side.
+        held = getattr(combat, 'capture_lay_target', lambda: None)()
+        review_order = sorted(self.order, key=lambda key: key != held) if held in groups else self.order
         obstructed = None
         navigation_owned = False
-        for key in self.order:
+        for key in review_order:
             target_jobs = groups[key]
             if key in self.covered and all(self._negative_evidence(
                     policy, job, policy._current(job, require_line=True)) for job in target_jobs):

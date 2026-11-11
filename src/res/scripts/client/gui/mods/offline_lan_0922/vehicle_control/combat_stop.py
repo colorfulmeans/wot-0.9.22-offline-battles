@@ -232,6 +232,15 @@ class CombatStop(object):
         return bool(attempt is not None and self.capture_hold() and
                     attempt['key'] == (candidate.get('shell_index'), candidate.get('target_key')))
 
+    def capture_lay_target(self):
+        attempt = self._capture_lay
+        if attempt is not None and self.capture_hold():
+            shell, target = attempt['key']
+            if (shell == self.runtime.gun.shot_index and
+                    any(_key(row) == target for row in self.targets)):
+                return target
+        return None
+
     def capture_can_lay(self, row):
         if row is None or row.get('line') != 'clear' or row.get('mechanical') != 'hull_laying':
             return False
@@ -279,8 +288,11 @@ class CombatStop(object):
         attempt = self._capture_lay
         if attempt is None:
             return
+        if self.capture_lay_target() is None:
+            self._capture_lay = None
+            return
         decision = self.runtime.attack_policy.decision
-        if decision['action'] != 'firing_position':
+        if decision['action'] not in ('firing_position', 'preaim', 'wait'):
             return
         state = self.runtime.state
         if abs(_angle(state['yaw'] - attempt['yaw'])) >= NATIVE_ANGLE_TOLERANCE:

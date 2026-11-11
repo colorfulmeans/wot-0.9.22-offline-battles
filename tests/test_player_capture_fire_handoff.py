@@ -178,6 +178,33 @@ class CaptureFireHandoffTests(unittest.TestCase):
         self.assertEqual(0., scene.battle._sender.forward)
         self.assertTrue(scene.runtime.combat_stop.capture_hold())
 
+    def test_capture_keeps_an_admitted_turn_when_an_opposite_target_reopens(self):
+        scene = self.scene(limited=True)
+        scene.battle._local_physics = dict(rotationIsAroundCenter=True)
+        enemies = scene.battle._runtime.bigworld.entities
+        scene.pose(enemies[2], (65., 0., 85.))
+        scene.runtime.set_mission('capture_base', {})
+        for unused in range(35):
+            scene.tick()
+            if scene.battle._sender.turn > .01:
+                break
+        self.assertGreater(scene.battle._sender.turn, .01)
+        self.assertEqual(2, scene.applied_order()['target_id'])
+
+        for component in ('chassis', 'hull', 'turret', 'gun'):
+            getattr(enemies[5].typeDescriptor, component).materials[0].armor = 10.
+        scene.pose(enemies[5], (23., 0., 85.))
+        for yaw in (.02, .04, .06, .08, .10):
+            scene.native_position((45., 0., 45.), yaw=yaw)
+            scene.tick()
+            self.assertGreaterEqual(scene.battle._sender.turn, 0.)
+            self.assertIn(scene.applied_order().get('target_id'), (None, 2))
+            self.assertEqual(0., scene.battle._sender.forward)
+
+        scene.native_position((45., 0., 45.), yaw=.45)
+        self.run_until_shots(scene)
+        self.assertEqual(2, scene.runtime.weapon.target['network_id'])
+
     def test_loaded_he_clip_fallback_uses_gun_handoff_without_eight_second_search(self):
         scene = self.scene(clip=3, soft_armor=30.)
         scene.set_he(piercing=1.)
