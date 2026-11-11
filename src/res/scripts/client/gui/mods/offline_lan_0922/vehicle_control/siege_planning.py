@@ -51,26 +51,38 @@ class ActualSiegeAim(object):
     def status(self):
         return dict(self.receipt)
 
+    @staticmethod
+    def _has_laying_lane(policy, row):
+        if row.get('scope') == 'excluded':
+            return False
+        # A completed stationary plan can supply a clear lane for laying.
+        # While classifying the stationary domain, keep unlaid points still.
+        return row.get('line') == 'clear' or (
+            row.get('line') == 'unknown' and
+            not policy.stationary_review_wait() and
+            policy._plannable(row, row.get('mode', 'penetration')))
+
     def _selected(self, frame, preferred):
         policy = self.runtime.attack_policy
         held = self.runtime.combat_stop.receipt.get('selected')
-        if preferred is not None:
-            preferred = policy.current_row(preferred, require_line=True)
-            if (preferred is not None and preferred.get('line') == 'clear' and
-                    preferred.get('shell_index') == frame['loaded'] and
-                    preferred.get('target_key') == held):
-                return preferred
-        # A known obstruction does not own the actuator while other points
-        # are being reviewed. Lay only a presently clear point and keep the
-        # independent armour and trigger checks on the actual barrel.
-        rows = policy._rows_for('penetration', frame['loaded'], fresh_line=True)
-        rows = [row for row in rows if row.get('line') == 'clear' and
-                row.get('target_key') == held and
-                row.get('armor') != 'failed' and row.get('scope') != 'excluded' and
-                isinstance(row.get('solution'), dict) and policy._needs_firing_position(row)]
-        if not rows:
+        preferred_key = (preferred or {}).get('key')
+        if preferred_key is not None:
+            current = policy.current_row(preferred, require_line=True)
+            if (current is not None and current.get('pose_stamp') == preferred.get('pose_stamp') and
+                    current.get('shell_index') == frame['loaded'] and
+                    (held is None or current.get('target_key') == held) and
+                    self._has_laying_lane(policy, current)):
+                return current
+        if held is None:
             return None
-        return min(rows, key=policy._penetration_order)
+        # Continue with another point of the owned contact. Firing still
+        # requires independent checks against the physical barrel.
+        rows = policy._rows_for('penetration', frame['loaded'], fresh_line=True)
+        rows = [row for row in rows if row.get('key') != preferred_key and
+                row.get('target_key') == held and row.get('armor') != 'failed' and
+                isinstance(row.get('solution'), dict) and policy._needs_firing_position(row) and
+                self._has_laying_lane(policy, row)]
+        return min(rows, key=policy._penetration_order) if rows else None
 
     def _motion_source(self, frame, hydraulic, solution, shell):
         """At most six calls to the installed flat-body inverse contract."""

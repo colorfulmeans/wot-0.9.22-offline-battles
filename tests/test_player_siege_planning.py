@@ -118,6 +118,23 @@ class ActualSiegeAimTests(unittest.TestCase):
         self.assertIsNone(helper.candidate(scene.runtime.attack_policy.frame, scene.now, row))
         self.assertEqual(0, helper.status()['native_calls'])
 
+    def test_blocked_point_yields_to_another_point_and_can_recover(self):
+        scene = self.scene()
+        first = scene.evaluated_row(sample=0)
+        other = scene.evaluated_row(sample=1)
+        runtime = scene.runtime
+        policy, helper = runtime.attack_policy, runtime.siege_aim
+        blocked = dict(first, line='enemy_blocked')
+        policy.rows[first['key']] = blocked
+        candidate = helper.candidate(policy.frame, scene.now, blocked)
+        self.assertIsNotNone(candidate, helper.status())
+        self.assertEqual(other['key'], candidate['key'])
+
+        policy.rows[first['key']] = first
+        candidate = helper.candidate(policy.frame, scene.now, first)
+        self.assertIsNotNone(candidate, helper.status())
+        self.assertEqual(first['key'], candidate['key'])
+
     def test_target_change_during_native_inverse_revokes_motion_result(self):
         scene = self.scene()
         row = scene.evaluated_row()
