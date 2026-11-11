@@ -87,6 +87,10 @@ class OrderedPlayerAttackTests(unittest.TestCase):
         decision = scene.tick(8.)
         self.assertEqual((2, ('bot', 3), 0, 'he_fallback'), decision['candidate']['key'])
         self.assertEqual([('bot', 3), ('bot', 3)], [call[3] for call in scene.calls])
+        self.assertEqual((None, 'keep_mounted_shell'), scene.policy.next_at_edge())
+        context = dict(automatic=True, candidate=decision['candidate'])
+        for unused in range(2):
+            scene.policy.shot_committed(dict(shell_index=2), dict(player_control=context))
         calls = list(scene.calls)
         self.assertEqual((None, 'ordered_lowest_penetration_still_failed'),
                          scene.policy.next_at_edge())
