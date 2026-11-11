@@ -1,5 +1,113 @@
 # PR119 control-offset correction — November 10, 2026
 
+## November 11 follow-up — current-target HE and front-vehicle admission
+
+The L-120 TD round in `wot-error-report-20261111-173700-f67e91ff6225.zip`
+used `colorfulmeans-42987574283-1`. Between 17:34:19.879 and
+17:35:10.772 the AP clip did not fire. The player repeatedly handed the
+hull to combat targeting enemy 14 with a still-obstructed ray. The report has
+50 `auto_front_vehicle` refusals in that round, including blockers 10,
+11 and 13. The player learned of those contacts at native trigger
+admission, after combat had already taken the hull.
+
+- Mounted player HE checks penetration points on its held vehicle and
+  skips obstructed points. It uses the first executable penetrating
+  point. After all available points fail penetration, it compares
+  estimated non-penetrating blast damage on that same vehicle and
+  rechecks the highest-scoring usable point for the trigger. An
+  incomplete comparison can only pre-aim. Ammunition return remains
+  driven by committed rounds and the native clip reload.
+- Before a point can qualify for route-to-combat admission, the intended
+  trajectory checks which hostile hull it would strike first. A
+  foreground vehicle excludes that point and interrupts its attack
+  evidence. A continuously usable ray qualifies after two seconds, and
+  the real barrel or hull can finish laying after handoff. The final
+  native shot still requires its independent physical check.
+- A confirmed wreck, friendly vehicle or world obstruction still enters
+  the existing finite recovery for owned combat. The driver, waypoint
+  arrival, route selection and capture navigation retain their existing
+  implementation. The detailed diagnostic option records front actor
+  IDs and the progress and scores of the held vehicle's HE comparison.
+
+The regression suite exercises a moving front hull, a clear alternate
+point, the two-second reopen boundary before physical alignment, a later
+penetrating ordinary-HE point, and unequal native blast scores. Its HE
+cases also cover obstruction, target retention and the distinction
+between potential penetration and non-penetrating blast damage.
+
+### Intermediate Windows HD #1513 verification
+
+[Windows build 43004424175](https://github.com/colorfulmeans/wot-0.9.22-offline-battles/actions/runs/43004424175)
+packaged runtime `0f959debb5153c8093de7baa66bb1cd6fe4147c0`.
+Artifact `13847748397` has build identity `colorfulmeans-43004424175-1`.
+The downloaded ZIP, embedded client ZIP, x64 launcher and 263 packaged
+Python 2.7 modules were independently checked before the launcher was
+used to install and run the build.
+[Tests 43004427958](https://github.com/colorfulmeans/wot-0.9.22-offline-battles/actions/runs/43004427958)
+passed at the same runtime commit, including the navigation, bot,
+client, Windows launcher and native geometry jobs.
+
+- L-120 TD / PFM-42 with `_20mm_pvlvkan_m_40` and 80/80/80 stock,
+  Mittengard team 2, stationary-target preset. The first handoff took
+  2.021 seconds with the gun still unaligned, and the first AP round
+  followed 1.705 seconds later. The detailed records excluded samples
+  on enemies 2 and 14 when the intended ray met enemies 5 and 7 first.
+  Another AP round followed the last such record in 1.448 seconds.
+  The report contains one route handoff and zero late front-vehicle
+  refusals.
+- In the same round, the launcher test control loaded ordinary HE with
+  automation released. Automatic fire evaluated all nine eligible
+  points on enemy 7 before fallback. It used different points on that
+  same vehicle through the 20-round clip. The next clip used the
+  lowest stocked penetration shell, APCR, since AP was exhausted.
+  The 138 committed projectiles all matched server shots. The visible
+  and worker exception trails were empty. Report
+  `wot-error-report-20261111-185105-7d3070a546b4.zip`.
+- Škoda T 24 with `_75mm_Skoda_A18` and 17/17/16 stock on the same
+  map and preset reproduced a remaining HE ownership loop. It made
+  five confirmed handoffs to enemy 2 before the first shot. Immediately
+  after handoff, the running penetration review stopped publishing its
+  still-clear HE contact, so the existing opportunity-loss grace period
+  expired during the sweep. The same battle later compared four clear
+  points on enemy 2, chose sample 8 with an estimated blast of 69 over
+  the other three at 0, and fired that point twice before returning to
+  AP. Report `wot-error-report-20261111-185617-4df4afa1ed92.zip`.
+
+The follow-up lets the current, unblocked HE contact continue to support
+the already confirmed stop while the same target is being reviewed.
+It still needs the complete ranking to fire a fallback shot. A fresh
+blocked line cannot retain that proof. The first follow-up still lost
+the opportunity during small source changes in
+`wot-error-report-20261111-191311-dcf5614e43fa.zip`. The earlier armour
+failure was valid within the ranking tolerance, so blocked points took
+both foreground probes while the clear point's exact lane expired.
+The final change gives that point the first available foreground probe
+and applies the normal obstruction checks to the refreshed ray. The
+native-observation regression reproduces that release and requires one
+handoff followed by a real HE launch with the completed ranking.
+
+### Delivered Windows test ZIP
+
+`wot_PR119_1d45aa54_Windows_2026-11-11.zip` uses runtime
+`1d45aa54a8809d2affd637393214e968bbd10270` and build identity
+`local-qa-1d45aa54`. The ZIP reuses the verified x64 launcher, server
+and native resources from Windows build 43004424175 with the updated
+CPython 2.7 client modules. The outer ZIP, inner client ZIP and mod
+passed archive checks. The complete inventory of 263 client bytecode
+modules matched the runtime source. The acceptance run used a fresh
+extraction of this same ZIP. [Runtime Tests 43010296857](https://github.com/colorfulmeans/wot-0.9.22-offline-battles/actions/runs/43010296857).
+
+The same T 24, map, side and stationary-target preset reproduced
+foreground obstructions on enemy 2. The report shows one HE handoff
+for that enemy after 2.021 seconds of confirmation while the gun was
+still unaligned. Enemies 3 and 5 obstructed eight of the nine samples
+at fallback selection. The gun used the remaining sample, 5, for
+both HE shots and returned to AP. The first HE shot followed handoff
+in 4.891 seconds. All 12 local launches matched the server, with no
+late front-vehicle refusals and empty visible/worker exception trails.
+The later handoff in this capture was for enemy 7 with AP.
+Report `wot-error-report-20261111-191748-abfd2a01065b.zip`.
+
 ## Follow-up for the 15:47 T 24 report — native fire receipts and ammunition return
 
 The single-shot Škoda T 24 report `wot-error-report-20261111-154736-4f1e0a10cc53.zip`
