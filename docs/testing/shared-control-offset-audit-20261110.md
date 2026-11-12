@@ -1,5 +1,80 @@
 # PR119 control-offset correction — November 10, 2026
 
+## November 12 follow-up — Siege transition order and hydraulic aim
+
+The travel controller observes a clear trajectory to a current enemy sample
+with the existing world, friendly and front-vehicle checks. Two continuous
+seconds of clear contact admit the siege request. Automatic combat keeps the
+same engagement while the native switch is pending. The gun evaluator and
+automatic gun input start checking pitch and yaw once the client observes the
+enabled mode and its current descriptor. The protected stationary task and
+single-feature control tests cover who may request the mode.
+
+The player gun-angle conversion uses yaw, pitch and roll from one actual
+stabilised body observation. Navigation still owns the chassis heading. The
+original Redshire cross-slope input produced about `3.18e-5` radians of
+spurious pitch when the chassis yaw was paired with the hydraulic pitch and
+roll. The complete body transform gives a zero local angle for the reproduced
+forward direction.
+
+The hydraulic motion source still tries the strict `1e-7` radian pitch and
+correction tolerance first. If all six calls miss it, the smallest measured
+error can supply a motion input when the native answer stays within mechanical
+travel and both residuals are at most `1e-6` radians. The regression exercises
+the `2.272338e-7` radian Redshire residual, a later strict answer and a point
+outside hydraulic travel. The existing actual-barrel and first-trigger
+checks authorize fire.
+
+With **Collect detailed diagnostic logs** enabled, the report includes the
+mode wait, actual aim basis, rounded actuator input and rejected support
+samples. The support diagnostic records the five heights already sampled and
+the fit residual when available. The support decision still uses the existing
+plane fit and tolerance.
+
+Runtime `aa550bfaa626a150e260d3ec8037da4b909984ba` passed 963 tests in 39
+isolated files. The three changed expectations reproduce the failures on
+baseline `438ec3fb`. The launcher ZIP contains the independently verified
+264-module client build `local-qa-siege-order-aa550bfa`. The installed
+mod's bytes match the ZIP used in the Windows test.
+
+Windows HD #1513 ran the same Redshire 15 vs 15 scene with player UDES 03
+on team 1. The in-battle rack was 13/13/14. At 19:29:13.366 the test
+command returned `shell_ready` for HE compact descriptor 3722, slot 2,
+with one chambered round and zero reload time. Automatic control resumed
+with HE ready at 19:29:14.271.
+
+- At 19:30:14.104 a clear point on #24 admitted siege after 2.005 seconds.
+  At 19:30:14.505 the switch was still in progress and the same engagement
+  held control. The first actual-body aim sample was at 19:30:16.520 in
+  enabled siege. The first HE shot at 19:30:20.583 dealt 166 damage to #24.
+  The second HE shot at 19:30:29.572 removed #19's remaining 110 hit points.
+- A further entry at 19:31:03.087 confirmed 2.008 seconds of clear contact.
+  At 19:31:13.157 the native input for #24 accepted a pitch and correction
+  residual of `1.103586e-7` radians. The physical trigger fired at
+  19:31:14.742. The server applied 198 HE damage. These three player shots
+  each have a matching debit, projectile and server impact.
+- The first two engagements still released on
+  `siege_stationary_review_stalled` at 19:30:43.520 and 19:30:57.038.
+  The sampled support-plane fit recorded five heights and a first
+  residual of 0.049437 m. The geometry needed to resolve those specific
+  slope waits remains open.
+
+The final report is `wot-error-report-20261112-193338-52da6926c4a7.zip`.
+The player's HE rack changed from 14 to 11 and each server projectile
+matched its native trigger and impact. The second shot's client penetration
+was 458 raw damage. The server applied the target's remaining 110 hit points.
+Allied UDES 03 #10 had support-fit and body-observation rejects and died
+before it recorded a shot in this round. In the preceding build's
+same-scene round #10 had ten server impact receipts. That run already
+contained a body-observation reject. The precise cause of the final
+round's Bot pause remains open.
+
+The player died at 19:31:21. The launcher deliberately stopped the
+session at 19:33:31, accounting for the final worker disconnect. The
+four session logs are present and the report ZIP passed its integrity check.
+The package for player testing is `wot_PR119_aa550bfa_Windows_2026-11-12.zip`.
+[Runtime CI](https://github.com/colorfulmeans/wot-0.9.22-offline-battles/actions/runs/43208959712).
+
 ## November 12 follow-up — Empty Bot critical records and siege turn progress
 
 Runtime `e467a85e790d3653b0549a669aa56b26ab1775eb` uses the canonical
