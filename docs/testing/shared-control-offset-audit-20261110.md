@@ -1,5 +1,75 @@
 # PR119 control-offset correction — November 10, 2026
 
+## November 12 follow-up — Five-point hydraulic chassis support
+
+In report `wot-error-report-20261112-195726-acf29a5596d3.zip`, the player
+changed from #13 to #4 in the same engagement. The stationary review rejected
+the starting pose repeatedly. The five armour-box ground samples produced a
+fit residual of 0.097292 m against the review tolerance of 0.0001 m.
+The earlier real turn at the same X/Z had valid track support and changed
+support height by 0.019266 m over about 36 degrees.
+
+The player hydraulic review now uses the five chassis columns and the
+supporting-face calculation shared with the existing local vertical motion.
+The sampled heights, pitch and roll feed the planned turn and its collision
+checks. Each slice has an independently checked middle and end. The last
+checked support pose must agree with the pose used for the projected aim.
+The existing combat controller consumes a completed motion proof. The
+actual-barrel and first-trigger validation remain the fire authority.
+The driving caller retains its original support, straddle and fall decisions.
+The worker uses its own physical observations.
+
+The **Collect detailed diagnostic logs** checkbox enables
+`stationary_chassis_support` records. Each emitted record includes all five
+columns, hit coordinates, surface normals and layer decisions from the
+existing queries. The report had 49 such player records with valid support,
+including a 0.103948 m gap from one sampled point to the supporting face.
+
+Windows HD #1513 ran two rounds of the same Redshire mobile-combat 15 vs 15
+scenario with player UDES 03 on team 2. The launcher test control confirmed
+HE descriptor 3722, slot 2, one chambered round and zero reload before
+automatic control resumed in each round. Both ammo racks were 13/13/14.
+
+- Round 1. At 21:12:02.748 a 14-slice slope turn toward #6 passed review.
+  The physical hull began turning at 21:12:02.757. The HE launch at
+  21:12:07.001 killed #6 on impact. The player killed the hillside #13 at
+  21:12:53 and handed off to #10 at 21:12:53.440 within engagement 2.
+  The 13-slice, 63.65-degree left turn toward #10 passed chassis review.
+  At 21:12:54.326 the actual aim reported `hydraulic_pitch_limit`. The
+  controller selected #12 next and three HE impacts on #12 were recorded
+  from the same position. The full #13-to-#10 left turn and shot remain
+  unverified in that handoff.
+- Round 2. The player turned left toward #9 and landed two HE shots, killing
+  it at 21:23:01. A later review of #12 remained pending while the atomic
+  receipt included a world-blocked point. For #10 the six-slice chassis
+  review passed at 21:24:09.453 and the turn began at 21:24:09.474. The
+  actual heading changed from -143.928 to -172.354 degrees. The first-trigger
+  receipt was `auto_actual_barrel_miss` for the attempted shots at #10.
+  These observations distinguish the completed turn from a verified launch.
+
+The team-2 FV215b 183 was #26. At 21:13:14 the line to enemy UDES 03 #9
+hit world geometry and at 21:13:16 the engagement handed driving back to
+the route with `point_recovery_no_checked_position`. The 21:14:27 clear
+penetration evidence was revoked after the muzzle moved 0.20 m. The recheck
+hit the terrain and later the player wreck. The same FV hit and killed
+enemy UDES 03 #10 at 21:14:07.
+
+Runtime `fa2437530219de2ea68c9fe02bbf6b4453be3c29` passed 1,195 focused
+tests covering stationary planning, hydraulic combat and startup, legacy
+runtime, support queries, vehicle physics and launch admission. CPython
+2.7.18 compiled all 264 client sources. The non-coplanar turn and diagnostic
+tests fail on `7471c825`. The midpoint-support test also passes there. The
+combined ownership check and the two burst diagnostic assertion failures
+were reproduced on the same baseline in the local Windows test environment.
+
+The package is `wot_PR119_fa243753_Windows_2026-11-12.zip`. The new client
+payload and staged server files use the runtime commit above. The package
+reuses the existing x64 launcher executable. The shipping x86 native source
+stamp, the ZIPs, the client bytecode and the installed payload were checked.
+The two-round report is
+`wot-error-report-20261112-212608-26f4e5af5b4a.zip`. All four session logs
+are present and the archive passed CRC verification.
+
 ## November 12 follow-up — Siege transition order and hydraulic aim
 
 The travel controller observes a clear trajectory to a current enemy sample
