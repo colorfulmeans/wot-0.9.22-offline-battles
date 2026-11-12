@@ -1,5 +1,90 @@
 # PR119 control-offset correction — November 10, 2026
 
+## November 12 follow-up — Finish obstructed HE engagements
+
+The `214138-c65b14d3ce9e` report showed UDES 03 holding Type 4 Heavy #12
+through repeated blocked-point and firing-position decisions. The siege
+consumer parked the vehicle before calling position recovery. Progress in
+the shared chassis caches extended the stop even when the retained point
+had no useful new result.
+
+The loaded HE review uses the same current-target sweep on ordinary,
+siege and worker vehicles. A checked obstruction removes the point from
+the sweep. A fresh clear result restores it. The loaded shell ranks
+penetration and HE contact within that target. An exhausted blocked
+target can hand off to a candidate with a checked clear lane in the
+same engagement. The candidate's own HE sweep begins after the handoff.
+Spare foreground work may check an alternative lane within the current
+callback. A pending alternative does not extend the stop.
+
+A stable blockage can enter the existing same-point position probe when
+combat owns movement. The probe checks a candidate route segment and the
+future lane. Unsuccessful position review returns the original task.
+The stationary hold clock uses newly completed point receipts for the
+held target and shell. Native siege mode still controls when aim may be
+evaluated. The existing five-point support, driver and actual launch
+checks authorize their respective operations. Combat handoff details
+use the existing detailed diagnostic logging switch.
+
+The first two Windows rounds on `523fc56f` exercised the position probe
+and exposed a stale target after native mode reentry. At 22:41:51.277
+the confirmed approach chose #10, while the HE sweep resumed #13.
+`b37bd79c` carries the confirmed contact across the enabled-mode echo.
+The regression keeps the old target visible while proving that the new
+engagement reviews only the confirmed target.
+
+Windows HD #1513 ran the final build in the same Redshire 15 vs 15
+mobile-combat scenario with player UDES 03 on team 2. The launcher test
+channel confirmed shell descriptor 3722 in slot 2 at 22:47:31, with
+one chambered round, zero reload and a 13/13/14 rack. Automatic drive
+and fire then resumed.
+
+- At 22:49:44.454 the player fired HE at #5. The server recorded the
+  matching impact. Engagement 4 transferred from #5 to #12 at
+  22:49:44.604 without a new route confirmation.
+- At 22:49:44.822 all nine HE penetration samples on #12 were
+  `world_blocked`. The current shell remained HE while reloading.
+  The existing recovery probe returned `point_recovery_no_checked_position`
+  at 22:49:45.170. The route regained control. After travel mode resumed,
+  the player moved 103.27 m by 22:50:26.032.
+- At 22:50:30.129 a newly clear point on #12 qualified after 2.019 s.
+  At 22:50:33.216 the enabled siege observation again confirmed all nine
+  points blocked, with HE chambered and zero reload. The position review
+  exhausted its existing six-second budget and released at 22:50:39.241.
+  A later approach obtained 2.016 s of clear evidence and entered siege
+  again. Several points cleared while support was still unsettled.
+  No player round was launched at #12 in this session. The full-block
+  handoff to an already clear alternative was covered by a focused
+  regression. The observed live full-block cases exercised position
+  review and route release.
+
+Runtime `b37bd79c96b543123822144d3e3f9996ad7c082c` passed 283 cases in
+14 isolated unittest files covering HE, ownership, siege and launch
+admission, support, capture, and the mobile-combat scenario. The extra
+host-worker tests requiring the native simulation and two burst
+diagnostic assertions reproduce their failures on `fa243753`.
+CPython 2.7 compiled all 264 client modules. The Windows ZIP contains the
+rebuilt client and current staged server files with the existing x64
+launcher executable. The x86 native source stamp, archive CRCs and
+installed client payload were verified. The package is
+`wot_PR119_b37bd79c_Windows_2026-11-12.zip`.
+
+The final report is `wot-error-report-20261112-225128-a940d3514e72.zip`.
+It passed CRC verification and contains the launcher, server, visible
+client and hidden worker logs. The launcher deliberately ended the
+session after collecting the obstruction and route evidence.
+
+The earlier two-round report
+`wot-error-report-20261112-224433-e587ff68a7aa.zip` records the HUD
+latency and enemy UDES observation. Around 22:37 the visible HUD ping
+was the hidden worker's frame interval. Logged worker samples were
+172–307 ms and the local server round trip was 7–14 ms in that interval.
+Worker profiling attributed the largest recorded cost to Bot simulation
+slices. Enemy UDES 03 #9 repeatedly released a stationary review and
+reentered siege. The mode changes reset and then recomputed the hydraulic
+pitch target. Continuous barrel motion within enabled siege still needs
+matching requested and actual pitch samples.
+
 ## November 12 follow-up — Five-point hydraulic chassis support
 
 In report `wot-error-report-20261112-195726-acf29a5596d3.zip`, the player
