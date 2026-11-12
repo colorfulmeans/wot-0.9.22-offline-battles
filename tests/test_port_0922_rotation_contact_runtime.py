@@ -26,8 +26,8 @@ class PlayerRotationContactTests(unittest.TestCase):
         battle._local_physics = local.vehicle_physics.derive_params(own_descriptor)
         battle._sender = types.SimpleNamespace(forward=0.)
         battle._local_drive_turn = 1.
-        battle._bots=types.SimpleNamespace(replica_contact_params=
-            lambda state,descriptor:local.vehicle_physics.derive_params(descriptor))
+        battle._replica_contact_params = lambda state, descriptor: \
+            local.vehicle_physics.derive_params(descriptor)
         battle._motion_is_clear = lambda *args, **kw: True
         battle._baked_pose_safe = lambda *args: True
         candidates = battle._contact_tanks((0., 0., 0.), shape, .04)

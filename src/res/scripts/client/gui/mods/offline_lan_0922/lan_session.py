@@ -1376,22 +1376,44 @@ class LANSession(object):
             return True
         return False
 
+    @staticmethod
+    def _fixture_map():
+        from . import equipment_test, mobile_combat_test, roof_crush_test
+        if mobile_combat_test.enabled():
+            return mobile_combat_test.MAP
+        if roof_crush_test.enabled():
+            return roof_crush_test.MAP
+        if equipment_test.enabled():
+            return equipment_test.MAP
+        return None
+
     def _map_pool_value(self):
+        fixture_map = self._fixture_map()
+        if fixture_map is not None:
+            return [fixture_map]
         if self._map_pool is None:
             return None
         return list(self._map_pool)
 
     def _server_supports_random_map(self):
+        if self._fixture_map() is not None:
+            return False
         supported = getattr(self.client, 'has_random_map', None)
         return bool(callable(supported) and supported())
 
     def _server_supports_team_selection(self):
+        from . import roof_crush_test
+        if roof_crush_test.enabled():
+            return False
         supported = getattr(self.client, 'has_team_selection', None)
         return bool(callable(supported) and supported())
 
     def _server_supports_team_size_selection(self):
         supported = getattr(self.client, 'has_team_size_selection', None)
         return bool(callable(supported) and supported())
+
+    def _room_roster_locked(self):
+        return self._fixture_map() is not None or bool(getattr(self.client, 'lineup_locked', False))
 
     def _team_status(self):
         sizes = dict(getattr(self.client, 'team_sizes', {}) or {})
@@ -1408,27 +1430,30 @@ class LANSession(object):
             current_team = None
         return {
             'team': current_team,
-            'preferred': self._room_preferences.get('team', 0),
+            'map_locked': self._fixture_map() is not None,
+            'preferred': (1 if self._fixture_map() is not None and
+                          not self._server_supports_team_selection() else
+                          self._room_preferences.get('team', 0)),
             'sizes': sizes,
             'classes': getattr(self.client, 'team_classes', {}),
-            'class_supported': callable(getattr(self.client,'set_team_class',None)) and not getattr(self.client,'lineup_locked',False),
+            'class_supported': callable(getattr(self.client,'set_team_class',None)) and not self._room_roster_locked(),
             'counts': counts,
             'supported': self._server_supports_team_selection(),
-            'size_supported': self._server_supports_team_size_selection() and not getattr(self.client,'lineup_locked',False),
+            'size_supported': self._server_supports_team_size_selection() and not self._room_roster_locked(),
         }
 
     def _bot_tier_status(self):
         return {
             'mode': getattr(self.client, 'bot_tier_mode', 'random'),
             'supported': callable(getattr(
-                self.client, 'set_bot_tier_mode', None)) and not getattr(self.client,'lineup_locked',False),
+                self.client, 'set_bot_tier_mode', None)) and not self._room_roster_locked(),
         }
 
     def _bot_skill_status(self):
         return {
             'mode': getattr(self.client, 'bot_skill_mode', 'mixed'),
             'supported': callable(getattr(
-                self.client, 'set_bot_skill_mode', None)) and not getattr(self.client,'lineup_locked',False),
+                self.client, 'set_bot_skill_mode', None)) and not self._room_roster_locked(),
         }
 
     def select_team(self, team):
@@ -1509,7 +1534,7 @@ class LANSession(object):
         return False
 
     def _remember_map(self, map_name):
-        if not map_name:
+        if not map_name or self._fixture_map() is not None:
             return False
         if self._room_preferences.get('map') == map_name:
             return True
@@ -1580,12 +1605,14 @@ class LANSession(object):
     def _restore_waiting_preferences(self):
         """Apply saved difficulty, capacities and team once per connection."""
         generation = self._client_generation
-        if getattr(self.client, 'lineup_locked', False):
+        if (LANSession._fixture_map() is not None or
+                getattr(self.client, 'lineup_locked', False)):
             # A custom roster owns these controls. Keep the next Automatic
             # room's capacities at 15 rather than replaying a sparse size.
             self._restored_skill_generation = generation
             self._restored_team_sizes_generation = generation
-            if self._room_preferences.get('team_sizes') != {1: 15, 2: 15}:
+            if (LANSession._fixture_map() is None and
+                    self._room_preferences.get('team_sizes') != {1: 15, 2: 15}):
                 self._room_preferences['team_sizes'] = {1: 15, 2: 15}
                 self._save_room_preferences()
         saved_skill = self._room_preferences.get('bot_skill_mode')
@@ -2244,6 +2271,20 @@ class LANSession(object):
             self._status_notifier(tr(
                 'Vehicle supplies are updating. Try starting again in a moment.'))
             return False
+        from . import mobile_combat_test
+        if mobile_combat_test.enabled():
+            from CurrentVehicle import g_currentVehicle
+            item = g_currentVehicle.item
+            descriptor = None if item is None else item.descriptor
+            vehicle = None if descriptor is None else descriptor.type.name
+            if vehicle not in mobile_combat_test.LOADOUTS:
+                self._status_notifier(tr('Select one of the eight mobile combat test vehicles in the garage.'))
+                return False
+            required = mobile_combat_test.LOADOUTS[vehicle][0]
+            if descriptor.gun.name != required:
+                self._status_notifier(tr('Mount the mobile combat test gun in the garage: %s') % required)
+                return False
+            map_name = mobile_combat_test.MAP
         # select_vehicle and start share the transport's ordered send queue.
         # Never start with an older loadout after a failed garage projection.
         if not self._publish_selected_vehicle():

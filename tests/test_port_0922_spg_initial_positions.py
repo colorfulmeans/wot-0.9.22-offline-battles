@@ -17,7 +17,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT/'server'), str(ROOT/'src/res/scripts/client')]
 from gui.mods.offline_lan_0922 import spg_positions as positions
-from server_bot_ai import BotPlanner
+from gui.mods.offline_lan_0922.vehicle_control.strategy import BotPlanner
 from test_port_0922_server_bot_ai import _bot, _route, _state, _contact
 import test_port_0922_bot_runtime as harness
 

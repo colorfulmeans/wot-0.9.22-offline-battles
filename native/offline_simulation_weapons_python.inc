@@ -18,6 +18,11 @@ ActorKey key(PyObject *kind,PyObject *id) {
     const int type=integer(kind); if(type<0 || type>1) throw Unsupported();
     ActorKey result;result.kind=static_cast<ActorKind>(type);result.id=wide(id);return result;
 }
+w::TerminationReason termination_reason(PyObject *value) {
+    const auto reason=static_cast<w::TerminationReason>(integer(value));
+    if(!w::valid_termination_reason(reason)) throw Unsupported();
+    return reason;
+}
 w::GunConfig config(PyObject *object) {
     double p[13];world_array(object,p,13);w::GunConfig result;
     result.fully_aimed_dispersion=p[0];result.after_shot=p[1];result.after_shot_in_burst=p[2];
@@ -178,7 +183,7 @@ PyObject *WOT_CDECL sim_weapon_command(PyObject *,PyObject *args) {
             profile.run(&weapon_bridge::w::GunState::require_full,&g);break;
         case 7:arity(2);answer=profile.run(&weapon_bridge::w::GunState::begin,&g,z(0),n(1));break;
         case 8:arity(1);answer=profile.run(&weapon_bridge::w::GunState::consume,&g,z(0)!=0);break;
-        case 9:arity(0);answer=profile.run(&weapon_bridge::w::GunState::cancel,&g);break;
+        case 9:arity(1);answer=profile.run(&weapon_bridge::w::GunState::terminate,&g,weapon_bridge::termination_reason(v[0]));break;
         case 10:{arity(9);
             profile.run(&weapon_bridge::w::GunState::restore,&g,weapon_bridge::wide(v[0]),n(1),z(2)!=0,n(3),n(4),n(5),z(6)!=0,z(7),z(8));
             profile.input();
@@ -191,14 +196,14 @@ PyObject *WOT_CDECL sim_weapon_command(PyObject *,PyObject *args) {
             profile.compute();ammo.validate(g.config.shell_count);state.ammo=std::move(ammo);break;}
         case 15:arity(4);answer=profile.run(&weapon_bridge::w::BurstState::start,&state.burst,weapon_bridge::wide(v[0]),z(1),n(2),z(3));break;
         case 16:arity(1);special=weapon_bridge::edges(profile.run(&weapon_bridge::w::BurstState::advance,&state.burst,n(0)));break;
-        case 17:arity(1);answer=profile.run(&weapon_bridge::w::BurstState::cancel,&state.burst,z(0));break;
+        case 17:arity(1);answer=profile.run(&weapon_bridge::w::BurstState::terminate,&state.burst,weapon_bridge::termination_reason(v[0]));break;
         case 18:{arity(2);auto burst=weapon_bridge::burst(v[0]);
             const auto fire_seq=weapon_bridge::wide(v[1]);
-            profile.compute();burst.validate(fire_seq);state.burst=burst;break;}
+            profile.run(&weapon_bridge::w::Store::restore_trigger,&ctx->weapons,key,burst,fire_seq);break;}
         case 19:arity(3);
             profile.run(&weapon_bridge::w::Store::prepare,&ctx->weapons,key,n(0),n(1),z(2));break;
         case 20:arity(3);answer=profile.run(&weapon_bridge::w::Store::begin,&ctx->weapons,key,z(0),n(1),n(2));break;
-        case 21:arity(0);answer=profile.run(&weapon_bridge::w::Store::cancel,&ctx->weapons,key);break;
+        case 21:arity(1);answer=profile.run(&weapon_bridge::w::Store::terminate,&ctx->weapons,key,weapon_bridge::termination_reason(v[0]));break;
         case 22:{arity(1);if(z(0)<0 || z(0)>g.config.clip_size) throw Unsupported();
             const int remaining=z(0);
             profile.compute();g.burst_remaining=remaining;break;}
@@ -225,6 +230,10 @@ PyObject *WOT_CDECL sim_weapon_command(PyObject *,PyObject *args) {
                 copy.elapsed<0. || copy.reload_duration<0. || copy.reload_factor<0. || copy.current_dispersion_factor<=0. ||
                 copy.aiming_start_factor<=0. || copy.aiming_elapsed<0. || copy.dispersion<=0. || copy.motion_dispersion_squared<0.) throw Unsupported();
             g=copy;break;}
+        case 28:arity(1);answer=profile.run(&weapon_bridge::w::BurstState::commit,&state.burst,weapon_bridge::edge(v[0]));break;
+        case 29:arity(0);answer=profile.run(&weapon_bridge::w::BurstState::abort,&state.burst);break;
+        case 30:arity(0);answer=profile.run(&weapon_bridge::w::Store::abort,&ctx->weapons,key);break;
+        case 31:arity(0);answer=profile.run(&weapon_bridge::w::GunState::abort,&g);break;
         default:throw Unsupported();
         }
         profile.output();

@@ -4,7 +4,7 @@ import unittest
 
 import test_port_0922_bot_runtime  # Install the standalone client fixtures.
 import test_port_0922_server_bot_ai as fixture
-from server_bot_ai import BotPlanner
+from gui.mods.offline_lan_0922.vehicle_control.strategy import BotPlanner
 
 
 class RadioRouteTests(unittest.TestCase):
@@ -55,16 +55,59 @@ class RadioRouteTests(unittest.TestCase):
             self.assertEqual(-300.0, orders[identity]['move_position']['x'])
         self.assertTrue(all(row['target_id'] is None for row in orders.values()))
 
-    def test_only_receiving_donor_returns_to_old_start_before_transfer(self):
-        p,m,s,players,unused=self._fixture((11,))
+    def test_only_receiving_donor_preserves_transfer_through_blocked_contact(self):
+        p,m,s,players,contacts=self._fixture((11,))
+        # The source gate is physically unfinished. A candidate must not
+        # manufacture combat ownership to pause this ordinary travel task.
+        s[0].update(z=100.)
         orders=self._orders(p,m,s,players,1.)
         self.assertEqual({11},set(p._travel_tasks))
         self.assertEqual('right',p._travel_tasks[11]['target_route']['id'])
         self.assertEqual('left',orders[11]['route_id'])
+        # Initial review still includes the received enemy beyond a role-
+        # derived range, without changing its unfinished transfer destination.
         self.assertEqual('route_transfer',orders[11]['combat_mode'])
+        self.assertEqual(dict(target_kind='human',target_id=2),orders[11]['initial_target_hint'])
+        self.assertIsNone(orders[11]['target_id'])
+        self.assertNotIn('combat_task_target',orders[11])
+        self.assertEqual(dict(x=-300.,y=0.,z=0.),orders[11]['move_position'])
+        self.assertFalse(orders[11]['fire_allowed'])
+        self.assertEqual(0,p._travel_tasks[11]['index'])
+        self.assertNotIn('paused_at',p._travel_tasks[11])
         self.assertEqual('left',orders[12]['route_id'])
+        self.assertIsNone(orders[12]['target_id'])
+        self.assertNotIn('initial_target_hint',orders[12])
         s[0].update(x=300,z=0)
-        committed=self._orders(p,m,s,players,2.)[11]
+        pending=self._orders(p,m,s,players,2.)[11]
+        # A received candidate is not a native movement-owner receipt. Even
+        # reaching the far endpoint cannot skip the unfinished source gate.
+        self.assertEqual('route_transfer',pending['combat_mode'])
+        self.assertEqual(dict(target_kind='human',target_id=2),pending['initial_target_hint'])
+        self.assertIsNone(pending['target_id'])
+        self.assertFalse(pending['fire_allowed'])
+        self.assertEqual('left',pending['route_id'])
+        self.assertEqual(-300.,pending['move_position']['x'])
+        self.assertEqual('right',p._travel_tasks[11]['target_route']['id'])
+        self.assertNotIn('paused_at',p._travel_tasks[11])
+        for contact in contacts:contact['visible']=False
+        p.report_contacts(contacts,p.known_targets(s,players),2.1)
+        resumed=self._orders(p,m,s,players,2.1)[11]
+        self.assertEqual('route_transfer',resumed['combat_mode'])
+        self.assertEqual('left',resumed['route_id'])
+        self.assertIsNone(resumed['target_id'])
+        self.assertNotIn('initial_target_hint',resumed)
+        self.assertEqual(-300.,resumed['move_position']['x'])
+        self.assertEqual(0,p._travel_tasks[11]['index'])
+        self.assertNotIn('paused_at',p._travel_tasks[11])
+        # Losing a candidate also cannot skip the ordered source leg.
+        # Complete both gates in order using their actual observed poses.
+        s[0].update(x=-300,z=0)
+        transfer=self._orders(p,m,s,players,2.2)[11]
+        self.assertEqual('left',transfer['route_id'])
+        self.assertEqual(300.,transfer['move_position']['x'])
+        self.assertEqual(1,p._travel_tasks[11]['index'])
+        s[0].update(x=300,z=0)
+        committed=self._orders(p,m,s,players,2.3)[11]
         self.assertEqual('right',committed['route_id']);self.assertNotIn(11,p._travel_tasks)
 
     def test_disconnected_donor_finishes_old_leg_until_task_expiry(self):
@@ -79,13 +122,35 @@ class RadioRouteTests(unittest.TestCase):
 
     def test_pending_target_survives_last_original_owner_death(self):
         p,m,s,players,contacts=self._fixture((11,),lease=500.)
+        s[0].update(z=100.)
         self._orders(p,m,s,players,1.)
         s[-1].update(alive=False,health=0)
         p._next_route_rebalance[1]=2.
         self._orders(p,m,s,players,2.)
         self.assertEqual('right',p._travel_tasks[11]['target_route']['id'])
         s[0].update(x=300,z=0)
-        self.assertEqual('right',self._orders(p,m,s,players,3.)[11]['route_id'])
+        pending=self._orders(p,m,s,players,3.)[11]
+        self.assertEqual('left',pending['route_id'])
+        self.assertEqual('right',p._travel_tasks[11]['target_route']['id'])
+        self.assertFalse(pending['fire_allowed'])
+        self.assertEqual('route_transfer',pending['combat_mode'])
+        self.assertEqual(dict(target_kind='human',target_id=2),pending['initial_target_hint'])
+        self.assertIsNone(pending['target_id'])
+        self.assertEqual(0,p._travel_tasks[11]['index'])
+        self.assertNotIn('paused_at',p._travel_tasks[11])
+        for contact in contacts:contact['visible']=False
+        p.report_contacts(contacts,p.known_targets(s,players),3.1)
+        resumed=self._orders(p,m,s,players,3.1)[11]
+        self.assertEqual('left',resumed['route_id'])
+        self.assertEqual('route_transfer',resumed['combat_mode'])
+        self.assertEqual(-300.,resumed['move_position']['x'])
+        self.assertEqual('right',p._travel_tasks[11]['target_route']['id'])
+        s[0].update(x=-300,z=0)
+        self.assertEqual('left',self._orders(p,m,s,players,3.2)[11]['route_id'])
+        self.assertEqual(1,p._travel_tasks[11]['index'])
+        s[0].update(x=300,z=0)
+        self.assertEqual('right',self._orders(p,m,s,players,3.3)[11]['route_id'])
+        self.assertNotIn(11,p._travel_tasks)
         self.assertTrue(p._route_assignments[11]['ordered_task'])
         self.assertEqual('right',self._orders(p,m,s,players,183.)[11]['route_id'])
 

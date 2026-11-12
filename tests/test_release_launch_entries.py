@@ -68,15 +68,13 @@ class LaunchEntryTests(unittest.TestCase):
             app = Path(directory)
             (app / '_internal').mkdir()
             (app / verifier.NORMAL_ENTRY).write_bytes(b'validated launcher')
-            for name in verifier.ENTRIES:
-                (app / name).write_bytes((ROOT / 'tools' / name).read_bytes())
             context = dict(io=io, os=os, zipfile=zipfile,
                            sys=SimpleNamespace(argv=['check', str(app / '_internal'), 'fake082', 'fake0922']),
-                           verify_archive=verifier.verify_archive)
+                           verify_current_archive=verifier.verify_current_archive)
             with mock.patch('builtins.print'):
                 exec(compile(snippet, '<downloaded-root-check>', 'exec'), context)
                 (app / 'unexpected-test.bat').write_bytes(b'development entry')
-                with self.assertRaisesRegex(ValueError, 'only the normal and diagnostic'):
+                with self.assertRaisesRegex(ValueError, 'only the normal launcher'):
                     exec(compile(snippet, '<downloaded-root-check>', 'exec'), context)
 
     def test_each_required_entry_is_mandatory(self):

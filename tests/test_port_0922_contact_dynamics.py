@@ -93,24 +93,56 @@ class GroundContactTests(unittest.TestCase):
         peer['x'], peer['z'] = 5., 0.
         self.assertLess(contact.rotation_fraction((0., 0., 0.), 0., math.pi/2, shape, [peer]), 1.)
 
-    def test_hostile_side_contact_keeps_hold_and_does_not_block_a_move_order(self):
+    def test_hostile_side_contact_preserves_hold_and_checks_overlap_for_movement(self):
         from gui.mods.offline_lan_0922.ai.adapter import BotAdapter
-        adapter = BotAdapter('test', 1)
-        peer = dict(id=2, team=2, position=(2.99, 0., 0.),
-                    half_width=1.5, half_length=3.5, alive=True)
-        state = dict(id=1, slot=0, team=1, position=(0., 0., 0.), yaw=0., speed=0.,
-                     dt=.1, half_width=1.5, half_length=3.5, neighbours=[peer])
-        order = dict(target_id=2, aim_position=(3., 0., 0.), move_position=(0., 0., 0.),
-                     face_position=(3., 0., 0.), combat_mode='engage', fire_allowed=True,
-                     throttle_override=0.)
-        held = adapter.decide_with_order(state,order,lambda *args: True)
-        self.assertEqual(0.,held['throttle'])
-        self.assertFalse(held['movement_intent'])
-        self.assertEqual(2,held['target_id'])
-        order.update(combat_mode='route',move_position=(0.,0.,100.),throttle_override=None)
-        driving=adapter.decide_with_order(state,order,lambda *args: True)
-        self.assertEqual(1.,driving['throttle'])
-        self.assertNotEqual('contact_escape',driving['recovery_mode'])
+        for actor in (1, 1000001):
+            for side in (2.99, 3.0, 3.01):
+                with self.subTest(actor=actor, side=side):
+                    adapter = BotAdapter('test', 1)
+                    peer = dict(id=2, team=2, position=(side, 0., 0.),
+                                half_width=1.5, half_length=3.5, alive=True)
+                    state = dict(id=actor, slot=0, team=1, position=(0., 0., 0.),
+                                 yaw=0., speed=0., dt=.1, half_width=1.5,
+                                 half_length=3.5, neighbours=[peer])
+                    hold = dict(target_id=2, aim_position=(3., 0., 0.),
+                                move_position=(0., 0., 0.), face_position=(3., 0., 0.),
+                                combat_mode='engage', fire_allowed=True,
+                                throttle_override=0.)
+                    held = adapter.decide_with_order(state, hold, lambda *args: True)
+                    self.assertEqual(0., held['throttle'])
+                    self.assertFalse(held['movement_intent'])
+                    self.assertEqual(2, held['target_id'])
+                    order = dict(hold, combat_mode='route', move_position=(0., 0., 100.),
+                                 throttle_override=None)
+                    before = dict(order)
+                    driving = adapter.decide_with_order(state, order, lambda *args: True)
+                    self.assertEqual(before, order)
+                    self.assertEqual('route', driving['combat_mode'])
+                    self.assertEqual(2, driving['target_id'])
+                    self.assertTrue(driving['movement_intent'])
+                    self.assertEqual(order['move_position'],
+                                     driving['control_trace']['strategic_move_position'])
+                    if side < 3.0:
+                        # The two 1.5 m half-widths overlap by 0.01 m. A living
+                        # enemy now uses the same checked separating exit as an
+                        # ally; this local exit does not rewrite the route task.
+                        self.assertEqual(-1., driving['throttle'])
+                        self.assertEqual('contact_escape', driving['recovery_mode'])
+                        self.assertEqual(2, driving['contact_escape']['peer'])
+                        self.assertLess(driving['move_position'][2], 0.)
+                    else:
+                        # Merely touching the side, or a small gap, leaves the
+                        # longitudinal corridor clear and must not cause retreat.
+                        self.assertEqual(1., driving['throttle'])
+                        self.assertEqual('drive', driving['recovery_mode'])
+                        self.assertEqual(order['move_position'], driving['move_position'])
+                    held_again = adapter.decide_with_order(state, hold, lambda *args: True)
+                    self.assertEqual(0., held_again['throttle'])
+                    self.assertFalse(held_again['movement_intent'])
+                    self.assertEqual(2, held_again['target_id'])
+                    self.assertTrue(held_again['fire_allowed'])
+                    self.assertEqual('combat_hold', held_again['control_trace']['action_owner'])
+                    self.assertNotIn(actor, adapter._contact_escapes)
 
     def test_korea_offset_side_contact_selects_checked_separating_end(self):
         """The 181355 Object 212 pose must actively leave the WZ-132."""

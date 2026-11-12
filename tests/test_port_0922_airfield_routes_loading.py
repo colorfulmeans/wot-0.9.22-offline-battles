@@ -85,19 +85,24 @@ class AirfieldDefaultRoadTests(unittest.TestCase):
         cls.graph=json.loads((ROOT/'navgraphs/31_airfield.json').read_text())
         cls.legacy=legacy_baker()
 
-    def test_original_routes_restored_exactly_for_both_teams(self):
+    def test_current_default_routes_keep_original_metadata_for_both_teams(self):
+        from check_navigation_resolution import verify_default_routes
         original=json.loads((ROOT/'tests/fixtures/airfield-original-routes.json').read_text())
-        self.assertEqual(original,self.graph['routes'])
+        # Authored Default geometry supersedes the old route coordinates;
+        # route identities and every non-waypoint field remain unchanged.
+        verify_default_routes(dict(routes=original),self.graph,'31_airfield')
         self.assertNotIn('bake_airfield_road_routes', (ROOT/'tools/bake_navigation_0922.py').read_text())
 
     def test_all_six_routes_are_connected_and_fit_the_existing_wire(self):
+        from gui.mods.offline_lan_0922 import bot_tactics
+        approved = bot_tactics.shared_route_points(bot_tactics.default_map('31_airfield'))
         grid=planning.graph_view('31_airfield',self.graph)
         with mock.patch.object(grid,'distances',side_effect=AssertionError('full flood')):
             for team,routes in self.graph['routes'].items():
                 for route in routes:
                     self.assertLessEqual(len(route['waypoints']),16)
                     self.assertIsNone(planning.validate_route(grid,dict(points=route['waypoints'])))
-                    self.assertIsNone(self.legacy._route_geometry_issue(route['waypoints']))
+                    self.assertEqual(approved[(int(team), route['id'])],route['waypoints'])
         for one,two in zip(self.graph['routes']['1'],self.graph['routes']['2']):
             self.assertEqual(list(reversed(one['waypoints'])),two['waypoints'])
 

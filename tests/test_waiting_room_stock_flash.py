@@ -66,6 +66,39 @@ class StockRoomTests(unittest.TestCase):
             self.assertFalse(controls[key]['enabled'])
         self.assertTrue(controls['class_1_random']['selected'])
 
+    def test_fixture_map_cannot_be_changed_but_start_stays_available(self):
+        from gui.mods.offline_lan_0922.lan_session import LANSession
+        room = self.room()
+        session = LANSession.__new__(LANSession)
+        session._map_pool = ['01_karelia', '02_malinovka']
+        session._room_preferences = {'team': 2}
+        session.client = types.SimpleNamespace(
+            lineup_locked=False, team_sizes={1: 1, 2: 15},
+            has_team_selection=lambda: True,
+            has_team_size_selection=lambda: True,
+            set_team_class=mock.Mock(), set_bot_tier_mode=mock.Mock(),
+            set_bot_skill_mode=mock.Mock(),
+            bot_tier_mode='same', bot_skill_mode='brutal')
+        room._map_pool = session._map_pool_value
+        room._random_supported = session._server_supports_random_map
+        room._team_status = session._team_status
+        room._bot_tier_status = session._bot_tier_status
+        room._bot_skill_status = session._bot_skill_status
+        room._open_map_window = mock.Mock()
+        for equipment, roof, expected in (('1', '0', '100_thepit'),
+                                          ('0', '1', '37_caucasus')):
+            with mock.patch.dict('os.environ', {'WOT_OFFLINE_DIAGNOSTICS': '1',
+                'WOT_OFFLINE_EQUIPMENT_TEST': equipment, 'WOT_OFFLINE_ROOF_CRUSH_TEST': roof}):
+                controls = flash.model(room)['controls']
+                self.assertEqual(expected, room._selected_map)
+                for key in ('map', 'random', 'size1', 'size2', 'tier', 'skill',
+                            'class_1_random', 'class_2_random'):
+                    self.assertFalse(controls[key]['enabled'], key)
+                self.assertEqual(roof == '0', controls['team1']['enabled'])
+                self.assertTrue(controls['start']['enabled'])
+                self.assertFalse(room.activate('map'))
+                room._open_map_window.assert_not_called()
+
     def test_native_initial_selection_events_do_not_resubmit_settings(self):
         room = self.room()
         adapter = flash.RoomWindow(room)

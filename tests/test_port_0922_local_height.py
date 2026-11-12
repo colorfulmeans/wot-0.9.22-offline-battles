@@ -325,13 +325,13 @@ class NativeColumnContractTests(unittest.TestCase):
             if isinstance(n,ast.ClassDef) and n.name==class_name)
         node=next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name==name)
         node.decorator_list=[]
-        ns=dict(_xyz=lambda x:tuple(x),BOT_WATER_AVOID_DEPTH=1.2)
+        ns=dict(_xyz=lambda x:tuple(x),NAVIGABLE_WATER_DEPTH=1.2)
         exec(compile(ast.Module(body=[node],type_ignores=[]),str(source),'exec'),ns)
         return ns[name]
 
     def test_native_column_recasts_below_each_layer_and_preserves_normals(self):
-        call=self.method('_navigation_height_columns',
-            'src/res/scripts/client/gui/mods/offline_lan_0922/battle_runtime.py','BattleRuntime')
+        from gui.mods.offline_lan_0922.vehicle_control.geometry import SharedBattleGeometry
+        call=SharedBattleGeometry._navigation_height_columns
         starts=[]
         def collide(start,end):
             starts.append(start)

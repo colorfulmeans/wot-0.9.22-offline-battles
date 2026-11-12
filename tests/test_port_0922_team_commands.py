@@ -5,6 +5,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'server'))
+sys.path.insert(0, str(ROOT / 'src/res/scripts/client'))
 
 from lan_battle_server import (
     BattleState, CLIENT_BUILD_0922, Player, PREBATTLE_SECONDS, TICK_HZ,
@@ -16,7 +17,7 @@ class _Socket(object):
         pass
 
 
-from server_bot_ai import BotPlanner
+from gui.mods.offline_lan_0922.vehicle_control.strategy import BotPlanner
 
 
 class _Planner(BotPlanner):
@@ -81,7 +82,7 @@ class TeamCommandTests(unittest.TestCase):
         self.assertEqual('unknown_command', ack['code'])
 
     def test_same_tick_new_sequence_cannot_bypass_command_cooldown(self):
-        from server_bot_ai import BotPlanner
+        from gui.mods.offline_lan_0922.vehicle_control.strategy import BotPlanner
         first = self.state.submit_team_command(1, self._message('HELPME', sequence=9))
         second = self.state.submit_team_command(1, self._message('ATTACK', sequence=10))
         self.assertTrue(first['accepted']);self.assertFalse(second['accepted'])
@@ -131,7 +132,7 @@ class TeamCommandTests(unittest.TestCase):
             20: {'id': 20, 'team': 1, 'alive': True, 'x': 8.0, 'z': 0.0},
         })
         self.state.bot_orders = {'revision': 1, 'orders': [
-            {'id': 20, 'combat_mode': 'under_fire_hold'},
+            {'id': 20, 'combat_mode': 'engage'},
         ]}
 
         ack = self.state.submit_team_command(1, self._message('BACKTOBASE'))
@@ -139,10 +140,10 @@ class TeamCommandTests(unittest.TestCase):
         self.assertTrue(ack['accepted'])
         self.assertEqual([12, 13, 17], ack['recipient_bot_ids'])
 
-    def test_driver_loss_and_routine_withdraw_do_not_make_a_mobile_bot_ineligible(self):
+    def test_driver_loss_does_not_make_a_routing_bot_ineligible(self):
         self.state.bot_states[11]['critical'] = {'crew_ko': ['driver']}
         self.state.bot_orders = {'revision': 1, 'orders': [
-            {'id': 11, 'combat_mode': 'withdraw'},
+            {'id': 11, 'combat_mode': 'route'},
         ]}
         ack = self.state.submit_team_command(1, self._message('HELPME'))
         self.assertEqual([11, 12], ack['recipient_bot_ids'])
@@ -194,7 +195,7 @@ class TeamCommandTests(unittest.TestCase):
             17: {'id': 17, 'team': 1, 'alive': True, 'x': 360.0, 'z': 0.0},
         })
         self.state.bot_orders = {'revision': 1, 'orders': [
-            {'id': 14, 'combat_mode': 'under_fire_hold'},
+            {'id': 14, 'combat_mode': 'engage'},
         ]}
         message = self._message('HELPME')
 
@@ -229,10 +230,10 @@ class TeamCommandTests(unittest.TestCase):
 
         self.assertEqual([11], ack['recipient_bot_ids'])
 
-    def test_broadcast_preserves_emergency_orders_but_back_to_base_keeps_defenders(self):
+    def test_broadcast_preserves_engagement_and_back_to_base_keeps_defenders(self):
         self.state.bot_orders = {'revision': 1, 'orders': [
             {'id': 11, 'combat_mode': 'base_defense'},
-            {'id': 12, 'combat_mode': 'under_fire_withdraw'},
+            {'id': 12, 'combat_mode': 'engage'},
         ]}
 
         attack = self.state.submit_team_command(1, self._message('ATTACK'))
@@ -299,6 +300,14 @@ class TeamCommandTests(unittest.TestCase):
                 command, sequence=sequence, target_id=12, target_kind='bot'))
             self.assertEqual([], ack['recipient_bot_ids'])
         self.assertEqual([], self.state._active_team_commands_locked())
+
+    def test_turnback_remains_a_radio_message_without_a_retreat_order(self):
+        ack = self.state.submit_team_command(1, self._message(
+            'TURNBACK', target_id=12, target_kind='bot'))
+        self.assertTrue(ack['accepted'])
+        self.assertEqual([], ack['recipient_bot_ids'])
+        self.assertEqual([], self.state._active_team_commands_locked())
+        self.assertEqual(0, self.sender.team_command_ready_tick)
 
     def test_navigation_without_target_data_does_not_produce_a_bot_reply(self):
         from unittest import mock

@@ -6,6 +6,7 @@ from unittest import mock
 import test_port_0922_battle_runtime as fixtures
 from gui.mods.offline_lan_0922 import destructibles_sensor as sensor
 from gui.mods.offline_lan_0922 import native_destructibles as geometry
+from gui.mods.offline_lan_0922.vehicle_control import geometry as shared_geometry
 
 
 class WorkerQueryReuseTests(unittest.TestCase):
@@ -30,7 +31,7 @@ class WorkerQueryReuseTests(unittest.TestCase):
         import random
         import struct
         from gui.mods.offline_lan_0922 import world_collision as world
-        module = fixtures.battle_runtime_module
+        module = shared_geometry
         rng = random.Random(461)
         for unused in range(200):
             bbox = (tuple(rng.uniform(-8,0) for i in range(3)),
@@ -45,7 +46,7 @@ class WorkerQueryReuseTests(unittest.TestCase):
 
     def test_rotation_reuses_preparation_but_preserves_every_posed_query(self):
         import math
-        module = fixtures.battle_runtime_module
+        module = shared_geometry
         battle = fixtures.BattleRuntime(fixtures._runtime())
         bbox = ((-1.,-.2,-3.),(2.,2.,4.))
         battle._destructibles = types.SimpleNamespace(_vehicle_body_bbox=lambda d:bbox)
@@ -80,6 +81,7 @@ class WorkerQueryReuseTests(unittest.TestCase):
         from gui.mods.offline_lan_0922.native_control_core import NativeControl
         from gui.mods.offline_lan_0922.bot_runtime import BotRuntime
         runtime = object.__new__(BotRuntime)
+        runtime._equipment_states = {}
         patch = mock.patch.dict(BotRuntime._spotting_profile.__globals__, {
             '_bot_profile':mock.Mock(return_value={}),
             '_base_invisibility':mock.Mock(return_value=0.),
@@ -108,7 +110,7 @@ class WorkerQueryReuseTests(unittest.TestCase):
                 for unused in range(1000):
                     owner._actor_config(source, {})
                 self.assertEqual(1, owner._project_actor_config.call_count)
-                self.assertIn(('bot',7,((),False)), runtime._spotting_profiles)
+                self.assertIn(('bot',7,((),False,())), runtime._spotting_profiles)
                 self.assertNotIn(('bot',7), runtime._spotting_profiles)
 
     def test_fitted_projection_invalidates_on_real_mutable_inputs(self):
@@ -426,3 +428,13 @@ class WorkerQueryReuseTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+def setUpModule():
+    import test_port_0922_bot_runtime as bots
+    bots.setUpModule()
+
+
+def tearDownModule():
+    import test_port_0922_bot_runtime as bots
+    bots.tearDownModule()

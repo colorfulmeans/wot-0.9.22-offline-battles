@@ -1,0 +1,224 @@
+"""An admitted reload survives pose churn and reaches native input in place.
+
+Only body/plate observations are supplied. AttackPolicy, FullPlayerRuntime,
+_LANInputSender and GunState are production
+consumers. These are lifecycle tests, not Windows physics acceptance.
+"""
+import copy
+import unittest
+
+import test_player_full_shell_settings as shell_fixtures
+import test_player_siege_engagement as siege_fixtures
+from gui.mods.offline_lan_0922 import siege_mechanics
+from gui.mods.offline_lan_0922.vehicle_control import attack_policy
+
+
+class ReloadAuthorityLifecycleTests(unittest.TestCase):
+    scene = shell_fixtures.FullShellSettingsTests.scene
+
+    def limited_scene(self):
+        scene = self.scene(clip=6, burst=3)
+        shell_fixtures.FullShellSettingsTests.move_from_previous_route_point(scene)
+        scene.entity.typeDescriptor.gun.turretYawLimits = (-.2, .2)
+        gun = scene.battle._gun_state
+        gun.clip = 3
+        for index, piercing in enumerate((1., 1000.)):
+            gun.shots[index].piercingPower = (piercing, piercing)
+            scene.battle.client.effective_params['gun']['shots'][index][
+                'source_shot']['piercingPower'] = (piercing, piercing)
+        scene.runtime.attack_policy.reset()
+        scene.runtime.attack_policy.atomic_time_budget = .25
+        return scene
+
+    def qualify(self, scene):
+        # Native armour/point work is authorized only after the copied BOT
+        # has selected this visible contact through its real lane query.
+        scene.admit()
+        policy = scene.runtime.attack_policy
+        self.assertIsInstance(policy.evaluator, attack_policy.NativeAttackEvaluator)
+        for unused in range(120):
+            scene.step(.11)
+            decision = policy.update(scene.now)
+            policy.background(scene.now)
+            self.assertFalse(hasattr(policy, 'search_started'))
+            if decision['action'] == 'reload_clip' and decision.get('early_reload'):
+                return decision
+        self.fail('verified alternative did not qualify current-failed reload: %r' % policy.status())
+
+    def test_limited_reload_keeps_qualification_across_pose_changes_without_retreat_wait(self):
+        scene = self.limited_scene()
+        gun = scene.battle._gun_state
+        policy = scene.runtime.attack_policy
+        self.qualify(scene)
+        qualified_at = policy.reload_authority['qualified_at']
+        settings, observed = scene.battle.change_vehicle_setting, []
+
+        def capture_setting(code, value):
+            if code in (scene.settings.CURRENT_SHELLS, scene.settings.RELOAD_PARTIAL_CLIP):
+                observed.append(dict(now=scene.now,
+                    decision=copy.deepcopy(scene.runtime.attack_policy.decision)))
+            return settings(code, value)
+
+        scene.battle.change_vehicle_setting = capture_setting
+        before = list(gun.ammo)
+        # Delay only this isolated native consumer while supplying ten real
+        # source poses. Geometric proofs expire; reload qualification does not.
+        # This is not a production movement/timeout prerequisite for loading.
+        for step in range(10):
+            scene.position = (.001 * step, 0., 12.)
+            scene.origin = (.001 * step, 2., 12.)
+            scene.set_hull(0.)
+            scene.step(.11)
+            decision = policy.update(scene.now)
+            self.assertFalse(hasattr(policy, 'search_started'))
+            authority = policy.reload_authority
+            self.assertIsNotNone(authority)
+            self.assertEqual(qualified_at, authority['qualified_at'])
+            self.assertEqual('reload_clip', decision['action'])
+            policy.background(scene.now)
+            self.assertEqual(before, gun.ammo)
+        # The mounted shell qualified the early reload. Replacement point
+        # review starts only after the native gun mounts the new shell.
+        self.assertIsNone(decision['candidate'])
+        self.assertFalse(policy._rows_for('penetration', 1, fresh_line=True))
+        self.assertEqual(qualified_at, policy.reload_authority['qualified_at'])
+        self.assertFalse(hasattr(scene.runtime, '_reload_order'))
+        self.assertFalse(hasattr(scene.runtime, '_reload_retreat'))
+        applied_at = scene.now
+        scene.runtime._apply_shell_intent()
+        self.assertEqual(1, len(observed))
+        receipt = observed[0]
+        self.assertEqual(applied_at, receipt['now'])
+        self.assertEqual('ordered_penetration_exhausted', receipt['decision']['reason'])
+        self.assertEqual(1, receipt['decision']['shell_index'])
+        self.assertEqual(before, gun.ammo)
+        self.assertEqual((1, 0), (gun.shot_index, gun.clip))
+        self.assertGreater(gun.reload_time, 0.)
+        self.assertIsNone(scene.runtime.attack_policy.reload_authority)
+        self.assertFalse(scene.launches())
+
+    def test_pending_replacement_clears_old_ai_queue_before_same_shell_partial_reload(self):
+        scene = self.limited_scene()
+        runtime, gun = scene.runtime, scene.battle._gun_state
+        # Retain the native queue-consumer regression for ranked reloads.
+        runtime.attack_policy = attack_policy.AttackPolicy(runtime, atomic_time_budget=.25)
+        self.qualify(scene)
+        # Finish the independent background ranking through real geometry.
+        for unused in range(40):
+            if runtime.attack_policy.next_shell == 1:
+                break
+            scene.step(.11)
+            runtime.attack_policy.update(scene.now)
+            runtime.attack_policy.background(scene.now)
+        self.assertEqual(1, runtime.attack_policy.next_shell)
+        runtime._apply_next_shell()
+        self.assertEqual(1, gun.pending_index)
+        self.assertFalse(hasattr(runtime, '_reload_order'))
+        self.assertFalse(hasattr(runtime, '_reload_retreat'))
+        # This is a missing native shot descriptor, not a supplied decision.
+        # The foreground update sees pending rank before the post-control
+        # background pass has released its previous NEXT_SHELLS lease.
+        gun.shots[1].speed = None
+        scene.step(.01)
+        decision = runtime.attack_policy.update(scene.now)
+        self.assertEqual(('reload_clip', 0, None),
+            (decision['action'], decision['shell_index'], decision['candidate']))
+        self.assertEqual(1, gun.pending_index)
+        runtime._apply_shell_intent()
+        self.assertEqual((0, 0, None), (gun.shot_index, gun.clip, gun.pending_index))
+        self.assertGreater(gun.reload_time, 0.)
+        self.assertIsNone(runtime.attack_policy.reload_authority)
+        self.assertEqual([(scene.settings.NEXT_SHELLS, 102),
+                          (scene.settings.NEXT_SHELLS, 101),
+                          (scene.settings.RELOAD_PARTIAL_CLIP, 0)], scene.setting_calls)
+
+    def test_native_siege_descriptor_exit_preserves_the_same_partial_clip_reload(self):
+        scene = siege_fixtures.SiegeScene()
+        scene.setUp()
+        self.addCleanup(scene.doCleanups)
+        scene.configure(enabled=True, clip=3, enabled_pitch=(-.8, .8))
+        shell_fixtures.FullShellSettingsTests.move_from_previous_route_point(scene)
+        gun, runtime = scene.battle._gun_state, scene.runtime
+        gun.clip = 2
+        for index, piercing in enumerate((1., 1000.)):
+            gun.shots[index].piercingPower = (piercing, piercing)
+            scene.battle.client.effective_params['gun']['shots'][index][
+                'source_shot']['piercingPower'] = (piercing, piercing)
+        policy = runtime.attack_policy
+        policy.reset()
+        policy.atomic_time_budget = .25
+        self.qualify(scene)
+        qualified = policy.reload_authority['qualified_at']
+        old_identity = policy.frame['identity']
+        physical_identity = policy.frame['weapon_identity']
+        self.assertFalse(hasattr(runtime, '_reload_order'))
+        self.assertFalse(hasattr(runtime, '_reload_retreat'))
+        # A real native composite/sequence echo, not a supplied policy frame,
+        # changes the mounted gun envelope to travel's exact zero pitch.
+        scene.echo_mode(siege_mechanics.SWITCHING_OFF, 1)
+        scene.step(.1)
+        decision = policy.update(scene.now)
+        self.assertNotEqual(old_identity, policy.frame['identity'])
+        self.assertEqual(physical_identity, policy.frame['weapon_identity'])
+        self.assertEqual(('reload_clip', qualified),
+            (decision['action'], decision['reload_qualified_at']))
+        scene.echo_mode(siege_mechanics.DISABLED, 1)
+        scene.step(.1)
+        decision = policy.update(scene.now)
+        self.assertEqual(('reload_clip', qualified),
+            (decision['action'], decision['reload_qualified_at']))
+        runtime._apply_shell_intent()
+        self.assertEqual((0, 0), (gun.shot_index, gun.clip))
+        self.assertGreater(gun.reload_time, 0.)
+        self.assertIsNone(policy.reload_authority)
+        self.assertFalse(scene.launches())
+
+    def test_last_stocked_ap_shot_loads_penetration_reserve_before_he(self):
+        scene = self.scene(clip=1, burst=1, third=True)
+        runtime, gun = scene.runtime, scene.battle._gun_state
+        gun.ammo[0] = gun.clip = 1
+        for index in (1, 2):
+            gun.shots[index].piercingPower = (1., 1.)
+            scene.battle.client.effective_params['gun']['shots'][index][
+                'source_shot']['piercingPower'] = (1., 1.)
+        he = gun.shots[2]
+        he.shell.kind, he.shell.explosionRadius = 'HIGH_EXPLOSIVE', 5.
+        scene.battle.client.effective_params['gun']['shots'][2][
+            'source_shot']['shell'].update(kind='HIGH_EXPLOSIVE', explosionRadius=5.)
+        policy = runtime.attack_policy
+        policy.reset()
+        for unused in range(100):
+            scene.step(.05)
+            decision = policy.update(scene.now)
+            policy.background(scene.now)
+            self.assertEqual('aim', decision['action'])
+            self.assertFalse(policy.fallback)
+            if policy.next_status == 'mounted_stock_exhausted':
+                break
+        self.assertEqual((1, 'mounted_stock_exhausted'),
+                         (policy.next_shell, policy.next_status))
+        self.assertFalse(policy._rows_for('penetration', 1, fresh_line=True))
+        runtime._apply_next_shell()
+        self.assertEqual(1, gun.pending_index)
+        scene.rotator_enabled = True
+        for unused in range(100):
+            scene.battle._advance_local_gun_to(scene.entity, scene.now)
+            scene.tick()
+            if scene.launches():
+                break
+        self.assertEqual([0], [shot['shell_index'] for shot in scene.launches()])
+        self.assertEqual((1, 0, None), (gun.shot_index, gun.clip, gun.pending_index))
+        self.assertEqual(0, gun.ammo[0])
+        self.assertGreater(gun.reload_time, 0.)
+        self.assertEqual(1, policy.loading_plan['shell_index'])
+        for unused in range(220):
+            scene.battle._advance_local_gun_to(scene.entity, scene.now)
+            scene.tick()
+            if len(scene.launches()) > 1:
+                break
+        self.assertEqual([0, 2], [shot['shell_index'] for shot in scene.launches()])
+        self.assertFalse(hasattr(policy, 'search_started'))
+
+
+if __name__ == '__main__':
+    unittest.main()

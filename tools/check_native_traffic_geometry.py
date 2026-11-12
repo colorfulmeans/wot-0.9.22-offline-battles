@@ -144,6 +144,21 @@ def run(backend):
                    pitch=0., roll=0., shape=[1.7, 3.5, -.8, 2.],
                    half_width=1.7, half_length=3.5, velocity=(0., 0., 4.))
         peer = dict(own, id=2, position=(0., 0., 8.), velocity=(0., 0., 0.))
+        # Physical braking is team-neutral; the independent crossing frontier
+        # still excludes enemies. Exercise actual native calls for both actor
+        # namespaces instead of a source-text or reference-only assertion.
+        for own_id in (1, 1000001):
+            for peer_id in (2, 1000002):
+                a = dict(own, id=own_id, velocity=(0., 0., 12.))
+                p = dict(peer, id=peer_id, team=2, position=(0., 0., 12.))
+                roster = check_roster(a, [p], 1.)
+                assert roster[4] == [p] and roster[5] == [p]
+                result = check_controls(a, [p], dict(throttle=1., turn=0.,
+                    movement_intent=True, recovery_mode='drive'), .1, 20.)
+                assert result[0][0] == 'ok'
+                assert result[0][1]['throttle'] == 0.
+                assert result[0][1]['forward_blocked_by'] == peer_id
+                assert traffic._adjust_roster(own_id, a, [p]) == {}
         for z in (-8., 0., 6.999999999, 7., 7.000000001, 8., 24.):
             for x in (0., 3.4, 3.400000001):
                 for throttle in (-.010000000001, -.01, 0., .01, .010000000001):
@@ -225,8 +240,12 @@ def run(backend):
         assert backend.driver_geometry(3, dict(own, yaw=NumberTrap()), [peer], (1.,)) is None
         assert backend.driver_geometry(3, own, [dict(peer, position=NumberTrap())], (1.,)) is None
         # Excluded actors are not required to carry unused valid geometry.
-        ignored = [dict(id=1), dict(id=8, alive=False), dict(id=9, team=2)]
+        ignored = [dict(id=1), dict(id=8, alive=False)]
         check_roster(own, ignored, 1.)
+        # An enemy is no longer excluded before geometry validation. Missing
+        # enemy geometry must refuse the native frontier, not invent a clear
+        # corridor; the ordinary caller retains its existing fallback law.
+        assert backend.driver_geometry(3, own, [dict(id=9, team=2)], (1.,)) is None
         assert backend.driver_geometry(4, own, [peer], (0.,)*8) is None
         assert backend.driver_geometry(4, own, [peer], (0.,)*8+(float('nan'),)) is None
 

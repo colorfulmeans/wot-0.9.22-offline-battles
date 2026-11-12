@@ -211,7 +211,8 @@ class NavigationCapabilityDirectionABITests(unittest.TestCase):
         calls, verdicts = [], []
 
         class CandidateAdapter(bot_fixture._FixedAdapter):
-            def decide(self, state, clear):
+            def decide_with_order(self, state, strategic, clear):
+                self.server_orders.append(dict(strategic))
                 # The route is behind the hull: pivot then drive forwards.
                 # The same world heading can separately be a backing escape.
                 verdicts.append((clear(0.0, 5.6),
@@ -405,43 +406,11 @@ class NavigationCapabilityGateTests(unittest.TestCase):
             self.assertTrue(grid.segment_clear(start, goal, policy))
             self.assertEqual(calls, tuple(self.native_calls))
 
-    def test_queued_cover_callback_uses_shared_static_policy(self):
-        calls = []
-
-        def cover(source, target, route, allies, segment_clear):
-            self.reset_receipts()
-            result = segment_clear((0.0, 0.0, 0.0), (0.0, 0.0, 8.0))
-            calls.append((source['id'], result, tuple(self.native_calls)))
-            return ({'source_id': source['id']},)
-
-        self.runtime.cover_probe = cover
-        self.runtime.visibility_probe = lambda *unused: True
-        self.runtime.firing_lane_probe = lambda *unused: True
-        command = {
-            'target_yaw': 0.0, 'throttle': 0.0, 'turn': 0.0,
-            'shell_index': 0, 'fire_allowed': False,
-            'target_id': self.module.HUMAN_TARGET_ID_BASE + 1,
-            'fire_range': 500.0, 'combat_mode': 'take_cover',
-            'aim_position': (0.0, 1.0, 20.0),
-            'face_position': (0.0, 1.0, 20.0),
-            'move_position': (0.0, 0.0, 0.0),
-            'recovery_mode': 'arrived', 'movement_intent': False,
-        }
-        self.runtime.adapter = bot_fixture._FixedAdapter(command)
-        self.runtime.states[12]['x'] = -20.0
-        player = bot_fixture._admit_player({
-            'id': 1, 'team': 1, 'alive': True,
-            'x': 0.0, 'y': 0.0, 'z': 20.0,
-            'health': 1000, 'max_health': 1000})
-        for frame in range(60):
-            self.runtime.update(1.0 / 30.0, 1.0 + frame / 30.0,
-                                players=[player])
-            if len(calls) >= 2:
-                break
-        self.assertEqual([11, 12], [call[0] for call in calls[:2]])
-        for bot_id, clear, native_calls in calls[:2]:
-            self.assertTrue(clear)
-            self.assertTrue(native_calls)
-            expected = self.runtime.navigation_planning_capability(bot_id)
-            self.assertTrue(all(call[3] is expected for call in native_calls),
-                            native_calls)
+    def test_navigation_capability_does_not_install_retired_cover_policy(self):
+        self.assertFalse(hasattr(self.runtime, 'cover_probe'))
+        self.assertFalse(hasattr(self.runtime, '_cover_queue'))
+        self.reset_receipts()
+        capability = self.runtime.navigation_planning_capability(11)
+        self.assertTrue(self.runtime.navigator.grid.segment_clear(
+            (0.0, 0.0, 0.0), (0.0, 0.0, 8.0), capability))
+        self.assert_consumer_reached_native(11)

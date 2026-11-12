@@ -63,7 +63,7 @@ class LocalActionSweepTests(unittest.TestCase):
             def decide(state,clear):
                 observed.append(state['pose_clear'](state['yaw']+.9))
                 return {'throttle':0.,'turn':0.,'target_yaw':state['yaw'],'fire_allowed':False}
-            runtime.adapter.decide=decide
+            runtime.adapter.fixture_controls=decide
             with contextlib.redirect_stdout(io.StringIO()):runtime.update(.1,1.)
             self.assertEqual([False],observed)
             runtime._decision_cache.clear();observed[:]=[]
@@ -249,7 +249,7 @@ class LocalActionSweepTests(unittest.TestCase):
                 observed.append(state['pose_clear'](state['yaw']+1.2))
                 observed.append(clear(state['yaw'],.54))
                 return {'throttle':0.,'turn':0.,'target_yaw':state['yaw'],'fire_allowed':False}
-            runtime.adapter.decide=decide
+            runtime.adapter.fixture_controls=decide
             with contextlib.redirect_stdout(io.StringIO()):runtime.update(.1,1.)
             self.assertEqual([False,False,False],observed)
             # Distinct requested arcs cannot reuse one next-frame proof.

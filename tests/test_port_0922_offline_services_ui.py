@@ -47,6 +47,25 @@ def bond_filter_controls():
 
 
 class NativeServiceUITests(unittest.TestCase):
+    def test_ten_battles_uses_stock_ordinary_milestone_text_only(self):
+        class PvE(object):
+            battlesCount=10
+            getDescription=lambda self:'old PvE warning'
+        class Ordinary(object):
+            getDescription=lambda self:'ordinary unchanged'
+        make=mock.Mock(return_value='native congratulations 10')
+        with native_modules({
+            'gui.awards.special_achievement_awards': {'PvEBattleAward':PvE, 'BattleAward':Ordinary},
+            'gui.shared.formatters': {'text_styles':types.SimpleNamespace(main=lambda text:('styled',text))},
+            'helpers': {'i18n':types.SimpleNamespace(makeString=make)},
+            'BigWorld': {'wg_getIntegralFormat':lambda count:str(count)}}):
+            self.ui._install_battle_milestone_text()
+            self.assertEqual(('styled','native congratulations 10'),PvE().getDescription())
+            make.assert_called_once_with('#menu:awardWindow/specialAchievement/battle/description2',battlesCount='10')
+            self.assertEqual('ordinary unchanged',Ordinary().getDescription())
+            self.ui.uninstall()
+            self.assertEqual('old PvE warning',PvE().getDescription())
+
     def setUp(self):
         self.ui = fixture._load_port_module('offline_services_ui')
         self.data = {'vehicles': [{'vehicleTypeCompactDescr': 2}],
@@ -64,7 +83,7 @@ class NativeServiceUITests(unittest.TestCase):
                 return 200 - other
 
         original = FittingItem.__dict__['__cmp__']
-        other_installs = ('_install_unavailable_entries', '_install_ordinary_mission_presentation', '_install_crew_skill_counter', '_install_directive_fitting', '_install_store_filters', '_install_shop',
+        other_installs = ('_install_battle_milestone_text', '_install_unavailable_entries', '_install_ordinary_mission_presentation', '_install_crew_skill_counter', '_install_directive_fitting', '_install_store_filters', '_install_shop',
             '_install_vehicle_filters_and_recovery', '_install_reserves',
             '_install_account',
             '_install_settings', '_install_exchange_dialog_limits',
@@ -93,7 +112,7 @@ class NativeServiceUITests(unittest.TestCase):
         original = FittingItem.__dict__['__cmp__']
         with native_modules({
                 'gui.shared.gui_items.fitting_item': {'FittingItem': FittingItem}
-                }), mock.patch.object(self.ui, '_install_unavailable_entries'), mock.patch.object(self.ui, '_install_directive_fitting'), \
+                }), mock.patch.object(self.ui, '_install_battle_milestone_text'), mock.patch.object(self.ui, '_install_unavailable_entries'), mock.patch.object(self.ui, '_install_directive_fitting'), \
                 mock.patch.object(self.ui, '_install_store_filters',
                                       side_effect=RuntimeError('startup failed')):
             with self.assertRaises(RuntimeError):
@@ -898,7 +917,7 @@ class ExchangeDialogLimitTests(unittest.TestCase):
 
     def test_regular_services_install_and_rollback_own_the_native_base_hook(self):
         original = self.meta_type.makeVO
-        others = ('_install_unavailable_entries', '_install_ordinary_mission_presentation', '_install_crew_skill_counter', '_install_directive_fitting', '_install_item_comparisons', '_install_store_filters',
+        others = ('_install_battle_milestone_text', '_install_unavailable_entries', '_install_ordinary_mission_presentation', '_install_crew_skill_counter', '_install_directive_fitting', '_install_item_comparisons', '_install_store_filters',
             '_install_shop', '_install_vehicle_filters_and_recovery',
             '_install_reserves', '_install_account',
             '_install_settings', '_schedule_daily_rollover')

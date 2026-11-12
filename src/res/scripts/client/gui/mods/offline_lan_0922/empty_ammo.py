@@ -23,7 +23,7 @@ def handoff(runtime, state, order):
         return
     state['_empty_ammo_active'] = True
     for key in ('_rear_motion_lease', '_rear_aim_episode', '_rear_hull_aim',
-                '_gun_angle_adjustment', '_gun_angle_pivot_refusal',
+                '_gun_angle_pivot_refusal',
                 '_authored_spg_travel', '_authored_spg_attack',
                 '_authored_spg_defending', '_authored_spg_resume',
                 '_authored_spg_return_zone', '_authored_spg_return_initial',
@@ -32,8 +32,7 @@ def handoff(runtime, state, order):
     adapter = getattr(runtime, 'adapter', None)
     driver = getattr(adapter, 'driver', None)
     getattr(driver, 'states', {}).pop(state['id'], None)
-    for name in ('_withdrawal_attempts', '_contact_escapes', '_flank_arrivals'):
-        getattr(adapter, name, {}).pop(state['id'], None)
+    getattr(adapter, '_contact_escapes', {}).pop(state['id'], None)
     # These are unlaunched planning intents, not projectile ledgers.
     cancel = getattr(runtime, '_cancel_artillery_intent', None)
     if callable(cancel):

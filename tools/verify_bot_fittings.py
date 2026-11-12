@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'src/res/scripts/client'))
 from gui.mods.offline_lan_0922.bot_fitting_data import PLANS, CLASSES
 from gui.mods.offline_lan_0922 import ammo_policy, vehicle_configuration
-from gui.mods.offline_lan_0922 import bot_fittings, equipment_policy
+from gui.mods.offline_lan_0922 import bot_fittings, equipment_policy, default_loadouts
 
 
 def audit_rented_outfits(packed):
@@ -58,7 +58,7 @@ def merge(shared, local):
     return result
 
 
-def audit(client):
+def audit(client, rebuild=False):
     client = Path(client)
     cache, translations, rows, invalid = {}, {}, [], []
     def gui_key(name, value):
@@ -126,6 +126,12 @@ def audit(client):
                 return True
             fixed = isinstance(listed.get('price'),dict) and 'gold' in listed['price']
             combinations=list(tiers.items())
+            from gui.mods.offline_lan_0922 import equipment_test
+            if vehicle in equipment_test.VEHICLES:
+                devices, directive = equipment_test.MATRIX[equipment_test.VEHICLES.index(vehicle)]
+                varied = copy.deepcopy(tiers['elite'])
+                varied.update(devices=list(devices), directive=directive)
+                combinations.append(('diagnostic_matrix', varied))
             for development, d in (('stock','rookie'),('intermediate','regular'),('full','elite')):
                 for equipment, e in (('none','rookie'),('single','regular'),('standard','veteran'),('improved','elite')):
                     value=dict(tiers[e]);value['modules']=tiers[d]['modules']
@@ -155,8 +161,11 @@ def audit(client):
                                 expected.append(candidate)
                                 base_mass += weight
                                 break
-                    assert expected == fitting['devices'], (vehicle,tier,'priority order',expected,fitting['devices'])
                     expected_directive = next(equipment_policy.directive_candidates(expected), None) if tier=='elite' else None
+                    if rebuild:
+                        fitting['devices'] = list(expected)
+                        fitting['directive'] = expected_directive
+                    assert expected == fitting['devices'], (vehicle,tier,'priority order',expected,fitting['devices'])
                     assert expected_directive == fitting['directive'], (vehicle,tier,'directive order')
                 if mass > float(components['chassis'][modules['chassis']]['maxLoad']):
                     if '_' not in tier:raise AssertionError((vehicle,tier,mass))
@@ -186,16 +195,51 @@ def audit(client):
                     for i,n in enumerate(shots)]
                 clip = int(float((gun.get('clip') or {}).get('count',1)))
                 capacity = int(float(gun['maxAmmo']))
-                profile = dict(vehicle_name=vehicle, gun_name=modules['gun'],class_tag=CLASSES[vehicle],
+                profile = dict(vehicle_name=vehicle, gun_name=modules['gun'],class_tag=CLASSES[vehicle],bot_tier=tier,
                                shells=shells,clip_size=clip)
                 allocation = ammo_policy.allocation(profile,capacity,len(shells))
                 assert sum(allocation) == capacity, (vehicle,tier,'full capacity')
                 assert all(n % clip == 0 for n in allocation), (vehicle,tier,'whole magazine')
                 assert all(allocation[s['index']] > 0 for s in ammo_policy.stages(profile)), (vehicle,tier,'missing shell')
+                # Exercise elite ammunition on every development/equipment
+                # combination, not only the default fully upgraded elite plan.
+                base = dict(profile, bot_tier='veteran')
+                elite_profile = dict(profile, bot_tier='elite')
+                old_stages = ammo_policy.stages(base)
+                new_stages = ammo_policy.stages(elite_profile)
+                elite_allocation = ammo_policy.allocation(elite_profile,capacity,len(shells))
+                protected = (bool(old_stages and ammo_policy.is_he(old_stages[0])) or
+                    (vehicle,modules['gun']) in default_loadouts.ELITE_PENETRATION_EXCEPTIONS)
+                if protected:
+                    assert [s['name'] for s in old_stages if not ammo_policy.is_he(s)] == [
+                        s['name'] for s in new_stages if not ammo_policy.is_he(s)], (vehicle,tier,'lost penetration backup')
+                    base_allocation = ammo_policy.allocation(base,capacity,len(shells))
+                    assert all(elite_allocation[s['index']] == base_allocation[s['index']]
+                               for s in old_stages if not ammo_policy.is_he(s)), (vehicle,tier,'changed backup quota')
+                else:
+                    premium = [s for s in shells if s['gold'] and not ammo_policy.is_he(s)]
+                    if premium and CLASSES[vehicle] != 'SPG':
+                        assert all(elite_allocation[s['index']] == 0 for s in shells
+                                   if not s['gold'] and not ammo_policy.is_he(s)), (vehicle,tier,'elite silver penetration round')
+                gold_he = [s for s in shells if s['gold'] and ammo_policy.is_he(s)]
+                if gold_he:
+                    assert all(elite_allocation[s['index']] == 0 for s in shells
+                               if not s['gold'] and ammo_policy.is_he(s)), (vehicle,tier,'elite silver HE')
+                else:
+                    assert [s['name'] for s in old_stages if ammo_policy.is_he(s)] == [
+                        s['name'] for s in new_stages if ammo_policy.is_he(s)], (vehicle,tier,'lost native HE without counterpart')
+                if CLASSES[vehicle] == 'SPG':
+                    assert all(ammo_policy.is_he(s) for s in new_stages), (vehicle,tier,'artillery penetration round')
+                assert sum(elite_allocation) == capacity, (vehicle,tier,'elite capacity')
+                assert all(n % clip == 0 for n in elite_allocation), (vehicle,tier,'elite whole magazines')
+                assert all(elite_allocation[s['index']] > 0 for s in new_stages), (vehicle,tier,'empty elite stage')
+                if modules['gun'] == '_122mm_cannon_mod_1930' and nation == 'ussr':
+                    assert [s['name'] for s in new_stages] == ['_122mm_OF420SO'], (vehicle,tier,'SU5 stronger HE')
                 rows.append(dict(vehicle=vehicle,tier=tier,modules=modules,weight=mass,
                     devices=list(fitting['devices']), directive=fitting['directive'],
                     max_health=float(definition['hull'].get('maxHealth',0))+float(turret.get('maxHealth',0)),
-                    reload_seconds=gun['reloadTime'],capacity=capacity,clip_size=clip,allocation=allocation))
+                    reload_seconds=gun['reloadTime'],capacity=capacity,clip_size=clip,allocation=allocation,
+                    elite_allocation=elite_allocation,elite_stages=[s['name'] for s in new_stages]))
     assert all(t.startswith('stock_') for v,t in invalid), 'An allowed fitting exceeds load'
     return dict(client='0.9.22.0.1 CN #1513', vehicles=len(PLANS), fittings=len(rows),
                 evidence='static resources; native install/rendering not asserted',

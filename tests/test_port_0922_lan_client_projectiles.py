@@ -406,6 +406,24 @@ class ProjectileWireTests(unittest.TestCase):
                     gun_checkpoint=self.gun_checkpoint()))
         self.assertEqual(count, len(client._outbound_queue))
 
+    def test_contact_normal_survives_queue_retry_without_aliasing(self):
+        client = self.active_client()
+        self.assertTrue(self.send_player_input(client))
+        normal = [0, 1, 0]
+        contacts = [dict(name='leftTrackHealth', weight=1.0)]
+        self.assertEqual(1, client.send_landing_observation(20.0, contacts, contact_normal=normal))
+        normal[1] = -1
+        first = wire_copy(client._outbound_queue[-1][1])
+        self.assertEqual([0, 1, 0], first['contact_normal'])
+        self.assertTrue(self.send_player_input(client))
+        self.assertEqual(1, client.send_landing_observation(21.0, contacts, contact_normal=[0, -1, 0]))
+        client._handle_landing_observation_result(dict(type='landing_observation_result',
+            round_id=3, authority_epoch=4, observation_seq=1, input_seq=1,
+            committed_seq=1, accepted=True, reason=''))
+        second = wire_copy(client._outbound_queue[-1][1])
+        self.assertEqual([0, -1, 0], second['contact_normal'])
+        self.assertEqual(2, second['observation_seq'])
+
     def test_landing_observations_are_sequenced_and_acknowledged(self):
         client = self.active_client()
         self.assertTrue(self.send_player_input(client))

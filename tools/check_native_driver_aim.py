@@ -12,7 +12,7 @@ backend = imp.load_dynamic('offline_math_batch_native', sys.argv[1])
 native_math._backend = backend
 native_math._attempted = True
 rng = random.Random(141309)
-modes = [None, 'engage', 'reverse_withdraw', 'avoid', 'blocked', 'reverse_turn',
+modes = [None, 'engage', 'drive', 'avoid', 'blocked', 'reverse_turn',
          'pivot_recovery', 'forward_escape', 'short_forward_escape',
          'short_reverse_escape', 'contact_escape', 'wreck_push', 'friendly_yield',
          'nav_wait', 'physical_hold']
@@ -24,7 +24,7 @@ def check(name, args):
     before = native_math.snapshot()['driver_aim']
     actual = getattr(driver, name)(*args)
     deferred = (name == 'combat_hull_aim' and driver._rear_laying_deferred(
-        args[0], args[1], args[2], args[3], args[11], args[12]))
+        args[0], args[1], args[2], args[3], args[10], args[11]))
     # A rejected tactical episode must not enter either aiming law. Every
     # admitted primitive still has to use native, never a silent fallback.
     expected_calls = 0 if deferred else 1
@@ -44,8 +44,8 @@ for case in range(6000):
     turn, throttle = [rng.uniform(-1., 1.) for unused in range(2)]
     rear = rng.choice((-1., 0., 1.))
     check('combat_hull_aim', (hull, target, minimum, maximum, turn, throttle,
-        rng.choice(modes), rng.choice((False, True)), rng.choice((None, 'engage', 'withdraw')),
-        rng.choice((False, True)), rng.choice((False, True)), rear, rng.choice((False, True))))
+        rng.choice(modes), rng.choice((False, True)), rng.choice((None, 'engage', 'route')),
+        rng.choice((False, True)), rear, rng.choice((False, True))))
     relative = driver._angle_delta(target, hull)
     check('limited_traverse_target', (relative, minimum, maximum, rear))
     desired, pitch = [rng.uniform(-1., 1.) for unused in range(2)]
@@ -61,13 +61,15 @@ for minimum, maximum in [(-math.pi, math.pi), (0., 0.), (-.1, .4), (-1.57, 1.57)
             for mode in modes:
                 for rear in [-1., 0., 1.]:
                     check('combat_hull_aim', (0., relative + epsilon, minimum, maximum,
-                        .5, -.5, mode, True, 'engage', False, True, rear, True))
+                        .5, -.5, mode, True, 'engage', False, rear, True))
             check('limited_traverse_target', (relative + epsilon, minimum, maximum, 1.))
 for yaw_error in [.06-1.e-12, .06, .06+1.e-12, -.06, math.pi, -math.pi]:
     for pitch_error in [.04-1.e-12, .04, .04+1.e-12, -.04]:
         check('gun_aligned', (yaw_error, 0., 0., pitch_error, 0., .06, .04))
 assert backend.driver_aim(3, (float('inf'), 0.), ()) is None
 assert backend.driver_aim(0, (0.,)*7, (0, 2, 0, 0, 0, 0)) is None
+assert backend.driver_aim(0, (0.,)*7, (2, 1, 0, 0, 0, 0)) is None
+assert backend.driver_aim(0, (0.,)*7, (0, 1, 0, 0, 1, 0)) is None
 assert backend.driver_aim(4, (), ()) is None
 # Unsupported numeric objects never invoke Python conversion inside C++.
 class Trap(object):

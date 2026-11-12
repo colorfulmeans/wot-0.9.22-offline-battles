@@ -133,7 +133,7 @@ def _rear_laying_deferred(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
 
 def _reference_combat_hull_aim(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
 		turn, throttle, recovery_mode, has_target=True,
-		combat_mode=None, movement_intent=False, withdrawal_aim=False,
+		combat_mode=None, movement_intent=False,
 		rear_turn=0.0, allow_rear_start=True):
 	"""Turn a limited-traverse hull until its gun can physically bear."""
 	if _rear_laying_deferred(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
@@ -156,8 +156,8 @@ def _reference_combat_hull_aim(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
 	                    (rear_turn or (allow_rear_start and abs(relative) > math.pi * 0.5)) and
 	                    not minimum_yaw + margin <= relative <= maximum_yaw - margin)
 	if rear_unreachable:
-		# A retreat cannot preserve frontal armour or fire at a rear threat
-		# which the installed turret cannot reach. Brake and lay the chassis.
+		# A rear threat outside the installed turret arc requires chassis
+		# laying before ordinary travel or firing can continue.
 		# Keep the admitted side across the +/-pi seam for this same target;
 		# target jitter must not repeatedly reverse both hull and turret.
 		center = (float(minimum_yaw) + float(maximum_yaw)) * 0.5
@@ -165,20 +165,8 @@ def _reference_combat_hull_aim(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
 		if rear_turn and abs(relative) > math.pi * 0.5 and delta * float(rear_turn) < 0.0:
 			delta += math.copysign(2.0 * math.pi, float(rear_turn))
 		return max(-1.0, min(1.0, delta / 0.58)), 0.0, True
-	if recovery_mode == 'reverse_withdraw':
-		# Only a short, physically admitted backing command may lay a fixed
-		# gun without stopping the escape. Long withdrawals retain steering.
-		relative = _angle_delta(target_yaw, hull_yaw)
-		center = (float(minimum_yaw) + float(maximum_yaw)) * 0.5
-		if (withdrawal_aim and float(throttle) < 0.0 and
-				abs(relative-center) <= 0.35 and
-				not (minimum_yaw <= -math.pi + 0.1 and maximum_yaw >= math.pi - 0.1)):
-			if minimum_yaw + 0.02 <= relative <= maximum_yaw - 0.02:
-				return 0.0, float(throttle), False
-			return -max(-0.5, min(0.5, (relative-center)/0.58)), float(throttle), True
-		return float(turn), float(throttle), False
 	if movement_intent and combat_mode != 'engage':
-		# A target can remain visible while a TD retreats or follows a route.
+		# A target can remain visible while a TD follows a route.
 		# Laying its fixed gun must not stop that move or reverse its safe turn.
 		# Explicit engagement still owns its mature stop-and-aim behaviour;
 		# a tactical firing hold may aim once the planner has ended movement.
@@ -238,7 +226,7 @@ def _reference_barrel_direction(yaw, pitch):
 # Each frontier transfers one complete aiming decision, with no retained state.
 def combat_hull_aim(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
         turn, throttle, recovery_mode, has_target=True,
-        combat_mode=None, movement_intent=False, withdrawal_aim=False,
+        combat_mode=None, movement_intent=False,
         rear_turn=0.0, allow_rear_start=True):
     if _rear_laying_deferred(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
                             rear_turn, allow_rear_start):
@@ -249,17 +237,18 @@ def combat_hull_aim(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
         'pivot_recovery', 'forward_escape', 'short_forward_escape',
         'short_reverse_escape', 'contact_escape', 'wreck_push', 'friendly_yield',
         'nav_wait', 'physical_hold')
-    mode = 1 if held else 2 if recovery_mode == 'reverse_withdraw' else 0
+    mode = 1 if held else 0
+    # The reviewed native call width is fixed; its retired policy slot is zero.
     result = native_math.call('driver_aim', 0,
         (hull_yaw, target_yaw, minimum_yaw, maximum_yaw, turn, throttle, rear_turn),
         (mode, int(bool(has_target)), int(combat_mode == 'engage'),
-         int(bool(movement_intent)), int(bool(withdrawal_aim)),
+         int(bool(movement_intent)), 0,
          int(bool(allow_rear_start))))
     if result is not None:
         return result[0], result[1], bool(result[2])
     return _reference_combat_hull_aim(hull_yaw, target_yaw, minimum_yaw,
         maximum_yaw, turn, throttle, recovery_mode, has_target, combat_mode,
-        movement_intent, withdrawal_aim, rear_turn, allow_rear_start)
+        movement_intent, rear_turn, allow_rear_start)
 
 
 def limited_traverse_target(relative, minimum, maximum, rear_turn=0.0):
@@ -1394,7 +1383,7 @@ class LocalDriver(object):
 			state['translation_progress_at'] = state['clock']
 		translation_stalled = state['clock'] - state['translation_progress_at'] >= 8.0
 		# A nearby path connector is not arrival at the tactical destination.
-		# Keep physical no-progress evidence across route/withdraw goal changes
+		# Keep physical no-progress evidence across route/recovery goal changes
 		# after a realised native refusal. Neither an elapsed timer alone nor
 		# reaching the actual destination may manufacture a recovery command.
 		native_translation_stalled = bool(rotation_refused and translation_stalled and

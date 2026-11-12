@@ -65,6 +65,58 @@ class ProfileProtectionTests(unittest.TestCase):
         current=overlays.inspect_profile_field(f.game,'Burst',f.GUNS,'shared/Gun-A/burst/rate')
         self.assertEqual('600',current['currentValue'])
 
+
+class PackagedPreviewContractTests(unittest.TestCase):
+    """Exercise the packaged smoke expectation even without a Tk display."""
+    def rendered(self, language, limit=0):
+        import bot_tactics_preview
+        document=storage.contract.empty('Smoke fixture')
+        document['behavior']=[dict(team=0,class_tag='all',slot=-1,values=dict(
+            skill='regular',development='full',equipment='improved',
+            consumables='large',crew_preset='all',outfit='off',
+            ammo_limit=limit,ammo_ratios=[0,0,0]))]
+        groups=bot_tactics_preview.grouped(document)
+        self.assertEqual(1,len(groups))
+        self.assertEqual(150,len(groups[0]['scopes']))
+        return bot_tactics_preview.rows(groups[0],language)
+
+    def test_packaged_smoke_accepts_current_fitting_preview_in_both_languages(self):
+        import bot_tactics_smoke
+        for language in ('en','zh'):
+            for limit in (0,1):
+                with self.subTest(language=language,limit=limit):
+                    bot_tactics_smoke._verify_effective_preview_rows(
+                        self.rendered(language,limit),language,limit)
+
+    def test_packaged_smoke_rejects_missing_duplicate_and_retired_preview_fields(self):
+        import bot_tactics_smoke
+        for language in ('en','zh'):
+            rows=self.rendered(language)
+            for index in range(len(rows)):
+                with self.subTest(language=language,missing=index):
+                    with self.assertRaisesRegex(AssertionError,'Effective fitting preview mismatch'):
+                        bot_tactics_smoke._verify_effective_preview_rows(
+                            rows[:index]+rows[index+1:],language,0)
+                with self.subTest(language=language,duplicate=index):
+                    with self.assertRaises(AssertionError):
+                        bot_tactics_smoke._verify_effective_preview_rows(rows+[rows[index]],language,0)
+            retired = ('反击攻击者','Retaliate against attacker')[language=='en']
+            with self.assertRaises(AssertionError):
+                bot_tactics_smoke._verify_effective_preview_rows(
+                    rows+[(retired,'1',rows[0][2])],language,0)
+
+    def test_packaged_smoke_rejects_wrong_value_or_default_source_for_every_fitting(self):
+        import bot_tactics_smoke
+        for language in ('en','zh'):
+            rows=self.rendered(language)
+            for index in range(len(rows)):
+                for column,replacement in ((1,'wrong effective value'),(2,'Difficulty default')):
+                    with self.subTest(language=language,index=index,column=column):
+                        mutated=[list(row) for row in rows]
+                        mutated[index][column]=replacement
+                        with self.assertRaises(AssertionError):
+                            bot_tactics_smoke._verify_effective_preview_rows(mutated,language,0)
+
 @unittest.skipUnless(os.name=='nt' or os.environ.get('DISPLAY'),'requires actual Tk display')
 class EditorProtectionTests(unittest.TestCase):
     def setUp(self):
@@ -96,10 +148,10 @@ class EditorProtectionTests(unittest.TestCase):
         self.assertEqual(['Default'],e.store.names())
     def test_adopt_resets_pending_fields_and_both_histories(self):
         e=self.editor;e.adopt(storage.contract.default_profile('Custom'))
-        e.rule_vars['reaction_seconds'].set('0.125');e.ammo_vars[0].set('9');e.wait_seconds.set('123')
+        e.rule_vars['ammo_limit'].set('125');e.ammo_vars[0].set('9');e.wait_seconds.set('123')
         e.checkpoint('behavior');e.checkpoint('maps')
         e.adopt(storage.contract.default_profile('Other'))
-        self.assertEqual('',e.rule_vars['reaction_seconds'].get());self.assertEqual(['','',''],[v.get() for v in e.ammo_vars])
+        self.assertEqual('',e.rule_vars['ammo_limit'].get());self.assertEqual(['','',''],[v.get() for v in e.ammo_vars])
         self.assertEqual('60',e.wait_seconds.get());self.assertEqual({'behavior':([],[]),'maps':([],[])},e.histories)
     def test_import_collision_is_rejected_without_replacing_default(self):
         e=self.editor;source=Path(self.temp.name)/'import.json';storage._atomic(source,storage.contract.default_profile())
@@ -126,6 +178,8 @@ class EditorProtectionTests(unittest.TestCase):
         report=json.loads(destination.read_text())
         self.assertTrue(report['default_readonly']);self.assertTrue(report['independent_presets_and_empty_ammo'])
         self.assertTrue(report['route_toolbar_and_restore_menu'])
+        self.assertTrue(report['effective_preview_values_and_sources_en_zh'])
+        self.assertTrue(report['zero_one_ammo_limit'])
 
     def test_stock_only_offers_no_equipment_and_restores_choices_after_leaving_stock(self):
         e=self.editor;e.adopt(storage.contract.default_profile('Custom'))
@@ -137,11 +191,13 @@ class EditorProtectionTests(unittest.TestCase):
         values=storage.contract.effective(e.store.read('Custom'),1,'heavyTank',0)
         self.assertEqual('none',values['equipment']);self.assertEqual('stock',values['development'])
 
-    def test_numeric_forms_are_readonly_and_keep_imported_fraction(self):
+    def test_numeric_forms_are_readonly_and_keep_imported_ammunition_limit(self):
         e=self.editor;e.adopt(storage.contract.default_profile('Custom'))
         for box in list(e.rule_boxes.values())+e.ammo_boxes:self.assertEqual('readonly',str(box.cget('state')))
-        e.document['behavior']=[dict(team=0,class_tag='all',slot=-1,values={'reaction_seconds':0.125})]
+        self.assertFalse(set(e.rule_vars) & storage.contract.RETIRED_GUNNERY_PARAMETERS)
+        e.document['behavior']=[dict(team=0,class_tag='all',slot=-1,values={'ammo_limit':125})]
         e._refresh_rules();e.rules.selection_set('0');e._select_rule()
-        self.assertIn('0.125',e.rule_boxes['reaction_seconds'].keys)
+        self.assertEqual('125',e.rule_vars['ammo_limit'].get())
+        self.assertIn('125',e.rule_boxes['ammo_limit'].keys)
 
 if __name__=='__main__':unittest.main()

@@ -377,7 +377,7 @@ class BattleRuntimeProbeIntegrationTests(unittest.TestCase):
                 return self.authority
 
             def probe_totals(self):
-                return (0, 0, 0, 0, 0)
+                return (0, 0, 0, 0)
 
             def diagnostic_totals(self):
                 return {'alive_bot_ticks': 0}

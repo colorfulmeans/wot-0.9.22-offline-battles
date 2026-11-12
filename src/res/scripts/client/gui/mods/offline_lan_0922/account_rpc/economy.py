@@ -244,8 +244,8 @@ def premium_vehicle_xp_factor_100(vehicles_module, vehicle_type_compact_descr):
     try:
         vehicle_type = vehicles_module.getVehicleType(
             int(vehicle_type_compact_descr))
-        factor = float(getattr(vehicle_type, 'premiumVehicleXPFactor', 0.0))
-        return max(0, int(round(factor * 100)))
+        from ..xp_coefficients import settlement_factor
+        return settlement_factor(vehicle_type)
     except (AttributeError, TypeError, ValueError, OverflowError):
         return 0
 

@@ -16,6 +16,24 @@ from gui.mods.offline_lan_0922 import native_input_diagnostics as logs
 
 
 class ReviewEvidenceTests(unittest.TestCase):
+    def test_new_combat_observations_require_the_checkbox_and_summarize_repeats(self):
+        owner = types.SimpleNamespace(round_id=1)
+        build = mock.Mock(side_effect=lambda: {'clip': 10})
+        with mock.patch.dict(logs.os.environ, {logs.DETAIL_ENV: '1', logs.COMBAT_DETAIL_ENV: '0'}), \
+                mock.patch.object(logs, 'write_json_record') as write:
+            logs.combat_detail(owner, 'auto_fire_gate', 1, 0., 'preconditions', build)
+            build.assert_not_called()
+            write.assert_not_called()
+            self.assertFalse(hasattr(owner, '_combat_detail_observations'))
+
+            logs.os.environ[logs.COMBAT_DETAIL_ENV] = '1'
+            for now in (0., .1, .2, 2.):
+                logs.combat_detail(owner, 'auto_fire_gate', 1, now, 'preconditions', build)
+            self.assertEqual(2, build.call_count)
+            self.assertEqual(3, write.call_args.args[1]['occurrences'])
+            logs.combat_detail(owner, 'auto_fire_gate', 1, 2.1, 'final_lane_rejected', build)
+            self.assertEqual('final_lane_rejected', write.call_args.args[1]['reason'])
+
     def test_diagnostic_server_persistence_keeps_early_evidence_over_basic_ceiling(self):
         tree = ast.parse((ROOT / 'launcher/wot_launcher.py').read_text(encoding='utf8'))
         selected = {'_open_server_log', '_BoundedLogStream', '_TeeTextStream'}

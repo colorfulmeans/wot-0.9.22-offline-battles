@@ -85,20 +85,28 @@ class MechanicalHandoffTests(unittest.TestCase):
         self.assertEqual(246.696,lease['start'])
 
     def test_mechanical_relocation_backs_out_of_enemy_contact(self):
-        self.state.update(x=0.,y=0.,z=0.,yaw=0.,_gun_angle_refusal=('bot',11))
-        peer=dict(self.state,id=11,z=7.,yaw=math.pi)
-        self.runtime.states={7:self.state,11:peer}
-        self.target['position']=(0.,0.,7.)
-        self.hold['move_position']=(0.,0.,0.)
-        self.runtime._gun_angle_order(self.state,self.hold,{11:self.target},0.,lambda *a:True)
-        result=self.runtime._gun_angle_order(self.state,self.hold,{11:self.target},2.,lambda *a:True)
-        self.assertLess(result['move_position'][2],0.)
-        self.assertEqual('withdraw',result['combat_mode'])
-        checks=self.state['_gun_angle_handoff']['candidate_checks']
-        self.assertLess(checks[0]['target_fraction'],1.)
-        self.assertEqual(1.,checks[1]['target_fraction'])
-        # This precheck neither moves a hull nor changes the contact solver.
-        self.assertEqual((0.,0.,0.),self.position())
+        from test_player_combat_stop import Scene
+        scene = Scene()
+        scene.raw_order.update(combat_mode='route',target_id=None,
+            move_position=(20.,0.,-30.),throttle_override=None,fire_allowed=False)
+        scene.candidate.update(key=(0,('bot',2),0,'penetration'),sample=0)
+        checks=[]
+        def native_future_probe(candidate,destination,now):
+            checks.append(tuple(destination))
+            return dict(status='clear' if destination[2]<-1. else 'blocked',
+                        fire_permission=False)
+        scene.runtime.point_recovery_probe=native_future_probe
+        result=None
+        for tick in range(9):
+            result=scene.apply(tick*.1)
+            if result['combat_mode']=='gun_angle_adjust':break
+        self.assertEqual('gun_angle_adjust',result['combat_mode'])
+        self.assertLess(result['move_position'][2],-1.)
+        self.assertEqual(scene.owner._physical_recovery['goal'],result['move_position'])
+        self.assertGreater(len(checks),2)
+        self.assertFalse(result['fire_allowed'])
+        self.assertEqual((0.,0.,0.),scene.state['position'])
+        self.assertFalse(hasattr(self.runtime,'_gun_angle_order'))
 
     def test_real_candidate_pitch_checks_do_not_mutate_refusal_or_fire_state(self):
         descriptor=harness._combat_descriptor()
@@ -155,8 +163,7 @@ class CandidateReachabilityTests(unittest.TestCase):
         def reachable(s,t,d,origin,point):
             checks.append(point)
             return point[1]>1.8
-        battle._bots=types.SimpleNamespace(bot_aim_selection_allowed=lambda *a:True,
-                                          bot_aim_point_reachable=reachable)
+        battle._bots=types.SimpleNamespace(bot_aim_point_reachable=reachable)
         for unused in range(12):
             before=len(checks)
             battle._bot_firing_lane(source,target)
@@ -171,8 +178,7 @@ class CandidateReachabilityTests(unittest.TestCase):
 
     def test_all_unreachable_keeps_exposed_point_for_bounded_relocation(self):
         runtime,battle,source,target,descriptor=self.scene()
-        battle._bots=types.SimpleNamespace(bot_aim_selection_allowed=lambda *a:True,
-                                          bot_aim_point_reachable=lambda *a:False)
+        battle._bots=types.SimpleNamespace(bot_aim_point_reachable=lambda *a:False)
         self.assertTrue(battle._bot_firing_lane(source,target))
         self.assertIsNotNone(battle._bot_aim_point(source,target))
         self.assertTrue(all(not c['reachable'] for c in source['_aim_candidate_receipt']['checks']))
@@ -180,7 +186,7 @@ class CandidateReachabilityTests(unittest.TestCase):
     def test_changed_pose_rechecks_retained_sample_and_keeps_search_cursor(self):
         runtime,battle,source,target,descriptor=self.scene()
         minimum=[0.]
-        battle._bots=types.SimpleNamespace(bot_aim_selection_allowed=lambda *a:True,
+        battle._bots=types.SimpleNamespace(
             bot_aim_point_reachable=lambda s,t,d,o,p:p[1]>=minimum[0])
         self.assertTrue(battle._bot_firing_lane(source,target))
         first=battle._bot_aim_point(source,target)
@@ -195,8 +201,7 @@ class CandidateReachabilityTests(unittest.TestCase):
 
     def test_wall_still_rejects_reachable_candidates(self):
         runtime,battle,source,target,descriptor=self.scene()
-        battle._bots=types.SimpleNamespace(bot_aim_selection_allowed=lambda *a:True,
-                                          bot_aim_point_reachable=lambda *a:True)
+        battle._bots=types.SimpleNamespace(bot_aim_point_reachable=lambda *a:True)
         runtime.bigworld.wg_collideSegment=lambda *a:(battle_fixtures._Vector(0.,1.,1.),)
         self.assertFalse(battle._bot_firing_lane(source,target))
         self.assertIsNone(battle._bot_aim_point(source,target))
@@ -213,7 +218,8 @@ class CandidateReachabilityTests(unittest.TestCase):
 
 
 class SupportMotionEvidenceTests(unittest.TestCase):
-    def test_projection_and_timed_transition_log_actual_inputs_without_new_casts(self):
+    def test_projection_and_timed_transition_capture_actual_inputs_without_new_casts(self):
+        from gui.mods.offline_lan_0922.native_input_diagnostics import detailed_enabled
         runtime,state=support_fixtures.ContactSupportTests.scene(self,lambda x,z:0.)
         state.update(speed=0.,_edge_support_active=True)
         for step in (0.,.2):
@@ -223,7 +229,13 @@ class SupportMotionEvidenceTests(unittest.TestCase):
                 runtime._update_vertical_motion(state,step,(0.,0.,-.2),0.,(0.,0.,-.1))
             self.assertEqual(step,state['_support_motion_receipt']['step'])
             self.assertEqual((0.,0.,-.2),state['_support_motion_receipt']['tick_pose'])
-            self.assertIn('"motion"',out.getvalue())
+            self.assertEqual(2.+step,state['_support_motion_receipt']['at'])
+            self.assertIn('support_motion_pose',state['_support_motion_receipt'])
+            if detailed_enabled():
+                self.assertIn('BOT SUPPORT MODE',out.getvalue())
+            else:
+                self.assertEqual('',out.getvalue(),
+                    'basic mode records the receipt without a detailed diagnostic line')
             self.assertFalse(state.get('_edge_support_active',False))
 
 

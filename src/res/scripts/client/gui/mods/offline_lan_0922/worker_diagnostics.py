@@ -12,6 +12,7 @@ import math
 import threading
 
 
+PROBE_KINDS = ('visibility', 'lane', 'ground', 'motion')
 CAPTURE_SECONDS = 30.0
 CAPTURE_COOLDOWN_SECONDS = 30.0
 MAX_CAPTURES = 3
@@ -553,8 +554,7 @@ class WorkerCombatDiagnostics(object):
             if selected:
                 self._selected_waits.append(wait)
 
-    def queue_state(self, now, eligible_keys, selected_keys,
-                    cover_blocked=False):
+    def queue_state(self, now, eligible_keys, selected_keys):
         if not self.active:
             return
         due = 0
@@ -591,12 +591,10 @@ class WorkerCombatDiagnostics(object):
             'oldest_wait_ms': round(oldest_wait * 1000.0, 3),
             'oldest_due_ms': round(oldest_due * 1000.0, 3),
             'selected_oldest_due_ms': round(selected_due * 1000.0, 3),
-            'cover_blocked': bool(cover_blocked),
             'eligibility_checked': eligibility_checked,
             'oldest_job': oldest_key,
             'selected_oldest_job': selected_key,
         }
-        self.count('lane_service_cover_blocked', int(cover_blocked))
 
     def receipt_stored(self, key, now, clear):
         if not self.active:

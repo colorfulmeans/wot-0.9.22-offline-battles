@@ -193,6 +193,17 @@ def _receipt(value):
         stats.pop('internal_crits_at_end', None)
     rewards = dict((name, max(0, _int(raw_rewards.get(name)))) for name in (
         'credits', 'xp', 'free_xp', 'repair_cost', 'ammo_cost', 'crystal'))
+    version = raw_rewards.get('economy_version', 1)
+    if type(version) not in integer_types or version not in (1, 2):
+        raise ValueError('battle receipt economy version is invalid')
+    if version == 2:
+        rewards['economy_version'] = version
+        for field, total in (('achievement_credits', 'credits'),
+                             ('achievement_xp', 'xp'), ('achievement_free_xp', 'free_xp')):
+            amount = raw_rewards.get(field, 0)
+            if type(amount) not in integer_types or not 0 <= amount <= rewards[total]:
+                raise ValueError('battle receipt resistance reward is invalid')
+            rewards[field] = amount
     # The client owns service prices and debits. A server receipt may not
     # charge them again; local service_costs records the actual settlement.
     if rewards['repair_cost'] or rewards['ammo_cost']:
@@ -435,6 +446,9 @@ def _receipt(value):
         result['stun_capable'] = value['stun_capable']
     if mounted is not None:
         result['vehicle_compact_descr'] = mounted
+    if 'crew_injuries' in value:
+        from gui.mods.offline_lan_0922 import crew_injuries
+        result['crew_injuries'] = crew_injuries.canonical(value['crew_injuries'])
     if battle_max_health is not None:
         result['max_health'] = battle_max_health
     if outfits is not None:
@@ -560,10 +574,10 @@ def _premium_vehicle_xp_factor_100(type_name):
         from items import vehicles
         vehicle_type = vehicles.getVehicleType(
             _vehicle_type_compact_descr(type_name))
-        factor = float(getattr(vehicle_type, 'premiumVehicleXPFactor', 0.0))
+        from ..xp_coefficients import settlement_factor
+        return settlement_factor(vehicle_type)
     except Exception:
         return 0
-    return max(0, int(round(factor * 100)))
 
 
 def _banked_rewards(receipt):
@@ -890,7 +904,8 @@ def pack_battle_result(receipt, packers=None, replay_types=None,
     # Whatever the account banked above that is its save multiplier, which is
     # #1513's one row for an account-owned multiplier on a finished battle.
     base_credits, booster_credits = _account_award_split(
-        _premium_vehicle_credits(receipt['vehicle'], original['credits']),
+        (original['credits'] if original.get('economy_version', 1) >= 2 else
+         _premium_vehicle_credits(receipt['vehicle'], original['credits'])),
         misconduct['gross_credits'] if misconduct else rewards['credits'])
     base_xp, booster_xp = _account_award_split(
         original['xp'], rewards['xp'], xp_factor_100)
@@ -938,6 +953,9 @@ def pack_battle_result(receipt, packers=None, replay_types=None,
         'killerID': 0,
         'credits': rewards['credits'],
         'originalCredits': base_credits,
+        'achievementCredits': original.get('achievement_credits', 0),
+        'achievementXP': original.get('achievement_xp', 0),
+        'achievementFreeXP': original.get('achievement_free_xp', 0),
         'boosterCredits': booster_credits,
         'factualCredits': rewards['credits'],
         'subtotalCredits': rewards['credits'],

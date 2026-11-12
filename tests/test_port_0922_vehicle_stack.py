@@ -10,6 +10,7 @@ import test_port_0922_battle_runtime as battle_fixture
 import test_port_0922_contact_support_navigation as support
 from test_port_0922_server_projectiles import _state, _update_player_input
 from gui.mods.offline_lan_0922 import vehicle_stack, tank_collision
+from gui.mods.offline_lan_0922.vehicle_control import geometry as shared_geometry
 
 
 class StackLawTests(unittest.TestCase):
@@ -308,9 +309,10 @@ class NativeRoofAdmissionTests(unittest.TestCase):
                 collision=types.SimpleNamespace(dist=.1,compName=component)
                 evidence=types.SimpleNamespace(collision=collision,
                     worldNormal=battle_fixture._Vector(0.,normal,0.))
-                with mock.patch.object(battle_fixture.battle_runtime_module,'_collide_vehicle_evidence_at_matrix',return_value=[evidence]):
+                with mock.patch.object(shared_geometry,'_collide_vehicle_evidence_at_matrix',return_value=[evidence]) as query:
                     hit=battle._stack_ground_hit(battle._vector((0.,2.1,0.)),
                         battle._vector((0.,1.9,0.)),None)
+                query.assert_called_once()
                 self.assertEqual(expected,hit is not None)
                 self.assertEqual(expected,bool(actor.get('_stack_carrier')))
 
@@ -334,9 +336,10 @@ class NativeRoofAdmissionTests(unittest.TestCase):
 
     def test_no_native_hit_cannot_invent_roof_from_obb_overlap(self):
         battle,actor=self.scene()
-        with mock.patch.object(battle_fixture.battle_runtime_module,'_collide_vehicle_evidence_at_matrix',return_value=[]):
+        with mock.patch.object(shared_geometry,'_collide_vehicle_evidence_at_matrix',return_value=[]) as query:
             self.assertIsNone(battle._stack_ground_hit(battle._vector((0.,2.1,0.)),
                 battle._vector((0.,1.9,0.)),None))
+        query.assert_called_once()
         self.assertNotIn('_stack_carrier',actor)
 
 

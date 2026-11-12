@@ -13,11 +13,14 @@ ROOT = Path(__file__).resolve().parents[1]
 CLIENT_SCRIPTS = ROOT / 'src' / 'res' / 'scripts' / 'client'
 TESTS_ROOT = ROOT / 'tests'
 sys.path.insert(0, str(ROOT / 'server'))
+sys.path.insert(0, str(ROOT / 'src/res/scripts/client'))
 sys.path.insert(0, str(CLIENT_SCRIPTS))
 sys.path.insert(0, str(TESTS_ROOT))
 
-from gui.mods.offline_lan_0922.ai.planner import BattleDirector
-from server_bot_ai import BotPlanner
+from gui.mods.offline_lan_0922.ai.adapter import BotAdapter
+from test_port_0922_ai import shared_plan_and_drive, wire_route
+from test_port_0922_server_bot_ai import _state
+from gui.mods.offline_lan_0922.vehicle_control.strategy import BotPlanner
 import test_port_0922_bot_runtime as runtime_fixtures
 from effective_params_fixture import bot_default_crew_factors
 from test_port_0922_fjord_departure import (
@@ -65,154 +68,115 @@ class HimmelsdorfDepartureTests(unittest.TestCase):
         }
 
     @staticmethod
-    def _synthetic_director():
-        director = BattleDirector('07_lakeville', 'connector-motion-contract')
-        agent = director.register_profile(
+    def _synthetic_control():
+        adapter = BotAdapter('07_lakeville', 'connector-motion-contract')
+        actor = adapter.roster.register_profile(
             93, 1, HimmelsdorfDepartureTests._route_profile(93),
             'Connector contract Bot')
-        agent['route'] = {
-            'id': 'connector-contract',
-            'waypoints': (
-                (0.0, -40.0, False),
-                (0.0, -65.0, False),
-                (40.0, 40.0, False),
-            ),
-        }
-        agent['route_started'] = False
-        return director, agent
+        actor['route'] = dict(id='connector-contract', waypoints=(
+            (0., -40., False), (0., -65., False), (40., 40., False)))
+        return adapter, BotPlanner(), actor
 
-    def test_local_connector_filter_requires_forward_motion(self):
+    def test_shared_connector_filter_requires_forward_motion(self):
         """Parked and reversing hulls retain the authored spawn connector."""
-        cases = (
-            (0.0, (0.0, 0.0, -65.0), 1),
-            (-6.0, (0.0, 0.0, -65.0), 1),
-            (6.0, (40.0, 0.0, 40.0), 2),
-        )
+        cases = ((0., (0., 0., -65.), 1), (-6., (0., 0., -65.), 1),
+                 (6., (40., 0., 40.), 2))
         for speed, expected_target, expected_index in cases:
             with self.subTest(speed=speed):
-                director, agent = self._synthetic_director()
-
-                order = director.order_for(
-                    93, (0.0, 0.0, -20.0), 0.0, speed,
-                    1000, 1000, 0.0)
-
-                self.assertEqual(expected_target, order['move_position'])
+                adapter, planner, actor = self._synthetic_control()
+                state = dict(_state(93, 1, 0., -20.), speed=speed)
+                order, command = shared_plan_and_drive(
+                    adapter, planner, actor, state, now=0.)
+                self.assertEqual(expected_target, command['move_position'])
                 self.assertEqual(expected_index, order['route_index'])
-                self.assertEqual((0.0, 0.0, -20.0), order['route_anchor'])
+                self.assertEqual(dict(x=0., y=0., z=-20.), order['route_anchor'])
                 self.assertTrue(order['route_join'])
-                self.assertTrue(agent['route_started'])
+                self.assertEqual(expected_index, planner._route_states[93]['index'])
 
-    def test_report_roster_parked_joins_match_disk_and_server_passage_contracts(self):
-        """Rebuild the reported map, human slot, Bot slots and baked routes.
+    def test_report_roster_parked_joins_use_one_shared_disk_and_passage_contract(self):
+        """Retain 29 real slots, roster capacities and authored egress proofs.
 
-        The report contains one human in team-2 slot zero, leaving all fifteen
-        team-1 Bots and fourteen team-2 Bots. The exact random vehicle roster is
-        not present in the report, so uniform non-SPG profiles isolate the
-        connector contract while retaining the real capacity allocation, spawn
-        poses and route geometry.
+        The former local-circle versus server-convoy comparison required two
+        runtime planners. Both actors now consume the same public build_orders
+        result, with the existing convoy passage proof checked at each gate.
         """
-        graph = json.loads(
-            (ROOT / 'navgraphs' / '86_himmelsdorf_winter.json').read_text())
-        director = BattleDirector(
-            '86_himmelsdorf_winter', 'reported-round-1',
-            bases={1: tuple(graph['bases'][0]),
-                   2: tuple(graph['bases'][1])},
+        from gui.mods.offline_lan_0922.bot_tactics import route_disk_reached
+        graph = json.loads((ROOT / 'navgraphs' / '86_himmelsdorf_winter.json').read_text())
+        adapter = BotAdapter('86_himmelsdorf_winter', 'reported-round-1',
+            bases={1: tuple(graph['bases'][0]), 2: tuple(graph['bases'][1])},
             bounds=tuple(graph['bounds']), baked_routes=graph['routes'])
-        server = BotPlanner()
-        route_counts = collections.Counter()
-        team_one_hill = []
-        bot_ids = []
-
+        planner = BotPlanner()
+        manifest, states = [], []
         for team in (1, 2):
             for slot in range(15):
                 if team == 2 and slot == 0:
                     continue
-                bot_id = slot + 1 if team == 1 else slot + 16
-                bot_ids.append(bot_id)
-                profile = self._route_profile(bot_id)
-                agent = director.register_profile(
-                    bot_id, team, profile, 'Bot %d' % bot_id)
-                raw_spawn = graph['spawn_formations'][str(team)][slot]
-                spawn = (float(raw_spawn[0]), float(raw_spawn[1]),
-                         float(raw_spawn[2]))
-                yaw = float(raw_spawn[3])
-
-                local_order = director.order_for(
-                    bot_id, spawn, yaw, 0.0, 1000, 1000, 0.0)
-                if agent['route'] is None:
-                    self.assertEqual('direct', local_order['route_id'])
-                    self.assertEqual(0, local_order['route_index'])
-                    self.assertEqual(tuple(graph['bases'][1 if team == 1 else 0]),
-                                     (local_order['move_position'][0],
-                                      local_order['move_position'][2]))
-                    continue
-                route = dict(agent['route'])
-                route['waypoints'] = [
-                    {'x': float(point[0]), 'y': spawn[1],
-                     'z': float(point[1])}
-                    for point in agent['route']['waypoints']
-                ]
-                server_bot = {
-                    'id': bot_id,
-                    'team': team,
-                    'slot': slot,
-                    'profile': profile,
-                    'route': route,
-                    'state': {
-                        'x': spawn[0], 'y': spawn[1], 'z': spawn[2],
-                        'yaw': yaw, 'speed': 0.0,
-                    },
-                }
-                (server_route_id, server_index, server_point,
-                 server_anchor, server_join) = server._route(server_bot, 0.0)
-
-                route_id = agent['route']['id']
-                route_counts[(team, route_id)] += 1
-                self.assertEqual(route_id, local_order['route_id'])
-                self.assertEqual(server_route_id, local_order['route_id'])
-                local_index = local_order['route_index']
-                self.assertLessEqual(local_index, server_index)
-                # Both owners use the six-metre disk. Only the server keeps
-                # its convoy forward-passage rule: every additional consumed
-                # spawn gate must have that precise bounded lane proof.
-                from gui.mods.offline_lan_0922.bot_tactics import route_disk_reached
-                for passed in range(local_index, server_index):
-                    point = route['waypoints'][passed]
-                    following = route['waypoints'][passed+1]
-                    self.assertTrue(route_disk_reached((spawn[0], spawn[2]),
-                        (point['x'], point['z']), (following['x'], following['z'])))
-                local_point = route['waypoints'][local_index]
-                self.assertEqual((local_point['x'],local_point['y'],local_point['z']),
-                                 local_order['move_position'])
-                server_expected = route['waypoints'][server_index]
-                self.assertEqual(server_expected, server_point)
-                for cursor, joined, anchor in (
-                        (local_index,local_order['route_join'],local_order['route_anchor']),
-                        (server_index,server_join,(server_anchor['x'],server_anchor['y'],server_anchor['z']))):
-                    if joined:
-                        self.assertEqual(spawn,anchor)
-                    else:
-                        previous = route['waypoints'][cursor-1]
-                        self.assertEqual((previous['x'],previous['y'],previous['z']),anchor)
-
-                if team == 1 and route_id == 'hill':
-                    dx = local_order['move_position'][0] - spawn[0]
-                    dz = local_order['move_position'][2] - spawn[2]
-                    heading_error = abs(
-                        (math.atan2(dx, dz) - yaw + math.pi) %
-                        (2.0 * math.pi) - math.pi)
-                    team_one_hill.append(
-                        (bot_id, local_order['route_index'], heading_error))
-
-        self.assertEqual(29, len(bot_ids))
-        self.assertNotIn(16, bot_ids)
-        # Each class has three places per route. Same-priority routes are
-        # sampled, not balanced into the former five-Bot route buckets.
+                identity = slot + 1 if team == 1 else slot + 16
+                actor = adapter.roster.register_profile(identity, team,
+                    self._route_profile(identity), 'Bot %d' % identity)
+                raw = graph['spawn_formations'][str(team)][slot]
+                state = dict(_state(identity, team, raw[0], raw[2]),
+                    y=float(raw[1]), yaw=float(raw[3]), speed=0.)
+                manifest.append(dict(actor, slot=slot,
+                    route=wire_route(actor['route'], state['y'])))
+                states.append(state)
+        orders = {row['id']: row for row in
+            planner.build_orders(manifest, states, [], 0.)['orders']}
+        route_counts, team_one_hill = collections.Counter(), []
+        for actor, state in zip(manifest, states):
+            identity, team, route = actor['id'], actor['team'], actor['route']
+            spawn = (state['x'], state['y'], state['z'])
+            order = orders[identity]
+            command = adapter.decide_with_order(dict(state, slot=actor['slot'],
+                position=spawn, dt=.1, now=0., neighbours=()), order, lambda *args: True)
+            if not route.get('waypoints'):
+                # Deleting the old missing-route enemy-base shortcut is part
+                # of removing its fallback, not permission to invent a lane.
+                self.assertEqual('', order['route_id'])
+                self.assertEqual(0, order['route_index'])
+                self.assertEqual(tuple(round(value, 3) for value in spawn),
+                                 command['move_position'])
+                continue
+            route_id, cursor = route['id'], order['route_index']
+            route_counts[(team, route_id)] += 1
+            self.assertEqual(route_id, order['route_id'])
+            self.assertEqual(cursor, planner._route_states[identity]['index'])
+            entry = planner._route_states[identity]['entry_receipt']['selected_index']
+            for passed in range(entry, cursor):
+                point, following = route['waypoints'][passed:passed + 2]
+                self.assertTrue(route_disk_reached((spawn[0], spawn[2]),
+                    (point['x'], point['z']), (following['x'], following['z'])))
+            # The common planner canonicalizes same-ID catalogue routes.
+            # Their horizontal geometry is authored; the manifest's vertical
+            # hint can come from a peer occupying a different spawn height.
+            selected_route = (planner._route_assignments.get(identity) or {}).get('route', route)
+            self.assertEqual(route_id, selected_route['id'])
+            self.assertEqual([(point['x'], point['z']) for point in route['waypoints']],
+                             [(point['x'], point['z']) for point in selected_route['waypoints']])
+            point = selected_route['waypoints'][cursor]
+            expected = tuple(round(point[axis], 3) for axis in ('x', 'y', 'z'))
+            self.assertEqual(expected, command['move_position'])
+            if order['route_join']:
+                expected_anchor = spawn
+            else:
+                previous = selected_route['waypoints'][cursor - 1]
+                expected_anchor = tuple(previous[axis] for axis in ('x', 'y', 'z'))
+            self.assertEqual(tuple(round(value, 3) for value in expected_anchor),
+                             tuple(order['route_anchor'][axis]
+                                   for axis in ('x', 'y', 'z')))
+            if team == 1 and route_id == 'hill':
+                dx, dz = command['move_position'][0] - spawn[0], command['move_position'][2] - spawn[2]
+                heading_error = abs((math.atan2(dx, dz) - state['yaw'] + math.pi) %
+                                    (2. * math.pi) - math.pi)
+                team_one_hill.append((identity, cursor, heading_error))
+        self.assertEqual(29, len(states))
+        self.assertNotIn(16, orders)
+        self.assertEqual(29, len(orders))
         self.assertTrue(route_counts)
         self.assertTrue(all(0 < count <= 3 for count in route_counts.values()))
         self.assertLessEqual(len(team_one_hill), 3)
-        for unused_bot_id, route_index, heading_error in team_one_hill:
-            self.assertGreaterEqual(route_index, 0)
+        for unused_identity, cursor, heading_error in team_one_hill:
+            self.assertGreaterEqual(cursor, 0)
             self.assertLessEqual(heading_error, math.pi)
 
     def test_flat_report_roster_departs_at_15_and_24_fps(self):
@@ -326,8 +290,6 @@ class HimmelsdorfDepartureTests(unittest.TestCase):
                         'bot_authority_id': 1,
                         'bots': bots,
                     })[0]
-                if not getattr(self,'authoritative',False):
-                    for agent in runtime.adapter.director.agents.values():agent.pop('route_entry_fixed',None)
                 planner=BotPlanner()
                 planner.tactics = runtime._bot_tactics
                 planner.tactics_map = '86_himmelsdorf_winter'

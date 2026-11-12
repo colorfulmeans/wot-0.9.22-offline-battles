@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 import os
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -14,15 +15,15 @@ sys.path.insert(0, str(PORT_ROOT / 'server'))
 sys.path.insert(0, str(CLIENT_SCRIPTS))
 
 from gui.mods.offline_lan_0922.ai import (
-    cover, maps, navigation, reviewed_routes_20260811,
+    maps, navigation,
 )
 from gui.mods.offline_lan_0922.ai.adapter import BotAdapter
 from gui.mods.offline_lan_0922.ai.driver import (
     LocalDriver, RECOVERY_YAW_OFFSET, TRAFFIC_WAIT_LEASE_SECONDS,
 )
-from gui.mods.offline_lan_0922.ai.planner import (
-    BattleDirector, build_vehicle_profile,
-)
+from gui.mods.offline_lan_0922.ai.planner import build_vehicle_profile
+from gui.mods.offline_lan_0922.vehicle_control.roster import BattleRoster
+from gui.mods.offline_lan_0922.vehicle_control.strategy import BotPlanner
 from gui.mods.offline_lan_0922.ai.navigation import (
     BAKED_FATAL_HAZARDS, BAKED_SHALLOW_WATER, _distance_2d,
     MAX_SEARCH_EXPANSIONS_PER_CATCH_UP_FRAME,
@@ -31,6 +32,32 @@ from gui.mods.offline_lan_0922.ai.navigation import (
 )
 from gui.mods.offline_lan_0922 import prebaked_navigation
 from lan_battle_server import MAP_POOL
+from test_port_0922_server_bot_ai import _state, _contact, _initial_hint
+
+
+def wire_route(route, height=0.):
+    """Supply the same explicit route data boundary as an actor manifest."""
+    result = dict(route or {})
+    result['waypoints'] = [dict(point) if isinstance(point, dict) else
+        dict(x=float(point[0]), y=float(height), z=float(point[1]),
+             hold=bool(point[2]) if len(point) > 2 else False)
+        for point in result.get('waypoints', ())]
+    return result
+
+
+def shared_plan_and_drive(adapter, planner, actor, state, now=1., contacts=()):
+    """Run production planning and driving; this fixture has no decision law."""
+    manifest = dict(actor, route=wire_route(actor.get('route'), state.get('y', 0.)))
+    players = [dict(id=row['target_id'], team=row['target_team'],
+        alive=row.get('health', 1) > 0) for row in contacts]
+    planner.report_contacts(contacts, planner.known_targets([state], players), now)
+    orders = planner.build_orders([manifest], [state], players, now)['orders']
+    order = next(row for row in orders if row['id'] == actor['id'])
+    sample = dict(state, slot=actor.get('slot', 0),
+        position=(state['x'], state['y'], state['z']),
+        dt=.2, now=now, speed=state.get('speed', 0.), neighbours=())
+    command = adapter.decide_with_order(sample, order, lambda *unused: True)
+    return order, command
 
 
 class _StrictNoLegacyStuff(object):
@@ -138,12 +165,9 @@ class BotAiPortTests(unittest.TestCase):
 
     def test_tactical_authoring_registry_has_no_static_base_coordinates(self):
         self.assertGreaterEqual(len(maps.TACTICAL_MAPS), len(MAP_POOL))
-        for registry_name, registry in (
-                ('authoring', maps._TACTICAL_MAPS_AUTHORING),
-                ('runtime', maps.TACTICAL_MAPS)):
-            for map_name, tactical in sorted(registry.items()):
-                with self.subTest(registry=registry_name, map=map_name):
-                    self.assertNotIn('bases', tactical)
+        for map_name, tactical in sorted(maps.TACTICAL_MAPS.items()):
+            with self.subTest(map=map_name):
+                self.assertNotIn('bases', tactical)
 
     def test_tactical_rectangle_matches_the_baked_gameplay_rectangle(self):
         # The LAN server resolves a minimap attention-cell order through this
@@ -177,148 +201,51 @@ class BotAiPortTests(unittest.TestCase):
             checked += 1
         self.assertGreaterEqual(checked, 40)
 
-    def test_review_overlay_rejects_an_unknown_removed_route(self):
-        tactical = copy.deepcopy(
-            maps._TACTICAL_MAPS_AUTHORING['06_ensk'])
-        for team in (1, 2):
-            tactical['routes'][team] = tuple(
-                route for route in tactical['routes'][team]
-                if route['id'] != 'rail_yard')
-        with self.assertRaisesRegex(
-                ValueError, 'removed tactical route is unavailable'):
-            reviewed_routes_20260811.apply_reviewed_map(
-                '06_ensk', tactical, ((0.0, 1.0), (0.0, -1.0)))
-
-    def test_installs_all_user_reviewed_route_batches(self):
-        reviewed = set(reviewed_routes_20260811.REVIEWED_ROUTE_POINTS)
-        accepted = set(reviewed_routes_20260811.ACCEPTED_UNCHANGED_MAPS)
-        self.assertEqual(38, len(reviewed))
-        self.assertEqual(113, sum(
-            len(routes) for routes in
-            reviewed_routes_20260811.REVIEWED_ROUTE_POINTS.values()))
-        self.assertEqual(
-            {'34_redshire', '95_lost_city', '100_thepit'}, accepted)
-        self.assertFalse(reviewed & accepted)
-
-        original_maps = {'04_himmelsdorf': maps.HIMMELSDORF}
-        for collection in (
-                maps.bot_ai_maps_group_a.TACTICAL_MAPS_GROUP_A,
-                maps.bot_ai_maps_group_b.TACTICAL_MAPS_GROUP_B,
-                maps.bot_ai_maps_group_c.TACTICAL_MAPS_GROUP_C,
-                maps.bot_ai_maps_extra.TACTICAL_MAPS_EXTRA,
-                maps.bot_ai_maps_0922_extra.TACTICAL_MAPS_0922_EXTRA):
-            original_maps.update(collection)
-        for map_name in reviewed:
-            self.assertIsNot(
-                original_maps[map_name], maps.TACTICAL_MAPS[map_name],
-                map_name)
-        graph_maps = set(
-            path.stem for path in (PORT_ROOT / 'navgraphs').glob('*.json')
-            if path.name != 'manifest.json')
-        self.assertEqual(graph_maps, reviewed | accepted)
-        for map_name in accepted:
-            self.assertIs(
-                original_maps[map_name], maps.TACTICAL_MAPS[map_name],
-                map_name)
-
-        ensk = maps.TACTICAL_MAPS['06_ensk']
-        for team in (1, 2):
-            self.assertEqual(
-                ['west_city', 'east_field'],
-                [route['id'] for route in ensk['routes'][team]])
-            self.assertEqual(
-                [7, 7],
-                [route['capacity'] for route in ensk['routes'][team]])
-
-        malinovka = maps.TACTICAL_MAPS['02_malinovka']
-        for team in (1, 2):
-            self.assertEqual(
-                ['west_lake_road', 'central_field', 'east_hill_loop'],
-                [route['id'] for route in malinovka['routes'][team]])
-            self.assertEqual(
-                [3, 5, 6],
-                [route['capacity'] for route in malinovka['routes'][team]])
-
-    def test_reviewed_route_geometry_is_bidirectional_and_single_gated(self):
-        for map_name, reviewed_routes in sorted(
-                reviewed_routes_20260811.REVIEWED_ROUTE_POINTS.items()):
-            tactical = maps.TACTICAL_MAPS[map_name]
-            team_routes = {}
+    def test_default_migration_keeps_lane_allocation_metadata(self):
+        expected = {
+            '06_ensk': [('west_city', 7), ('east_field', 7)],
+            '02_malinovka': [('west_lake_road', 3), ('central_field', 5), ('east_hill_loop', 6)],
+        }
+        for name, routes in expected.items():
+            tactical = maps.get_tactical_map(name)
             for team in (1, 2):
-                team_routes[team] = dict(
-                    (route['id'], route)
-                    for route in tactical['routes'][team])
-            with self.subTest(map=map_name):
-                self.assertTrue(set(reviewed_routes).issubset(team_routes[1]))
-                self.assertEqual(set(team_routes[1]), set(team_routes[2]))
-                for route_id in reviewed_routes:
-                    team_one = team_routes[1][route_id]['waypoints']
-                    team_two = team_routes[2][route_id]['waypoints']
-                    self.assertEqual(1, sum(
-                        int(bool(point[2])) for point in team_one))
-                    self.assertEqual(tuple(reversed(team_one)), team_two)
-                    for key in ('capacity', 'risk', 'role_weights'):
-                        self.assertEqual(
-                            team_routes[1][route_id][key],
-                            team_routes[2][route_id][key])
+                self.assertEqual(routes, [(r['id'], r['capacity']) for r in tactical['routes'][team]])
 
-        himmelsdorf = maps.TACTICAL_MAPS['04_himmelsdorf']
-        rear_one = next(route for route in himmelsdorf['routes'][1]
-                        if route['id'] == 'rear_guard')
-        rear_two = next(route for route in himmelsdorf['routes'][2]
-                        if route['id'] == 'rear_guard')
-        self.assertEqual(((-80.0, -270.0, 1),), rear_one['waypoints'])
-        self.assertEqual(((45.0, 270.0, 1),), rear_two['waypoints'])
-
-    def test_cover_contract_is_plain_data_and_deterministic(self):
-        result = cover.score_candidates([{
-            'id': 'ridge', 'position': (1, 2, 3), 'travel_distance': 5,
-            'route_alignment': 1, 'enemy_occlusion': 1, 'exposure': 0,
-            'slope': 0, 'water': 0, 'ally_congestion': 0,
-            'peek_feasible': True, 'peek_position': (2, 2, 3),
-            'escape_feasible': True,
-        }])
-        self.assertEqual('ridge', result[0]['id'])
-        self.assertEqual({'x': 1.0, 'y': 2.0, 'z': 3.0}, result[0]['position'])
+    def test_retired_cover_module_has_no_runtime_fallback(self):
+        ai_root = CLIENT_SCRIPTS / 'gui' / 'mods' / 'offline_lan_0922' / 'ai'
+        self.assertFalse((ai_root / 'cover.py').exists())
 
     def test_adapter_returns_no_engine_objects(self):
         descriptor = {'type': {'name': 'MS-1', 'tags': ('mediumTank',)},
                       'physics': {'speedLimits': (18.0,)}, 'hull': {},
                       'turret': {}, 'gun': {'shots': ()}}
         adapter = BotAdapter('01_karelia', 7)
-        adapter.register(1, 1, descriptor)
-        order = adapter.decide({
-            'id': 1, 'slot': 0, 'position': (0, 0, 0),
-            'yaw': 0, 'speed': 0,
-            'dt': 0.05, 'now': 1, 'health': 100, 'max_health': 100,
-            'contacts': (), 'neighbours': (),
-        }, lambda yaw: True)
-        self.assertEqual(1, order['bot_id'])
-        self.assertIn('throttle', order)
-        self.assertIsInstance(order['move_position'], tuple)
+        actor = adapter.register(1, 1, descriptor)
+        strategic, command = shared_plan_and_drive(
+            adapter, BotPlanner(), actor, _state(1, 1, 0., 0.))
+        self.assertEqual(1, command['bot_id'])
+        self.assertIn('throttle', command)
+        self.assertIsInstance(command['move_position'], tuple)
+        self.assertEqual(actor['route']['id'], strategic['route_id'])
+        self.assertEqual(tuple(strategic['move_position'][axis]
+                               for axis in ('x', 'y', 'z')),
+                         command['move_position'])
+        json.dumps(strategic)
+        json.dumps(command)
 
-    def test_adapter_passes_signed_speed_to_the_route_planner(self):
+    def test_adapter_passes_signed_speed_through_the_shared_route_planner(self):
         descriptor = {'type': {'name': 'MS-1', 'tags': ('mediumTank',)},
                       'physics': {'speedLimits': (18.0,)}, 'hull': {},
                       'turret': {}, 'gun': {'shots': ()}}
         adapter = BotAdapter('01_karelia', 7)
-        adapter.register(1, 1, descriptor)
-        observed = []
-        original_order_for = adapter.director.order_for
-
-        def order_for(*args, **kwargs):
-            observed.append(args[3])
-            return original_order_for(*args, **kwargs)
-
-        adapter.director.order_for = order_for
-        adapter.decide({
-            'id': 1, 'slot': 0, 'position': (0, 0, 0),
-            'yaw': 0, 'speed': -3.5,
-            'dt': 0.05, 'now': 1, 'health': 100, 'max_health': 100,
-            'contacts': (), 'neighbours': (),
-        }, lambda unused_yaw: True)
-
-        self.assertEqual([-3.5], observed)
+        actor = adapter.register(1, 1, descriptor)
+        planner = BotPlanner()
+        state = dict(_state(1, 1, 0., 0.), speed=-3.5)
+        with mock.patch.object(planner, '_route', wraps=planner._route) as route:
+            shared_plan_and_drive(adapter, planner, actor, state)
+        self.assertTrue(route.call_args_list)
+        self.assertEqual({-3.5},
+            {call.args[0]['state']['speed'] for call in route.call_args_list})
 
     def test_vehicle_profile_reads_native_1513_components_as_attributes(self):
         descriptor = _StrictNoLegacyStuff(
@@ -384,8 +311,8 @@ class BotAiPortTests(unittest.TestCase):
 
         for team in (1, 2):
             for label, profile in profiles.items():
-                director = BattleDirector('01_karelia', 41)
-                agent = director.register_profile(
+                roster = BattleRoster('01_karelia', 41)
+                agent = roster.register_profile(
                     100 + team, team, profile, label)
                 with self.subTest(team=team, vehicle_class=label):
                     self.assertEqual(expected[label], agent['route']['id'])
@@ -410,29 +337,29 @@ class BotAiPortTests(unittest.TestCase):
 
         for team in (1, 2):
             for lineup in lineups:
-                director = BattleDirector('01_karelia', 73)
+                roster = BattleRoster('01_karelia', 73)
                 assigned = []
                 for index, label in enumerate(lineup):
-                    agent = director.register_profile(
+                    agent = roster.register_profile(
                         index + 1, team, profiles[label],
                         '%s-%d' % (label, index))
                     assigned.append((label, agent['route']['id']))
                 with self.subTest(team=team, lineup=lineup):
                     self.assertTrue(all(route is not None for label,route in assigned))
-                    self.assertTrue(all(n<=3 for n in director.route_usage.values()))
-                    self.assertEqual(len(lineup)-1,sum(director.route_usage.values()))
-                    self.assertTrue(all(key[2]!='SPG' for key in director.route_usage))
+                    self.assertTrue(all(n<=3 for n in roster.route_usage.values()))
+                    self.assertEqual(len(lineup)-1,sum(roster.route_usage.values()))
+                    self.assertTrue(all(key[2]!='SPG' for key in roster.route_usage))
 
     def test_spg_uses_battery_route_without_consuming_frontline_capacity(self):
-        director = BattleDirector('04_himmelsdorf', 29)
+        roster = BattleRoster('04_himmelsdorf', 29)
         profile = self._strategy_profile('SPG', 10.0, 30.0)
 
-        first = director.register_profile(501, 1, profile, 'Battery one')
-        second = director.register_profile(502, 1, profile, 'Battery two')
+        first = roster.register_profile(501, 1, profile, 'Battery one')
+        second = roster.register_profile(502, 1, profile, 'Battery two')
 
         self.assertEqual('rear_guard', first['route']['id'])
         self.assertNotEqual(first['route']['id'], second['route']['id'])
-        self.assertEqual({}, director.route_usage)
+        self.assertEqual({}, roster.route_usage)
 
     def test_baked_route_geometry_uses_current_static_strategy_metadata(self):
         baked = {'1': [], '2': []}
@@ -457,12 +384,12 @@ class BotAiPortTests(unittest.TestCase):
                 'waypoints': ((20.0, float(team), False),),
             })
 
-        director = BattleDirector(
+        roster = BattleRoster(
             '01_karelia', 19, baked_routes=baked)
 
         for team in (1, 2):
             routes = dict((route['id'], route)
-                          for route in director._routes_for(team))
+                          for route in roster._routes_for(team))
             with self.subTest(team=team):
                 self.assertEqual(
                     baked[str(team)][1]['waypoints'],
@@ -536,71 +463,58 @@ class BotAiPortTests(unittest.TestCase):
         self.assertEqual(0.0, order['turn'])
         self.assertEqual(0.25, order['target_yaw'])
 
-    def test_local_director_does_not_jiggle_without_confirmed_cover(self):
+    def test_macro_candidate_cannot_manufacture_a_driver_hold_or_jiggle(self):
         descriptor = {
             'type': {'name': 'heavy', 'tags': ('heavyTank',)},
             'physics': {'speedLimits': (12.0,)},
             'hull': {'primaryArmor': 180.0},
-            'turret': {'primaryArmor': 180.0,
-                       'circularVisionRadius': 400.0},
+            'turret': {'primaryArmor': 180.0, 'circularVisionRadius': 400.0},
             'gun': {'shots': ()},
         }
-        director = BattleDirector('04_himmelsdorf', 45)
-        agent = director.register(401, 1, descriptor, 'Jiggler')
-        agent['personality'].update({
-            'caution': 0.2, 'patience': 0.2,
-            'aggression': 0.3, 'jiggle': 0.95,
-        })
-        position = (185.0, 0.0, -82.0)
-        target = (185.0, 0.0, -22.0)
-        modes = set()
-        throttle_values = set()
-
+        adapter = BotAdapter('04_himmelsdorf', 45)
+        actor = adapter.register(401, 1, descriptor, 'Stationary')
+        planner = BotPlanner()
+        baseline_adapter = BotAdapter('04_himmelsdorf', 45)
+        baseline_actor = baseline_adapter.register(401, 1, descriptor, 'Stationary')
+        baseline_planner = BotPlanner()
+        self.assertNotIn('jiggle', planner._personality(401))
+        state = _state(401, 1, 185., -82.)
+        contact = _contact(402, 185., -22., [401], 'heavyTank')
         for tick in range(600):
-            now = tick * 0.2
-            director.update_contact(
-                1, 402, 2, target, 1000, 1000,
-                'heavyTank', True, now)
-            order = director.order_for(
-                401, position, 0.0, 0.0, 1000, 1000, now)
-            modes.add(order['combat_mode'])
-            throttle_values.add(order['throttle_override'])
+            order, command = shared_plan_and_drive(
+                adapter, planner, actor, state, tick * .2, [contact])
+            route, drive = shared_plan_and_drive(baseline_adapter, baseline_planner,
+                baseline_actor, state, tick * .2)
+            self.assertEqual(route['combat_mode'], order['combat_mode'])
+            self.assertEqual(route['move_position'], order['move_position'])
+            for field in ('throttle', 'turn', 'brake', 'move_position'):
+                self.assertEqual(drive.get(field), command.get(field), field)
+            self.assertEqual(402, _initial_hint(order)['target_id'])
+            self.assertIsNone(command['target_id'])
+            self.assertFalse(order['fire_allowed'])
 
-        self.assertNotIn('jiggle_forward', modes)
-        self.assertNotIn('jiggle_back', modes)
-        self.assertEqual({None}, throttle_values)
-
-    def test_discovered_artillery_has_priority_over_a_soft_regular_target(self):
-        director = BattleDirector('04_himmelsdorf', 46)
+    def test_discovered_artillery_has_no_class_bonus_over_a_nearer_target(self):
+        adapter = BotAdapter('04_himmelsdorf', 46)
         profile = self._strategy_profile('mediumTank', 18.0, 85.0)
-        director.register_profile(401, 1, profile, 'Hunter')
-        director.update_contact(
-            1, 402, 2, (0.0, 0.0, 100.0), 10, 1000,
-            'heavyTank', True, 1.0, shootable_by_ids=(401,))
-        director.update_contact(
-            1, 403, 2, (0.0, 0.0, 130.0), 500, 500,
-            'SPG', True, 1.0, shootable_by_ids=(401,))
-
-        order = director.order_for(
-            401, (0.0, 0.0, 0.0), 0.0, 0.0, 1000, 1000, 1.0)
-
-        self.assertEqual(403, order['target_id'])
+        actor = adapter.roster.register_profile(401, 1, profile, 'Hunter')
+        nearby = dict(_contact(402, 0., 100., [401], 'heavyTank'), health=10)
+        artillery = dict(_contact(403, 0., 130., [401], 'SPG'), health=500, max_health=500)
+        order, command = shared_plan_and_drive(adapter, BotPlanner(), actor,
+            _state(401, 1, 0., 0.), contacts=[nearby, artillery])
+        self.assertEqual(402, _initial_hint(order)['target_id'])
+        self.assertIsNone(command['target_id'])
 
     def test_unspotted_artillery_does_not_override_a_visible_target(self):
-        director = BattleDirector('04_himmelsdorf', 47)
+        adapter = BotAdapter('04_himmelsdorf', 47)
         profile = self._strategy_profile('mediumTank', 18.0, 85.0)
-        director.register_profile(401, 1, profile, 'Hunter')
-        director.update_contact(
-            1, 402, 2, (0.0, 0.0, 100.0), 800, 1000,
-            'heavyTank', True, 1.0, shootable_by_ids=(401,))
-        director.update_contact(
-            1, 403, 2, (0.0, 0.0, 130.0), 500, 500,
-            'SPG', False, 1.0, shootable_by_ids=(401,))
-
-        order = director.order_for(
-            401, (0.0, 0.0, 0.0), 0.0, 0.0, 1000, 1000, 1.0)
-
-        self.assertEqual(402, order['target_id'])
+        actor = adapter.roster.register_profile(401, 1, profile, 'Hunter')
+        nearby = dict(_contact(402, 0., 100., [401], 'heavyTank'), health=800)
+        artillery = dict(_contact(403, 0., 130., [401], 'SPG'),
+            visible=False, health=500, max_health=500)
+        order, command = shared_plan_and_drive(adapter, BotPlanner(), actor,
+            _state(401, 1, 0., 0.), contacts=[nearby, artillery])
+        self.assertEqual(402, _initial_hint(order)['target_id'])
+        self.assertIsNone(command['target_id'])
 
     def test_navigation_accepts_caller_probes(self):
         grid = TerrainGrid(lambda x, z, hint_y: 0.0,
@@ -1994,69 +1908,53 @@ class BotAiPortTests(unittest.TestCase):
                     (40.0, -120.0, True),
                     (-2.0, 350.0, False))
         team_two = tuple(reversed(team_one))
-        director = BattleDirector('95_lost_city', 7, baked_routes={
+        roster = BattleRoster('95_lost_city', 7, baked_routes={
             '1': ({'id': 'baked-1', 'waypoints': team_one},),
             '2': ({'id': 'baked-2', 'waypoints': team_two},),
         })
 
-        first = director.register_profile(1, 1, {'roles': {}}, 'First')
-        second = director.register_profile(2, 2, {'roles': {}}, 'Second')
+        first = roster.register_profile(1, 1, {'roles': {}}, 'First')
+        second = roster.register_profile(2, 2, {'roles': {}}, 'Second')
 
         self.assertEqual(team_one, first['route']['waypoints'])
         self.assertEqual(team_two, second['route']['waypoints'])
         self.assertEqual(3, len(first['route']['waypoints']))
 
-    def test_route_hold_metadata_does_not_pause_local_director(self):
-        director = BattleDirector('07_lakeville', 'no-route-holds')
-        agent = director.register_profile(
-            92, 1, {'roles': {}, 'vehicle_name': 'medium'},
-            'Continuous traveller')
-        agent['route'] = {
-            'waypoints': (
-                (0.0, -40.0, False),
-                (0.0, -20.0, True),
-                (0.0, 80.0, False),
-            )}
-        agent['route_started'] = True
-        agent['waypoint_index'] = 1
-
-        target = director._route_position(
-            agent, (0.0, 0.0, -20.0), 3.0, 0.0)
-
-        self.assertEqual((0.0, 0.0, 80.0), target)
-        self.assertEqual(2, agent['waypoint_index'])
+    def test_route_hold_metadata_does_not_pause_shared_control(self):
+        adapter = BotAdapter('07_lakeville', 'no-route-holds')
+        actor = adapter.roster.register_profile(92, 1,
+            self._strategy_profile('mediumTank', 18., 85.), 'Continuous traveller')
+        actor['route'] = dict(id='continuous-route', waypoints=(
+            (0., -40., False), (0., -20., True), (0., 80., False)))
+        planner = BotPlanner()
+        order, command = shared_plan_and_drive(adapter, planner, actor,
+            _state(92, 1, 0., -40.), now=1.)
+        self.assertEqual(1, order['route_index'])
+        order, command = shared_plan_and_drive(adapter, planner, actor,
+            _state(92, 1, 0., -20.), now=3.)
+        self.assertEqual((0., 0., 80.), command['move_position'])
+        self.assertEqual(2, order['route_index'])
+        self.assertEqual(2, planner._route_states[92]['index'])
+        self.assertGreater(command['throttle'], 0.)
 
     def test_only_a_forward_moving_spawn_skips_its_rear_connector(self):
-        descriptor = {
-            'type': {'name': 'medium', 'tags': ('mediumTank',)},
+        descriptor = {'type': {'name': 'medium', 'tags': ('mediumTank',)},
             'physics': {'speedLimits': (18.0,)}, 'hull': {},
             'turret': {}, 'gun': {'shots': ()}}
-        cases = (
-            (0.0, (0.0, 0.0, -65.0), 1),
-            (-2.0, (0.0, 0.0, -65.0), 1),
-            (2.0, (40.0, 0.0, 40.0), 2),
-        )
+        cases = ((0., (0., 0., -65.), 1), (-2., (0., 0., -65.), 1),
+                 (2., (40., 0., 40.), 2))
         for speed, expected, waypoint_index in cases:
-            director = BattleDirector('07_lakeville', 'forward-join')
-            agent = director.register(
-                93, 1, descriptor, 'Forward join bot')
-            agent['route'] = {
-                'waypoints': (
-                    (0.0, -40.0, False),
-                    (0.0, -65.0, False),
-                    (40.0, 40.0, False),
-                )}
-            agent['route_started'] = False
-
-            order = director.order_for(
-                93, (0.0, 0.0, -20.0), 0.0, speed,
-                1000, 1000, 0.0)
-
+            adapter = BotAdapter('07_lakeville', 'forward-join')
+            actor = adapter.register(93, 1, descriptor, 'Forward join bot')
+            actor['route'] = dict(id='connector-contract', waypoints=(
+                (0., -40., False), (0., -65., False), (40., 40., False)))
+            planner = BotPlanner()
+            state = dict(_state(93, 1, 0., -20.), speed=speed)
+            order, command = shared_plan_and_drive(adapter, planner, actor, state, now=0.)
             with self.subTest(speed=speed):
-                self.assertEqual(expected, order['move_position'])
-                self.assertEqual(waypoint_index, agent['waypoint_index'])
-                self.assertEqual(
-                    (0.0, 0.0, -20.0), order['route_anchor'])
+                self.assertEqual(expected, command['move_position'])
+                self.assertEqual(waypoint_index, planner._route_states[93]['index'])
+                self.assertEqual(dict(x=0., y=0., z=-20.), order['route_anchor'])
                 self.assertTrue(order['route_join'])
 
     def test_normal_route_turn_keeps_full_throttle(self):
@@ -2413,18 +2311,9 @@ class BotAiPortTests(unittest.TestCase):
         self.assertEqual(1.0, corridor['throttle'])
         self.assertFalse(corridor['brake'])
 
-    def test_prohorovka_west_ridge_corner_keeps_forward_progress(self):
+    def test_sharp_corner_keeps_forward_progress(self):
         driver = LocalDriver()
-        graph = json.loads(
-            (PORT_ROOT / 'navgraphs' / '05_prohorovka.json').read_text())
-        route = next(
-            route for route in graph['routes']['1']
-            if route['id'] == 'west_ridge')
-        corner_index = next(
-            index for index, point in enumerate(route['waypoints'])
-            if tuple(point[:2]) == (54.0, -442.0))
-        first, corner, target = route['waypoints'][corner_index - 1:
-                                                   corner_index + 2]
+        first, corner, target = ((-6.0, -438.0), (54.0, -442.0), (54.0, -446.0))
         incoming_yaw = math.atan2(
             float(corner[0]) - float(first[0]),
             float(corner[1]) - float(first[1]))

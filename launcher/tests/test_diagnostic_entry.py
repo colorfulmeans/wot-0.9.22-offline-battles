@@ -5,9 +5,18 @@ import types
 import unittest
 from unittest import mock
 import wot_launcher as launcher
+import testing_ui
 
 
 class DiagnosticEntryTests(unittest.TestCase):
+    def test_new_combat_diagnostics_use_only_the_detailed_log_checkbox(self):
+        settings = dict(scene='drop', control=True, drive=True, collision=True)
+        for checked in (True, False):
+            with self.subTest(checked=checked):
+                env = testing_ui.environment(dict(settings, logs=checked), diagnostics=True)
+                self.assertEqual('1', env['WOT_OFFLINE_DIAGNOSTICS'])
+                self.assertEqual('1' if checked else '0', env['WOT_OFFLINE_COMBAT_DIAGNOSTICS'])
+
     def test_normal_and_diagnostic_entrances_do_not_persist_a_previous_choice(self):
         with mock.patch.dict(os.environ, {'WOT_OFFLINE_DIAGNOSTICS':'1',
                 'WOT_OFFLINE_SPIKE_PROFILE':'1',

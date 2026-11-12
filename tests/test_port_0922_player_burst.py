@@ -3,7 +3,7 @@ import unittest
 from unittest import mock
 
 import test_port_0922_battle_runtime as f
-from gui.mods.offline_lan_0922 import gun_mechanics
+from gui.mods.offline_lan_0922 import burst_mechanics, gun_mechanics
 
 
 class PlayerBurstTests(unittest.TestCase):
@@ -73,7 +73,7 @@ class PlayerBurstTests(unittest.TestCase):
         self.assertEqual(0, self.battle._gun_state.clip)
         self.assertIsNone(self.battle._local_player_burst)
 
-    def test_destroyed_gun_cancels_unlaunched_tail_without_ammo_debit(self):
+    def test_destroyed_gun_physically_terminates_tail_without_ammo_debit(self):
         self.battle.shoot(0, 0)
         ammo = list(self.battle._gun_state.ammo)
         self.entity.is_gun_destroyed = True
@@ -102,7 +102,7 @@ class PlayerBurstTests(unittest.TestCase):
         self.assertFalse(self.battle._advance_local_player_burst())
         self.assertIsNone(self.battle._local_player_burst)
 
-    def test_cancelled_tail_applies_queued_reload_without_consuming_tail(self):
+    def test_physical_termination_applies_queued_reload_without_consuming_tail(self):
         self.battle.shoot(0, 0)
         ammo = list(self.battle._gun_state.ammo)
         self.battle.change_vehicle_setting(
@@ -138,6 +138,75 @@ class PlayerBurstTests(unittest.TestCase):
         for launch in self._launches():
             self.assertTrue(self.battle._accept_projectile_event(dict(launch)))
         self.assertEqual([(3, False)], calls)
+
+    def test_delayed_callback_drains_every_due_physical_shell(self):
+        self.assertTrue(self.battle.shoot(0, 0))
+        trigger = self.battle._local_player_burst['clock']
+        self.assertIsInstance(trigger, burst_mechanics.TriggerClock)
+        self.assertEqual(1, trigger.next_index)
+        self.now += 0.3
+        self.assertTrue(self.battle._advance_local_player_burst())
+        self.assertEqual([0, 1, 2], [r['burst_index'] for r in self._launches()])
+        self.assertEqual(3, trigger.next_index)
+        self.assertFalse(trigger.active)
+        self.assertIsNone(self.battle._local_player_burst)
+        self.assertEqual([17, 10], self.battle._gun_state.ammo)
+
+    def test_physical_tails_never_ask_replacement_controller_for_admission(self):
+        self.assertTrue(self.battle.shoot(0, 0))
+        control = mock.Mock()
+        control.trigger_context = {'automatic': True}
+        control.owned_burst = self.battle._local_player_burst
+        control.authorize_trigger.side_effect = AssertionError('tail authorization')
+        control.prepare_trigger.side_effect = AssertionError('tail admission')
+        self.battle._player_control = control
+        self.now += 0.3
+        self.assertTrue(self.battle._advance_local_player_burst())
+        control.authorize_trigger.assert_not_called()
+        control.prepare_trigger.assert_not_called()
+        self.assertEqual(2, control.shot_committed.call_count)
+        self.assertEqual(3, len(self._launches()))
+
+    def test_each_shell_samples_actual_barrel_and_native_dispersion(self):
+        gun = self.battle._gun_state
+        angles = []
+        def scatter(direction, perfect, **values):
+            angles.append(values['dispersion_angle'])
+        gun.scatter = scatter
+        self.battle._native_dispersion_angle = mock.Mock(side_effect=[.01, .02, .03])
+        ray = [self.battle._vector((0, 0, 1))]
+        self.battle._mutable_shot_ray = lambda: (
+            self.battle._vector((1, 2, 3)), ray[0])
+        self.assertTrue(self.battle.shoot(0, 0))
+        ray[0] = self.battle._vector((1, 0, 0))
+        self.now += .1
+        self.assertTrue(self.battle._advance_local_player_burst())
+        ray[0] = self.battle._vector((0, 0, -1))
+        self.now += .1
+        self.assertTrue(self.battle._advance_local_player_burst())
+        launches = self._launches()
+        self.assertEqual([.01, .02, .03], angles)
+        self.assertGreater(launches[0]['velocity'][2], 0)
+        self.assertGreater(launches[1]['velocity'][0], 0)
+        self.assertLess(launches[2]['velocity'][2], 0)
+
+    def test_prelaunch_abort_does_not_invent_reload_or_spend_ammo(self):
+        self.battle.client.send_projectile_launch = lambda *a, **kw: None
+        gun = self.battle._gun_state
+        self.assertFalse(self.battle.shoot(0, 0))
+        self.assertIsNone(self.battle._local_player_burst)
+        self.assertEqual([20, 10], gun.ammo)
+        self.assertEqual(6, gun.clip)
+        self.assertEqual(0, gun.reload_time)
+        self.assertEqual(0, gun._burst_remaining)
+
+    def test_tactical_stop_is_not_a_physical_termination_reason(self):
+        self.assertTrue(self.battle.shoot(0, 0))
+        with self.assertRaises(ValueError):
+            self.battle._terminate_local_player_trigger('stop')
+        self.now += .3
+        self.assertTrue(self.battle._advance_local_player_burst())
+        self.assertEqual(3, len(self._launches()))
 
 
 if __name__ == '__main__':

@@ -1195,6 +1195,8 @@ class WaitingRoomUI(object):
         if not self._host():
             return False
         if role == 'map':
+            if (self._team_status() or {}).get('map_locked'):
+                return False
             return self._open_map_window()
         if role == 'random':
             return self._select_random_map()

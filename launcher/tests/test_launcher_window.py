@@ -46,6 +46,19 @@ class _Widget(object):
         return self.options.get(name)
 
 
+class _Canvas(_Widget):
+    configure = _Widget.config
+    def create_window(self, *args, **kwargs): return 1
+    def bbox(self, *args): return (0, 0, 640, 400)
+    def itemconfigure(self, *args, **kwargs): pass
+    def yview(self, *args): pass
+    def yview_scroll(self, *args): pass
+
+
+class _Scrollbar(_Widget):
+    def set(self, *args): pass
+
+
 class _Entry(_Widget):
     """The real Entry keeps its own text, which the balance panel reads."""
 
@@ -171,6 +184,7 @@ class _FakeTk(object):
     Tk = _Root
     Toplevel = _Root
     Frame = _Widget
+    Canvas = _Canvas
     LabelFrame = _Widget
     Label = _Widget
     Entry = _Entry
@@ -183,6 +197,7 @@ class _FakeTk(object):
 
 
 class _FakeTtk(object):
+    Scrollbar = _Scrollbar
     Combobox = _Widget
     Spinbox = _Widget
     Notebook = _Notebook
@@ -586,13 +601,16 @@ class WindowTest(unittest.TestCase):
             "missing": ("hidden-worker.log",),
             "notRun": (),
         }
+        physical = os.path.join(self.settings_dir, "LocalCache", "report.zip")
         notice = mock.Mock()
         tkinter = mock.Mock(messagebox=mock.Mock(showinfo=notice))
         with mock.patch.object(
                 wot_launcher.error_reports, "create_report",
                 return_value=report) as create, mock.patch.object(
                     wot_launcher.error_reports, "select_in_explorer") \
-                as select, mock.patch.dict("sys.modules", {"tkinter": tkinter}):
+                as select, mock.patch.dict("sys.modules", {"tkinter": tkinter}), \
+                mock.patch.object(wot_launcher.os.path, "realpath",
+                                  return_value=physical):
             self.assertTrue(self.window._create_error_report())
             for unused in range(200):
                 if not self.window._report_busy:
@@ -604,9 +622,9 @@ class WindowTest(unittest.TestCase):
         notice.assert_called_once_with(
             "Error report ready",
             "Please send this ZIP file to the author to report the problem:"
-            "\n\n%s" % report["path"],
+            "\n\n%s" % physical,
             parent=self.window.root)
-        self.assertIn("Created error report", self._log_text())
+        self.assertIn("Created error report: %s" % physical, self._log_text())
         self.assertIn("server.log, visible-client.log", self._log_text())
         self.assertIn("hidden-worker.log", self._log_text())
 
@@ -2407,6 +2425,9 @@ class WindowTest(unittest.TestCase):
         self.assertIn("Enter the address", self._log_text())
 
     def test_a_matching_existing_server_is_reused(self):
+        # The harness enables diagnostics for trace tests. This case exercises
+        # an ordinary LAN entry, not the fresh-server diagnostic entry.
+        self.window._diagnostic_entry = False
         with mock.patch("core.listener_status",
                         return_value=core.LISTENER_COMPATIBLE), \
                 mock.patch("wot_launcher.subprocess.Popen") as popen:
@@ -2434,7 +2455,21 @@ class WindowTest(unittest.TestCase):
         popen.assert_not_called()
         self.assertIn("fresh launcher-owned server", self._log_text())
 
+    def test_diagnostic_entry_refuses_an_external_compatible_server(self):
+        self.window._diagnostic_entry = True
+        with mock.patch("core.listener_status",
+                        return_value=core.LISTENER_COMPATIBLE), \
+                mock.patch("wot_launcher.subprocess.Popen") as popen, \
+                mock.patch("wot_launcher.bot_tactics_store.Store") as store:
+            self.assertFalse(self.window._start_server(
+                self.settings_dir, core.PORT_0_9_22))
+        popen.assert_not_called()
+        store.assert_not_called()
+        self.assertIn("fresh launcher-owned server", self._log_text())
+
     def test_exact_lineup_refuses_an_external_compatible_server(self):
+        # Isolate the exact-roster guard from the earlier diagnostic-mode guard.
+        self.window._diagnostic_entry = False
         lineup = [{
             "team": 2, "slot": 0,
             "vehicle": "germany:G12_Ltraktor",
@@ -2470,7 +2505,31 @@ class WindowTest(unittest.TestCase):
             environment[core.SERVER_BOT_LINEUP_ENV_0922])
         self.window._stop_server(force=True)
 
+    def test_only_test_scenes_and_explicit_diagnostics_ignore_the_personal_profile(self):
+        for diagnostic_entry, fixture, expected in ((False, '0', 'profile-1.json'),
+                                                     (False, '3', None),
+                                                     (True, '0', None)):
+            with self.subTest(diagnostic_entry=diagnostic_entry, fixture=fixture):
+                self.window._diagnostic_entry = diagnostic_entry
+                with mock.patch.dict(os.environ, {'WOT_OFFLINE_DIAGNOSTICS': '1',
+                                                  'WOT_OFFLINE_EQUIPMENT_TEST': fixture,
+                                                  'WOT_0922_BOT_TACTICS_PATH': 'stale.json'}), \
+                        mock.patch('core.listener_status', return_value=core.LISTENER_FREE), \
+                        mock.patch('core.wait_for_server', return_value=True), \
+                        mock.patch('core.local_addresses', return_value=[]), \
+                        mock.patch('wot_launcher.bot_tactics_store.Store') as store, \
+                        mock.patch('wot_launcher.subprocess.Popen', return_value=_Process()) as launch:
+                    store.return_value.ensure_active.return_value = 'profile-1.json'
+                    self.assertTrue(self.window._start_server(
+                        self.settings_dir, core.PORT_0_9_22, loopback_only=True))
+                    self.assertEqual(expected, launch.call_args.kwargs['env'].get(
+                        'WOT_0922_BOT_TACTICS_PATH'))
+                    if expected is None:
+                        store.assert_not_called()
+                self.window._stop_server(force=True)
+
     def test_launcher_owned_server_reuse_requires_game_and_visibility_context(self):
+        self.window._diagnostic_entry = False
         server = _Process()
         self.window._server = server
         game_root = os.path.realpath(self.settings_dir)
@@ -2488,6 +2547,38 @@ class WindowTest(unittest.TestCase):
                 os.path.join(self.settings_dir, "other"),
                 core.PORT_0_9_22))
         listener.assert_not_called()
+        self.assertIn("different game or visibility", self._log_text())
+
+    def test_launcher_owned_server_reuse_requires_tactics_and_scene_context(self):
+        self.window._server = _Process()
+        self.window._diagnostic_entry = True
+        self.window._server_context = {
+            "game_root": os.path.normcase(os.path.realpath(self.settings_dir)),
+            "port_version": core.PORT_0_9_22,
+            "loopback_only": False,
+            "built_in_tactics": True,
+            "test_scene": (),
+        }
+        with mock.patch("core.listener_status") as listener, \
+                mock.patch("wot_launcher.subprocess.Popen") as popen:
+            self.assertTrue(self.window._start_server(
+                self.settings_dir, core.PORT_0_9_22))
+            self.window._diagnostic_entry = False
+            self.assertFalse(self.window._start_server(
+                self.settings_dir, core.PORT_0_9_22))
+            self.window._server_context.update(
+                loopback_only=True, test_scene=("3", "0", "0"))
+            with mock.patch.dict(os.environ, {
+                    "WOT_OFFLINE_EQUIPMENT_TEST": "3",
+                    "WOT_OFFLINE_ROOF_CRUSH_TEST": "0",
+                    "WOT_OFFLINE_ROOF_SHOT_DROP": "0"}):
+                self.assertTrue(self.window._start_server(
+                    self.settings_dir, core.PORT_0_9_22, loopback_only=True))
+                os.environ["WOT_OFFLINE_EQUIPMENT_TEST"] = "4"
+                self.assertFalse(self.window._start_server(
+                    self.settings_dir, core.PORT_0_9_22, loopback_only=True))
+        listener.assert_not_called()
+        popen.assert_not_called()
         self.assertIn("different game or visibility", self._log_text())
 
     def test_persistent_server_survives_session_cleanup_until_stopped(self):

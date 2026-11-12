@@ -234,7 +234,7 @@ class WorkerSolidMotionTests(unittest.TestCase):
         self.assertEqual('velocity_owned_by_remote_player',
                          state['_translation_motion_receipt']['outcome'])
 
-    def test_final_motion_log_carries_current_sweep_and_mechanical_handoff(self):
+    def test_final_motion_log_carries_current_sweep_without_retired_handoff(self):
         import io
         runtime = self.prepare()
         state = runtime.states[11]
@@ -254,8 +254,8 @@ class WorkerSolidMotionTests(unittest.TestCase):
         self.assertEqual([[12, 0.]], rows[0]['translation_sweep']['contacts'])
         self.assertEqual('unresolved_motor_sweep_settled',
                          rows[0]['translation_sweep']['outcome'])
-        self.assertEqual(6.27, rows[0]['gun_angle_handoff']['anchor_distance'])
-        self.assertEqual(1.2, rows[0]['gun_angle_handoff']['sampled_at'])
+        self.assertNotIn('gun_angle_handoff', rows[0])
+        self.assertEqual([0., 0.], rows[0]['controls']['motion'])
 
     def test_drive_sweep_reuse_is_limited_to_each_movement_and_roster(self):
         runtime = self.prepare()
@@ -312,10 +312,8 @@ class WorkerSolidMotionTests(unittest.TestCase):
             battle = t.BattleRuntime(native)
             battle.client = t._Client()
             battle._avatar = native.bigworld.avatar
-            battle._bots = types.SimpleNamespace(states={},
-                replica_contact_params=lambda raw, descriptor: dict(
-                    t.battle_runtime_module.vehicle_physics.derive_params(descriptor),
-                    mass=wreck_mass))
+            battle._replica_contact_params = lambda raw, descriptor: dict(
+                t.vehicle_physics.derive_params(descriptor), mass=wreck_mass)
             battle._local_physics = dict(t._effective_params_snapshot()['physics'], mass=100575.)
             local = t._Vehicle(10, t._Descriptor(), t._Vector(), (0,0,0), {'health':500})
             remote = t._Vehicle(11, t._Descriptor(), t._Vector(), (0,0,0), {'health':0})

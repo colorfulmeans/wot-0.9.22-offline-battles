@@ -14,6 +14,16 @@ from gui.mods.offline_lan_0922 import player_critical_mechanics as pcm
 
 
 class EnvironmentalModulesTests(unittest.TestCase):
+    def setUp(self):
+        # These are engine-free law tests on every host. Native simulation
+        # integration has its own acceptance; a Windows Python 3 test process
+        # cannot load the shipping x86 CPython 2 extension.
+        patcher = mock.patch(
+            'gui.mods.offline_lan_0922.native_simulation.NativeSimulation.create',
+            return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def target(self, pools=None):
         td=fixtures._strict_1513_descriptor()
         return types.SimpleNamespace(id=1,health=1000,maxHealth=1000,typeDescriptor=td,
@@ -113,7 +123,7 @@ class EnvironmentalModulesTests(unittest.TestCase):
         v=self.target()
         with contextlib.redirect_stdout(io.StringIO()):
             damage,payload=cd.tick_fire(v,1.,now=1.)
-        self.assertEqual(50,damage)
+        self.assertEqual(47,damage)
         for name in em.FIRE_DEVICES:
             self.assertEqual(dd.device_max_hp(v.typeDescriptor,name)-10.,v.devices_hp[name])
         for name in ('leftTrackHealth','rightTrackHealth','gunHealth','surveyingDeviceHealth'):
@@ -384,7 +394,8 @@ class EnvironmentalModulesTests(unittest.TestCase):
         player.combat_fire_elapsed=0.;player.combat_fire_timer=0.
         state=dict(id=16,health=player.health,max_health=player.max_health,critical=player.critical)
         shadow=bot_runtime._BotCriticalVehicle(state,descriptor,0.,0.)
-        with contextlib.redirect_stdout(io.StringIO()):
+        with contextlib.redirect_stdout(io.StringIO()), mock.patch(
+                'gui.mods.offline_lan_0922.fire_model.ignition_scale', return_value=1.):
             result=pcm.advance_fire(player,1.,1.)
             damage,payload=cd.tick_fire(shadow,1.,now=1.)
         self.assertEqual(damage,result['damage'])

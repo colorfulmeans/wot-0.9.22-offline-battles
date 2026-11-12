@@ -542,8 +542,10 @@ class WreckOwnerTests(unittest.TestCase):
         native=vt._runtime();battle=vt.BattleRuntime(native)
         battle.client=vt._Client();battle._avatar=native.bigworld.avatar
         battle._local_physics=human_params
-        battle._bots=types.SimpleNamespace(states={11:copy.deepcopy(state)},
-            replica_contact_params=lambda raw,descriptor:params)
+        # The foreground owns only the published body and neutral physical
+        # parameters. The real worker below remains the sole wreck integrator.
+        self.assertIsNone(battle._bots)
+        battle._replica_contact_params=lambda raw,descriptor:params
         local=vt._Vehicle(10,vt._Descriptor(),vt._Vector(),(0,0,0),{'health':500})
         native.bigworld.entities[11]=vt._Vehicle(11,vt._Descriptor(),vt._Vector(),(0,0,0),{'health':0})
         record=dict(engine_id=11,network_id=11,kind='bot',local=False,ready=True,
@@ -580,7 +582,6 @@ class WreckOwnerTests(unittest.TestCase):
                 while queue and queue[0][0]<=clock[0]+1.e-9:
                     unused,stamp,revision,published=queue.pop(0)
                     record.update(state=published,presented_pose=published)
-                    battle._bots.states[11]=published
                     battle._remember_ram_bot_snapshot(dict(bot_state_revision=revision,
                         bot_state_time_us=int(stamp*1000000),bots=[published]))
         self.assertGreater(state['x'],1.)
@@ -880,7 +881,14 @@ class HeadOnOwnerTests(unittest.TestCase):
         human_queue=[];published_human=None
         sign=-1 if reverse else 1
         human_yaw=math.pi if reverse else 0.
-        with mock.patch('sys.stdout'):
+        # This experiment prescribes both physical pedal inputs, not an AI
+        # decision to ram. _FixedAdapter fixes the planned pedal but the final
+        # automatic traffic guard can still replace it with braking. Hold only
+        # that decision boundary fixed; retain the real drive, world/hull sweeps,
+        # momentum solver, publication delays and reciprocal contact receipts.
+        with mock.patch('sys.stdout'), mock.patch.object(
+                worker._traffic_coordinator, 'safe_controls',
+                side_effect=lambda body, command, *unused, **kwargs: dict(command)):
             for tick in range(hz*6):
                 clock[0]=(tick+1)*dt
                 battle._local_speed=self.module.vehicle_physics.longitudinal_step(
@@ -892,6 +900,7 @@ class HeadOnOwnerTests(unittest.TestCase):
                 if bank+1.e-9>=.1:
                     raw=dict(id=battle.client.player_id,team=1,x=0.,y=0.,z=position[2],
                              yaw=human_yaw,speed=battle._local_speed,forward=sign*human_throttle,
+                             alive=bool(local.isAlive()),
                              tank_pushes=copy.deepcopy(list(battle._local_contact_pushes.values())))
                     human_queue.append((clock[0]+input_delay,raw))
                     while human_queue and human_queue[0][0]<=clock[0]+1.e-9:

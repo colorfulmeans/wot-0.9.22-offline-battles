@@ -35,6 +35,21 @@ TYPE_59_MARKS = (1449, 2118, 2659)
 MARKS_DB_ID = 295
 
 
+class RegionalMasteryTests(unittest.TestCase):
+    def test_regional_base_xp_factors_scale_every_class_not_marks(self):
+        from gui.mods.offline_lan_0922 import xp_coefficients
+        for cd in (305,561,65073,817):
+            base = mastery_catalog.MASTERY_XP[cd]
+            factor,reference = xp_coefficients.mastery_scale(cd)
+            self.assertEqual(tuple((v*factor+reference-1)//reference for v in base),
+                             battle_mastery.mastery_thresholds(cd))
+            self.assertEqual(mastery_catalog.MARKS_DAMAGE[cd],battle_mastery.marks_curve(cd))
+
+    def test_churchill_reference_already_contains_special_bonus(self):
+        self.assertEqual(mastery_catalog.MASTERY_XP[51713],
+                         battle_mastery.mastery_thresholds(51713))
+
+
 class _Packer(object):
     def __init__(self, name, calls):
         self.name = name
@@ -615,20 +630,20 @@ class PremiumVehicleFactorTests(unittest.TestCase):
         import types
         module = types.ModuleType('items.vehicles')
         module.getVehicleType = lambda compact_descr: types.SimpleNamespace(
-            premiumVehicleXPFactor=0.6)
+            tags=('premium', 'mediumTank'), level=8, premiumVehicleXPFactor=0.1)
         original = postbattle_store._vehicle_type_compact_descr
         postbattle_store._vehicle_type_compact_descr = lambda unused: TYPE_59
         self.addCleanup(setattr, postbattle_store,
                         '_vehicle_type_compact_descr', original)
         with self._with_vehicles(module):
-            self.assertEqual(60, postbattle_store.
+            self.assertEqual(10, postbattle_store.
                              _premium_vehicle_xp_factor_100('china:Ch01_Type59'))
 
     def test_a_researchable_vehicle_and_an_unreadable_one_earn_no_bonus(self):
         import types
         module = types.ModuleType('items.vehicles')
         module.getVehicleType = lambda compact_descr: types.SimpleNamespace(
-            premiumVehicleXPFactor=0.0)
+            tags=('mediumTank',), level=5, premiumVehicleXPFactor=0.0)
         original = postbattle_store._vehicle_type_compact_descr
         postbattle_store._vehicle_type_compact_descr = lambda unused: 1
         self.addCleanup(setattr, postbattle_store,

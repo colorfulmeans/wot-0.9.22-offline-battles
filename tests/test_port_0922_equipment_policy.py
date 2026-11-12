@@ -28,8 +28,8 @@ class EquipmentPolicyTests(unittest.TestCase):
             name='example', tags={'lightTank'}), mayInstallOptionalDevice=may_install,
             installOptionalDevice=lambda cd, slot: installed.append(cd))
         result = records.initialize_elite_devices(types.SimpleNamespace(g_cache=cache), descriptor)
-        self.assertEqual([2, 3, 4], installed)
-        self.assertEqual([(1,0), (2,0), (3,1), (4,2)], attempts)
+        self.assertEqual([3, 4, 2], installed)
+        self.assertEqual([(3,0), (4,1), (1,2), (2,2)], attempts)
         self.assertEqual(900, result)
 
     def test_directive_skips_net_and_preserves_equipment_order(self):
@@ -51,11 +51,11 @@ class EquipmentPolicyTests(unittest.TestCase):
 
     def test_all_five_classes_keep_the_approved_family_order(self):
         expected = {
-            'lightTank': ('ventilation', 'optics', 'stabilizer', 'rammer', 'aim_drives'),
-            'mediumTank': ('stabilizer', 'rammer', 'ventilation', 'optics', 'aim_drives'),
-            'heavyTank': ('stabilizer', 'rammer', 'ventilation', 'aim_drives', 'optics'),
-            'AT-SPG': ('ventilation', 'rammer', 'aim_drives', 'camouflage', 'optics'),
-            'SPG': ('ventilation', 'rammer', 'aim_drives', 'camouflage', 'optics'),
+            'lightTank': ('optics', 'rammer', 'stabilizer', 'ventilation', 'aim_drives'),
+            'mediumTank': ('rammer', 'stabilizer', 'optics', 'ventilation', 'aim_drives'),
+            'heavyTank': ('liner', 'rammer', 'stabilizer', 'ventilation', 'aim_drives'),
+            'AT-SPG': ('rammer', 'ventilation', 'aim_drives', 'camouflage', 'binoculars'),
+            'SPG': ('rammer', 'ventilation', 'aim_drives', 'camouflage', 'binoculars'),
         }
         self.assertEqual(expected, self.policy.PRIORITIES)
         for tag, families in expected.items():

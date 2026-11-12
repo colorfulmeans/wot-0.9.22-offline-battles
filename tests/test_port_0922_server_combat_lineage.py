@@ -84,6 +84,9 @@ def _graph():
         'cell_size': 4.0, 'origin': (0.0, 0.0),
         'bounds': (0, 0, 8, 0), 'width': 3, 'height': 1,
         'heights_mm': (0, 0, 0),
+        # Link bits 3 and 4 are the west/east edges of this corridor.
+        'directions': ((-1, -1), (0, -1), (1, -1), (-1, 0),
+                       (1, 0), (-1, 1), (0, 1), (1, 1)),
         'links': (1 << 4, (1 << 3) | (1 << 4), 1 << 3),
         'hazards': (0, 0, 0),
         'spawn_anchors': ((0.0, 0.0), (8.0, 0.0)),
@@ -117,7 +120,7 @@ def _human():
     }
 
 
-class _Director(object):
+class _Roster(object):
     def __init__(self):
         self.agents = {}
 
@@ -131,17 +134,17 @@ class _Director(object):
 class _FixedAdapter(object):
     def __init__(self, command):
         self.command = dict(command)
-        self.director = _Director()
+        self.roster = _Roster()
 
     def register(self, bot_id, team, descriptor, name):
-        self.director.register_profile(bot_id, team, {}, name)
+        self.roster.register_profile(bot_id, team, {}, name)
 
-    def decide(self, state, clear):
+    def fixture_controls(self, state, clear):
         clear(state['yaw'])
         return dict(self.command)
 
     def decide_with_order(self, state, strategic, clear):
-        return self.decide(state, clear)
+        return self.fixture_controls(state, clear)
 
 
 def _burning_payload():

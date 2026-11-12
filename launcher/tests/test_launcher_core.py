@@ -1551,20 +1551,24 @@ class PayloadStagingTest(unittest.TestCase):
             self.assertTrue(
                 os.path.isfile(core.server_script(port_version, self.target)),
                 port_version)
-            self.assertTrue(os.path.isfile(os.path.join(
-                os.path.dirname(core.server_script(port_version,self.target)),
-                'server_route_recovery.py')))
-            self.assertTrue(os.path.isfile(os.path.join(
-                os.path.dirname(core.server_script(port_version,self.target)),
-                'server_empty_ammo.py')))
+            shared_root = os.path.join(os.path.dirname(os.path.dirname(
+                core.server_script(port_version, self.target))), 'src', 'res',
+                'scripts', 'client', 'gui', 'mods', 'offline_lan_0922',
+                'vehicle_control')
+            for name in ('strategy.py', 'route_recovery.py', 'empty_ammo_tasks.py'):
+                self.assertTrue(os.path.isfile(os.path.join(shared_root, name)), name)
+            for name in ('server_bot_ai.py', 'server_route_recovery.py', 'server_empty_ammo.py'):
+                self.assertFalse(os.path.exists(os.path.join(
+                    os.path.dirname(core.server_script(port_version, self.target)), name)))
 
     def test_staged_server_imports_without_the_repository_on_its_path(self):
         import subprocess
         import sys
         source=os.path.dirname(core.server_script(core.PORT_0_9_22,self.target))
         result=subprocess.run([sys.executable,'-I','-S','-c',
-            "import sys;sys.path.insert(0,sys.argv[1]);from server_bot_ai import BotPlanner;"
-            "from server_empty_ammo import EmptyAmmoMixin;"
+            "import sys;sys.path.insert(0,sys.argv[1]);import lan_battle_server;"
+            "from gui.mods.offline_lan_0922.vehicle_control.strategy import BotPlanner;"
+            "from gui.mods.offline_lan_0922.vehicle_control.empty_ammo_tasks import EmptyAmmoMixin;"
             "assert isinstance(BotPlanner(),EmptyAmmoMixin)",source],
             cwd=self.target,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
         self.assertEqual(0,result.returncode,result.stderr)

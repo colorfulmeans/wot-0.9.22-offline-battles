@@ -192,7 +192,7 @@ class WaterWarningTests(unittest.TestCase):
         self.assertTrue(self.battle._publish_player_environment(0.3, 1.0))
         sender.assert_called_once_with([
             {'player_id': 1, 'input_seq': 12, 'level': 2}], 1)
-        bot = fixture.battle_runtime_module.BotRuntime(
+        bot = fixture.bot_runtime.BotRuntime(
             1, water_depth_probe=self.battle._water_depth)
         self.entity.typeDescriptor.chassis.topRightCarryingPoint=(1.7,3.5)
         bot._descriptors[11] = self.entity.typeDescriptor

@@ -862,7 +862,7 @@ class GarageStore(object):
                              auto_settings=None, friendly_fire_facts=None,
                              vehicle_type_name=None, battle_start=0,
                              daily_facts=None, training=False,
-                             campaign_receipt=None):
+                             campaign_receipt=None, crew_injuries=None):
         """Apply and persist one battle's whole settlement exactly once.
 
         The compact crew descriptors, the earnings, the damage the battle did
@@ -908,7 +908,8 @@ class GarageStore(object):
         experience_percent = economy.earnings_percent(
             snapshot.get('earningsPercent'))
         vehicle_credits_percent = 100
-        if (vehicles_module is not None and economy.is_premium_vehicle(
+        if ((rewards or {}).get('economy_version', 1) < 2 and
+                vehicles_module is not None and economy.is_premium_vehicle(
                 vehicles_module, vehicle_type_compact_descr)):
             vehicle_credits_percent = economy.PREMIUM_VEHICLE_CREDITS_PERCENT
         credits_percent = experience_percent * vehicle_credits_percent // 100
@@ -987,7 +988,8 @@ class GarageStore(object):
                 refused, 'crew experience',
                 lambda: state.award_battle_crew_xp(
                     vehicle_type_compact_descr, battle_xp,
-                    xp_to_tankman_flag),
+                    xp_to_tankman_flag, crew_injuries=crew_injuries,
+                    enrolled_crew=self._crew_service_rosters.get(receipt_id)),
                 GarageError)
         if crew is not None:
             result.update(crew)
@@ -1008,6 +1010,7 @@ class GarageStore(object):
                 refused, 'consumables used',
                 lambda: state.settle_battle_consumables(
                     vehicle_type_compact_descr, equipment_used), GarageError)
+        earnings_wallet_before = dict(state._wallet())
         if rewards is not None:
             # The award needs no vehicle record: the wallet and the vehicle's
             # experience are both keyed by the type this battle was fought
@@ -1033,6 +1036,7 @@ class GarageStore(object):
         result['refused'] = list(refused)
         result['service_costs'] = _settle_automatically(
             state, int(result['vehicle_id']), auto_settings, GarageError)
+        earnings_wallet_after = dict(state._wallet())
         if campaign_receipt is not None and not training:
             from gui.mods.offline_lan_0922 import ordinary_missions
             finish = (daily_facts or {}).get('finished_at')
@@ -1119,6 +1123,10 @@ class GarageStore(object):
         self._dirty = False
         result['receipt_id'] = receipt_id
         result['applied'] = True
+        _log('ECONOMY SETTLED receipt=%s version=%s server=%s income=%s awarded=%s service=%s wallet_before=%s wallet_after=%s' % (
+            receipt_id, (rewards or {}).get('economy_version', 1), rewards,
+            result.get('income'), result.get('awarded'), result.get('service_costs'),
+            earnings_wallet_before, earnings_wallet_after))
         state.report_customization(vehicle_type_compact_descr, 'settlement_committed', receipt_id)
         return result
 

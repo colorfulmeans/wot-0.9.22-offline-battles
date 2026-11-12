@@ -2081,14 +2081,15 @@ def _point_xyz(value):
 
 
 def vehicle_target_bounds_at_matrix(vehicle, vehicle_matrix, math_module,
-                                    chassis_matrix=None):
+                                    chassis_matrix=None, require_complete=False):
     """Compose a world AABB over the attached descriptor hit-test boxes.
 
     #1513 Vehicle.onEnterWorld enables targetFullBounds. The public BigWorld
     2.0.1 picker uses an embodiment bounding box, which motivates this local
     full-envelope rule. Descriptor boxes are an approximation of the visual
     compound's bounds; neither their equality nor the shipped native picker
-    rule has been established on #1513. Missing geometry contributes no box.
+    rule has been established on #1513. Collision broad phases can require
+    bounds for every attached component before using the envelope to reject.
     """
     try:
         components = _pose_components(vehicle, math_module)
@@ -2103,6 +2104,8 @@ def vehicle_target_bounds_at_matrix(vehicle, vehicle_matrix, math_module,
             tester = _component_value(component, 'hitTester')
             bounds = _blast_bbox_bounds(_component_value(tester, 'bbox'))
             if bounds is None:
+                if require_complete:
+                    return None
                 continue
             root_matrix = (chassis_matrix if component_index == 0 and
                            chassis_matrix is not None else vehicle_matrix)
@@ -2116,6 +2119,9 @@ def vehicle_target_bounds_at_matrix(vehicle, vehicle_matrix, math_module,
                     bounds[(index >> 1) & 1][1],
                     bounds[(index >> 2) & 1][2]))
                 point = _point_xyz(corner)
+                if require_complete and any(math.isnan(value) or math.isinf(value)
+                                            for value in point):
+                    return None
                 if lower is None:
                     lower = list(point)
                     upper = list(point)

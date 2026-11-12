@@ -82,13 +82,7 @@ class _RandomEntity(object):
         # PreQueueEntity.doAction toggles by isInQueue(); the enqueue and
         # dequeue effects land on a later server callback.
         if not self.isInQueue():
-            self.queue_calls += 1
-
-            def enqueue():
-                self._account.isInRandomQueue = True
-                self._events.onEnqueuedRandom.fire()
-
-            self._pending.append(enqueue)
+            self.queue(action)
         else:
             self.dequeue_calls += 1
 
@@ -98,6 +92,19 @@ class _RandomEntity(object):
 
             self._pending.append(dequeue)
         return True
+
+    def queue(self, ctx=None, callback=None):
+        self.queue_calls += 1
+        def enqueue():
+            if getattr(self, 'cancel_warning', False):
+                if callback:
+                    callback(False)
+                return
+            self._account.isInRandomQueue = True
+            self._events.onEnqueuedRandom.fire()
+            if callback:
+                callback(True)
+        self._pending.append(enqueue)
 
     def exitFromQueue(self):
         self.doAction()
@@ -144,6 +151,19 @@ class _Runtime(object):
 
 
 class QueueScreenTests(unittest.TestCase):
+    def test_cancel_warning_releases_pending_request_and_allows_retry(self):
+        self.entity.cancel_warning = True
+        self.assertTrue(self.screen.open())
+        self.assertNotIn('queue', self.entity.__dict__)
+        self.pump()
+        self.assertFalse(self.screen.is_ready())
+        self.assertEqual([True], self.exits)
+        self.entity.cancel_warning = False
+        self.assertTrue(self.screen.open())
+        self.pump()
+        self.assertTrue(self.account.isInRandomQueue)
+        self.assertEqual(2, self.entity.queue_calls)
+
     def setUp(self):
         self.module = _load()
         self.pending = []

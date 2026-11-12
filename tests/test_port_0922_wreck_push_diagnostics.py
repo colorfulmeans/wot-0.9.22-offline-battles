@@ -74,3 +74,13 @@ class SustainedWreckDriveTests(unittest.TestCase):
             twelve_seconds = self._travel(68000.0, 1050.0, 32000.0, ticks=360)
         self.assertGreater(first_six_seconds, 10.0)
         self.assertGreater(twelve_seconds, first_six_seconds + 10.0)
+
+
+def setUpModule():
+    import test_port_0922_bot_runtime as bots
+    bots.setUpModule()
+
+
+def tearDownModule():
+    import test_port_0922_bot_runtime as bots
+    bots.tearDownModule()

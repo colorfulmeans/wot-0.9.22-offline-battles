@@ -1,9 +1,8 @@
-"""October 3 orbit, right-hand wreck exit and stale withdrawal reports."""
+"""October 3 orbit and physical right-hand wreck exit regressions."""
 import math
 import unittest
 from gui.mods.offline_lan_0922.ai.driver import LocalDriver
 from gui.mods.offline_lan_0922.ai.adapter import BotAdapter
-from test_port_0922_server_bot_ai import BotPlanner
 
 
 class EgressTests(unittest.TestCase):
@@ -62,35 +61,5 @@ class EgressTests(unittest.TestCase):
             state['position']=(0.,0.,frame*.03)
             command=adapter.decide_with_order(state,order,lambda *unused: True)
             self.assertEqual('wreck_push',command['recovery_mode'])
-
-    def test_failed_withdrawal_releases_parking_after_threat_disappears(self):
-        planner=BotPlanner()
-        bot=dict(id=18,state=dict(x=57.455,y=1.1,z=-8.213))
-        goal=dict(x=57.412,y=1.1,z=-27.683)
-        route=dict(combat_mode='route',target_id=None,move_position=dict(x=182.,y=0.,z=-10.),
-                   throttle_override=None)
-        def apply(now,target=None):
-            order=dict(route,target_id=target)
-            return planner._apply_retreat_order(order,bot,goal,goal,now,
-                                               'low_health_retreat','low_health_defend')
-        self.assertIsNone(apply(1.)['throttle_override'])
-        self.assertEqual(0.,apply(12.)['throttle_override'])
-        resumed=apply(28.)
-        self.assertEqual('route',resumed['combat_mode'])
-        self.assertIsNone(resumed['throttle_override'])
-        self.assertEqual(route['move_position'],resumed['move_position'])
-        self.assertEqual('route',apply(29.)['combat_mode'])
-        self.assertEqual('low_health_retreat',apply(30.,2)['combat_mode'])
-
-    def test_defensive_hold_with_current_enemy_remains_intentional(self):
-        planner=BotPlanner()
-        bot=dict(id=18,state=dict(x=0.,y=0.,z=0.))
-        route=dict(combat_mode='route',target_id=2,move_position=dict(x=0.,y=0.,z=100.))
-        for now in (1.,30.,60.):
-            result=planner._apply_retreat_order(dict(route),bot,dict(x=0.,y=0.,z=0.),
-                         dict(x=100.,y=0.,z=0.),now,'low_health_retreat','low_health_defend')
-            self.assertEqual(0.,result['throttle_override'])
-            self.assertEqual('low_health_defend',result['tactical_phase'])
-
 
 if __name__=='__main__': unittest.main()

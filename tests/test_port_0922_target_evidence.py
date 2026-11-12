@@ -13,7 +13,6 @@ class TargetEvidenceTests(unittest.TestCase):
     def setUp(self):
         ai.ServerBotTacticsTests.setUp(self)
         self.planner = ai.BotPlanner()
-        self.planner._capable = lambda *args: True
         self.players = [dict(id=i, team=2, alive=True) for i in (2, 3)]
         self.contacts = [ai._contact(2, 0, 100, [11]), ai._contact(3, 10, 110, [11])]
 
@@ -27,70 +26,75 @@ class TargetEvidenceTests(unittest.TestCase):
         self.states[0].update(aim_feedback_kind='human', aim_feedback_id=2,
             aim_feedback_error=error, aim_feedback_aligned=aligned)
 
-    def test_damaged_turret_gets_time_for_actual_progress_then_timeout(self):
-        self.assertEqual(2, self.orders(1)['target_id'])
+    def test_damaged_turret_cannot_create_a_hint_patience_timeout(self):
+        self.assertEqual(2, ai._initial_hint(self.orders(1))['target_id'])
         self.contacts[1]['health'] = 10
         for now, error in ((3.1, 2.6), (6, 1.5), (9, .4)):
             self.aim(error)
-            self.assertEqual(2, self.orders(now)['target_id'])
-        self.assertEqual(3, self.orders(15.1)['target_id'])
+            self.assertEqual(2, ai._initial_hint(self.orders(now))['target_id'])
+        self.assertEqual(2, ai._initial_hint(self.orders(15.1))['target_id'])
+        self.assertFalse(hasattr(self.planner, '_target_assignments'))
 
-    def test_first_shot_releases_ordinary_aim_commitment(self):
+    def test_first_shot_does_not_restore_a_low_health_target_bonus(self):
         self.orders(1)
         self.aim(.1)
         self.contacts[1]['health'] = 10
-        self.assertEqual(2, self.orders(3.1)['target_id'])
+        self.assertEqual(2, ai._initial_hint(self.orders(3.1))['target_id'])
         self.states[0]['fire_seq'] = 1
-        self.assertEqual(3, self.orders(5.2)['target_id'])
+        self.assertEqual(2, ai._initial_hint(self.orders(5.2))['target_id'])
 
-    def test_attacker_still_preempts_an_executed_aim(self):
+    def test_health_loss_cannot_restore_an_attacker_preemption_hook(self):
         self.orders(1)
         self.aim(2.6)
-        self.planner.report_damage(11, 'player', 3, 100, 1.1)
-        self.assertEqual(3, self.orders(1.2)['target_id'])
+        self.states[0]['health'] -= 100
+        self.assertFalse(hasattr(self.planner, 'report_damage'))
+        self.assertFalse(hasattr(self.planner, '_recent_hit'))
+        self.assertEqual(2, ai._initial_hint(self.orders(1.2))['target_id'])
 
-    def test_idle_fire_timer_cannot_cancel_a_progressing_slow_aim(self):
-        self.orders(1)
-        bot = self.planner._alive_bots(self.manifest, self.states, self.planner.tactics)[0]
-        bot['state'].update(aim_feedback_kind='human', aim_feedback_id=2,
-            aim_feedback_error=2.6, aim_feedback_aligned=False)
-        order = dict(combat_mode='engage', throttle_override=0.,
-            target_kind='human', target_id=2, fire_allowed=True)
-        self.planner._release_unproductive_firing_hold(order, bot,
-            dict(x=0, y=0, z=100), dict(x=0, y=0, z=0), 3)
-        self.assertEqual('executed_aim_in_progress',
-            order['tactical_evidence']['firing_hold']['reason'])
-        self.assertEqual('engage', order['combat_mode'])
-        bot['state']['aim_feedback_error'] = .5
-        self.planner._release_unproductive_firing_hold(order, bot,
-            dict(x=0, y=0, z=100), dict(x=0, y=0, z=0), 8)
-        self.assertNotIn(11, self.planner._firing_holds)
-        self.planner._release_unproductive_firing_hold(order, bot,
-            dict(x=0, y=0, z=100), dict(x=0, y=0, z=0), 15)
-        self.assertIn(11, self.planner._firing_holds)
+    def test_slow_aim_cannot_create_a_macro_idle_fire_timer(self):
+        initial = self.orders(1)
+        baseline = ai.BotPlanner()
+        baseline.build_orders(self.manifest, self.states, self.players, 1.)
+        for now, error in ((3., 2.6), (8., .5), (15., .5), (30., .5)):
+            self.aim(error)
+            order = self.orders(now)
+            self.assertEqual(2, ai._initial_hint(order)['target_id'])
+            self.assertEqual('route', order['combat_mode'])
+            self.assertIsNone(order['throttle_override'])
+            route = baseline.build_orders(self.manifest, self.states, self.players, now)['orders'][0]
+            self.assertEqual(route['move_position'], order['move_position'])
+            self.assertNotIn('firing_hold', order['tactical_evidence'])
+        self.assertFalse(hasattr(self.planner, '_release_unproductive_firing_hold'))
+        self.assertFalse(hasattr(self.planner, '_firing_holds'))
 
-    def test_close_threat_still_preempts(self):
+    def test_a_new_closer_contact_changes_only_the_stateless_initial_hint(self):
         self.orders(1)
         self.aim(2.6)
         self.contacts[1].update(x=0, z=20)
-        self.assertEqual(3, self.orders(1.1)['target_id'])
+        self.assertEqual(3, ai._initial_hint(self.orders(1.1))['target_id'])
+        self.assertEqual('initial_hint', self.planner._target_decisions[11]['owner'])
+        self.assertFalse(hasattr(self.planner, '_target_assignments'))
 
-    def test_lane_loss_is_bounded_and_never_grants_fire(self):
+    def test_lane_loss_retains_hint_without_overriding_route(self):
         self.orders(1)
         self.contacts[0]['shootable_by_bot_ids'] = []
-        held = self.orders(1.1)
-        self.assertEqual(2, held['target_id'])
-        self.assertFalse(held['fire_allowed'])
-        self.assertEqual(3, self.orders(3.2)['target_id'])
+        for now in (1.1, 3.2, 30.):
+            held = self.orders(now)
+            self.assertEqual(2, ai._initial_hint(held)['target_id'])
+            self.assertFalse(held['fire_allowed'])
+            self.assertEqual('route', held['combat_mode'])
+            self.assertIsNone(held['throttle_override'])
+        self.contacts[0]['shootable_by_bot_ids'] = [11]
+        self.assertFalse(self.orders(30.2)['fire_allowed'])
 
-    def test_target_death_releases_aim_immediately(self):
+    def test_target_death_removes_the_initial_hint_immediately(self):
         self.orders(1)
         self.aim(2.6)
         self.players[0]['alive'] = False
         self.contacts = self.contacts[1:]
-        self.assertEqual(3, self.orders(1.2)['target_id'])
+        self.assertEqual(3, ai._initial_hint(self.orders(1.2))['target_id'])
 
-    def test_capturer_preempts_ordinary_target_and_diagnostic_matches(self):
+    def test_capturer_changes_task_hint_without_creating_a_gun_target_owner(self):
         self.orders(1)
         bot = self.planner._alive_bots(self.manifest, self.states, self.planner.tactics)[0]
         contacts = self.planner._prune_contacts(
@@ -102,11 +106,12 @@ class TargetEvidenceTests(unittest.TestCase):
         decision = self.planner._target_decisions[11]
         self.assertEqual(('human', 3), decision['selected'])
         self.assertEqual('base_capturer', decision['outcome'])
-        self.assertGreater(self.planner._target_assignments[11]['until'], 1.1)
-        lease = copy.deepcopy(self.planner._target_assignments[11])
+        self.assertEqual('initial_hint', decision['owner'])
+        self.assertFalse(hasattr(self.planner, '_target_assignments'))
+        priority = copy.deepcopy(decision['base_priority'])
         self.planner._prioritize_base_invaders(1, [bot], contacts, result,
             {11: dict(point=dict(x=0,y=0,z=0),radius=50)}, defense, 1.2)
-        self.assertEqual(lease, self.planner._target_assignments[11])
+        self.assertEqual(priority, self.planner._target_decisions[11]['base_priority'])
 
     def test_capturer_does_not_bypass_wall_or_radio_expiry(self):
         self.orders(1)
@@ -121,9 +126,9 @@ class TargetEvidenceTests(unittest.TestCase):
             {11: selected}, {11: dict(point=dict(x=0,y=0,z=0),radius=50)}, defense, 1.1)
         self.assertEqual(2, result[11]['id'])
 
-    def test_base_priority_preempts_recent_attacker_only_inside_own_circle(self):
+    def test_base_defense_objective_remains_independent_of_health_loss(self):
         self.orders(1)
-        self.planner.report_damage(11, 'player', 2, 100, 1.1)
+        self.states[0]['health'] -= 100
         self.orders(1.2)
         bot = self.planner._alive_bots(self.manifest, self.states, self.planner.tactics)[0]
         contacts = self.planner._prune_contacts(
@@ -132,7 +137,7 @@ class TargetEvidenceTests(unittest.TestCase):
         result = self.planner._prioritize_base_invaders(1, [bot], contacts, {11: current},
             {11: dict(point=dict(x=0,y=0,z=0),radius=50)}, dict(contributors={'1': [dict(kind='human', id=3)]}), 1.2)
         self.assertEqual(3, result[11]['id'])
-        self.assertEqual('proved_capturer_lane',
+        self.assertEqual('base_defense_objective',
             self.planner._target_decisions[11]['base_priority']['reason'])
 
     def test_working_defender_stays_but_idle_defender_is_eventually_replaced(self):
@@ -247,12 +252,14 @@ class LanePublicationTests(unittest.TestCase):
                 self.assertEqual([], row['shootable_by_bot_ids'])
                 self.assertNotEqual('published', self.runtime.states[11]['_lane_publication_evidence']['reason'])
 
-    def test_mechanical_retry_cooldown_is_not_a_negative_native_lane(self):
-        self.runtime._gun_angle_rejected = lambda *args: True
+    def test_mechanical_refusal_is_not_a_negative_native_lane(self):
+        self.runtime.states[11]['_gun_angle_refusal'] = ('bot', 19)
         row = self.pack()
         self.assertEqual([11], row['shootable_by_bot_ids'])
         self.assertEqual('published',self.runtime.states[11]['_lane_publication_evidence']['reason'])
-        self.assertTrue(self.runtime.states[11]['_lane_publication_evidence']['mechanical_retry_suppressed'])
+        self.assertTrue(self.runtime.states[11]['_lane_publication_evidence']['mechanical_refusal'])
+        self.assertNotIn('mechanical_retry_suppressed',
+                         self.runtime.states[11]['_lane_publication_evidence'])
 
     def test_expiry_publishes_pending_only_for_selected_positive_lane(self):
         row = self.pack(4.)

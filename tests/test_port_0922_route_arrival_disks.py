@@ -7,7 +7,7 @@ from unittest import mock
 
 from test_port_0922_navigation import TerrainNavigator
 from test_port_0922_server_bot_ai import BotPlanner, _route, _bot, _state
-from server_bot_ai import _route_point_reached, ROUTE_ARRIVAL_RADIUS
+from gui.mods.offline_lan_0922.vehicle_control.strategy import _route_point_reached, ROUTE_ARRIVAL_RADIUS
 from gui.mods.offline_lan_0922 import bot_tactics
 
 
@@ -56,6 +56,23 @@ class RouteArrivalDiskTests(unittest.TestCase):
         self.assertEqual(0., second['throttle_override'])
         self.assertEqual(second['move_position'], second['face_position'])
 
+    def test_owned_combat_records_actual_terminal_without_reclaiming_motion(self):
+        import test_port_0922_terminal_route_handoff as terminal
+        helper = terminal.TerminalRouteHandoffTests()
+        scene = helper.scene((2., -230.))
+        scene[3].clear()
+        first = helper.order(scene, now=1., contact=False)
+        pose = scene[2][0]
+        pose.update(z=-245., _combat_movement_owner=dict(owned=True, task_order=first))
+        paused = helper.order(scene, now=2., contact=False)
+        self.assertEqual('paused_by_combat_owner', paused['route_assignment']['progress']['outcome'])
+        self.assertEqual(2., scene[0]._route_states[17]['terminal_crossing']['at'])
+        pose.pop('_combat_movement_owner')
+        pose['z'] = -270.
+        resumed = helper.order(scene, now=3., contact=False)
+        self.assertEqual(('hold', 0., -270.), (resumed['combat_mode'],
+                         resumed['throttle_override'], resumed['move_position']['z']))
+
     def test_duplicate_or_stale_samples_cannot_create_terminal_crossing(self):
         for second_time, crossed in ((1., False), (2., True), (4., False)):
             planner = BotPlanner()
@@ -95,6 +112,25 @@ class RouteArrivalDiskTests(unittest.TestCase):
                         self.assertFalse(_route_point_reached(point['x']+6.01, point['z'], points, i, i))
                         checked += 1
         self.assertGreater(checked, 1000)
+
+    def test_fractional_authored_disk_boundary_keeps_crossing_and_finite_lane(self):
+        point = (14.7903, 77.0369)
+        self.assertGreater((point[0]+6.)-point[0], 6.)
+        for sign in (-1., 1.):
+            with self.subTest(sign=sign):
+                edge = point[0]+sign*6., point[1]
+                outside = point[0]+sign*(6.+1.e-6), point[1]
+                self.assertTrue(bot_tactics.route_disk_reached(edge, point))
+                self.assertFalse(bot_tactics.route_disk_reached(outside, point))
+                before = edge[0], point[1]-10.
+                after = edge[0], point[1]+10.
+                self.assertTrue(bot_tactics.route_disk_reached(after, point, previous=before))
+                self.assertFalse(bot_tactics.route_disk_reached(
+                    (outside[0], after[1]), point, previous=(outside[0], before[1])))
+                following = point[0], point[1]+20.
+                self.assertTrue(bot_tactics.route_disk_reached(after, point, following))
+                self.assertFalse(bot_tactics.route_disk_reached(
+                    (outside[0], after[1]), point, following))
 
 
 class CapturedE3CornerTests(unittest.TestCase):

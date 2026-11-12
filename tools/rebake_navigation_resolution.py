@@ -9,7 +9,7 @@ from pathlib import Path
 import bake_navigation_0922 as baker
 
 GAMEPLAY_FIELDS = (
-    'routes', 'bases', 'bounds', 'objective_bases', 'objective_base_radii',
+    'bases', 'bounds', 'objective_bases', 'objective_base_radii',
     'ctf_spawn_points', 'spawn_anchors', 'spawn_anchor_source',
     'spawn_formations', 'spawn_formation_source',
 )
@@ -63,8 +63,11 @@ def retain_gameplay(graph, previous, previous_bytes):
     graph['navigation_previous_sha256'] = hashlib.sha256(previous_bytes).hexdigest()
     # Fresh spawn packing is not evidence for the retained old layout.
     fresh = graph['validation']
+    # This validates retained physical topology, not an older graph's routes.
+    # The publisher below validates the reviewed Default with the shipping
+    # layered search, including authored passages in local meshes.
     graph['validation'] = baker._legacy_baker().validate_graph(
-        graph, dict(bases=graph['bases']))
+        dict(graph, routes={'1': [], '2': []}), dict(bases=graph['bases']))
     graph['validation'].update({key:copy.deepcopy(value)
         for key,value in previous['validation'].items() if key.startswith('spawn_')})
     graph['bake']['resolution_rebake'] = dict(
@@ -76,6 +79,7 @@ def retain_gameplay(graph, previous, previous_bytes):
         retained_spawn_validation_identity=graph['navigation_previous_sha256'],
         retained_spawn_layout_requires_native_acceptance=True,
         navigation_policy_changed=False)
+    baker.publish_default_routes(graph)
     return graph
 
 

@@ -12,16 +12,15 @@ import test_port_0922_bot_runtime as harness
 
 
 class RearLimitedAimTests(unittest.TestCase):
-    def aim(self, bearing, mode='withdraw', recovery='reverse_withdraw',
+    def aim(self, bearing, mode='route', recovery='drive',
             limits=(-math.pi / 2, math.pi / 2), rear_turn=0, has_target=True):
         return driver.combat_hull_aim(
             0, bearing, limits[0], limits[1], -.2, -1, recovery,
             has_target, combat_mode=mode, movement_intent=True,
             rear_turn=rear_turn)
 
-    def test_t110e4_rear_threat_brakes_withdrawal_and_lays_hull(self):
-        for mode in ('withdraw', 'low_health_retreat', 'under_fire_withdraw',
-                     'crossfire_withdraw', 'advance', 'flank', 'route'):
+    def test_t110e4_rear_threat_brakes_travel_and_lays_hull(self):
+        for mode in ('advance_contact', 'gun_angle_adjust', 'advance', 'route'):
             with self.subTest(mode=mode):
                 self.assertEqual((1., 0., True), self.aim(2.9, mode))
                 self.assertEqual((-1., 0., True), self.aim(-2.9, mode))
@@ -55,7 +54,7 @@ class RearLimitedAimTests(unittest.TestCase):
             target = math.pi + (.001 if frame % 2 else -.001)
             turn, throttle, active = driver.combat_hull_aim(
                 yaw, target, -math.pi / 2, math.pi / 2, 0, -1,
-                'reverse_withdraw', True, combat_mode='withdraw',
+                'drive', True, combat_mode='route',
                 movement_intent=True, rear_turn=prior)
             if not active:
                 self.assertLessEqual(abs(driver._angle_delta(target, yaw)), math.pi / 2)
@@ -68,7 +67,7 @@ class RearLimitedAimTests(unittest.TestCase):
             self.fail('rear hull laying did not converge')
         self.assertFalse(driver.gun_aligned(math.pi, 0, math.pi / 2, 0, 0))
 
-    def test_reachable_rear_target_with_wide_turret_keeps_withdrawal(self):
+    def test_reachable_rear_target_with_wide_turret_keeps_travel(self):
         self.assertEqual((-.2, -1., False), self.aim(
             2.9, limits=(-3., 3.)))
 
@@ -76,7 +75,7 @@ class RearLimitedAimTests(unittest.TestCase):
         self.assertEqual((-.2, -1., False), self.aim(
             3.1, limits=(-math.pi, math.pi)))
 
-    def test_forward_fixed_gun_retreat_retains_existing_route_owner(self):
+    def test_forward_fixed_gun_travel_retains_existing_route_owner(self):
         self.assertEqual((-.2, -1., False), self.aim(
             1., limits=(-.1, .1)))
 
@@ -127,7 +126,7 @@ class RearTraverseRuntimeTests(unittest.TestCase):
         for now,target_id in ((1.,2),(4.,3),(7.,2),(9.1,3)):
             state['_rear_aim_episode']=dict(identity=('bot',target_id),
                 target_id=target_id,start=now-.1,fire_seq=state.get('fire_seq',0))
-            order=dict(combat_mode='magazine_reload_retreat',target_id=target_id,
+            order=dict(combat_mode='route',target_id=target_id,
                        move_position=(0.,0.,20.))
             result=self.runtime._rear_laying_order(state,order,targets,now)
             self.assertEqual(1.,state['_rear_motion_lease']['start'])
@@ -148,18 +147,18 @@ class RearTraverseRuntimeTests(unittest.TestCase):
         for now,target_id in ((1.,2),(4.,3),(7.,2),(9.,3)):
             state['_rear_aim_episode']=dict(identity=('human',target_id),
                 target_id=target_id,start=now-.1,fire_seq=state.get('fire_seq',0))
-            order=dict(combat_mode='withdraw',target_id=target_id,
+            order=dict(combat_mode='route',target_id=target_id,
                        move_position=(0.,0.,20.))
             result=self.runtime._rear_laying_order(state,order,targets,now)
             self.assertEqual(0.,state['_rear_motion_lease']['start'])
             if now<8.:
                 self.assertEqual('engage',result['combat_mode'])
             else:
-                self.assertEqual('withdraw',result['combat_mode'])
+                self.assertEqual('route',result['combat_mode'])
                 self.assertTrue(state['_rear_motion_blocked'])
                 self.assertNotIn('_rear_aim_episode',state)
                 control=driver.combat_hull_aim(0.,2.9,-.1,.1,.2,1.,'drive',True,
-                    combat_mode='withdraw',movement_intent=True,
+                    combat_mode='route',movement_intent=True,
                     allow_rear_start=not state['_rear_motion_blocked'])
                 self.assertEqual((.2,1.,False),control)
 
@@ -174,7 +173,7 @@ class RearTraverseRuntimeTests(unittest.TestCase):
             # Arrival needs the admitted movement goal, not a temporary
             # engage/current-position order substituted during the attempt.
             state['_rear_motion_lease']['goal']=goal
-            order=dict(combat_mode='withdraw',target_id=2,move_position=goal)
+            order=dict(combat_mode='route',target_id=2,move_position=goal)
             self.runtime._rear_laying_order(state,order,{2:dict(alive=True)},9.)
             self.assertNotIn('_rear_motion_lease',state)
             self.assertFalse(state['_rear_motion_blocked'])
@@ -271,7 +270,7 @@ class RearTraverseRuntimeTests(unittest.TestCase):
         self.aim(target_id=3)
         self.assertLess(self.state['turret_yaw'], math.pi / 2)
 
-    def test_runtime_brakes_reverse_for_rear_target_and_clears_lock_on_loss(self):
+    def test_runtime_brakes_travel_for_rear_target_and_clears_lock_on_loss(self):
         runtime = self.fixture.module.BotRuntime(
             1, descriptor_resolver=lambda unused: self.descriptor,
             direction_probe=lambda *unused: dict(clear=True, slope=0.),
@@ -281,7 +280,7 @@ class RearTraverseRuntimeTests(unittest.TestCase):
             firing_lane_probe=lambda *unused: True,
             baked_graph=harness._flat_open_graph())
         runtime.battle_start(self.fixture.start)
-        order = dict(id=11, team=2, combat_mode='under_fire_withdraw',
+        order = dict(id=11, team=2, combat_mode='route',
                      target_kind='human', target_id=2, move_position=(0., 0., -20.),
                      aim_position=(.1, 0., -100.), face_position=(.1, 0., -100.),
                      fire_range=500., fire_allowed=True, throttle_override=None)

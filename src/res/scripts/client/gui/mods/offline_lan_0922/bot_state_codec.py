@@ -166,6 +166,125 @@ class BotStateCodecError(ValueError):
     """One row could not be encoded or decoded against this layout."""
 
 
+try:
+    _MOVEMENT_INTEGER_TYPES = (int, long)
+    _MOVEMENT_STRING_TYPES = (basestring,)
+except NameError:
+    _MOVEMENT_INTEGER_TYPES = (int,)
+    _MOVEMENT_STRING_TYPES = (str,)
+
+
+def _movement_identity(value):
+    if (isinstance(value, bool) or
+            not isinstance(value, _MOVEMENT_INTEGER_TYPES) or
+            not 1 <= value <= 2147483647):
+        raise BotStateCodecError('combat movement identity is invalid')
+    return int(value)
+
+
+def _movement_point(value):
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        coordinates = [value.get(axis) for axis in ('x', 'y', 'z')]
+    elif isinstance(value, (list, tuple)) and len(value) == 3:
+        coordinates = value
+    else:
+        raise BotStateCodecError('combat movement route point is invalid')
+    point = {}
+    for axis, coordinate in zip(('x', 'y', 'z'), coordinates):
+        if isinstance(coordinate, bool):
+            raise BotStateCodecError('combat movement route point is invalid')
+        try:
+            number = float(coordinate)
+        except (TypeError, ValueError, OverflowError):
+            raise BotStateCodecError('combat movement route point is invalid')
+        if number != number or number in (_INFINITY, -_INFINITY):
+            raise BotStateCodecError('combat movement route point is not finite')
+        point[axis] = number
+    return point
+
+
+def normalize_combat_movement_owner(raw):
+    """Copy only the route-pause receipt, never a second executable order.
+
+    This optional JSON side table is separate from the integer pose rows. It
+    records the common controller's ownership; it cannot admit a shot, choose
+    a target, or write physical controls on the server.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise BotStateCodecError('combat movement owner is not an object')
+    owned = raw.get('owned', False)
+    if owned is False:
+        return None
+    if owned is not True:
+        raise BotStateCodecError('combat movement owned flag is invalid')
+    target = raw.get('target')
+    if (not isinstance(target, (list, tuple)) or len(target) != 2 or
+            target[0] not in ('human', 'bot')):
+        raise BotStateCodecError('combat movement target is invalid')
+    target = [target[0], _movement_identity(target[1])]
+    source = raw.get('task_order')
+    if source is None:
+        source = {}
+    if not isinstance(source, dict):
+        raise BotStateCodecError('combat movement route task is invalid')
+    task = {}
+    for name in ('route_id', 'route_index', 'move_position',
+                 'route_anchor', 'route_join'):
+        if name not in source:
+            continue
+        value = source[name]
+        if name in ('move_position', 'route_anchor'):
+            value = _movement_point(value)
+        elif name == 'route_id' and value is not None:
+            if not isinstance(value, _MOVEMENT_STRING_TYPES) or len(value) > 256:
+                raise BotStateCodecError('combat movement route id is invalid')
+        elif name == 'route_index' and value is not None:
+            if (isinstance(value, bool) or
+                    not isinstance(value, _MOVEMENT_INTEGER_TYPES) or
+                    not 0 <= value <= 2147483647):
+                raise BotStateCodecError('combat movement route index is invalid')
+            value = int(value)
+        elif name == 'route_join' and value is not None:
+            if not isinstance(value, bool):
+                raise BotStateCodecError('combat movement route join is invalid')
+        task[name] = value
+    return dict(owned=True, target=target, task_order=task)
+
+
+def normalize_combat_movement_owners(records):
+    """Validate a complete, actor-keyed side table without aliasing its input."""
+    if not isinstance(records, (list, tuple)) or len(records) > 30:
+        raise BotStateCodecError('combat movement table is invalid')
+    seen = set()
+    result = []
+    for entry in records:
+        if not isinstance(entry, dict):
+            raise BotStateCodecError('combat movement entry is invalid')
+        bot_id = _movement_identity(entry.get('id'))
+        if bot_id in seen:
+            raise BotStateCodecError('combat movement actor is duplicated')
+        seen.add(bot_id)
+        owner = normalize_combat_movement_owner(entry.get('owner'))
+        result.append(dict(id=bot_id, owner=owner or dict(owned=False)))
+    return result
+
+
+def project_combat_movement_owners(states):
+    """Freeze the local owner's metadata alongside its full publication."""
+    result = []
+    for state in states:
+        if not state.get('alive', True):
+            continue
+        owner = normalize_combat_movement_owner(state.get('_combat_movement_owner'))
+        if owner is not None:
+            result.append(dict(id=_movement_identity(state.get('id')), owner=owner))
+    return result
+
+
 def encode_snapshot_equipment(states):
     """Share equal immutable contracts inside one self-contained snapshot.
 

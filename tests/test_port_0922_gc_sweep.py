@@ -116,7 +116,8 @@ case.setUp()
 with mock.patch.object(case.module.native_simulation.NativeSimulation,
                        'create', return_value=None):
     runtime = case._roster_runtime()
-player = fixture.wire_player(5)
+player = fixture.wire_player(5, alive=True, visible=True,
+                             health=1000, max_health=1000)
 player.setdefault('team', 1)
 player.setdefault('position', [0.0, 0.0, 0.0])
 player.setdefault('yaw', 0.0)

@@ -1,14 +1,17 @@
 """Shared priorities; player and Bot installers remain separate owners."""
 
 PRIORITIES = {
-    'lightTank': ('ventilation', 'optics', 'stabilizer', 'rammer', 'aim_drives'),
-    'mediumTank': ('stabilizer', 'rammer', 'ventilation', 'optics', 'aim_drives'),
-    'heavyTank': ('stabilizer', 'rammer', 'ventilation', 'aim_drives', 'optics'),
-    'AT-SPG': ('ventilation', 'rammer', 'aim_drives', 'camouflage', 'optics'),
-    'SPG': ('ventilation', 'rammer', 'aim_drives', 'camouflage', 'optics'),
+    'lightTank': ('optics', 'rammer', 'stabilizer', 'ventilation', 'aim_drives'),
+    'mediumTank': ('rammer', 'stabilizer', 'optics', 'ventilation', 'aim_drives'),
+    'heavyTank': ('liner', 'rammer', 'stabilizer', 'ventilation', 'aim_drives'),
+    'AT-SPG': ('rammer', 'ventilation', 'aim_drives', 'camouflage', 'binoculars'),
+    'SPG': ('rammer', 'ventilation', 'aim_drives', 'camouflage', 'binoculars'),
 }
 
 NORMAL = {
+    'liner': ('antifragmentationLining_superheavy', 'antifragmentationLining_heavy',
+              'antifragmentationLining_medium', 'antifragmentationLining_light'),
+    'binoculars': ('stereoscope',),
     'ventilation': ('improvedVentilation_class1', 'improvedVentilation_class2',
                     'improvedVentilation_class3'),
     'optics': ('coatedOptics',),

@@ -9,6 +9,250 @@ and battle logic, a small LAN server and a launcher.
 
 Current release: **v1.1.1** — [release notes](docs/releases/v1.1.1.md).
 
+### Testing controls in the launcher
+
+The **Testing** tab beside Bot tactics combines diagnostic logs, test scenes,
+and optional player automatic control. Its three areas are independent. Use
+the regular Start button after choosing settings; the normal and diagnostic
+outer launcher entrances remain available. Dedicated scene-launch buttons are
+replaced by the scene selector. Network/replay launches never inherit a
+single-player fixture.
+
+With player control enabled, every battle starts under manual control. The
+physical grave key left of `1` toggles takeover; chat/input/menu focus suppresses
+that shortcut. Player decisions and native input run in the visible client,
+with private navigation, missions, targeting, ammunition feedback and equipment
+state. Shared services provide static map geometry and native mechanics. The
+room's required worker continues to own Bots and world simulation; it does not
+execute player commands or player decisions.
+
+Driving, aim/fire and consumables can be enabled separately. The mouse panel
+offers **Start**, **Release to manual**, **Halt**, **Attack**, **Return to base**,
+**Defend base**, **Hold position**, **Capture base**, **Fire once**, bounded
+driving, shell loading/reloading, held target/point aiming, explicit equipment
+and siege settings, ammunition checks and **Refresh status**.
+Halt brakes to an observed stop and retains
+parking control. Completion requires supported full-body rest (including turn,
+vertical and lateral motion) for half a second and successful owned-resource
+cleanup; zero forward speed alone is insufficient. Halt and completion/timeout
+of a timed drive preserve independent explicit aim and setting observations.
+**Release to manual / Stop** releases the controller's movement, aim and future
+trigger decisions. Once the first physical shell has committed, the complete
+descriptor-defined trigger continues, whether initiated manually or by automatic
+control. Already launched projectiles still settle. Closing the panel or disabling its master switch
+requests release. Battle exit restores the original native input binding.
+
+Explicit missions take priority over automatic front/base retasking. Return
+and hold commands complete after supported, stopped arrival and retain their
+parking anchor until replaced or released. Capture waits for an actual enemy
+flag result; entering the circle is progress, not completion. No-ammunition
+state distinguishes total exhaustion, empty current stock, clip reload and
+unavailable data. Total exhaustion clears combat holds and makes an automatic
+or attacking player proceed to capture; explicit return, defend and hold
+commands retain their meaning. Mounted shell order and inventory are preserved.
+The panel can copy the current client position into an optional X/Y/Z destination
+and radius for Attack/Hold; leaving the destination disabled preserves their
+default semantics. Default TD routes execute their authored parking waits,
+including occupancy checks. Empty-ammunition travel skips those firing waits.
+An implicit capture approach can yield to emergency base defence before actual
+capture begins. Failed implicit tasks retire their movement/fire ownership and
+retry with bounded backoff; explicit mission outcomes remain visible until the
+user replaces or releases them.
+
+### Shared control, independent actors
+
+Player automation runs on **each participant's own visible client**, including
+LAN joiners. Players and worker-controlled Bots now use the same canonical
+`vehicle_control` planner and combat laws. The retired player copies and
+competing Bot decision paths are removed, not retained behind a selector or
+fallback. There is no source-copy or synchronization step.
+`tools/check_shared_vehicle_control.py --check` verifies the shared-source
+structure and actor-isolation contracts.
+
+`FullPlayerRuntime` binds the common control laws to the foreground vehicle;
+`BotControlBinding` binds them to each worker-owned Bot. Each actor retains
+separate mission, navigation, targeting, recovery and trigger state. Bindings
+observe their own physical vehicle and apply inputs through its existing owner.
+Foreground native movement, reload, dispersion, ammunition and projectiles are
+not simulated a second time, and a player's controller never publishes Bot
+authority. The room worker remains required for Bots and world authority, but
+does not execute the visible player's decisions.
+
+| Capability | Shared implementation and physical boundary |
+| --- | --- |
+| Routes, traffic and recovery | One shared planner and the common navigation laws use actor-owned state. Tactical retreat, cover-peek and flank strategies are deleted; blocked-waypoint skipping and physical recovery remain. |
+| Initial target | Ordinary acquisition starts with the nearest living enemy; exactly equal distance is broken by lower armour. Point-by-point penetration validation remains authoritative. A valid current penetration engagement is not replaced by an attacker bonus, player preference or background next-shot proposal. |
+| Artillery target | Reachable targets are ranked by actual HE damage estimates from proved arcs and contact geometry, not nominal shell damage or the old target score. Native trajectory, obstruction and launch checks still apply. |
+| Aim and movement | Common hull, turret, artillery and firing-position laws request input through the actor's physical binding. The existing native owner arbitrates final movement and firing; a predicted gun angle is not a physical firing receipt. |
+| Current ammunition | `AttackPolicy` validates the mounted shell first. The first executable penetration candidate stops travel and starts aiming without waiting for background alternatives. A still-valid current-shell penetration proof obstructed by another vehicle or the world retains its ammunition ownership. |
+| Global search | Ordinary firing-position recovery is separate from the eight-second penetration search. The latter requires complete, fresh failure evidence for all relevant enemies and points in the required ammunition domain. Blocked, mechanically unavailable, pending and unknown points are not armour failures. |
+| Background and HE | Independent bounded work compares all stocked shells, visible enemies and relevant points for the next trigger or magazine. HE penetration and fallback are separate candidates; valid zero-damage HE contact is allowed in fallback. Pose changes invalidate evidence. |
+| Trigger admission | The shared `TriggerAdmission` proves only a new automatic trigger's first physical launch. It freezes that launch's scatter draw through pending proof and rechecks identity and actual geometry before commit. It has no tactical burst-tail continuation or cancellation operation. |
+| Physical firing | Manual control and Bots use the same trigger contract. Every shell independently samples the actual gun pose and dispersion, consumes ammunition, receives a unique projectile identity and settles its own collision. Stop, a new blocker or target loss cannot cancel the tail of a committed trigger. |
+| Ownership | Sharing code does not share actor state or physics. The foreground binding reads actual vehicle/equipment state and sends ordinary native input; the Bot binding uses that Bot's worker-owned state. Neither advances another actor or creates shadow physics. |
+
+Shared-source and regression tests are not Windows gameplay acceptance.
+Native frame cost, long-arc moving-target fire,
+slopes/bridges, busy narrow passages and two-machine LAN independence still need
+an observed Chinese HD #1513 client run. See `COMPATIBILITY_REVIEW.md` for the
+current test evidence and the remaining acceptance boundary. Shared code is not
+a guarantee that a physically blocked passage can be traversed. Each binding's
+physical input and lifecycle integration need their own evidence.
+
+### Player command protocol for local tests
+
+Each launch creates a new session and two JSON-lines journals:
+
+| Environment variable | Meaning |
+| --- | --- |
+| `WOT_OFFLINE_TEST_CONTROL_FILE` | Requests appended by the launcher or local script |
+| `WOT_OFFLINE_TEST_CONTROL_RESULT_FILE` | Receipts and one-second status snapshots from the visible client |
+| `WOT_OFFLINE_TEST_CONTROL_SESSION` | Identity of this client launch |
+
+Read a current `type: "status"` record with `live: true`, then copy its
+`session_id`, `round_id` and `player_id` into each request. Use a fresh string
+`id` for each operation. Every action except `stop` also requires `expires_at`,
+a Unix wall-clock admission deadline. For example, with the current status in
+`status`, append this request from a local Python script:
+
+```python
+import json, os, time, uuid
+request = {key: status[key] for key in ('session_id', 'round_id', 'player_id')}
+request.update(id=uuid.uuid4().hex, action='return_base', args={},
+               expires_at=time.time() + 2.0, timeout_seconds=180, replace=True)
+with open(os.environ['WOT_OFFLINE_TEST_CONTROL_FILE'], 'a') as journal:
+    journal.write(json.dumps(request) + '\n')
+```
+
+Actions are `start`, `stop`, `halt`, `attack`, `return_base`, `defend_base`,
+`hold_position`, `capture_base`, `drive`, `fire`, `status`, `select_shell`,
+`reload`, `wait_state`, `assert_state`, `aim_target`, `aim_point`, `release_aim`,
+`use_equipment` and `set_siege`. `drive` accepts
+`seconds` (0.01–10), `forward` and `turn` (both -1–1). Attack/hold arguments may
+include `position: [x,y,z]` and `radius` (2–150 metres); a hold defaults to the current pose,
+and base commands use the active match's flag geometry. Attack with a position
+advances to that point. A plain attack follows the selected route and then
+enters its capture phase.
+
+Writing a request means submitted. Match its ID to `type: "command"` receipts:
+`accepted`, then `completed`, `failed` or `cancelled`; invalid requests return
+`rejected`. Identical retries return the existing receipt without repeating a
+shot or drive. Reusing an ID with another payload is rejected. Invalid input is
+checked before changing the current task. `replace: false` rejects an occupied
+movement channel instead of replacing its task. For a sequence, wait for the
+terminal receipt before appending the next operation; there is no implicit
+command queue. Late identities from another round or session are rejected.
+An ID conflict is a separate `type: "request_error"` receipt; it cannot overwrite
+the original operation's eventual result. Identity rejections echo the request's
+identity and also carry `current_identity`, so an old-round producer can observe
+the rejection. A rejected ID remains rejected on retry; use a new ID for a new
+attempt after conditions change.
+
+Admission expiry and execution timeout are separate. The launcher normally gives
+the client two seconds to admit a request; a delayed unread drive/fire/mission
+is rejected after that deadline instead of executing unexpectedly. Once admitted,
+`timeout_seconds` runs on the client's execution clock. An identical retry keeps
+its original receipt even after admission expiry. Same-identity `stop` deliberately
+has no admission expiry and remains readable after death or battle result while
+the visible controller is running. Launcher response timeout means **unconfirmed**,
+not completed or cancelled.
+
+`fire` completes when its native trigger's physical rounds have committed and
+returns their projectile IDs (including a multi-round burst); this does not
+assert a hit or damage. Stop or a command timeout cannot cancel the physical
+tail after its first commit; the fire receipt observes physical completion or
+an explicit gun/actor/battle failure. Separate `type: "shot"` receipts carry `command_id`, `projectile_id`, an
+increasing `event_seq`, local commit, flight terminal/rejection and canonical
+combat observations. `damage_total`, `hit_count` and `penetrated` are cumulative
+observed effects, not per-message values to add together. Flight termination
+does not by itself prove a hit, miss or final damage; combat effects may follow
+it, including several HE targets. The launcher displays these observations
+separately from the trigger's completed receipt, even after control is released.
+Rejected committed shots drain ammunition feedback without refunding ammunition,
+rewinding reload or counting the rejection as a combat miss. Status snapshots expose
+mission progress, ammunition capability, current target/aim, pose and the latest
+command receipt, plus up to 32 recent projectile observations for readback repair
+within the bounded result-line size (`shot_snapshot_omitted` reports trimming).
+`PLAYER CONTROL` diagnostics retain the corresponding decisions.
+
+### Observed-state and gun test commands
+
+| Action | Arguments and completion |
+| --- | --- |
+| `select_shell` | `compact_descr` is a positive integer from `status.testing.gun.stock`, not a guessed AP/HE slot. Complete only after that mounted shell is loaded and the actual gun is ready. Existing reload of the same selection is not restarted. |
+| `reload` | No arguments. Request the existing native partial-clip reload for a magazine gun, or wait for its already running reload. Complete when the actual available clip is loaded and ready; single-shot guns return `reload_not_supported`. |
+| `wait_state` | Observe a whitelisted `condition` until matched or execution timeout. Completion includes the actual observation and time. It owns no driving/fire channel. |
+| `assert_state` | The same predicates, checked immediately. Known mismatch fails; missing observation fails as unavailable rather than inventing a value. |
+
+State predicates are `ammo_ready`, `ammo_empty` and `halted` (no extra fields),
+`active` (`value: true/false`), `mission_status` or `mission_phase` (`value` from
+the published mission states, optionally bound to its `command_id`), and
+`shot_terminal` or `shot_effect` (exactly one `projectile_id` or `command_id`).
+`shot_effect` may also specify `damage_min`; even a zero threshold needs a real
+combat effect. A terminal launch rejection cannot satisfy a hit/effect assertion.
+An entire fire-command predicate uses its actual committed projectile IDs, never
+the planned number of burst rounds. Command-scoped checks require its completed
+fire receipt and final ID list; after cancellation/timeout, use the retained
+individual projectile IDs. There are at most 32 pending state watchers;
+no arbitrary expressions, Python code or object-property paths are accepted.
+
+Gun-setting commands cannot compete with automatic aim/fire or an outstanding
+trigger/burst. Release automatic firing before issuing one. While a gun command
+is pending, another fire or automatic-fire takeover is rejected. Stop cancels
+the gun command's observation but cannot rewind the already requested native
+reload/selection. Read-only watchers survive a same-round stop, do not cancel an
+unrelated drive on timeout, and cancel on identity change or final teardown.
+Use a distinct operation ID for each step. A test can load a shell, wait for its
+completed receipt, fire, then wait for `shot_terminal` or assert a received
+`shot_effect`; fixed sleeps are not execution evidence.
+
+### Explicit aim, equipment and siege commands
+
+These commands use the same foreground gateway, not the Bot or worker paths.
+Their command receipts and current ownership are deliberately separate:
+
+| Action | Arguments and completion |
+| --- | --- |
+| `aim_target` | `target_id` is an actual visible enemy **engine entity ID** from `status.manual_aim.visible_targets`, not a Bot/network player ID. Optional `tolerance_deg` defaults to 0.5 (0.05–5). Complete only when current native angles and muzzle direction agree with the requested point. |
+| `aim_point` | Finite `position: [x,y,z]`, each coordinate within ±100000; the same optional tolerance. Select a mechanically reachable low/high arc only if the existing native angle getter can represent it. |
+| `release_aim` | No arguments releases the currently owned source. Optional `command_id` must match the holder; a mismatch cannot release somebody else's command. Completion means the owned source/mode was restored or already yielded to a newer owner. |
+| `use_equipment` | `equipment_id` comes from `status.native_actions.equipment.stock` (not `compact_descr`). A small repair/medical kit requires a descriptor-backed `target` from that row's `targets`, such as `engineHealth` or `loader1`. All-target kits/extinguishers omit `target`; an RPM limiter requires `active: true/false` instead. Complete only on the exact accepted canonical equipment intent sequence. |
+| `set_siege` | `enabled: true/false`. Real braking may precede submission. Complete only after the exact submitted input frontier is acknowledged in a stable requested mode and the local native descriptor, gun and physics application has finished. |
+
+Aim completion **retains** the native source until explicit release, replacement,
+Stop, target loss, or identity/entity change. The acquisition deadline does not
+expire a completed hold. `status.manual_aim.held`, `aligned`, `command_id` and
+`reason` describe the current hold; an earlier completed receipt does not prove
+current alignment. A subsequent `fire` checks alignment again and still returns
+its own actual projectile commitments. Explicit aim proves neither an unobstructed
+shot nor a hit, and never rotates the hull or fires by itself. The previous manual
+source/mode is restored only while this command still owns it.
+
+Release automatic fire before explicit aiming or gun-setting commands. Release
+held aim before enabling automatic fire or changing siege mode. A pending mode
+change excludes driving, new aiming, shell changes and firing; automatic driving
+or firing must be stopped before requesting it. An equipment command cannot
+compete with automatic consumables, and automatic consumable takeover waits for
+its pending command. These conflicts are rejected before replacing an owner.
+Independent explicit aim survives timed driving, its timeout, and Halt.
+
+Equipment readiness or a changed cooldown is not an acknowledgement. If a later
+native equipment request overwrites the only available exact receipt, the older
+test command reports `equipment_receipt_superseded`, not guessed success.
+RPM-limiter and mode commands already at their requested state return a no-op only
+from current stable canonical observations. Stop cancels their observation and
+any still-unsent owned siege brake; it does not refund an item, switch off a
+manually commanded limiter, or undo a submitted native transition. Failed native
+cleanup retains a bounded retry obligation and blocks competing commands.
+
+The default execution timeout is 30 seconds for aim/equipment/siege and 10 seconds
+for `release_aim`; admission still expires independently. A useful test sequence is
+Stop → load shell → aim at an observed target → wait for aim completion → Fire →
+wait for the actual shot result → release the matching aim holder. Use the
+individual command receipts for every transition, not fixed sleeps.
+The precise native Windows acceptance boundary is recorded in
+[COMPATIBILITY_REVIEW.md](COMPATIBILITY_REVIEW.md).
+
 ### Historical battle review notes
 
 The investigation notes below retain the original review context. For v1.1.0
@@ -35,8 +279,8 @@ It is limited to the current local dead vehicle with an attached turret;
 the unsafe native filter synchronization remains suppressed. Failed display
 readback rolls back the candidate. Native Windows acceptance remains pending.
 
-Use `START_DIAGNOSTIC_TEST.bat` beside the unpacked launcher. Its existing
-`--diagnostics` entrance enables bounded `BATTLE REVIEW` records in the
+Enable detailed diagnostic logs in the launcher’s Testing tab before
+starting the game. This enables bounded `BATTLE REVIEW` records in the
 visible client, hidden worker and bundled server logs. Ordinary startup does
 not construct these payloads. Records carry round, PID, process-local clock,
 stage and sample number; worker and server clock origins are independent.
@@ -158,8 +402,10 @@ After a custom room, Automatic starts from 15 slots per team with editable contr
 Restart the room after selecting or saving a different launcher lineup. Legacy
 profiles retain their unpinned random vehicles and explicitly saved difficulty.
 Random (mixed distribution) draws one stable rating per round/team/slot, not four
-equally likely difficulty labels. Explicit tactics still override lineup difficulty;
-the effective preview identifies lineup sources without modifying tactics files.
+equally likely difficulty labels. That rating selects a native fitting preset,
+not artificial aiming or tactical errors. Explicit Bot-tactics fitting overrides
+still take precedence over lineup defaults; the effective preview identifies
+lineup sources without modifying tactics files.
 
 Acceptance: test both languages, per-team bulk actions, empty versus random slots,
 clear a team then set Elite, save/reopen and enable Random vehicles (the slots must
@@ -561,7 +807,10 @@ rows and lifetime totals use the same rounded award, applied only once even
 after a retry or restart.
 The launcher's Saves tab can also edit the bond balance. Older saves start
 with zero bonds. The historical additional base-XP bond payout for all-Tier-X
-battles is not implemented: its exact conversion table is still unavailable.
+battles is not implemented. Bond rewards are currently held unchanged at the
+owner's request; missing original data does not prohibit compatible community
+evidence or explicitly labelled reconstruction under CLAUDE.md if that scope is
+reopened.
 Ranked-season and clan-event rewards are outside the offline modes.
 
 Ammunition and consumables are stock now, not scenery. A battle spends the
@@ -649,19 +898,29 @@ whose profile changed after it started must be restarted first.
   module and crew damage, fires and repairs.
 - Spotting with view range, camouflage, movement, firing, foliage, line of
   sight and last-known positions.
-- Bots that use map geometry, terrain, water, firing lanes, team strength and
-  shared contacts to route, take cover, pick targets and choose ammunition,
-  including SPG arcs. Navigation and foliage data ship for all 41 supported
-  standard-battle maps.
+- Bots use the shared vehicle-control laws for routing, target validation and
+  ammunition, including SPG arcs. Map geometry, terrain, water, firing lanes and
+  shared contacts remain inputs to those decisions. Navigation and foliage data
+  ship for all 41 supported standard-battle maps.
 - Completing the final macro-route point hands travel over to a stationary
   engagement or capture hold. The Bot keeps its selected enemy and existing
   firing-lane permission instead of circling the base coordinate; a displaced
   hull resumes travel when it leaves the existing arrival area. Intermediate
-  points, explicit waits, cover, withdrawal and collision checks keep their
+  points, explicit waits, route recovery and collision checks keep their
   own owners. `tactical_evidence.route_terminal` records the decision and release.
-- Low health does not trigger Bot withdrawal. Combat withdrawal is reserved
-  for a fired, empty reloadable magazine; a loaded magazine keeps fighting,
-  and ammunition recovery releases the withdrawal owner.
+- All automatically controlled actors use the same logic without tactical
+  withdrawal, timed cover-peeking, flank manoeuvres or personality-driven range shuffling.
+  Being hit, low health, several enemy directions, local numerical disadvantage,
+  a close enemy or an empty magazine does not create a retreat destination.
+  Magazine reloads do not wait for cover or a retreat receipt. Physical
+  avoidance/unsticking, blocked-waypoint skipping, actual out-of-range approach
+  and the existing firing-position recovery remain separate owners.
+- The launcher's owner-reviewed October Default is the single bundled route
+  geometry source for all 41 maps. The August AI route sketches and their
+  projector are removed. Old or incomplete graph route coordinates cannot
+  silently replace the reviewed Default. Valid named user profiles remain
+  supported; grid hazards, collision links and authored coordinates are not
+  rewritten to compensate for a wrong route source.
 - Team text chat, minimap pings and fixed battle messages are relayed to
   human teammates, including the sender, independently from Bot responses.
   Text and pings remain available during the countdown and after the sender's
@@ -688,20 +947,19 @@ whose profile changed after it started must be restarted first.
   pool and roster size determine whether artillery is selected. Manually
   assigned Bot lineups retain the host's choices; tank destroyers do not count
   toward the artillery quota.
-- Bot competence is a spectrum, not a tier. Each Bot gets one rating that
-  sets the crew level its vehicle is trained to, how long that gunner takes
-  to react, how patiently it waits for the aiming circle, how far off centre
-  it lays the gun and how badly it leads a moving target. The same rating is
-  the chance it does the tactically right thing each time the situation
-  comes up: reaching for cover, peeking out of it, angling its hull, picking
-  the round that beats the armour in front of it, aiming at the part it can
-  actually hurt, turning on whoever just hit it, breaking off when it should,
-  avoiding a crossfire and going around a flank. A weak Bot is not a Bot that
-  does everything slightly worse; it is one that does not think of some of
-  it. The waiting room chooses how competence is spread over the whole roster
-  - easy, relaxed, pub mix, hard or brutal - and the launcher's exact Bot
-  lineup can still pin one slot to a named tier, with or without also pinning
-  its vehicle.
+- Bot difficulty selects native vehicle and crew configuration, not tactical
+  intelligence. A room or slot rating now resolves only a fitting preset; it
+  is not equivalent to crew proficiency alone. Stock/intermediate/full modules,
+  crew training and skills, equipment and directives, consumables and outfit
+  keep their existing configuration rules and independent overrides. Their
+  real effects on reload, aiming time and physical dispersion remain. There
+  are no extra rating-based reaction delays, aiming patience, artificial
+  dispersion, aim-point offsets or moving-target lead errors. Random weak-spot
+  and shell-choice gates, player preference and attacker-retaliation overrides
+  are removed.
+  The waiting room's easy, relaxed, pub mix, hard and brutal choices distribute
+  fitting presets across the roster. The launcher's exact Bot lineup can still
+  pin one slot to a named fitting tier, with or without pinning its vehicle.
 - Live combat statistics, a damage log with assists, hit and critical-damage
   messages, target outlines, vehicle fires, wrecks, and a consumables panel
   that counts down each cooldown.

@@ -943,7 +943,7 @@ class BattleProjectileTests(unittest.TestCase):
         return fixture, fixture._pending_fire_shell_change_battle(
             clip_size=clip_size)
 
-    def test_same_burst_launch_rejection_replays_shell_settings_in_order(self):
+    def test_same_trigger_launch_rejection_keeps_tail_then_replays_shell_settings(self):
         fixture, (battle, gun, settings, client, record) = (
             self._local_fire_transaction_fixture())
         battle._server_entity(10).typeDescriptor.gun.burst = (3, 0.1)
@@ -956,16 +956,25 @@ class BattleProjectileTests(unittest.TestCase):
         with mock.patch('sys.stdout', io.StringIO()):
             self.assertTrue(fixture._reject_local_launch(battle, launched))
 
+        # A rejected projectile is terminal for that projectile, not for its
+        # already committed physical trigger. Deferred settings remain queued
+        # until both tail rounds have consumed the original shell.
+        self.assertIsNotNone(battle._local_player_burst)
+        self.assertEqual(2, gun._burst_remaining)
+        self.assertEqual([19, 10], gun.ammo)
+        self.assertEqual(0, gun.shot_index)
+        battle._clock = lambda: 10.3
+        self.assertTrue(battle._advance_local_player_burst())
         self.assertIsNone(battle._local_player_burst)
         self.assertEqual(0, gun._burst_remaining)
-        self.assertEqual([19, 10], gun.ammo)
+        self.assertEqual([17, 10], gun.ammo)
         self.assertEqual(1, gun.shot_index)
         self.assertEqual(0, gun.pending_index)
         self.assertEqual(0, gun.clip)
         self.assertEqual(gun.reload, gun.reload_time)
         self.assertFalse(battle.shoot(0.0, 0.0))
 
-    def test_same_burst_launch_rejection_preserves_partial_reload_input(self):
+    def test_same_trigger_launch_rejection_keeps_tail_then_applies_partial_reload(self):
         fixture, (battle, gun, settings, client, record) = (
             self._local_fire_transaction_fixture())
         battle._server_entity(10).typeDescriptor.gun.burst = (3, 0.1)
@@ -977,9 +986,15 @@ class BattleProjectileTests(unittest.TestCase):
         with mock.patch('sys.stdout', io.StringIO()):
             self.assertTrue(fixture._reject_local_launch(battle, launched))
 
+        self.assertIsNotNone(battle._local_player_burst)
+        self.assertEqual(2, gun._burst_remaining)
+        self.assertEqual(2, gun.clip)
+        self.assertEqual([19, 10], gun.ammo)
+        battle._clock = lambda: 10.3
+        self.assertTrue(battle._advance_local_player_burst())
         self.assertIsNone(battle._local_player_burst)
         self.assertEqual(0, gun._burst_remaining)
-        self.assertEqual([19, 10], gun.ammo)
+        self.assertEqual([17, 10], gun.ammo)
         self.assertEqual(0, gun.clip)
         self.assertEqual(gun.reload, gun.reload_time)
         self.assertEqual(gun.reload, gun.reload_duration)
@@ -1809,6 +1824,7 @@ class BattleProjectileTests(unittest.TestCase):
 
     def test_bot_authority_change_invalidates_artillery_proofs_once(self):
         battle, unused_bigworld = _battle()
+        battle._worker_mode = True
 
         class _Bots(object):
             def __init__(self):

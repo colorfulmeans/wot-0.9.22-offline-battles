@@ -15,6 +15,7 @@ import bot_state_rows
 ROOT = Path(__file__).resolve().parents[1]
 PORT_ROOT = ROOT
 sys.path.insert(0, str(PORT_ROOT / 'server'))
+sys.path.insert(0, str(PORT_ROOT / 'src/res/scripts/client'))
 
 from lan_battle_server import (
     BattleState, CLIENT_BUILD_0922, ClientHandler,
@@ -26,7 +27,7 @@ from lan_battle_server import (
     RICOCHET_CONTINUATION_CAPABILITY,
     SIMULATION_WORKER_AUTHORITY_ID, SIMULATION_WORKER_CAPABILITY,
     SimulationWorker)
-from server_bot_ai import BotPlanner
+from gui.mods.offline_lan_0922.vehicle_control.strategy import BotPlanner
 
 PACKAGE_ROOT = PORT_ROOT / 'src' / 'res' / 'scripts' / 'client' / 'gui' / 'mods' / 'offline_lan_0922'
 
@@ -53,6 +54,10 @@ def _graph(map_name='01_karelia', waypoint_count=2):
         'game_version': '0.9.22.0.1-cn-1513', 'map': map_name,
         'cell_size': 4.0, 'origin': (0.0, 0.0), 'bounds': (0, 0, 8, 0),
         'width': 3, 'height': 1, 'heights_mm': (0, 0, 0),
+        # Explicit schema used by route admission as well as TerrainGrid;
+        # bits 3 and 4 below are the west/east edges of this tiny corridor.
+        'directions': ((-1, -1), (0, -1), (1, -1), (-1, 0),
+                       (1, 0), (-1, 1), (0, 1), (1, 1)),
         'links': (1 << 4, (1 << 3) | (1 << 4), 1 << 3),
         'hazards': (0, 0, 0),
         'spawn_anchors': ((0.0, 0.0), (8.0, 0.0)),
@@ -141,19 +146,15 @@ class _StaticGridLifecycle(object):
         pass
 
 
-class _Director(object):
+class _Roster(object):
     def __init__(self): self.registered = []
     def register_profile(self, *args): self.registered.append(args)
 
 class _Adapter(object):
     def __init__(self, *unused):
-        self.director = _Director(); self.calls = []; self.server_orders = []
-    def register(self, *args): self.director.registered.append(args)
-    def plan_order(self, state):
-        target_id = state['contacts'][0]['id'] if state.get('contacts') else None
-        return dict(target_id=target_id, fire_allowed=True, shell_index=2,
-                    fire_range=500.0)
-    def decide(self, state, clear):
+        self.roster = _Roster(); self.calls = []; self.server_orders = []
+    def register(self, *args): self.roster.registered.append(args)
+    def fixture_controls(self, state, clear):
         self.calls.append((state, clear(state['yaw'])))
         target_id = (state['contacts'][0]['id']
                      if state.get('contacts') else None)
@@ -162,7 +163,7 @@ class _Adapter(object):
                 'fire_range': 500.0}
     def decide_with_order(self, state, strategic, clear):
         self.server_orders.append(dict(strategic))
-        command = self.decide(state, clear)
+        command = self.fixture_controls(state, clear)
         command.update({
             'target_id': strategic.get('target_id'),
             'fire_allowed': bool(strategic.get('fire_allowed')),
@@ -177,16 +178,13 @@ class _FixedAdapter(_Adapter):
         super().__init__()
         self.command = dict(command)
 
-    def decide(self, state, clear):
+    def fixture_controls(self, state, clear):
         self.calls.append((state, clear(state['yaw'])))
-        return dict(self.command)
-
-    def plan_order(self, state):
         return dict(self.command)
 
     def decide_with_order(self, state, strategic, clear):
         self.server_orders.append(dict(strategic))
-        return self.decide(state, clear)
+        return self.fixture_controls(state, clear)
 
 
 class _Strict1513Component(object):
@@ -1371,7 +1369,6 @@ class ServerBotObservationRelayTests(unittest.TestCase):
                 'x': 10.0, 'y': 0.0, 'z': 20.0,
                 'health': 1000, 'max_health': 1000,
             }],
-            'affordances': [],
         }
 
     @staticmethod
@@ -1391,7 +1388,6 @@ class ServerBotObservationRelayTests(unittest.TestCase):
                 'x': 20.0, 'y': 0.0, 'z': 20.0,
                 'health': 1000, 'max_health': 1000,
             }],
-            'affordances': [],
         }
 
     def test_validated_visibility_is_relayed_once_to_every_participant(self):
@@ -1730,6 +1726,10 @@ class BotRuntimeTests(unittest.TestCase):
         self._modules = dict((key, value) for key, value in sys.modules.items()
                              if key == 'gui' or key.startswith('gui.'))
         self.module = _load(); self.adapters = []
+        # Legacy continuity fixtures compare exact HP. Freeze ignition strength,
+        # while the separate RNG lifecycle case exercises the high bound.
+        fire_rng = mock.patch('gui.mods.offline_lan_0922.fire_model.ignition_scale', return_value=1.)
+        fire_rng.start(); self.addCleanup(fire_rng.stop)
         # Each case is an independent diagnostic session. A preceding long
         # motion test must not consume the next case's trace evidence budget.
         from gui.mods.offline_lan_0922 import native_input_diagnostics as diagnostics
@@ -2203,7 +2203,7 @@ class BotRuntimeTests(unittest.TestCase):
         after = runtime.probe_totals()
         self.assertEqual(after, runtime.probe_totals())
         self.assertEqual(
-            {'visibility': 1, 'lane': 1, 'cover': 0,
+            {'visibility': 1, 'lane': 1,
              'ground': 1, 'motion': 1},
             dict(zip(self.module.PROBE_KINDS,
                      (after[index] - before[index]
@@ -2626,7 +2626,6 @@ class BotRuntimeTests(unittest.TestCase):
             'speed': 7.0, 'movement_dir': 1, 'rotation_dir': -1,
             'target_kind': 'human', 'target_id': 1,
         })
-        runtime._friendly_repositions[11] = {'until': 99.0}
         payload = _critical_payload(
             {'name': 'engineHealth', 'hp': 0.0, 'max_hp': 100.0,
              'state': 'destroyed'},
@@ -2666,7 +2665,7 @@ class BotRuntimeTests(unittest.TestCase):
             state['speed'], state['movement_dir'], state['rotation_dir']))
         self.assertIsNone(state['target_kind'])
         self.assertIsNone(state['target_id'])
-        self.assertNotIn(11, runtime._friendly_repositions)
+        self.assertFalse(hasattr(runtime, '_friendly_repositions'))
         self.assertTrue(runtime._mark_combat_publication(state))
         projected = bot_state_rows.decoded(bot_state_rows.rows([state]), 0)
         self.assertEqual((0, False, 640, 5), (
@@ -2881,12 +2880,12 @@ class BotRuntimeTests(unittest.TestCase):
         for frame in range(29):
             before_direction = len(direction_calls)
             before_receipt = len(receipt_calls)
-            before_ground = runtime.probe_totals()[3]
+            before_ground = runtime.probe_totals()[2]
             self.assertTrue(runtime.prewarm_world_receipts(
                 1.0 + frame / 24.0))
             self.assertEqual(1, len(direction_calls) - before_direction)
             self.assertEqual(1, len(receipt_calls) - before_receipt)
-            self.assertEqual(4, runtime.probe_totals()[3] - before_ground)
+            self.assertEqual(4, runtime.probe_totals()[2] - before_ground)
             self.assertTrue(all(
                 state['movement_dir'] == 0
                 for state in runtime.states.values()))
@@ -2905,12 +2904,12 @@ class BotRuntimeTests(unittest.TestCase):
 
         direction_before_live = len(direction_calls)
         receipts_before_live = len(receipt_calls)
-        ground_before_live = runtime.probe_totals()[3]
+        ground_before_live = runtime.probe_totals()[2]
         runtime.update(.04, 3.0)
 
         self.assertEqual(29, len(direction_calls) - direction_before_live)
         self.assertEqual(0, len(receipt_calls) - receipts_before_live)
-        self.assertEqual(29, runtime.probe_totals()[3] - ground_before_live)
+        self.assertEqual(29, runtime.probe_totals()[2] - ground_before_live)
         self.assertTrue(all(
             state['movement_dir'] == 1
             for state in runtime.states.values()))
@@ -3027,7 +3026,7 @@ class BotRuntimeTests(unittest.TestCase):
         runtime.battle_start(self.start)
         self.assertTrue(runtime.prewarm_world_receipts(1.0))
         self.assertEqual(1, len(direction_calls))
-        runtime.adapter.decide = (
+        runtime.adapter.fixture_controls = (
             lambda unused_state, unused_clear: dict(command))
 
         # A server/native pose correction between countdown and battle start
@@ -3106,7 +3105,7 @@ class BotRuntimeTests(unittest.TestCase):
         for index in range(29):
             self.assertTrue(runtime.prewarm_world_receipts(
                 1.0 + index / 24.0))
-        runtime.adapter.decide = lambda unused_state, unused_clear: dict(
+        runtime.adapter.fixture_controls = lambda unused_state, unused_clear: dict(
             command)
         for state in runtime.states.values():
             yaw = state['yaw']
@@ -3177,7 +3176,7 @@ class BotRuntimeTests(unittest.TestCase):
                 self.assertTrue(clear(candidate))
             return dict(command)
 
-        adapter.decide = decide
+        adapter.fixture_controls = decide
         runtime.update(.04, 1.0)
 
         # This synthetic graph lacks the shipped static-corridor contract, so
@@ -3263,7 +3262,7 @@ class BotRuntimeTests(unittest.TestCase):
                 self.assertTrue(clear(candidate))
             return dict(command)
 
-        adapter.decide = decide
+        adapter.fixture_controls = decide
         runtime.update(.04, 1.0)
 
         self.assertEqual(7, len(graph_calls))
@@ -3477,7 +3476,7 @@ class BotRuntimeTests(unittest.TestCase):
         verdicts = []
 
         class WaypointAdapter(_FixedAdapter):
-            def decide(self, state, clear):
+            def fixture_controls(self, state, clear):
                 state['navigation_probe_distance'] = 5.0
                 verdicts.append((clear(state['yaw']),
                                  clear(state['yaw'], 12.0)))
@@ -3657,8 +3656,8 @@ class BotRuntimeTests(unittest.TestCase):
         }
 
         class MixedAdapter(_FixedAdapter):
-            def decide(self, state, clear):
-                result = _FixedAdapter.decide(self, state, clear)
+            def fixture_controls(self, state, clear):
+                result = _FixedAdapter.fixture_controls(self, state, clear)
                 if state['id'] == 11:
                     result['throttle'] = 0.0
                 return result
@@ -3992,7 +3991,7 @@ class BotRuntimeTests(unittest.TestCase):
             physics_ground_probe=lambda *unused: 0.0,
             spawn_resolver=_spawn_resolver, baked_graph=_graph())
         runtime.battle_start(self.start)
-        runtime.adapter.decide = lambda unused_state, unused_clear: dict(
+        runtime.adapter.fixture_controls = lambda unused_state, unused_clear: dict(
             command)
 
         runtime.update(.04, 1.0)
@@ -4044,7 +4043,7 @@ class BotRuntimeTests(unittest.TestCase):
              'name': 'Soft-%d' % index}
             for index in range(5)]
         runtime.battle_start(dict(self.start, bots=roster))
-        runtime.adapter.decide = lambda unused_state, unused_clear: dict(
+        runtime.adapter.fixture_controls = lambda unused_state, unused_clear: dict(
             command)
 
         runtime.update(.04, 1.0)
@@ -4787,7 +4786,7 @@ class BotRuntimeTests(unittest.TestCase):
              for index in range(len(after)))))
         for name in ('visibility', 'lane', 'ground', 'motion'):
             self.assertAlmostEqual(0.001, elapsed[name])
-        self.assertEqual(0.0, elapsed['cover'])
+        self.assertNotIn('cover', elapsed)
 
     def test_bounded_probe_clock_starts_on_authority_tick_and_expires(self):
         clock_calls = [0]
@@ -4943,7 +4942,6 @@ class BotRuntimeTests(unittest.TestCase):
                     'clear': True, 'collision': False, 'slope': 0.0},
                 visibility_probe=visible, firing_lane_probe=lane,
                 ground_probe=ground, physics_ground_probe=ground,
-                cover_probe=lambda *unused: (),
                 spawn_resolver=_spawn_resolver, native_motion=True,
                 baked_graph=_graph(), control_seconds=self.module.WORKER_CONTROL_SECONDS,
                 combat_diagnostics=diagnostic)
@@ -4959,12 +4957,6 @@ class BotRuntimeTests(unittest.TestCase):
             for frame in range(55):
                 dt = (0.1, 0.1, 0.45, 0.035, 0.08)[frame % 5]
                 now += dt
-                if frame == 10:
-                    source = copy.deepcopy(runtime.states[11])
-                    target = runtime._bot_observation_target(25, runtime.states[25])
-                    for offset in (0.0, 0.2, 0.4):
-                        runtime._cover_queue.append((
-                            now + offset, 11, source, target, (0, 0, 0), ()))
                 if diagnostic is not None:
                     diagnostic.begin_frame(frame, now, 'queue')
                 wire.extend(runtime.update(dt, now))
@@ -5011,8 +5003,8 @@ class BotRuntimeTests(unittest.TestCase):
         stages = set(name for row in traces for name in row['stages'])
         self.assertTrue({'bot.slice', 'bot.targets', 'bot.lane_service',
                          'bot.probe.lane'}.issubset(stages))
-        self.assertGreater(sum(row['counts'].get(
-            'lane_service_cover_blocked', 0) for row in traces), 0)
+        self.assertTrue(all('lane_service_cover_blocked' not in row['counts']
+                            for row in traces))
         self.assertGreater(max(row['completed_wait']['max_kept_ms']
                                for row in traces), 1000.0)
         residual = sum(row['counts'].get('slice_residual_actors_us', 0)
@@ -5385,7 +5377,7 @@ class BotRuntimeTests(unittest.TestCase):
         command.update(throttle=1.0, movement_intent=True,
                        move_position=(0.0, 0.0, 10.0),
                        combat_mode='advance', recovery_mode='drive')
-        runtime.adapter.decide = lambda *unused: dict(command)
+        runtime.adapter.fixture_controls = lambda *unused: dict(command)
         runtime.direction_probe = lambda *unused: {
             'clear': True, 'collision': False, 'slope': 0.375}
         state['speed'] = 4.0
@@ -5412,7 +5404,7 @@ class BotRuntimeTests(unittest.TestCase):
 
         self.module.vehicle_physics.damper_suspension_step = solve
         try:
-            before = runtime.probe_totals()[3]
+            before = runtime.probe_totals()[2]
             blocked = runtime._update_vertical_motion(state, 0.2)
         finally:
             self.module.vehicle_physics.damper_suspension_step = original
@@ -5420,7 +5412,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertFalse(blocked)
         self.assertEqual([(10, 12, 0.2, 0.0)], solver_calls)
         self.assertEqual(22, len(calls))
-        self.assertEqual(22, runtime.probe_totals()[3] - before)
+        self.assertEqual(22, runtime.probe_totals()[2] - before)
         self.assertFalse(state['airborne'])
         self.assertAlmostEqual(0.0, state['y'], places=5)
         self.assertAlmostEqual(0.0, state['pitch'], places=5)
@@ -6650,7 +6642,7 @@ class BotRuntimeTests(unittest.TestCase):
         yaw = 0.641
 
         class TrafficAdapter(_Adapter):
-            def decide(adapter_self, state, clear):
+            def fixture_controls(adapter_self, state, clear):
                 adapter_self.calls.append((state, clear(state['yaw'])))
                 moving = state['id'] == 23
                 heading = yaw if moving else state['yaw']
@@ -6995,7 +6987,8 @@ class BotRuntimeTests(unittest.TestCase):
                 ValueError, 'collision manifest descriptor is unavailable'):
             self.runtime.battle_start(start)
 
-    def test_injected_baked_graph_replaces_runtime_grid_and_passes_routes(self):
+    def test_injected_graph_replaces_physical_grid_but_not_reviewed_default_routes(self):
+        from gui.mods.offline_lan_0922 import bot_tactics
         graph = _graph()
         seen = []
         def factory(*args, **kwargs):
@@ -7010,10 +7003,14 @@ class BotRuntimeTests(unittest.TestCase):
             direction_probe=lambda *unused: {'clear': True, 'slope': 0.0})
         runtime.battle_start(self.start)
         self.assertTrue(runtime.navigator.grid.prebaked)
+        expected = bot_tactics.shared_route_points(bot_tactics.default_map(graph['map']))
         for team in ('1', '2'):
             actual = seen[0][1]['baked_routes'][team]
-            self.assertEqual([(r['id'], r['waypoints']) for r in graph['routes'][team]],
-                             [(r['id'], r['waypoints']) for r in actual])
+            self.assertEqual({identity[1]: points for identity, points in expected.items()
+                              if identity[0] == int(team)},
+                             {row['id']: row['waypoints'] for row in actual})
+        self.assertEqual(graph['heights_mm'], runtime.baked_graph['heights_mm'])
+        self.assertEqual(list(graph['links']), list(runtime.baked_graph['links']))
 
     def test_supported_map_with_empty_baked_routes_fails_closed(self):
         graph = _graph()
@@ -7107,6 +7104,20 @@ class BotRuntimeTests(unittest.TestCase):
         player = [{'id': 2, 'team': 1, 'alive': True,
                    'x': 5, 'y': 0, 'z': 5}]
         player = [_admit_player(value) for value in player]
+        # This fixture isolates the publication/gun clocks below an accepted
+        # execution order. It has no BattleRuntime native-admission binding;
+        # an ordinary planner hint is no longer permission to fire.
+        self.assertIsNone(self.runtime._control_for(self.runtime.states[11]))
+        self.assertTrue(self.runtime._apply_orders({
+            'bot_order_revision': 1,
+            'bot_orders': [{
+                'id': 11, 'target_kind': 'human', 'target_id': 2,
+                'fire_allowed': True, 'fire_range': 500.0, 'shell_index': 0,
+                'combat_mode': 'engage',
+                'aim_position': (5.0, 0.0, 5.0),
+                'face_position': (5.0, 0.0, 5.0),
+            }],
+        }))
         self.runtime.update(.20, 1.22, players=player)
         self.runtime.update(.20, 1.42, players=player)
         result = self.runtime.update(.04, 1.46, players=player)
@@ -7114,8 +7125,8 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual('bot_state', result[0]['type'])
         self.assertGreater(bot['z'], 0.0)
         self.assertEqual(0, bot['shell_index'])
-        # The opening shot also waits for this Bot's gunner tier, which the
-        # banked-pose contract above is not about.
+        # Physical alignment and reload may still outlast the banked-pose
+        # samples; there is no additional difficulty reaction clock.
         now = 1.46
         while now < 8.0 and not self.runtime.states[11]['fire_seq']:
             now += .04
@@ -7731,7 +7742,7 @@ class BotRuntimeTests(unittest.TestCase):
             runtime = self._drive_runtime(
                 lambda *unused: {'clear': True, 'collision': False, 'slope': 0.0})
             command = dict(self._stationary_command(), brake=brake)
-            runtime.adapter.decide = lambda *unused: dict(command)
+            runtime.adapter.fixture_controls = lambda *unused: dict(command)
             runtime.update(0.1, 1.1)
             states[brake] = runtime.states[11]
             # An explicit brake changes acceleration, not the body's current
@@ -7756,7 +7767,7 @@ class BotRuntimeTests(unittest.TestCase):
                     state['profile']['class_tag'] = 'SPG'
                     command = dict(self._stationary_command(),
                                    throttle=1.0, brake=False, fire_allowed=True)
-                    runtime.adapter.decide = lambda *unused: dict(command)
+                    runtime.adapter.fixture_controls = lambda *unused: dict(command)
                     runtime._active_artillery_intent = lambda *unused: None
                     runtime._active_artillery_reproof = lambda *unused: {}
                     runtime._refresh_control_this_step = True
@@ -7780,7 +7791,7 @@ class BotRuntimeTests(unittest.TestCase):
                 command=dict(self._stationary_command(),combat_mode=mode,spg_mode='sortie',
                     move_position=(0.,0.,400.),face_position=(0.,0.,400.),
                     throttle=1.,brake=False,movement_intent=True,fire_allowed=True)
-                runtime.adapter.decide=lambda *a:dict(command)
+                runtime.adapter.fixture_controls=lambda *a:dict(command)
                 runtime._active_artillery_intent=lambda *a:None
                 runtime._active_artillery_reproof=lambda *a:dict(
                     hold_solution=dict(aim_position=(100.,2.,0.)))
@@ -8063,10 +8074,10 @@ class BotRuntimeTests(unittest.TestCase):
         planning = [False]
 
         class TrackedAdapter(_FixedAdapter):
-            def decide(self, *args, **kwargs):
+            def fixture_controls(self, *args, **kwargs):
                 planning[0] = True
                 try:
-                    return super(TrackedAdapter, self).decide(*args, **kwargs)
+                    return super(TrackedAdapter, self).fixture_controls(*args, **kwargs)
                 finally:
                     planning[0] = False
 
@@ -8493,7 +8504,7 @@ class BotRuntimeTests(unittest.TestCase):
                     spawn_resolver=_spawn_resolver, baked_graph=_graph())
                 runtime.battle_start(dict(self.start, bots=roster))
                 # This case measures authority cadence, not planner fallback.
-                runtime.adapter.decide = (
+                runtime.adapter.fixture_controls = (
                     lambda unused_state, unused_clear: dict(command))
                 previous = None
                 changed = 0
@@ -8557,7 +8568,7 @@ class BotRuntimeTests(unittest.TestCase):
         calls = []
 
         class HoldAdapter(_FixedAdapter):
-            def decide(self, state, unused_clear):
+            def fixture_controls(self, state, unused_clear):
                 self.calls.append(state['id'])
                 return dict(self.command)
 
@@ -8614,7 +8625,7 @@ class BotRuntimeTests(unittest.TestCase):
         calls = []
 
         class HoldAdapter(_FixedAdapter):
-            def decide(self, state, unused_clear):
+            def fixture_controls(self, state, unused_clear):
                 self.calls.append(state['id'])
                 return dict(self.command)
 
@@ -8691,7 +8702,7 @@ class BotRuntimeTests(unittest.TestCase):
         calls = []
 
         class HoldAdapter(_FixedAdapter):
-            def decide(self, state, unused_clear):
+            def fixture_controls(self, state, unused_clear):
                 self.calls.append(state['id'])
                 return dict(self.command)
 
@@ -8757,7 +8768,7 @@ class BotRuntimeTests(unittest.TestCase):
         lane_calls = []
 
         class HoldAdapter(_FixedAdapter):
-            def decide(self, state, unused_clear):
+            def fixture_controls(self, state, unused_clear):
                 self.calls.append(state['id'])
                 return dict(self.command)
 
@@ -9189,7 +9200,7 @@ class BotRuntimeTests(unittest.TestCase):
                 vertical_speed, places=8)
             self.assertEqual(min(fps, 30), publications)
 
-    def test_cover_jobs_are_phased_and_publish_complete_fair_batches(self):
+    def test_observations_and_lanes_continue_without_retired_cover_jobs(self):
         command = {
             'target_yaw': 0.0, 'throttle': 0.0, 'turn': 0.0,
             'shell_index': 0, 'fire_allowed': True,
@@ -9202,82 +9213,41 @@ class BotRuntimeTests(unittest.TestCase):
         }
         roster = [
             {'id': 11 + index, 'team': 2, 'slot': index,
-             'name': 'Cover-%d' % index}
+             'name': 'Stationary-%d' % index}
             for index in range(6)
         ]
-        player = {
+        player = _admit_player({
             'id': 1, 'team': 1, 'alive': True,
             'x': 0.0, 'y': 0.0, 'z': 0.0,
             'health': 1000, 'max_health': 1000,
-        }
-        player = _admit_player(player)
+        })
+        self.assertNotIn('cover', self.module.PROBE_KINDS)
         for fps in (24, 40, 60, 120):
             with self.subTest(fps=fps):
-                frame_number = [0]
-                calls = []
-
-                def cover_probe(source, target, unused_route, allies,
-                                unused_segment_clear):
-                    calls.append((frame_number[0], source['id'],
-                                  frame_number[0] / float(fps)))
-                    self.assertEqual(6, len(allies))
-                    return ({'source_id': source['id'],
-                             'target_id': target['network_id']},)
-
+                lane_calls = []
                 runtime = self.module.BotRuntime(
                     1,
                     descriptor_resolver=lambda unused: _combat_descriptor(),
-                    adapter_factory=lambda *unused, **kwargs: _FixedAdapter(
-                        command),
-                    direction_probe=lambda *unused: {
-                        'clear': True, 'slope': 0.0},
+                    adapter_factory=lambda *unused, **kwargs: _FixedAdapter(command),
+                    direction_probe=lambda *unused: {'clear': True, 'slope': 0.0},
                     visibility_probe=lambda *unused: True,
-                    firing_lane_probe=lambda *unused: True,
+                    firing_lane_probe=lambda *args: lane_calls.append(args) or True,
                     ground_probe=lambda *unused: 0.0,
                     physics_ground_probe=lambda *unused: 0.0,
-                    spawn_resolver=_spawn_resolver, cover_probe=cover_probe,
-                    baked_graph=_graph())
+                    spawn_resolver=_spawn_resolver, baked_graph=_graph())
                 runtime.battle_start(dict(self.start, bots=roster))
-
                 observations = []
                 dt = 1.0 / float(fps)
                 for frame in range(int(fps * 2.5) + 1):
-                    frame_number[0] = frame
-                    outgoing = runtime.update(
-                        dt, 1.0 + frame * dt, players=[player])
-                    published = [
-                        message for message in outgoing
-                        if message.get('type') == 'bot_observation']
-                    observations.extend(published)
-
+                    outgoing = runtime.update(dt, 1.0 + frame * dt, players=[player])
+                    observations.extend(message for message in outgoing
+                                        if message.get('type') == 'bot_observation')
                 self.assertGreaterEqual(len(observations), 6)
-                # Visibility publishes independently at 0.40 seconds. Cover
-                # results arrive as their one-hertz phased jobs complete.
-                self.assertEqual([], observations[0]['affordances'])
-                published_ids = [
-                    value['candidates'][0]['source_id']
-                    for observation in observations
-                    for value in observation['affordances']]
-                self.assertEqual([11, 12, 13, 14, 15, 16],
-                                 published_ids[:6])
-                self.assertEqual([11, 12, 13, 14, 15, 16],
-                                 [value[1] for value in calls[:6]])
-                self.assertEqual(11, calls[6][1])
-                self.assertGreaterEqual(
-                    calls[3][2] - calls[0][2],
-                    self.module.COVER_REFRESH_SECONDS - dt - 1e-9)
-                frame_counts = {}
-                for frame, unused_bot_id, unused_offset in calls:
-                    frame_counts[frame] = frame_counts.get(frame, 0) + 1
-                self.assertEqual(1, max(frame_counts.values()))
-                self.assertGreaterEqual(len(calls), 7)
-
-                # Every cover batch remains phased through half of its own
-                # one-second tactical window.
-                first_offsets = [value[2] for value in calls[:3]]
-                self.assertEqual(0.0, first_offsets[0])
-                self.assertLess(first_offsets[-1],
-                                self.module.COVER_JOB_WINDOW_SECONDS + 1e-9)
+                self.assertTrue(lane_calls)
+                self.assertTrue(all('affordances' not in row for row in observations))
+                for name in ('cover_probe', '_cover_queue', '_cover_results',
+                             '_cover_cursor', '_next_cover_refresh', '_cover_job_current'):
+                    self.assertFalse(hasattr(runtime, name), name)
 
     def test_cached_motion_probe_has_explicit_corridor_safety_bounds(self):
         cached = {
@@ -9454,7 +9424,7 @@ class BotRuntimeTests(unittest.TestCase):
             spawn_resolver=_spawn_resolver, native_motion=True,
             baked_graph=_graph())
         runtime.battle_start(self.start)
-        runtime.adapter.decide = lambda unused_state, unused_clear: dict(
+        runtime.adapter.fixture_controls = lambda unused_state, unused_clear: dict(
             command)
 
         runtime.update(.04, 1.0)
@@ -9628,7 +9598,7 @@ class BotRuntimeTests(unittest.TestCase):
         # Isolate the continuous-motion seam from LocalDriver's decision
         # probes; an intentional hold returns before direction_clear in the
         # production adapter.
-        runtime.adapter.decide = lambda unused_state, unused_clear: dict(command)
+        runtime.adapter.fixture_controls = lambda unused_state, unused_clear: dict(command)
 
         self.assertTrue(all(
             not state['grounded_once'] for state in runtime.states.values()))
@@ -9949,7 +9919,6 @@ class BotRuntimeTests(unittest.TestCase):
         runtime.battle_start(self.start)
         runtime._next_observation = 100.0
         runtime._next_shot_lane_refresh = 100.0
-        runtime._next_cover_refresh = 100.0
         runtime.states[11].update(x=0.0, y=0.0, z=0.0, yaw=0.0)
         player = _admit_player({
             'id': 2, 'team': 1, 'alive': True,
@@ -9991,7 +9960,6 @@ class BotRuntimeTests(unittest.TestCase):
         runtime.battle_start(self.start)
         runtime._next_observation = 100.0
         runtime._next_shot_lane_refresh = 100.0
-        runtime._next_cover_refresh = 100.0
         original_solve = runtime._ballistic_solution
         original_aim = runtime._update_gun_aim
 
@@ -10024,7 +9992,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertLess(len(origins), len(aims))
         self.assertEqual({11}, set(origins))
 
-    def test_target_solution_cache_invalidates_and_burst_forces_freshness(self):
+    def test_target_solution_cache_invalidates_and_explicit_refresh_is_fresh(self):
         runtime = self.module.BotRuntime(1)
         descriptor = _combat_descriptor()
         state = {'id': 11, 'fire_seq': 0,
@@ -10089,7 +10057,6 @@ class BotRuntimeTests(unittest.TestCase):
         runtime.battle_start(self.start)
         runtime._next_observation = 100.0
         runtime._next_shot_lane_refresh = 100.0
-        runtime._next_cover_refresh = 100.0
         solution = {
             'aim_position': (0.0, 1.0, 0.0),
             'yaw': 0.0, 'pitch': 0.0, 'flight_time': 0.1,
@@ -10107,8 +10074,7 @@ class BotRuntimeTests(unittest.TestCase):
         stale = bot_state_rows.bots(runtime.update(0.2, 1.0, players=[player])[0])[0]
         self.assertEqual(0, stale['fire_seq'])
 
-        # A fresh solution admits exactly one shot, once the gunner has also
-        # spent its own tier opening delay.
+        # A fresh solution admits one shot once the physical gun is ready.
         freshness[0] = True
         now, fired = 1.0, 0
         while now < 8.0 and not fired:
@@ -10117,40 +10083,11 @@ class BotRuntimeTests(unittest.TestCase):
             fired = runtime.states[11]['fire_seq']
         self.assertEqual(1, fired)
 
-        # Going stale again holds the next shot even with the gun reloaded
-        # and the gunner long past every delay it has.
+        # Going stale again holds the next shot even with the gun reloaded.
         freshness[0] = False
         runtime._gun_states[11].elapsed = 100.0
         runtime.update(0.2, now + 0.2, players=[player])
         self.assertEqual(1, runtime.states[11]['fire_seq'])
-
-    def _spend_gunner_delay(self, runtime, players, now=1.0, step=0.04,
-                            bot_id=11, hold_fire=True):
-        """Run the clock through this Bot's opening-shot delay, trigger held.
-
-        The tier's reaction and aiming patience are deliberate behaviour with
-        their own tests.  These callers measure fire bookkeeping instead, so
-        spend both with ``fire_allowed`` off - the gunner still tracks its
-        target through the ordinary solve - and let the caller's own next
-        tick take the shot.
-        """
-        params = self.module.bot_gunnery.skill_parameters(
-            runtime.bot_skill(bot_id))
-        deadline = (now + params['reaction_seconds'] +
-                    params['patience_seconds'])
-        command = (getattr(runtime.adapter, 'command', None)
-                   if hold_fire else None)
-        allowed = None if command is None else command.get('fire_allowed')
-        if command is not None:
-            command['fire_allowed'] = False
-        try:
-            while now + step < deadline:
-                now += step
-                runtime.update(step, now, players=players)
-        finally:
-            if command is not None:
-                command['fire_allowed'] = allowed
-        return now
 
     def _gunnery_command(self):
         return {
@@ -10181,7 +10118,6 @@ class BotRuntimeTests(unittest.TestCase):
         runtime.battle_start(start)
         runtime._next_observation = 100.0
         runtime._next_shot_lane_refresh = 100.0
-        runtime._next_cover_refresh = 100.0
         state = runtime.states[11]
         state['x'], state['y'], state['z'], state['yaw'] = 0.0, 0.0, 0.0, 0.0
         return runtime
@@ -10266,7 +10202,7 @@ class BotRuntimeTests(unittest.TestCase):
         projected = server._sanitize_bot_state(changed,server.bot_manifest[0],server.bot_states[raw['id']])
         self.assertEqual(projected['fitting'],raw['fitting'])
 
-    def test_the_manifest_publishes_each_bot_gunnery_tier(self):
+    def test_the_manifest_publishes_each_bot_fitting_tier(self):
         messages = self.runtime.battle_start(
             dict(self.start, bot_skill_mode='brutal'))
 
@@ -10327,12 +10263,11 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertLessEqual(self.runtime.bot_rating(11), ceiling)
 
     def test_a_takeover_reinstalls_the_exact_rating_not_its_label(self):
-        """Snapping a rating to its nearest tier would move the gunner.
+        """Authority transfer preserves the frozen roster configuration.
 
-        The crew level a rating trains is baked into the published reload
-        duration, so a successor that re-labelled a Bot would also fail the
-        installed-gun guard. Reinstalling the exact number is what keeps a
-        mid-spectrum gunner identical across a failover.
+        The label selects a physical fitting tier, not an artificial gunner.
+        The exact saved rating remains protocol data and must not be rerolled
+        or silently replaced by an anchor during authority transfer.
         """
         manifest = self.runtime.battle_start(
             dict(self.start, bot_skill_mode='mixed'))[0]
@@ -10353,180 +10288,130 @@ class BotRuntimeTests(unittest.TestCase):
 
         self.assertEqual(expected, successor.bot_rating(11))
 
-    def test_the_aim_selection_gate_holds_for_one_aiming_epoch(self):
-        """A per-frame flip would re-solve the ballistics every tick."""
-        self.runtime.battle_start(dict(self.start, bot_skill_mode='mixed'))
-        state = {'id': 11}
-        target = {'kind': 'human', 'network_id': 2, 'id': 2}
+    def test_runtime_has_no_artificial_gunnery_policy_or_hold_clock(self):
+        self.runtime.battle_start(self.start)
+        for name in ('bot_aim_selection_allowed', '_track_gunnery_hold',
+                     '_gunnery_error', '_aimed_target', '_gunner_ready',
+                     '_gunnery_holds'):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(self.runtime, name))
 
-        first = self.runtime.bot_aim_selection_allowed(state, target)
-        for unused_repeat in range(5):
-            self.assertEqual(
-                first,
-                self.runtime.bot_aim_selection_allowed(state, target))
-        # The accessor may not create or advance the hold that owns the epoch.
-        self.assertEqual({}, self.runtime._gunnery_holds)
+    def test_identical_physical_fittings_aim_at_the_same_part_at_every_rating(self):
+        selected = {'aim_position': (2.0, 2.5, 100.0),
+                    'aim_token': ('turret', 'current-pose')}
+        target = {'kind': 'human', 'network_id': 2, 'id': 2,
+                  'alive': True, 'position': (0.0, 0.0, 100.0),
+                  'velocity': (0.0, 0.0, 0.0)}
+        original = copy.deepcopy(target)
+        descriptor = _combat_descriptor()
+        solutions = []
+        for rating in (0.0, 0.17, 0.34, 0.505, 0.67, 0.835, 1.0):
+            runtime = self.module.BotRuntime(
+                1, direct_launch_origin_probe=lambda *unused: (0.0, 1.0, 0.0),
+                direct_aim_point_probe=lambda *unused: dict(selected))
+            runtime._bot_ratings[11] = rating
+            state = {'id': 11, 'x': 0.0, 'y': 0.0, 'z': 0.0,
+                     'profile': {'class_tag': 'mediumTank'}}
+            # Crossing the removed 1.5-second bias epoch cannot move a
+            # stationary, already selected armour point.
+            for now in (0.0, 1.49, 1.51, 3.01):
+                solution = runtime._ballistic_solution(
+                    state, target, descriptor, 0, now)
+                self.assertIsNotNone(solution)
+                self.assertEqual(selected['aim_position'],
+                                 solution['aim_position'])
+                self.assertEqual(selected['aim_token'], solution['_aim_token'])
+                solutions.append(solution)
+        self.assertTrue(all(solution == solutions[0] for solution in solutions))
+        self.assertEqual(original, target)
 
-    def test_the_top_of_the_spectrum_always_looks_for_the_weak_spot(self):
-        self.runtime.battle_start(dict(self.start, bot_skill_mode='brutal'))
+    def test_identical_physics_gives_exact_moving_target_lead_at_every_rating(self):
+        target = {'kind': 'human', 'network_id': 2, 'id': 2,
+                  'alive': True, 'position': (0.0, 0.0, 300.0),
+                  'velocity': (20.0, 0.0, 0.0)}
+        original = copy.deepcopy(target)
+        solutions = []
+        for rating in (0.0, 0.34, 0.67, 1.0):
+            runtime = self.module.BotRuntime(
+                1, direct_launch_origin_probe=lambda *unused: (0.0, 1.0, 0.0))
+            runtime._bot_ratings[11] = rating
+            state = {'id': 11, 'x': 0.0, 'y': 0.0, 'z': 0.0,
+                     'profile': {'class_tag': 'mediumTank'}}
+            solution = runtime._ballistic_solution(
+                state, target, _combat_descriptor(), 0, 1.0)
+            self.assertIsNotNone(solution)
+            self.assertAlmostEqual(20.0 * solution['flight_time'],
+                                   solution['aim_position'][0])
+            self.assertAlmostEqual(1.0, solution['aim_position'][1])
+            self.assertAlmostEqual(300.0, solution['aim_position'][2])
+            solutions.append(solution)
+        self.assertTrue(all(solution == solutions[0] for solution in solutions))
+        self.assertEqual(original, target)
 
-        self.assertTrue(self.runtime.bot_aim_selection_allowed(
-            {'id': 11}, {'kind': 'human', 'network_id': 2, 'id': 2}))
-
-    def test_a_bot_with_no_competence_never_looks_for_the_weak_spot(self):
-        self.runtime.battle_start(dict(
-            self.start, bot_skill_mode='brutal',
-            bot_lineup=[{'team': 2, 'slot': 0, 'skill': 'rookie'}]))
-
-        self.assertEqual(0.0, self.runtime.bot_rating(11))
-        self.assertFalse(self.runtime.bot_aim_selection_allowed(
-            {'id': 11}, {'kind': 'human', 'network_id': 2, 'id': 2}))
-
-    def test_a_weak_gunner_lays_the_gun_off_the_target_centre(self):
-        command = self._gunnery_command()
+    def test_same_physical_clip_gun_has_the_same_cadence_at_every_rating(self):
         player = _admit_player(
             {'id': 2, 'team': 1, 'alive': True,
              'x': 0.0, 'y': 10.5, 'z': 100.0})
-        offsets = {'rookie': [], 'elite': []}
-        # One seeded engagement is one draw from a half-normal, so average a
-        # spread of rounds instead of asserting on a single lucky gunner.
-        for round_id in range(1, 21):
-            for skill in offsets:
-                runtime = self._gunnery_runtime(
-                    command, round_id=round_id,
-                    bot_lineup=[{'team': 2, 'slot': 0, 'skill': skill}])
-                runtime.update(0.20, 1.0, players=[player])
-                aim = runtime._ballistic_solution_cache[11][2]['aim_position']
-                offsets[skill].append(math.sqrt(
-                    (aim[0] - 0.0) ** 2 + (aim[2] - 100.0) ** 2))
+        schedules = []
+        for rating in (0.0, 0.34, 0.67, 1.0):
+            # Keep the installed modules, crew, devices and gun state fixed.
+            # Rating labels alone may not inject firing delays or aim error.
+            runtime = self._gunnery_runtime(self._gunnery_command())
+            runtime._bot_ratings[11] = rating
+            runtime._bot_behavior.setdefault(11, {})['crew_preset'] = 'all'
+            schedule = []
+            for tick in range(1, 161):
+                runtime.update(0.05, 1.0 + tick * 0.05, players=[player])
+                schedule.append(runtime.states[11]['fire_seq'])
+            schedules.append(schedule)
+        self.assertGreater(schedules[0][-1], 1)
+        self.assertTrue(all(schedule == schedules[0] for schedule in schedules))
 
-        rookie = sum(offsets['rookie']) / len(offsets['rookie'])
-        elite = sum(offsets['elite']) / len(offsets['elite'])
-        self.assertGreater(rookie, 0.20)
-        self.assertGreater(rookie, elite * 5.0)
-
-    def test_a_better_tier_never_fires_a_clip_gun_less_often(self):
-        """The tier ladder must not invert on a gun that reloads fast."""
-        command = self._gunnery_command()
+    def test_ready_physical_gun_does_not_wait_for_a_rating_reaction_delay(self):
         player = _admit_player(
             {'id': 2, 'team': 1, 'alive': True,
              'x': 0.0, 'y': 10.5, 'z': 100.0})
-        shots = {}
-        for skill in ('rookie', 'elite'):
-            runtime = self._gunnery_runtime(
-                command, bot_lineup=[{'team': 2, 'slot': 0, 'skill': skill}])
-            now = 1.0
-            for unused_step in range(200):
-                now += 0.05
-                published = runtime.update(0.05, now, players=[player])
-                shots[skill] = bot_state_rows.bots(published[0])[0]['fire_seq']
+        target = {'kind': 'human', 'network_id': 2, 'id': 2,
+                  'alive': True, 'visible': True,
+                  'position': (0.0, 10.5, 100.0), 'velocity': (0.0, 0.0, 0.0)}
+        for rating in (0.0, 0.34, 0.67, 1.0):
+            with self.subTest(rating=rating):
+                runtime = self._gunnery_runtime(self._gunnery_command())
+                runtime._bot_ratings[11] = rating
+                runtime._bot_behavior.setdefault(11, {})['crew_preset'] = 'all'
+                state = runtime.states[11]
+                descriptor = runtime._descriptors[11]
+                solution = runtime._local_ballistic_solution(
+                    state, target, descriptor, 0)
+                self.assertIsNotNone(solution)
+                state.update(aim_yaw=solution['yaw'],
+                             turret_yaw=solution['yaw'],
+                             gun_pitch=solution['pitch'],
+                             desired_gun_pitch=solution['pitch'],
+                             gun_aligned=True)
+                runtime._gun_states[11].elapsed = 100.0
+                runtime.update(0.04, 1.0, players=[player])
+                self.assertEqual(1, runtime.states[11]['fire_seq'])
 
-        self.assertGreater(shots['rookie'], 0)
-        self.assertGreaterEqual(shots['elite'], shots['rookie'])
-
-    def test_a_weak_gunner_mis_leads_a_moving_target(self):
-        command = self._gunnery_command()
-        player = _admit_player(
-            {'id': 2, 'team': 1, 'alive': True, 'yaw': 1.5707963,
-             'speed': 12.0, 'x': 0.0, 'y': 10.5, 'z': 100.0})
-        leads = {}
-        for skill in ('rookie', 'elite'):
-            runtime = self._gunnery_runtime(
-                command,
-                bot_lineup=[{'team': 2, 'slot': 0, 'skill': skill}])
-            state = runtime.states[11]
-            target = {
-                'kind': 'human', 'network_id': 2, 'id': 2,
-                'alive': True, 'visible': True,
-                'position': (0.0, 10.5, 100.0),
-                'yaw': 1.5707963, 'speed': 12.0}
-            aimed = runtime._aimed_target(state, target, 1.0)
-            lead = runtime._target_velocity(aimed)[0] / 12.0
-            leads[skill] = abs(1.0 - lead)
-
-        self.assertGreater(
-            self.module.bot_gunnery.skill_parameters('rookie')['lead_error'],
-            self.module.bot_gunnery.skill_parameters('elite')['lead_error'])
-        self.assertLessEqual(
-            leads['elite'],
-            self.module.bot_gunnery.skill_parameters('elite')['lead_error'])
-        self.assertLessEqual(
-            leads['rookie'],
-            self.module.bot_gunnery.skill_parameters('rookie')['lead_error'])
-
-    def test_a_bot_holds_fire_until_its_reaction_delay_expires(self):
-        command = self._gunnery_command()
-        player = _admit_player(
-            {'id': 2, 'team': 1, 'alive': True,
-             'x': 0.0, 'y': 10.5, 'z': 100.0})
-        runtime = self._gunnery_runtime(
-            command, bot_lineup=[{'team': 2, 'slot': 0, 'skill': 'rookie'}])
-        reaction = self.module.bot_gunnery.skill_parameters(
-            'rookie')['reaction_seconds']
-
-        now = 1.0
-        while now < 1.0 + reaction - 1.0e-6:
-            now += 0.05
-            published = runtime.update(0.05, now, players=[player])
-            self.assertEqual(
-                0, bot_state_rows.bots(published[0])[0]['fire_seq'],
-                'a Bot fired %.2fs into a %.2fs reaction delay' % (
-                    now - 1.0, reaction))
-
-        fired = 0
-        while now < 1.0 + reaction + 4.0 and not fired:
-            now += 0.05
-            fired = bot_state_rows.bots(runtime.update(
-                0.05, now, players=[player])[0])[0]['fire_seq']
-        self.assertEqual(1, fired)
-
-    def test_the_hold_survives_one_missing_target_frame(self):
-        """A gunner does not react to the same tank twice."""
-        command = self._gunnery_command()
-        state = self.runtime.states.get(11)
-        self.runtime.battle_start(self.start)
-        state = self.runtime.states[11]
-        target = {'kind': 'human', 'network_id': 2, 'id': 2, 'alive': True,
-                  'position': (0.0, 10.5, 100.0)}
-
-        self.assertEqual(
-            (0.0, 0.0, True),
-            self.runtime._track_gunnery_hold(state, target, 1.0))
-        self.assertIsNone(
-            self.runtime._track_gunnery_hold(state, None, 1.5))
-        self.assertEqual(
-            (2.0, 2.0, True),
-            self.runtime._track_gunnery_hold(state, target, 3.0))
-
-    def test_a_new_target_restarts_the_reaction_clock(self):
-        self.runtime.battle_start(self.start)
-        state = self.runtime.states[11]
-        first = {'kind': 'human', 'network_id': 2, 'id': 2, 'alive': True,
-                 'position': (0.0, 10.5, 100.0)}
-        second = dict(first, network_id=3, id=3)
-
-        self.runtime._track_gunnery_hold(state, first, 1.0)
-        self.assertEqual(
-            (2.0, 2.0, True),
-            self.runtime._track_gunnery_hold(state, first, 3.0))
-        self.assertEqual(
-            (0.0, 0.0, True),
-            self.runtime._track_gunnery_hold(state, second, 3.0))
-
-    def test_the_bots_own_shot_ends_the_opening_shot_of_an_engagement(self):
-        self.runtime.battle_start(self.start)
-        state = self.runtime.states[11]
-        target = {'kind': 'human', 'network_id': 2, 'id': 2, 'alive': True,
-                  'position': (0.0, 10.5, 100.0)}
-
-        self.runtime._track_gunnery_hold(state, target, 1.0)
-        state['fire_seq'] = 1
-        self.assertEqual(
-            (3.0, 0.0, False),
-            self.runtime._track_gunnery_hold(state, target, 4.0))
-        self.assertEqual(
-            (4.0, 1.0, False),
-            self.runtime._track_gunnery_hold(state, target, 5.0))
+    def test_new_target_uses_its_own_physical_solution_without_a_hold_epoch(self):
+        runtime = self.module.BotRuntime(
+            1, direct_launch_origin_probe=lambda *unused: (0.0, 1.0, 0.0))
+        runtime._bot_ratings[11] = 0.0
+        state = {'id': 11, 'x': 0.0, 'y': 0.0, 'z': 0.0,
+                 'profile': {'class_tag': 'mediumTank'}}
+        first = {'kind': 'human', 'network_id': 2, 'id': 2,
+                 'alive': True, 'position': (0.0, 0.0, 100.0),
+                 'velocity': (0.0, 0.0, 0.0)}
+        second = dict(first, network_id=3, id=3, position=(10.0, 0.0, 100.0))
+        before = runtime._ballistic_solution(
+            state, first, _combat_descriptor(), 0, 1.0)
+        self.assertIsNone(runtime._ballistic_solution(
+            state, None, _combat_descriptor(), 0, 1.04))
+        after = runtime._ballistic_solution(
+            state, second, _combat_descriptor(), 0, 1.08)
+        self.assertEqual((0.0, 1.0, 100.0), before['aim_position'])
+        self.assertEqual((10.0, 1.0, 100.0), after['aim_position'])
+        self.assertGreater(after['yaw'], before['yaw'])
 
     def test_bot_fire_uses_turret_pitch_los_reload_clip_and_barrel_scatter(self):
         lane_probes = []
@@ -10563,7 +10448,6 @@ class BotRuntimeTests(unittest.TestCase):
         # covered separately and intentionally uses the same cached probe.
         runtime._next_observation = 100.0
         runtime._next_shot_lane_refresh = 100.0
-        runtime._next_cover_refresh = 100.0
         state = runtime.states[11]
         state['x'], state['y'], state['z'], state['yaw'] = 0.0, 0.0, 0.0, 0.0
         player = {'id': 2, 'team': 1, 'alive': True,
@@ -10599,13 +10483,9 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual(1, fired['fire_seq'])
         self.assertIn('shot_yaw', fired)
         self.assertIn('shot_pitch', fired)
-        # The barrel points at this gunner's own aim point, which its tier
-        # lays a little off the target centre; the dispersed ray below is
-        # measured against that, not against a perfect solution.
-        self.assertLess(
-            abs(fired['aim_yaw']),
-            self.module.bot_gunnery.skill_parameters(
-                runtime.bot_skill(11))['aim_bias_factor'] * 0.1)
+        # Nominal aim stays on the selected point. Only the physical gun's
+        # dispersion may separate the actual emitted ray from that point.
+        self.assertAlmostEqual(0.0, fired['aim_yaw'])
         self.assertGreater(fired['shot_pitch'], 0.0)
         self.assertEqual(1, runtime.states[11]['clip'])
         self.assertAlmostEqual(0.2, runtime.states[11]['reload_duration'])
@@ -10709,11 +10589,10 @@ class BotRuntimeTests(unittest.TestCase):
         runtime.battle_start(self.start)
         runtime._next_observation = 100.0
         runtime._next_shot_lane_refresh = 100.0
-        runtime._next_cover_refresh = 100.0
         player = _admit_player({'id': 2, 'team': 1, 'alive': True,
                                 'x': 0.0, 'y': 0.0, 'z': 100.0})
         runtime.states[11].update(x=0.0, y=0.0, z=0.0, yaw=0.0)
-        now = self._spend_gunner_delay(runtime, [player])
+        now = 1.0
         blocked = bot_state_rows.bots(runtime.update(
             0.15, now + 0.15, players=[player])[0])[0]
         self.assertEqual(0, blocked['fire_seq'])
@@ -10854,7 +10733,6 @@ class BotRuntimeTests(unittest.TestCase):
         runtime.battle_start(self.start)
         runtime._next_observation = 100.0
         runtime._next_shot_lane_refresh = 100.0
-        runtime._next_cover_refresh = 100.0
         state = runtime.states[11]
         state.update({
             'x': 0.0, 'y': 0.0, 'z': 0.0, 'yaw': 0.0,
@@ -10869,12 +10747,10 @@ class BotRuntimeTests(unittest.TestCase):
         }
         player = _admit_player(player)
 
-        # The first callback acquires the target; the second is long enough
-        # for the gunner to spend its tier reaction.  The SPG is stationary,
-        # so its aiming circle is already converged.
-        runtime.update(0.04, 1.0, players=[player])
+        # The stationary gun is ready. The final native arc proof, not an
+        # artificial reaction clock, owns whether this shot can launch.
         pending = bot_state_rows.bots(runtime.update(
-            0.40, 1.40, players=[player])[0])[0]
+            0.04, 1.0, players=[player])[0])[0]
         self.assertEqual(0, pending['fire_seq'])
         self.assertEqual((1, 1), (
             pending['shell_index'], pending['next_shell_index']))
@@ -10882,7 +10758,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual(1, calls[0][3])
         self.assertEqual(1, calls[0][2])
 
-        fired_message = runtime.update(0.04, 1.44, players=[player])[0]
+        fired_message = runtime.update(0.04, 1.04, players=[player])[0]
         fired = bot_state_rows.bots(fired_message)[0]
         launch = fired_message['launches'][0]
         self.assertEqual(1, fired['fire_seq'])
@@ -11804,7 +11680,6 @@ class BotRuntimeTests(unittest.TestCase):
         runtime.battle_start(self.start)
         runtime._next_observation = 100.0
         runtime._next_shot_lane_refresh = 100.0
-        runtime._next_cover_refresh = 100.0
         state = runtime.states[11]
         state['turret_yaw'] = -0.001
         state['aim_yaw'] = -0.001
@@ -11884,7 +11759,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual([], runtime._pending_launches)
         self.assertNotIn(11, runtime._burst_states)
 
-    def test_active_burst_stops_without_debit_when_alignment_is_lost(self):
+    def _armed_trigger_fixture(self, loaded_clip=5):
         descriptor = _combat_descriptor(
             reload_time=4.0, clip=(5, 2.0), dispersion=0.01,
             max_ammo=20)
@@ -11894,7 +11769,9 @@ class BotRuntimeTests(unittest.TestCase):
             'turretRotation': 0.0,
         }
         runtime = self.module.BotRuntime(
-            1, friendly_lane_probe=lambda *unused: True)
+            1, friendly_lane_probe=lambda *unused: True,
+            direct_launch_origin_probe=lambda source, *unused: (
+                source['x'], source['y'] + 1.0, source['z']))
         runtime.round_id = 5
         runtime._descriptors[11] = descriptor
         state = {
@@ -11911,6 +11788,7 @@ class BotRuntimeTests(unittest.TestCase):
         solution = {'flight_time': 0.5}
         gun_state = self.module._BotGunState(descriptor)
         gun_state.elapsed = 10.0
+        gun_state.clip = loaded_clip
         ammo_state = self.module._BotAmmoState(descriptor, {}, state)
         runtime._gun_states[11] = gun_state
         runtime._ammo_states[11] = ammo_state
@@ -11921,17 +11799,314 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertTrue(runtime._fire(
             state, gun_state, 1.0, descriptor,
             ammo_state=ammo_state, launch_preview=preview))
+        return (runtime, state, gun_state, ammo_state,
+                descriptor, target, solution, initial_ammo)
+
+    def test_active_trigger_finishes_when_alignment_is_lost(self):
+        (runtime, state, gun_state, ammo_state, descriptor,
+         target, solution, initial_ammo) = self._armed_trigger_fixture()
         state['gun_aligned'] = False
-        remaining = list(ammo_state.remaining)
-        clip = gun_state.clip
-        self.assertEqual(0, runtime._advance_active_burst(
+        self.assertEqual(2, runtime._advance_active_burst(
             state, gun_state, ammo_state, 1.0, descriptor,
             target, solution, 0.2, set()))
-        self.assertEqual(remaining, ammo_state.remaining)
-        self.assertEqual(clip, gun_state.clip)
-        self.assertEqual(1, state['fire_seq'])
-        self.assertEqual(1, len(runtime._pending_launches))
+        self.assertEqual(initial_ammo - 3,
+                         ammo_state.remaining[ammo_state.loaded])
+        self.assertEqual(2, gun_state.clip)
+        self.assertEqual(3, state['fire_seq'])
+        self.assertEqual(3, len(runtime._pending_launches))
+        self.assertEqual(3, runtime._burst_states[11].next_index)
         self.assertFalse(runtime._burst_states[11].active)
+
+    def test_committed_trigger_ignores_target_and_tactical_lane_failures(self):
+        for scenario in ('dead_target', 'lost_target', 'blocked_lanes',
+                         'expired_solution', 'withdrawn_order'):
+            with self.subTest(scenario=scenario):
+                (runtime, state, gun_state, ammo_state, descriptor,
+                 target, solution, initial_ammo) = self._armed_trigger_fixture()
+                if scenario == 'dead_target':
+                    target['alive'] = False
+                elif scenario == 'lost_target':
+                    target = None
+                    solution = None
+                elif scenario == 'expired_solution':
+                    solution = {'flight_time': 0.0, 'expired': True}
+                elif scenario == 'withdrawn_order':
+                    state['fire_allowed'] = False
+                    state['combat_mode'] = 'hold'
+                    target = None
+                    solution = None
+                friendly = mock.Mock(return_value=False)
+                world = mock.Mock(return_value=False)
+                solve = mock.Mock(return_value=None)
+                runtime.friendly_lane_probe = friendly
+                runtime.firing_lane_probe = world
+                runtime._ballistic_solution = solve
+
+                self.assertEqual(2, runtime._advance_active_burst(
+                    state, gun_state, ammo_state, 1.0, descriptor,
+                    target, solution, 0.2, set()))
+
+                friendly.assert_not_called()
+                world.assert_not_called()
+                solve.assert_not_called()
+                self.assertEqual(initial_ammo - 3,
+                                 ammo_state.remaining[ammo_state.loaded])
+                self.assertEqual(2, gun_state.clip)
+                self.assertEqual(3, state['fire_seq'])
+                self.assertEqual([1, 2, 3], [
+                    launch['fire_seq'] for launch in runtime._pending_launches])
+                self.assertFalse(runtime._burst_states[11].active)
+                self.assertIsNone(runtime._burst_states[11].terminal_reason)
+
+    def test_trigger_tail_samples_current_barrel_and_freezes_each_projectile(self):
+        (runtime, state, gun_state, ammo_state, descriptor,
+         unused_target, unused_solution, unused_ammo) = self._armed_trigger_fixture()
+        first = copy.deepcopy(runtime._pending_launches[0])
+        state.update(x=4.0, z=5.0, aim_yaw=0.75, turret_yaw=0.75,
+                     gun_pitch=-0.02, gun_aligned=False)
+        self.assertEqual(1, runtime._advance_active_burst(
+            state, gun_state, ammo_state, 1.0, descriptor,
+            None, None, 0.1, set(), 0, 100000))
+        second = copy.deepcopy(runtime._pending_launches[1])
+        state.update(x=-2.0, z=8.0, aim_yaw=-0.6, turret_yaw=-0.6,
+                     gun_pitch=0.03)
+        self.assertEqual(1, runtime._advance_active_burst(
+            state, gun_state, ammo_state, 1.0, descriptor,
+            None, None, 0.1, set(), 100000, 200000))
+
+        launches = runtime._pending_launches
+        self.assertEqual(first, launches[0])
+        self.assertEqual(second, launches[1])
+        self.assertEqual([(0.0, 1.0, 0.0), (4.0, 1.0, 5.0),
+                          (-2.0, 1.0, 8.0)], [
+            launch['shot_origin'] for launch in launches])
+        self.assertEqual([0, 100000, 200000], [
+            launch['launch_time_us'] for launch in launches])
+        self.assertEqual([1, 2, 3], [launch['fire_seq'] for launch in launches])
+        self.assertEqual([1, 1, 1], [launch['burst_group_seq'] for launch in launches])
+        self.assertEqual([0, 1, 2], [launch['burst_index'] for launch in launches])
+        self.assertLess(abs(launches[1]['shot_yaw'] - 0.75), 0.1)
+        self.assertLess(abs(launches[1]['shot_pitch'] - 0.02), 0.1)
+        self.assertLess(abs(launches[2]['shot_yaw'] + 0.6), 0.1)
+        self.assertLess(abs(launches[2]['shot_pitch'] + 0.03), 0.1)
+        self.assertNotEqual(launches[1]['shot_yaw'], launches[2]['shot_yaw'])
+
+    def test_trigger_physical_failures_terminate_without_debiting_the_tail(self):
+        for scenario, reason in (
+                ('dead_actor', 'actor_destroyed'),
+                ('destroyed_gun', 'gun_unavailable'),
+                ('drowning', 'gun_unavailable'),
+                ('overturned', 'gun_unavailable'),
+                ('switching_siege', 'gun_unavailable'),
+                ('no_ammunition', 'ammunition_unavailable'),
+                ('missing_launch', 'launch_unavailable'),
+                ('failed_commit', 'native_failure')):
+            with self.subTest(scenario=scenario):
+                (runtime, state, gun_state, ammo_state, descriptor,
+                 target, solution, unused_ammo) = self._armed_trigger_fixture()
+                destroyed = set()
+                if scenario == 'dead_actor':
+                    state['alive'] = False
+                elif scenario == 'destroyed_gun':
+                    destroyed.add('gunHealth')
+                elif scenario == 'drowning':
+                    state['_drowning'] = True
+                elif scenario == 'overturned':
+                    state['_overturned'] = True
+                elif scenario == 'switching_siege':
+                    state['siege_state'] = self.module.siege_mechanics.SWITCHING_ON
+                elif scenario == 'no_ammunition':
+                    ammo_state.remaining[ammo_state.loaded] = 0
+                elif scenario == 'missing_launch':
+                    runtime._direct_launch_preview = mock.Mock(return_value=None)
+                elif scenario == 'failed_commit':
+                    runtime._commit_burst_edge = mock.Mock(return_value=False)
+                before = list(ammo_state.remaining)
+                clip = gun_state.clip
+
+                self.assertEqual(0, runtime._advance_active_burst(
+                    state, gun_state, ammo_state, 1.0, descriptor,
+                    target, solution, 0.2, destroyed))
+
+                self.assertEqual(before, ammo_state.remaining)
+                self.assertEqual(clip, gun_state.clip)
+                self.assertEqual(0, gun_state._burst_remaining)
+                self.assertEqual(1, state['fire_seq'])
+                self.assertEqual(1, len(runtime._pending_launches))
+                clock = runtime._burst_states[11]
+                self.assertFalse(clock.active)
+                self.assertEqual(reason, clock.terminal_reason)
+                self.assertEqual((1, 3, 1), (
+                    clock.group_seq, clock.count, clock.next_index))
+                self.assertEqual(0, runtime._advance_active_burst(
+                    state, gun_state, ammo_state, 1.0, descriptor,
+                    target, solution, 1.0, destroyed))
+                self.assertEqual(before, ammo_state.remaining)
+
+    def test_tactical_termination_request_cannot_cancel_committed_trigger(self):
+        (runtime, state, gun_state, ammo_state, descriptor,
+         target, solution, initial_ammo) = self._armed_trigger_fixture()
+        for reason in ('stop', 'target_destroyed', 'gun_unaligned',
+                       'friendly_blocked', 'world_blocked', 'timeout'):
+            with self.subTest(reason=reason):
+                with self.assertRaises(ValueError):
+                    runtime._terminate_active_trigger(state, reason)
+                self.assertTrue(runtime._burst_states[11].active)
+                self.assertEqual(2, gun_state._burst_remaining)
+                self.assertEqual(initial_ammo - 1,
+                                 ammo_state.remaining[ammo_state.loaded])
+        self.assertEqual(2, runtime._advance_active_burst(
+            state, gun_state, ammo_state, 1.0, descriptor,
+            target, solution, 0.2, set()))
+        self.assertEqual(initial_ammo - 3,
+                         ammo_state.remaining[ammo_state.loaded])
+
+    def test_partial_clip_trigger_fires_one_or_two_remaining_rounds(self):
+        for loaded in (1, 2):
+            with self.subTest(loaded=loaded):
+                (runtime, state, gun_state, ammo_state, descriptor,
+                 target, solution, initial_ammo) = self._armed_trigger_fixture(loaded)
+                self.assertEqual(loaded - 1, runtime._advance_active_burst(
+                    state, gun_state, ammo_state, 1.0, descriptor,
+                    target, solution, 1.0, set()))
+                self.assertEqual(initial_ammo - loaded,
+                                 ammo_state.remaining[ammo_state.loaded])
+                self.assertEqual(0, gun_state.clip)
+                self.assertEqual('full', gun_state.reload_kind)
+                self.assertEqual(loaded, state['fire_seq'])
+                self.assertEqual([loaded] * loaded, [
+                    launch['burst_count'] for launch in runtime._pending_launches])
+                self.assertEqual(list(range(loaded)), [
+                    launch['burst_index'] for launch in runtime._pending_launches])
+                self.assertFalse(runtime._burst_states[11].active)
+
+    def test_new_trigger_is_rejected_while_committed_tail_is_pending(self):
+        (runtime, state, gun_state, ammo_state, descriptor,
+         target, solution, initial_ammo) = self._armed_trigger_fixture()
+        preview = runtime._direct_launch_preview(
+            state, descriptor, ammo_state.loaded, gun_state, solution)
+
+        self.assertFalse(runtime._fire(
+            state, gun_state, 1.0, descriptor,
+            ammo_state=ammo_state, launch_preview=preview))
+
+        self.assertEqual(initial_ammo - 1,
+                         ammo_state.remaining[ammo_state.loaded])
+        self.assertEqual(4, gun_state.clip)
+        self.assertTrue(runtime._burst_states[11].active)
+        self.assertEqual(2, gun_state._burst_remaining)
+        self.assertEqual(2, runtime._advance_active_burst(
+            state, gun_state, ammo_state, 1.0, descriptor,
+            target, solution, 0.2, set()))
+        self.assertEqual(initial_ammo - 3,
+                         ammo_state.remaining[ammo_state.loaded])
+
+    def test_trigger_bad_commit_edges_do_not_debit_or_advance_any_owner(self):
+        (runtime, state, gun_state, ammo_state, descriptor,
+         target, solution, initial_ammo) = self._armed_trigger_fixture()
+        clock = runtime._burst_states[11]
+        due = clock.advance(0.2)
+        preview = runtime._direct_launch_preview(
+            state, descriptor, ammo_state.loaded, gun_state,
+            None, burst_edge=due[0])
+        bad = [dict(due[1])]
+        for name, value in (
+                ('burst_group_seq', 0), ('burst_count', 4),
+                ('shell_index', 1), ('final', True)):
+            edge = dict(due[0])
+            edge[name] = value
+            bad.append(edge)
+        for edge in bad:
+            with self.subTest(edge=edge):
+                self.assertFalse(runtime._commit_burst_edge(
+                    state, gun_state, 1.0, descriptor, edge,
+                    ammo_state, launch_preview=preview))
+                self.assertEqual(initial_ammo - 1,
+                                 ammo_state.remaining[ammo_state.loaded])
+                self.assertEqual(4, gun_state.clip)
+                self.assertEqual(2, gun_state._burst_remaining)
+                self.assertEqual(1, state['fire_seq'])
+                self.assertEqual(1, clock.next_index)
+                self.assertEqual(1, len(runtime._pending_launches))
+
+        self.assertEqual(2, runtime._advance_active_burst(
+            state, gun_state, ammo_state, 1.0, descriptor,
+            target, solution, 0.2, set(), due_edges=due))
+        self.assertEqual(initial_ammo - 3,
+                         ammo_state.remaining[ammo_state.loaded])
+        self.assertFalse(runtime._commit_burst_edge(
+            state, gun_state, 1.0, descriptor, due[-1],
+            ammo_state, launch_preview=preview))
+        self.assertEqual(initial_ammo - 3,
+                         ammo_state.remaining[ammo_state.loaded])
+        self.assertEqual(2, gun_state.clip)
+        self.assertEqual(3, len(runtime._pending_launches))
+
+    def test_rejected_first_trigger_edge_preserves_reload_and_ammunition(self):
+        descriptor = _combat_descriptor(
+            reload_time=4.0, clip=(5, 2.0), max_ammo=20)
+        descriptor.gun.burst = (3, 0.1)
+        runtime = self.module.BotRuntime(1)
+        state = {'id': 11, 'fire_seq': 0, 'gun_aligned': True,
+                 'alive': True, 'x': 0.0, 'y': 0.0, 'z': 0.0,
+                 'aim_yaw': 0.0, 'gun_pitch': 0.0,
+                 'critical': {}, 'profile': {}}
+        gun = self.module._BotGunState(descriptor)
+        gun.elapsed = 10.0
+        ammo = self.module._BotAmmoState(descriptor, {}, state)
+        before = (gun.elapsed, gun.clip, gun.reload_kind,
+                  gun.reload_duration, list(ammo.remaining), ammo.reload_pending)
+
+        self.assertFalse(runtime._fire(
+            state, gun, 1.0, descriptor, ammo_state=ammo,
+            launch_preview={'fire_seq': 999}))
+
+        self.assertEqual(before, (
+            gun.elapsed, gun.clip, gun.reload_kind, gun.reload_duration,
+            list(ammo.remaining), ammo.reload_pending))
+        self.assertEqual(0, gun._burst_remaining)
+        self.assertEqual(0, state['fire_seq'])
+        self.assertEqual([], runtime._pending_launches)
+        clock = runtime._burst_states[11]
+        self.assertFalse(clock.active)
+        self.assertEqual((0, 0, 0), (
+            clock.group_seq, clock.count, clock.next_index))
+
+    def test_following_trigger_requires_new_alignment_and_uses_remaining_clip(self):
+        (runtime, state, gun_state, ammo_state, descriptor,
+         target, solution, initial_ammo) = self._armed_trigger_fixture()
+        self.assertEqual(2, runtime._advance_active_burst(
+            state, gun_state, ammo_state, 1.0, descriptor,
+            target, solution, 0.2, set()))
+        gun_state.tick(gun_state.remaining() + 0.001)
+        reload_kind = gun_state.complete_reload()
+        self.assertEqual('intra', reload_kind)
+        ammo_state.stage(ammo_state.next, reload_kind is not None,
+                         full_reload=reload_kind == 'full')
+        state['gun_aligned'] = False
+        preview = runtime._direct_launch_preview(
+            state, descriptor, ammo_state.loaded, gun_state, solution)
+        self.assertFalse(runtime._fire(
+            state, gun_state, 1.0, descriptor,
+            ammo_state=ammo_state, launch_preview=preview))
+        self.assertEqual(initial_ammo - 3,
+                         ammo_state.remaining[ammo_state.loaded])
+        self.assertEqual(3, state['fire_seq'])
+        state['gun_aligned'] = True
+        self.assertTrue(runtime._fire(
+            state, gun_state, 1.0, descriptor,
+            ammo_state=ammo_state, launch_preview=preview))
+        self.assertEqual(1, runtime._advance_active_burst(
+            state, gun_state, ammo_state, 1.0, descriptor,
+            None, None, 0.1, set()))
+        self.assertEqual(initial_ammo - 5,
+                         ammo_state.remaining[ammo_state.loaded])
+        self.assertEqual([1, 1, 1, 4, 4], [
+            launch['burst_group_seq'] for launch in runtime._pending_launches])
+        self.assertEqual([3, 3, 3, 2, 2], [
+            launch['burst_count'] for launch in runtime._pending_launches])
+        self.assertEqual('full', gun_state.reload_kind)
+        self.assertEqual(0, gun_state.clip)
 
     def test_fire_alignment_record_is_bound_to_one_physical_launch(self):
         descriptor = _combat_descriptor(
@@ -12482,7 +12657,7 @@ class BotRuntimeTests(unittest.TestCase):
             self.assertEqual(0.0, mean)
             self.assertAlmostEqual(
                 effective_base * device_damage.CREW_KO_TIME_FACTOR, sigma)
-        self.assertEqual([(0.0, 2.0 * math.pi)], uniform_calls)
+        self.assertEqual([(0.0, 1.0), (0.0, 2.0 * math.pi)], uniform_calls)
         self.assertAlmostEqual(0.4, state['shot_yaw'])
         self.assertAlmostEqual(0.1, state['shot_pitch'])
 
@@ -12612,7 +12787,6 @@ class BotRuntimeTests(unittest.TestCase):
         runtime.battle_start(self.start)
         runtime._next_observation = 100.0
         runtime._next_shot_lane_refresh = 100.0
-        runtime._next_cover_refresh = 100.0
         state = runtime.states[11]
         state.update({
             'x': 0.0, 'y': 0.0, 'z': 0.0, 'yaw': 0.0,
@@ -12625,13 +12799,13 @@ class BotRuntimeTests(unittest.TestCase):
         }
         player = _admit_player(player)
 
-        now = self._spend_gunner_delay(runtime, [player])
+        now = 1.0
         self.assertEqual([], probes)
         blocked = bot_state_rows.bots(runtime.update(
             .15, now + .15, players=[player])[0])[0]
         self.assertEqual(0, blocked['fire_seq'])
         self.assertEqual(1, probes[0][2]['fire_seq'])
-        self.assertNotIn(11, runtime._friendly_repositions)
+        self.assertFalse(hasattr(runtime, '_friendly_repositions'))
         fired = bot_state_rows.bots(runtime.update(
             .15, now + .30, players=[player])[0])[0]
         self.assertEqual(1, fired['fire_seq'])
@@ -12644,14 +12818,20 @@ class BotRuntimeTests(unittest.TestCase):
             item[:2] for item in probes])
 
     def test_authored_wait_cancels_friendly_reposition_without_translation(self):
-        runtime=self.runtime
-        runtime.battle_start(self.start)
-        for phase in ('waiting','queue'):
-            runtime._server_orders[11]={'parking_phase':phase}
-            runtime._friendly_repositions[11]={'until':99.}
-            self.assertEqual((None,False),runtime._friendly_reposition_order(
-                runtime.states[11],{},1.))
-            self.assertNotIn(11,runtime._friendly_repositions)
+        # Authored parking belongs to the task even when a current friendly
+        # refusal exists. There is no separate engine-side marker to cancel.
+        from test_player_combat_stop import Scene
+        for phase in ('waiting', 'queue'):
+            scene = Scene(admitted=False)
+            scene.raw_order.update(parking_phase=phase, combat_mode='route',
+                move_position=(20., 0., -30.), face_position=(20., 0., -30.))
+            scene.candidate.update(line='friendly_blocked', mechanical='reachable')
+            result = scene.apply(1.)
+            self.assertEqual((20., 0., -30.), result['move_position'])
+            self.assertEqual((20., 0., -30.), result['face_position'])
+            self.assertIsNone(scene.owner._physical_recovery)
+            self.assertFalse(scene.owner.stop_allowed)
+        self.assertFalse(hasattr(self.runtime, '_friendly_reposition_order'))
 
     def test_blocked_friendly_lane_repositions_through_safe_driver(self):
         final_probes = []
@@ -12675,7 +12855,6 @@ class BotRuntimeTests(unittest.TestCase):
         runtime.battle_start(self.start)
         runtime._next_observation = 100.0
         runtime._next_shot_lane_refresh = 100.0
-        runtime._next_cover_refresh = 100.0
         state = runtime.states[11]
         state.update({
             'x': 0.0, 'y': 0.0, 'z': 0.0, 'yaw': 0.0,
@@ -12700,23 +12879,22 @@ class BotRuntimeTests(unittest.TestCase):
         }
         player = _admit_player(player)
 
-        now = self._spend_gunner_delay(runtime, [player]) + .04
+        now = 1.04
         runtime.update(.04, now, players=[player])
-        self.assertIn(11, runtime._friendly_repositions)
+        self.assertFalse(hasattr(runtime, '_friendly_repositions'))
         self.assertEqual(1, state['fire_seq'])
         start_position = self.module._position(state)
-        moved = False
+        initial_ammo = list(state['ammo_remaining'])
+        # This fixture exercises the engine's final gun consumer. A blocked
+        # shot cannot install a second movement owner beneath shared control;
+        # complete shared recovery/driver cases live in the worker suite.
         for index in range(1, 151):
-            runtime.update(
-                .04, now + .04 * index, players=[player])
-            if self.module._distance(
-                    start_position, self.module._position(state)) > 0.05:
-                moved = True
-                break
-
-        self.assertTrue(moved)
-        self.assertEqual(1, state['fire_seq'])
-        self.assertTrue(final_probes)
+            runtime.update(.04, now + .04 * index, players=[player])
+            self.assertEqual(start_position, self.module._position(state))
+            self.assertEqual(initial_ammo, state['ammo_remaining'])
+            self.assertEqual(1, state['fire_seq'])
+            self.assertFalse(state.get('local_combat_manoeuvre'))
+        self.assertFalse(hasattr(runtime, '_mark_friendly_reposition'))
 
     def test_blocked_reposition_expires_without_crossing_native_gate(self):
         command = {
@@ -12745,7 +12923,6 @@ class BotRuntimeTests(unittest.TestCase):
         runtime.battle_start(self.start)
         runtime._next_observation = 100.0
         runtime._next_shot_lane_refresh = 100.0
-        runtime._next_cover_refresh = 100.0
         state = runtime.states[11]
         state.update({
             'x': 0.0, 'y': 0.0, 'z': 0.0, 'yaw': 0.0,
@@ -12770,30 +12947,20 @@ class BotRuntimeTests(unittest.TestCase):
         }
         player = _admit_player(player)
 
-        now = self._spend_gunner_delay(runtime, [player]) + .04
+        now = 1.04
         runtime.update(.04, now, players=[player])
-        self.assertIn(11, runtime._friendly_repositions)
+        self.assertFalse(hasattr(runtime, '_friendly_repositions'))
         initial_position = self.module._position(state)
         initial_ammo = list(state['ammo_remaining'])
-        deadline = runtime._friendly_repositions[11]['deadline']
-        self.assertLessEqual(deadline-now, self.module.FRIENDLY_REPOSITION_MAX_SECONDS)
-        expired = False
-        for index in range(1, int(math.ceil((deadline-now)/.04))+3):
+        for index in range(1, 201):
             runtime.update(.04, now + .04 * index, players=[player])
             self.assertEqual(initial_position, self.module._position(state))
             self.assertEqual(initial_ammo, state['ammo_remaining'])
             self.assertEqual(0, state['fire_seq'])
-            if 11 not in runtime._friendly_repositions:
-                self.assertGreaterEqual(now+.04*index,deadline)
-                expired = True
-                self.assertEqual('timeout',state['_friendly_reposition_last_terminal']['outcome'])
-                break
-            self.assertEqual(deadline,runtime._friendly_repositions[11]['deadline'])
-
-        self.assertTrue(expired)
-        self.assertEqual(initial_position, self.module._position(state))
-        self.assertEqual(0, state['fire_seq'])
-        self.assertEqual(initial_ammo, state['ammo_remaining'])
+            self.assertFalse(state.get('local_combat_manoeuvre'))
+        # Time passing cannot manufacture another side-step or bypass the
+        # same final friendly/collision refusal.
+        self.assertNotIn('_friendly_reposition_retry', state)
 
     def test_friendly_lane_fail_closed_without_blocker_does_not_reposition(self):
         verdicts = [
@@ -12825,7 +12992,6 @@ class BotRuntimeTests(unittest.TestCase):
         runtime.battle_start(self.start)
         runtime._next_observation = 100.0
         runtime._next_shot_lane_refresh = 100.0
-        runtime._next_cover_refresh = 100.0
         state = runtime.states[11]
         state.update({
             'x': 0.0, 'y': 0.0, 'z': 0.0, 'yaw': 0.0,
@@ -12839,9 +13005,9 @@ class BotRuntimeTests(unittest.TestCase):
         player = _admit_player(player)
 
         runtime.update(.04, 1.0, players=[player])
-        self.assertNotIn(11, runtime._friendly_repositions)
+        self.assertFalse(hasattr(runtime, '_friendly_repositions'))
         runtime.update(.04, 1.04, players=[player])
-        self.assertNotIn(11, runtime._friendly_repositions)
+        self.assertFalse(hasattr(runtime, '_friendly_repositions'))
         self.assertEqual(0, state['fire_seq'])
 
     def test_unavailable_native_launch_origin_stops_without_reposition(self):
@@ -12875,7 +13041,6 @@ class BotRuntimeTests(unittest.TestCase):
         runtime.battle_start(self.start)
         runtime._next_observation = 100.0
         runtime._next_shot_lane_refresh = 100.0
-        runtime._next_cover_refresh = 100.0
         state = runtime.states[11]
         state.update({
             'x': 0.0, 'y': 0.0, 'z': 0.0, 'yaw': 0.0,
@@ -12890,7 +13055,7 @@ class BotRuntimeTests(unittest.TestCase):
         }])
 
         self.assertEqual(0, state['fire_seq'])
-        self.assertNotIn(11, runtime._friendly_repositions)
+        self.assertFalse(hasattr(runtime, '_friendly_repositions'))
         self.assertEqual([], lane_calls)
 
     def test_spg_exact_friendly_lane_is_checked_before_atomic_fire(self):
@@ -12971,7 +13136,6 @@ class BotRuntimeTests(unittest.TestCase):
         runtime.battle_start(self.start)
         runtime._next_observation = 100.0
         runtime._next_shot_lane_refresh = 100.0
-        runtime._next_cover_refresh = 100.0
         state = runtime.states[11]
         state.update({
             'x': 0.0, 'y': 0.0, 'z': 0.0, 'yaw': 0.0,
@@ -12986,17 +13150,15 @@ class BotRuntimeTests(unittest.TestCase):
         }
         player = _admit_player(player)
 
-        # The first callback acquires the target; the second is long enough
-        # for the gunner to spend its tier reaction.  The SPG is stationary,
-        # so its aiming circle is already converged.
-        runtime.update(.04, 1.0, players=[player])
-        blocked = bot_state_rows.bots(runtime.update(.40, 1.40, players=[player])[0])[0]
+        # The stationary gun is ready. Final native friendly-lane proof
+        # owns launch admission; difficulty introduces no extra delay.
+        blocked = bot_state_rows.bots(runtime.update(.04, 1.0, players=[player])[0])[0]
         self.assertEqual(0, blocked['fire_seq'])
         self.assertNotIn(11, runtime._artillery_intents)
         self.assertNotIn(11, runtime._artillery_reproofs)
-        destination = runtime._friendly_repositions[11]['destination']
-        state['x'], state['y'], state['z'] = destination
-        fired = bot_state_rows.bots(runtime.update(.15, 1.55, players=[player])[0])[0]
+        self.assertFalse(hasattr(runtime, '_friendly_repositions'))
+        self.assertEqual((0., 0., 0.), self.module._position(state))
+        fired = bot_state_rows.bots(runtime.update(.15, 1.15, players=[player])[0])[0]
         self.assertEqual(1, fired['fire_seq'])
         self.assertEqual(2, len(probes))
 
@@ -13117,7 +13279,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual(stale, missing['aim_position'])
 
         stable = self.module._overlay_live_target_pose(dict(
-            command, combat_mode='support_hold', stable_hull_face=True,
+            command, combat_mode='engage', stable_hull_face=True,
             face_position=stale), {
                 'alive': True, 'visible': True, 'position': moved_pose})
         self.assertEqual(moved_pose, stable['aim_position'])
@@ -13182,7 +13344,6 @@ class BotRuntimeTests(unittest.TestCase):
         # windows so only the selected target may be copied.
         runtime._next_observation = 100.0
         runtime._next_shot_lane_refresh = 100.0
-        runtime._next_cover_refresh = 100.0
         full_refreshes = []
         original_refresh = runtime._refresh_target_poses
 
@@ -13899,7 +14060,28 @@ class BotRuntimeTests(unittest.TestCase):
             2.0, self.module._critical_factor(
                 state, descriptor, 'reload'))
 
-    def test_bot_fire_burns_five_percent_per_second_and_ends_at_ten_seconds(self):
+    def test_bot_strong_ignition_survives_ten_seconds_and_draws_only_once(self):
+        descriptor = _critical_descriptor()
+        runtime = self.module.BotRuntime(
+            1, descriptor_resolver=lambda unused: descriptor,
+            adapter_factory=lambda *args, **kwargs: _Adapter(*args),
+            direction_probe=lambda *unused: {'clear': True, 'slope': 0.0},
+            ground_probe=lambda *unused: 0.0, physics_ground_probe=lambda *unused: 0.0,
+            spawn_resolver=_spawn_resolver, baked_graph=_graph())
+        runtime.battle_start(self.start)
+        burning = _critical_payload({'name':'fuelTankHealth','hp':0.,'max_hp':100.,
+            'state':'destroyed'},destroyed=['fuelTankHealth'],fire=True)
+        runtime.apply_snapshot({'server_tick':1,'bots':[_snapshot_bot(
+            critical=burning,revision=1,base_revision=1)]})
+        with mock.patch('gui.mods.offline_lan_0922.fire_model.ignition_scale',return_value=1.2) as rng:
+            for index in range(60):
+                outgoing=bot_state_rows.bots(runtime.update(.2,index*.2)[0])[0]
+                if index==50:self.assertTrue(outgoing['critical']['fire'])
+            rng.assert_called_once_with()
+        self.assertFalse(outgoing['critical']['fire'])
+        self.assertEqual(640,outgoing['health'])
+
+    def test_bot_fire_decays_and_ends_at_calibrated_ten_seconds(self):
         descriptor = _critical_descriptor()
         runtime = self.module.BotRuntime(
             1, descriptor_resolver=lambda unused: descriptor,
@@ -13920,12 +14102,12 @@ class BotRuntimeTests(unittest.TestCase):
         outgoing = None
         for index in range(49):
             outgoing = bot_state_rows.bots(runtime.update(.20, index * .20)[0])[0]
-        self.assertEqual(550, outgoing['health'])
+        self.assertEqual(751, outgoing['health'])
         self.assertTrue(outgoing['critical']['fire'])
 
         outgoing = bot_state_rows.bots(runtime.update(.20, 9.8)[0])[0]
         fuel = outgoing['critical']['devices'][0]
-        self.assertEqual(500, outgoing['health'])
+        self.assertEqual(750, outgoing['health'])
         self.assertFalse(outgoing['critical']['fire'])
         self.assertEqual(0.0, outgoing['combat_fire_elapsed'])
         self.assertEqual(0.0, outgoing['combat_fire_timer'])
@@ -14008,7 +14190,7 @@ class BotRuntimeTests(unittest.TestCase):
         first_track = dict((record['name'], record['hp'])
                            for record in first['critical']['devices'])[
                                'leftTrackHealth']
-        self.assertEqual(950, first['health'])
+        self.assertEqual(953, first['health'])
 
         # The server has not consumed the publication yet and repeats its last
         # canonical state.  This is an echo, not a new critical hit.
@@ -14016,7 +14198,7 @@ class BotRuntimeTests(unittest.TestCase):
             'server_tick': 11,
             'bots': [_snapshot_bot(
                 critical=baseline, revision=1, base_revision=1)]})
-        self.assertEqual(950, runtime.states[11]['health'])
+        self.assertEqual(953, runtime.states[11]['health'])
         self.assertEqual(
             first_track, dict((record['name'], record['hp']) for record in
                               runtime.states[11]['critical']['devices'])[
@@ -14028,7 +14210,7 @@ class BotRuntimeTests(unittest.TestCase):
         second_track = dict((record['name'], record['hp'])
                             for record in second['critical']['devices'])[
                                 'leftTrackHealth']
-        self.assertEqual(900, second['health'])
+        self.assertEqual(910, second['health'])
         self.assertGreater(second_track, first_track)
 
         # A later snapshot acknowledges the earlier exact publication.  It
@@ -14041,7 +14223,7 @@ class BotRuntimeTests(unittest.TestCase):
                 ack_seq=first_seq,
                 fire_elapsed=first['combat_fire_elapsed'],
                 fire_timer=first['combat_fire_timer'])]})
-        self.assertEqual(900, runtime.states[11]['health'])
+        self.assertEqual(910, runtime.states[11]['health'])
         self.assertEqual(
             second_track, dict((record['name'], record['hp']) for record in
                                runtime.states[11]['critical']['devices'])[
@@ -14087,7 +14269,7 @@ class BotRuntimeTests(unittest.TestCase):
         for index in range(5):
             publication = bot_state_rows.bots(runtime.update(
                 .20, .20 + index * .20)[0])[0]
-        self.assertEqual((900, 5),
+        self.assertEqual((903, 5),
                          (publication['health'], publication['combat_seq']))
         runtime.apply_snapshot({
             'server_tick': 2,
@@ -14104,7 +14286,7 @@ class BotRuntimeTests(unittest.TestCase):
             combat_base_revision=2, combat_ack_seq=0,
             combat_fire_elapsed=0.0, combat_fire_timer=0.0)
 
-        self.assertEqual(750, runtime.states[11]['health'])
+        self.assertEqual(753, runtime.states[11]['health'])
         self.assertEqual((2, 0), (
             runtime.states[11]['combat_base_revision'],
             runtime.states[11]['combat_seq']))
@@ -14119,10 +14301,10 @@ class BotRuntimeTests(unittest.TestCase):
         # does not cross another one-second damage boundary, so the replayed
         # 50 health loss remains exact.  No invisible replay proposal may
         # consume sequence 1 and make the wire jump directly to sequence 2.
-        self.assertEqual(750, next_publication['health'])
+        self.assertEqual(744, next_publication['health'])
         self.assertAlmostEqual(
             1.2, next_publication['combat_fire_elapsed'])
-        self.assertAlmostEqual(.2, next_publication['combat_fire_timer'])
+        self.assertAlmostEqual(1.2, next_publication['combat_fire_timer'])
         self.assertEqual(1, next_publication['combat_seq'])
         self.assertEqual([1], [entry['seq'] for entry in sync['pending']])
         self.assertEqual([], sync['unpublished_steps'])
@@ -14155,7 +14337,7 @@ class BotRuntimeTests(unittest.TestCase):
             self.assertEqual(
                 published['combat_seq'],
                 server.bot_states[11]['combat_ack_seq'])
-        self.assertEqual(700, server.bot_states[11]['health'])
+        self.assertEqual(710, server.bot_states[11]['health'])
 
     def test_a_server_fenced_combat_lineage_is_rebased_by_the_authority(self):
         """The server's fence must close its own gap, not freeze the Bot.
@@ -14349,7 +14531,7 @@ class BotRuntimeTests(unittest.TestCase):
         for index in range(5):
             publication = bot_state_rows.bots(runtime.update(
                 .20, .20 + index * .20)[0])[0]
-        self.assertEqual(900, publication['health'])
+        self.assertEqual(903, publication['health'])
         runtime.apply_snapshot({
             'server_tick': 2,
             'bots': [_snapshot_bot(
@@ -14416,21 +14598,21 @@ class BotRuntimeTests(unittest.TestCase):
             reload_duration=reload_duration, critical=burning,
             combat_revision=22, combat_base_revision=1,
             combat_ack_seq=21, combat_fire_elapsed=4.4,
-            combat_fire_timer=0.4)
+            combat_fire_timer=4.4)
         runtime.battle_start(dict(
             self.start, bot_manifest=[takeover_bot]))
 
         for index in range(3):
             outgoing = bot_state_rows.bots(runtime.update(
                 .20, 100.2 + index * .20)[0])[0]
-        self.assertEqual(750, outgoing['health'])
+        self.assertEqual(784, outgoing['health'])
         self.assertEqual(5.0, outgoing['combat_fire_elapsed'])
-        self.assertEqual(0.0, outgoing['combat_fire_timer'])
+        self.assertEqual(5.0, outgoing['combat_fire_timer'])
 
         for index in range(25):
             outgoing = bot_state_rows.bots(runtime.update(
                 .20, 100.8 + index * .20)[0])[0]
-        self.assertEqual(500, outgoing['health'])
+        self.assertEqual(721, outgoing['health'])
         self.assertFalse(outgoing['critical']['fire'])
         self.assertEqual(0.0, outgoing['combat_fire_elapsed'])
         self.assertEqual(0.0, outgoing['combat_fire_timer'])
@@ -14455,7 +14637,7 @@ class BotRuntimeTests(unittest.TestCase):
             reload_duration=reload_duration, critical=burning,
             combat_revision=4, combat_base_revision=1,
             combat_ack_seq=3, combat_fire_elapsed=2.0,
-            combat_fire_timer=0.0)
+            combat_fire_timer=2.0)
         runtime.battle_start(dict(self.start, bot_authority_id=2))
         runtime.battle_start(dict(
             self.start, bot_manifest=[takeover_bot]))
@@ -14481,7 +14663,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual([], sync['unpublished_steps'])
 
         outgoing = bot_state_rows.bots(runtime.update(.20, 100.4)[0])[0]
-        self.assertEqual(800, outgoing['health'])
+        self.assertEqual(791, outgoing['health'])
         self.assertEqual(3.2, outgoing['combat_fire_elapsed'])
         self.assertEqual(6, outgoing['combat_seq'])
 
@@ -14505,7 +14687,7 @@ class BotRuntimeTests(unittest.TestCase):
             reload_duration=reload_duration, critical=burning,
             combat_revision=4, combat_base_revision=1,
             combat_ack_seq=3, combat_fire_elapsed=2.0,
-            combat_fire_timer=0.0)
+            combat_fire_timer=2.0)
         runtime.battle_start(dict(self.start, bot_authority_id=2))
         runtime.battle_start(dict(
             self.start, bot_manifest=[takeover_bot]))
@@ -14531,7 +14713,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertFalse(sync['authority_handoff_pending'])
 
         outgoing = bot_state_rows.bots(runtime.update(.20, 100.4)[0])[0]
-        self.assertEqual(800, outgoing['health'])
+        self.assertEqual(791, outgoing['health'])
         self.assertEqual(3.2, outgoing['combat_fire_elapsed'])
         self.assertEqual(5, outgoing['combat_seq'])
 
@@ -14555,7 +14737,7 @@ class BotRuntimeTests(unittest.TestCase):
             reload_duration=reload_duration, critical=burning,
             combat_revision=3, combat_base_revision=1,
             combat_ack_seq=3, combat_fire_elapsed=2.0,
-            combat_fire_timer=0.0)
+            combat_fire_timer=2.0)
         runtime.battle_start(dict(self.start, bot_authority_id=2))
         runtime.battle_start(dict(
             self.start, bot_manifest=[takeover_bot]))
@@ -14580,7 +14762,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertFalse(sync['authority_handoff_pending'])
 
         outgoing = bot_state_rows.bots(runtime.update(.20, 100.4)[0])[0]
-        self.assertEqual((700, 3.2, 6), (
+        self.assertEqual((691, 3.2, 6), (
             outgoing['health'], outgoing['combat_fire_elapsed'],
             outgoing['combat_seq']))
 
@@ -14604,7 +14786,7 @@ class BotRuntimeTests(unittest.TestCase):
             reload_duration=reload_duration, critical=burning,
             combat_revision=3, combat_base_revision=1,
             combat_ack_seq=3, combat_fire_elapsed=2.0,
-            combat_fire_timer=0.0)
+            combat_fire_timer=2.0)
         runtime.battle_start(dict(self.start, bot_authority_id=2))
         runtime.battle_start(dict(
             self.start, bot_manifest=[takeover_bot]))
@@ -14630,7 +14812,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertFalse(sync['authority_handoff_pending'])
 
         outgoing = bot_state_rows.bots(runtime.update(.20, 100.4)[0])[0]
-        self.assertEqual((750, 3.2, 5), (
+        self.assertEqual((741, 3.2, 5), (
             outgoing['health'], outgoing['combat_fire_elapsed'],
             outgoing['combat_seq']))
 
@@ -15130,7 +15312,7 @@ class BotRuntimeTests(unittest.TestCase):
                     movement_intent=True, target_yaw=0.,
                     recovery_probe_distance=2.,
                     recovery_mode='short_reverse_escape' if sign < 0 else 'short_forward_escape')
-                runtime.adapter.decide = lambda *unused: dict(command)
+                runtime.adapter.fixture_controls = lambda *unused: dict(command)
                 grid = runtime.navigator.grid
                 # A fatal patch is beyond the admitted 2 m escape, within the
                 # old four-metre execution lookahead. The actual short step
@@ -15216,7 +15398,7 @@ class BotRuntimeTests(unittest.TestCase):
                                 clear(math.pi * 0.5, 4.0)))
             return self._stationary_command()
 
-        runtime.adapter.decide = decide
+        runtime.adapter.fixture_controls = decide
         runtime.update(0.04, 1.0)
         self.assertEqual([(True, False)], checked)
 
@@ -17353,7 +17535,7 @@ class BotRuntimeTests(unittest.TestCase):
             self.assertIn('frozen=True', output.getvalue())
             self.assertIn('strategic_goal=(0.0, 0.0, 200.0)', output.getvalue())
 
-    def test_motion_diagnostic_nonempty_gun_angle_rejections_use_simulation_time(self):
+    def test_motion_diagnostic_omits_retired_gun_angle_rejection_clock(self):
         from contextlib import redirect_stdout
         self.runtime.battle_start(self.start)
         state=self.runtime.states[11]
@@ -17364,7 +17546,8 @@ class BotRuntimeTests(unittest.TestCase):
         with redirect_stdout(output):
             self.runtime._finish_motion_stall(state,False,False,position,100.0)
         row=_motion_rows(output.getvalue())[0]
-        self.assertEqual([8.0,0.0],[r['seconds_left'] for r in row['gun_angle_rejected']])
+        self.assertNotIn('gun_angle_rejected', row)
+        self.assertEqual([0., 0.], row['controls']['motion'])
         self.assertNotIn('_motion_stall_pending',state)
 
     def test_navigation_receipt_is_bounded_and_does_not_query_world(self):
@@ -17453,14 +17636,14 @@ class BotRuntimeTests(unittest.TestCase):
         state['_motion_stall_log'] = (
             (state['x'], state['y'], state['z']), 0.0)
         state['_gun_angle_rejected']={('bot',2):8.0}
-        original_decide = self.runtime.adapter.decide
+        original_decide = self.runtime.adapter.fixture_controls
 
         def decide(*args):
             command = original_decide(*args)
             command.update(throttle=1.0,turn=-0.4, fire_allowed=False)
             return command
 
-        self.runtime.adapter.decide = decide
+        self.runtime.adapter.fixture_controls = decide
 
         def brake(body, command, neighbours, now, distance, step):
             return dict(command, throttle=0.0, turn=0.0, brake=True,
@@ -17476,7 +17659,8 @@ class BotRuntimeTests(unittest.TestCase):
         line = next(line for line in output.getvalue().splitlines()
                     if line.startswith('[Offline LAN 0.9.22] BOT MOTION '))
         row = _motion_rows(output.getvalue())[0]
-        self.assertEqual(5.0,row['gun_angle_rejected'][0]['seconds_left'])
+        self.assertNotIn('gun_angle_rejected', row)
+        self.assertEqual([0., 0.], row['controls']['motion'])
         self.assertNotIn('_motion_stall_pending',state)
 
     def test_update_passes_control_stages_to_bounded_motion_diagnostic(self):
@@ -17485,14 +17669,14 @@ class BotRuntimeTests(unittest.TestCase):
         state = self.runtime.states[11]
         state['_motion_stall_log'] = (
             (state['x'], state['y'], state['z']), 0.0)
-        original_decide = self.runtime.adapter.decide
+        original_decide = self.runtime.adapter.fixture_controls
 
         def decide(*args):
             command = original_decide(*args)
             command.update(throttle=1.0,turn=-0.4, fire_allowed=False)
             return command
 
-        self.runtime.adapter.decide = decide
+        self.runtime.adapter.fixture_controls = decide
 
         def brake(body, command, neighbours, now, distance, step):
             return dict(command, throttle=0.0, turn=0.0, brake=True,
@@ -17520,14 +17704,14 @@ class BotRuntimeTests(unittest.TestCase):
         self.runtime.battle_start(self.start)
         state = self.runtime.states[11]
         state['_motion_stall_log'] = ((state['x'], state['y'], state['z']), 0.0)
-        original_decide = self.runtime.adapter.decide
+        original_decide = self.runtime.adapter.fixture_controls
 
         def decide(*args):
             command = original_decide(*args)
             command.update(throttle=1.0, turn=-.4, fire_allowed=False)
             return command
 
-        self.runtime.adapter.decide = decide
+        self.runtime.adapter.fixture_controls = decide
         output = io.StringIO()
         with redirect_stdout(output), mock.patch.object(
                 self.runtime, '_rotation_fraction_for', return_value=0.0), mock.patch.object(
@@ -17640,7 +17824,7 @@ class BotRuntimeTests(unittest.TestCase):
                     physics_ground_probe=lambda *unused: 0.0,
                     spawn_resolver=_spawn_resolver, baked_graph=_graph())
                 runtime.battle_start(self.start)
-                runtime.adapter.decide = (
+                runtime.adapter.fixture_controls = (
                     lambda unused_state, unused_clear: dict(command))
                 state = runtime.states[11]
                 start_z = state['z']
@@ -17927,6 +18111,13 @@ class BotRuntimeTests(unittest.TestCase):
             {'id': 11, 'team': 1, 'slot': 0, 'name': 'A'},
             {'id': 12, 'team': 2, 'slot': 0, 'name': 'B'},
         ]))
+        # This contract counts the observation/lane-service pass only.
+        # Explicit neutral shared orders keep unrelated approach-laying
+        # cache reads out of it now that absent orders use the real planner.
+        runtime._server_orders = dict((actor, dict(id=actor,
+            combat_mode='hold', target_id=None, fire_allowed=False,
+            move_position=(0., 0., 0.), face_position=(0., 0., 0.)))
+            for actor in (11, 12))
         key_calls = []
         original_key = runtime._shot_los_key
 
@@ -18006,7 +18197,6 @@ class BotRuntimeTests(unittest.TestCase):
         runtime.update(.04, 1.0)
         runtime._next_observation = 100.0
         runtime._next_shot_lane_refresh = 100.0
-        runtime._next_cover_refresh = 100.0
         distance_calls = []
         original_distance = self.module._distance
 
@@ -18171,7 +18361,7 @@ class BotRuntimeTests(unittest.TestCase):
         start = server.current_battle_message()
         start['bot_authority_id'] = 1
         # The room preset travels with the round, so the successor installs
-        # the same gunner tier and therefore the same reload contract.
+        # the same physical fitting tier and therefore the same reload contract.
         start['bot_skill_mode'] = self.start['bot_skill_mode']
         takeover = self.module.BotRuntime(
             1, descriptor_resolver=lambda unused: _combat_descriptor(),
@@ -18311,8 +18501,8 @@ class BotRuntimeTests(unittest.TestCase):
             }, None),
             ('ATTACK', 'team_attack', (24.0, 0.0),
              {'x': 4.0, 'y': 0.0, 'z': 0.0}, None, None),
-            ('TURNBACK', 'team_turnback', (24.0, 0.0),
-             {'x': 0.0, 'y': 0.0, 'z': 0.0}, None, 'turnback'),
+            ('TURNBACK', 'route', (24.0, 0.0),
+             {'x': 4.0, 'y': 0.0, 'z': 0.0}, None, 'ignored_turnback'),
             ('ATTENTIONTOCELL', 'team_attention_cell', (0.0, 0.0),
              {'x': 12.0, 'y': 0.0, 'z': -4.0},
              {'arena_bounds': [0.0, -40.0, 80.0, 40.0]}, 15),
@@ -18334,6 +18524,16 @@ class BotRuntimeTests(unittest.TestCase):
                     'id': 11, 'team': 1, 'slot': 0, 'name': 'Recipient',
                 }]))[0])
                 state = runtime.states[11]
+                # This tests radio motion in a +/-60m contact-physics arena,
+                # not which real map Default was selected. Supply an explicit
+                # test lane to both consumers rather than treating the tiny
+                # physical graph's old embedded lane as the gameplay default.
+                route = dict(id='radio_test_lane',
+                    waypoints=((0.0, 0.0, False), (4.0, 0.0, False)))
+                state['route'] = route
+                runtime.adapter.roster.agents[11]['route'] = route
+                manifest[0]['route'] = dict(id=route['id'], waypoints=[
+                    dict(x=p[0], y=0.0, z=p[1], hold=p[2]) for p in route['waypoints']])
                 state.update(
                     x=start[0], y=0.0, z=start[1], yaw=0.0, speed=0.0)
                 team_order = {
@@ -18345,17 +18545,18 @@ class BotRuntimeTests(unittest.TestCase):
                 if isinstance(extra, int):
                     team_order['cell_index'] = extra
                 planner = BotPlanner()
-                if extra == 'turnback':
-                    planner._route_states[11] = {
-                        'index': 1, 'route_id': 'safe-1', 'join_index': 0,
-                        'join_anchor': {'x': 0.0, 'y': 0.0, 'z': 0.0},
-                    }
+                if extra == 'ignored_turnback':
+                    baseline = BotPlanner().build_orders(
+                        manifest, [dict(state)], [issuer], 1.0, defense)['orders'][0]
                 payload = planner.build_orders(
                     manifest, [dict(state)], [issuer], 1.0, defense,
                     team_orders=[team_order])
                 order = payload['orders'][0]
                 self.assertEqual(mode, order['combat_mode'])
                 self.assertEqual(goal, order['move_position'])
+                if extra == 'ignored_turnback':
+                    for key in ('combat_mode', 'route_id', 'route_index', 'move_position'):
+                        self.assertEqual(baseline[key], order[key])
                 runtime.apply_snapshot({
                     'bot_order_revision': payload['revision'],
                     'bot_orders': payload['orders'], 'bots': [],
@@ -19847,7 +20048,7 @@ class BotRuntimeTests(unittest.TestCase):
             order['id'] for order in replaced['orders']
             if order['combat_mode'] == 'base_defense'))
 
-    def test_base_defenders_spread_visible_capture_contributors(self):
+    def test_base_defenders_choose_equal_near_capturers_without_focus_quotas(self):
         planner = BotPlanner()
         manifest = []
         states = []
@@ -19906,8 +20107,14 @@ class BotRuntimeTests(unittest.TestCase):
 
         self.assertEqual([11, 12], sorted(
             order['id'] for order in defenders))
-        self.assertEqual({2, 3}, set(
+        self.assertEqual({2}, set(
             order['target_id'] for order in defenders))
+        for order in defenders:
+            selection = order['tactical_evidence']['selection']
+            self.assertEqual({('human', 2), ('human', 3)},
+                             set(row['target'] for row in selection['candidates']))
+            self.assertEqual('initial_distance_armor', selection['selection_law'])
+        self.assertFalse(hasattr(planner, '_focus_limit'))
         self.assertTrue(all(order['fire_allowed'] for order in defenders))
         self.assertTrue(all(order['combat_mode'] == 'engage' for order in defenders))
         self.assertTrue(all(order['throttle_override'] == 0.0 for order in defenders))
@@ -20069,14 +20276,8 @@ class BotRuntimeTests(unittest.TestCase):
         weapon_profile = self.module.ai_planner.build_vehicle_profile(
             weapon_descriptor)
         weapon_profile = BattleState._sanitize_bot_profile(weapon_profile)
-        personality = {'aggression': 0.5}
         remaining = {'ammo_remaining': [30, 20, 10]}
-        self.assertEqual(0, planner._shell_index(
-            weapon_profile, planner._contacts[1][('human', 2)],
-            personality, remaining))
-        self.assertEqual(0, planner._shell_index(
-            weapon_profile, planner._contacts[1][('human', 3)],
-            personality, remaining))
+        self.assertEqual(0, planner._shell_index(weapon_profile, remaining))
 
     def test_cached_observation_uses_current_bot_pose_and_health(self):
         adapter = _FixedAdapter(self._stationary_command())
@@ -20145,7 +20346,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertIs(cached_target, runtime._decision_cache[11][5][12])
         self.assertEqual(cached_snapshot, cached_target)
 
-    def test_team_spot_does_not_pull_blocked_bot_off_route(self):
+    def test_team_spot_keeps_blocked_candidate_without_fire_or_route_replacement(self):
         lane_calls = []
 
         def firing_lane(source, target):
@@ -20169,8 +20370,8 @@ class BotRuntimeTests(unittest.TestCase):
             physics_ground_probe=lambda *unused: 0.0,
             spawn_resolver=_spawn_resolver, baked_graph=_graph())
         roster = [
-            {'id': 11, 'team': 1, 'slot': 0, 'name': 'Clear'},
-            {'id': 12, 'team': 1, 'slot': 1, 'name': 'Blocked'},
+            {'id': 11, 'team': 1, 'slot': 0, 'name': 'Blocked'},
+            {'id': 12, 'team': 1, 'slot': 1, 'name': 'Clear'},
         ]
         manifest = bot_state_rows.bots(runtime.battle_start(
             dict(self.start, bots=roster))[0])
@@ -20197,6 +20398,9 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual([(11, 2), (12, 2)], lane_calls)
 
         planner = BotPlanner()
+        manifest_before = copy.deepcopy(manifest)
+        route_orders = dict((order['id'], order) for order in
+            planner.build_orders(manifest, bot_states, [enemy], .9)['orders'])
         known = planner.known_targets(bot_states, [enemy])
         self.assertEqual(1, planner.report_contacts(
             observation['contacts'], known, 1.0))
@@ -20204,10 +20408,22 @@ class BotRuntimeTests(unittest.TestCase):
                       planner.build_orders(
                           manifest, bot_states, [enemy], 1.0)['orders'])
         self.assertIsNone(orders[11]['target_id'])
+        self.assertEqual({'target_kind': 'human', 'target_id': 2},
+                         orders[11]['initial_target_hint'])
         self.assertEqual('route', orders[11]['combat_mode'])
         self.assertFalse(orders[11]['fire_allowed'])
-        self.assertEqual(2, orders[12]['target_id'])
-        self.assertEqual('human', orders[12]['target_kind'])
+        self.assertIsNone(orders[11]['throttle_override'])
+        for key in ('route_id', 'route_index', 'route_anchor', 'move_position'):
+            self.assertEqual(route_orders[11][key], orders[11][key], key)
+        self.assertEqual(manifest_before, manifest)
+        candidate = orders[11]['tactical_evidence']['selection']['candidates'][0]
+        self.assertEqual('eligible', candidate['reason'])
+        self.assertFalse(candidate['local_lane'])
+        self.assertIsNone(orders[12]['target_id'])
+        self.assertIsNone(orders[12]['target_kind'])
+        self.assertEqual({'target_kind': 'human', 'target_id': 2},
+                         orders[12]['initial_target_hint'])
+        self.assertEqual('route', orders[12]['combat_mode'])
         self.assertFalse(orders[12]['fire_allowed'])
 
         payload = planner.build_orders(
@@ -20216,8 +20432,8 @@ class BotRuntimeTests(unittest.TestCase):
             'bot_order_revision': payload['revision'],
             'bot_orders': payload['orders'],
         }))
-        # Team spotting does not pull bot 11 off its route. Bot 12 owns the
-        # current firing lane and becomes the sole shooter after reloading.
+        # Both actors retain the live candidate without a macro movement or
+        # firing grant, including the actor with a clear lane diagnostic.
         for index in range(4):
             now = 1.21 + index * .21
             runtime.update(.06, now, players=[enemy])
@@ -20228,7 +20444,29 @@ class BotRuntimeTests(unittest.TestCase):
                 'bot_orders': payload['orders'],
             })
         self.assertEqual(0, runtime.states[11]['fire_seq'])
+        self.assertEqual(0, runtime.states[12]['fire_seq'])
+        # Exercise the actual final lane/fire components with accepted input.
+        # This bare BotRuntime has no native admission binding; the preceding
+        # planner assertions do not claim a lane diagnostic grants combat.
+        accepted = []
+        for order in payload['orders']:
+            state = runtime.states[order['id']]
+            self.assertIsNone(runtime._control_for(state))
+            accepted.append(dict(order,
+                target_kind='human', target_id=2,
+                combat_mode='engage', fire_allowed=True,
+                fire_range=500.0, shell_index=0,
+                aim_position=(0.0, 0.0, 100.0),
+                face_position=(0.0, 0.0, 100.0)))
+        self.assertTrue(runtime._apply_orders({
+            'bot_order_revision': payload['revision'] + 1,
+            'bot_orders': accepted,
+        }))
+        for index in range(4):
+            runtime.update(.06, 2.05 + index * .21, players=[enemy])
+        self.assertEqual(0, runtime.states[11]['fire_seq'])
         self.assertGreater(runtime.states[12]['fire_seq'], 0)
+        self.assertEqual(manifest_before, manifest)
 
     def test_low_health_support_keeps_facing_and_firing_without_retreat(self):
         runtime = self.module.BotRuntime(
@@ -20268,6 +20506,8 @@ class BotRuntimeTests(unittest.TestCase):
         enemy = _admit_player(enemy)
         planner = BotPlanner()
         bot_states = [dict(state)]
+        route_order = planner.build_orders(
+            manifest, bot_states, [enemy], .9)['orders'][0]
         self.assertEqual(1, planner.report_contacts([{
             'observing_team': 1, 'target_kind': 'human',
             'target_id': 2, 'target_team': 2,
@@ -20279,13 +20519,29 @@ class BotRuntimeTests(unittest.TestCase):
             manifest, bot_states, [enemy], 1.0)
         order = payload['orders'][0]
 
-        self.assertEqual('engage', order['combat_mode'])
-        self.assertEqual(0.,order['throttle_override'])
-        self.assertEqual({'x': 0.0, 'y': 0.0, 'z': 0.0},
-                         order['move_position'])
+        self.assertEqual('route', order['combat_mode'])
+        self.assertIsNone(order['target_id'])
+        self.assertEqual({'target_kind': 'human', 'target_id': 2},
+                         order['initial_target_hint'])
+        self.assertFalse(order['fire_allowed'])
+        self.assertIsNone(order['throttle_override'])
+        self.assertEqual(route_order['move_position'], order['move_position'])
+        self.assertIsNone(runtime._control_for(state))
+
+        def accepted_stationary_order(task_order):
+            # Input to the real driver, physics and gun components. Native
+            # combat admission is covered by the bound ownership scenes;
+            # low health must not rewrite an already accepted stationary aim.
+            return dict(task_order, combat_mode='engage',
+                target_kind='human', target_id=2, fire_allowed=True,
+                fire_range=500.0, throttle_override=0.0,
+                move_position=(0.0, 0.0, 0.0),
+                aim_position=(0.0, 0.0, 20.0),
+                face_position=(0.0, 0.0, 20.0))
+
         runtime.apply_snapshot({
             'bot_order_revision': payload['revision'],
-            'bot_orders': payload['orders'], 'bots': [],
+            'bot_orders': [accepted_stationary_order(order)], 'bots': [],
         })
 
         yaws = []
@@ -20302,9 +20558,11 @@ class BotRuntimeTests(unittest.TestCase):
                     'health': 1000, 'max_health': 1000,
                 }], planner.known_targets(bot_states, [enemy]), now)
                 payload = planner.build_orders(manifest, bot_states, [enemy], now)
+                self.assertEqual('route', payload['orders'][0]['combat_mode'])
+                self.assertIsNone(payload['orders'][0]['throttle_override'])
                 runtime._apply_orders({
                     'bot_order_revision': payload['revision'],
-                    'bot_orders': payload['orders'],
+                    'bot_orders': [accepted_stationary_order(payload['orders'][0])],
                 })
             runtime.update(0.02, 1.0 + frame * 0.02,
                            players=[enemy])
@@ -20317,7 +20575,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertGreaterEqual(runtime.states[11]['fire_seq'], 1)
         self.assertAlmostEqual(0.,runtime.states[11]['z'])
 
-    def test_non_close_support_target_still_uses_engage_hold(self):
+    def test_non_close_support_target_keeps_route_and_only_hints_combat(self):
         planner = BotPlanner()
         profile = {
             'dominant_role': 'support', 'desired_range': 200.0,
@@ -20345,6 +20603,8 @@ class BotRuntimeTests(unittest.TestCase):
             'id': 2, 'team': 2, 'alive': True,
             'x': 0.0, 'y': 0.0, 'z': 150.0,
         }
+        route_order = planner.build_orders(
+            manifest, bot_states, [enemy], .9)['orders'][0]
         self.assertEqual(1, planner.report_contacts([{
             'observing_team': 1, 'target_kind': 'human',
             'target_id': 2, 'target_team': 2,
@@ -20356,10 +20616,14 @@ class BotRuntimeTests(unittest.TestCase):
         order = planner.build_orders(
             manifest, bot_states, [enemy], 1.0)['orders'][0]
 
-        self.assertEqual(2, order['target_id'])
-        self.assertTrue(order['fire_allowed'])
-        self.assertEqual('engage', order['combat_mode'])
-        self.assertEqual(0.0, order['throttle_override'])
+        self.assertIsNone(order['target_id'])
+        self.assertEqual({'target_kind': 'human', 'target_id': 2},
+                         order['initial_target_hint'])
+        self.assertFalse(order['fire_allowed'])
+        self.assertEqual('route', order['combat_mode'])
+        self.assertIsNone(order['throttle_override'])
+        for key in ('route_id', 'route_index', 'route_anchor', 'move_position'):
+            self.assertEqual(route_order[key], order[key], key)
 
     def test_far_detail_observation_keeps_all_bots_and_explicit_lane_list(self):
         runtime = self.module.BotRuntime(
@@ -20402,9 +20666,20 @@ class BotRuntimeTests(unittest.TestCase):
         orders = planner.build_orders(
             manifest, bot_states, [enemy], 1.0)['orders']
         self.assertTrue(all(order['target_id'] is None for order in orders))
+        self.assertTrue(all(order['initial_target_hint'] ==
+                            {'target_kind': 'human', 'target_id': 2}
+                            for order in orders))
         self.assertTrue(all(order['combat_mode'] == 'route'
                             for order in orders))
         self.assertTrue(all(not order['fire_allowed'] for order in orders))
+        for order in orders:
+            candidate = order['tactical_evidence']['selection']['candidates'][0]
+            self.assertEqual('eligible', candidate['reason'])
+            self.assertFalse(candidate['local_lane'])
+            self.assertFalse(candidate['ready'])
+            self.assertIsNone(order['throttle_override'])
+            self.assertEqual('', order['route_id'])
+        self.assertTrue(all(not row['route']['waypoints'] for row in manifest))
 
     def test_full_roster_firing_lane_refresh_is_staggered_and_complete(self):
         roster = [
@@ -20510,7 +20785,7 @@ class BotRuntimeTests(unittest.TestCase):
         lane_calls = []
 
         class HoldAdapter(_FixedAdapter):
-            def decide(self, state, unused_clear):
+            def fixture_controls(self, state, unused_clear):
                 self.calls.append(state['id'])
                 return dict(self.command)
 
@@ -21084,40 +21359,30 @@ class BotRuntimeTests(unittest.TestCase):
                         self.assertEqual((1.0, offset <= 0.0),
                                          runtime._shot_los_cache[(11, kind, 21)])
 
-    def test_future_and_stale_cover_jobs_leave_the_lane_window_available(self):
-        for ready, stale, expected in ((1.5, False, 'lane'),
-                                       (0.5, True, 'lane'),
-                                       (0.5, False, 'cover')):
-            with self.subTest(ready=ready, stale=stale):
-                calls = []
-                runtime = self.module.BotRuntime(
-                    1, descriptor_resolver=lambda unused: _combat_descriptor(),
-                    adapter_factory=lambda *args, **kwargs:
-                        _FixedAdapter(self._stationary_command()),
-                    direction_probe=lambda *args: {'clear': True, 'slope': 0.0},
-                    visibility_probe=lambda *args: True,
-                    firing_lane_probe=lambda *args: True,
-                    cover_probe=lambda *args: calls.append('cover') or (),
-                    ground_probe=lambda *args: 0.0,
-                    physics_ground_probe=lambda *args: 0.0,
-                    spawn_resolver=_spawn_resolver, native_motion=True,
-                    baked_graph=_graph(), control_seconds=0.1)
-                runtime.battle_start(dict(self.start, bots=[
-                    {'id': 11, 'team': 1, 'slot': 0, 'name': 'CoverSource'},
-                    {'id': 12, 'team': 2, 'slot': 0, 'name': 'CoverTarget'}]))
-                runtime.debug_logging = False
-                source = dict(runtime.states[11], team=2 if stale else 1)
-                target = {'kind': 'bot', 'network_id': 12}
-                key = (source['team'], 'bot', 12)
-                runtime._visible_target_poses[key] = dict(runtime.states[12])
-                runtime._renew_team_spot(key, 1.0)
-                runtime._cover_queue = [(ready, 11, source, target, (0, 0, 0), ())]
-                runtime._next_cover_refresh = 100.0
-                runtime._service_shot_lane_work = lambda *args: (
-                    calls.append('lane') or 0)
-                runtime.update(0.1, 1.0)
-                self.assertEqual([expected], calls)
-                self.assertEqual(int(ready > 1.0), len(runtime._cover_queue))
+    def test_lane_window_has_no_retired_cover_reservation(self):
+        calls = []
+        runtime = self.module.BotRuntime(
+            1, descriptor_resolver=lambda unused: _combat_descriptor(),
+            adapter_factory=lambda *args, **kwargs:
+                _FixedAdapter(self._stationary_command()),
+            direction_probe=lambda *args: {'clear': True, 'slope': 0.0},
+            visibility_probe=lambda *args: True,
+            firing_lane_probe=lambda *args: True,
+            ground_probe=lambda *args: 0.0,
+            physics_ground_probe=lambda *args: 0.0,
+            spawn_resolver=_spawn_resolver, native_motion=True,
+            baked_graph=_graph(), control_seconds=0.1)
+        runtime.battle_start(dict(self.start, bots=[
+            {'id': 11, 'team': 1, 'slot': 0, 'name': 'LaneSource'},
+            {'id': 12, 'team': 2, 'slot': 0, 'name': 'LaneTarget'}]))
+        runtime.debug_logging = False
+        key = (1, 'bot', 12)
+        runtime._visible_target_poses[key] = dict(runtime.states[12])
+        runtime._renew_team_spot(key, 1.0)
+        runtime._service_shot_lane_work = lambda *args: calls.append('lane') or 0
+        runtime.update(0.1, 1.0)
+        self.assertEqual(['lane'], calls)
+        self.assertFalse(hasattr(runtime, '_cover_queue'))
 
     def test_lane_budget_debt_counts_only_due_native_work(self):
         native_calls = []
@@ -21345,7 +21610,9 @@ class BotRuntimeTests(unittest.TestCase):
         observation_batches = 0
         observation_times = []
         per_frame_lane_probes = []
-        ready_order_batches = 0
+        ready_hint_batches = 0
+        maximum_hinted = 0
+        manifest_before = copy.deepcopy(manifest)
 
         # Drive the runtime at 50 FPS for 120 seconds. Periodic firing-lane
         # refreshes and current-fire safety checks share one frame budget.
@@ -21383,32 +21650,49 @@ class BotRuntimeTests(unittest.TestCase):
             contact_by_target = dict(
                 ((contact['target_kind'], contact['target_id']), contact)
                 for contact in contacts)
-            targeted = 0
-            firing = 0
+            hinted = 0
+            ready_hints = 0
             for order in orders:
-                if order['target_id'] is None:
-                    self.assertFalse(order['fire_allowed'])
-                    self.assertEqual('route', order['combat_mode'])
+                expected_contacts = set((row['target_kind'], row['target_id'])
+                    for row in contacts if row['observing_team'] == order['team'])
+                selection = order['tactical_evidence']['selection']
+                self.assertEqual(expected_contacts,
+                    set(row['target'] for row in selection['candidates']))
+                self.assertIsNone(order['target_id'])
+                self.assertFalse(order['fire_allowed'])
+                self.assertEqual('route', order['combat_mode'])
+                hint = order.get('initial_target_hint')
+                if hint is None:
                     continue
-                targeted += 1
-                contact = contact_by_target[
-                    (order['target_kind'], order['target_id'])]
-                if order['fire_allowed']:
-                    firing += 1
+                hinted += 1
+                target = (hint['target_kind'], hint['target_id'])
+                self.assertIn(target, expected_contacts)
+                contact = contact_by_target[target]
+                candidate = next(row for row in selection['candidates']
+                                 if row['target'] == target)
+                self.assertEqual(order['id'] in contact['shootable_by_bot_ids'],
+                                 candidate['local_lane'])
+                if candidate['ready']:
+                    ready_hints += 1
                     self.assertIn(order['id'],
                                   contact['shootable_by_bot_ids'])
             if len(runtime._shot_los_cache) == 420:
-                # Reload and empty ammunition now affect permission even when
-                # a lane exists. Only the two clear observers may be targeted.
+                # All live contacts stay in the evaluation domain. The two
+                # clear observers retain ready diagnostics; neither those
+                # diagnostics nor the hint is a movement or launch grant.
                 self.assertTrue(all(order['id'] in (11, 25)
                                     for order in orders
-                                    if order['target_id'] is not None))
-            self.assertLessEqual(targeted, 2)
-            self.assertLessEqual(firing, targeted)
-            ready_order_batches += int(firing > 0)
+                                    if any(row.get('ready') for row in
+                                        order['tactical_evidence']['selection']['candidates'])))
+            maximum_hinted = max(maximum_hinted, hinted)
+            self.assertLessEqual(ready_hints, 2)
+            self.assertLessEqual(ready_hints, hinted)
+            ready_hint_batches += int(ready_hints > 0)
 
         self.assertTrue(observation_times)
-        self.assertGreater(ready_order_batches, 0)
+        self.assertGreater(maximum_hinted, 2)
+        self.assertEqual(manifest_before, manifest)
+        self.assertGreater(ready_hint_batches, 0)
         self.assertLessEqual(
             observation_times[0],
             1.0 + self.module.PUBLICATION_SECONDS + 0.02 + 1e-6)
@@ -21838,7 +22122,7 @@ class BotRuntimeTests(unittest.TestCase):
         for native_clear in (False, True, None):
             observed = []
             class PoseAdapter(_FixedAdapter):
-                def decide(self, state, clear):
+                def fixture_controls(self, state, clear):
                     observed.append(state['pose_clear'](.5))
                     return dict(self.command)
             proof = mock.Mock(return_value=None if native_clear is None else dict(clear=native_clear, proved=True,
@@ -22279,3 +22563,19 @@ class BotOwnStationaryVisionTests(unittest.TestCase):
 
         self.assertEqual(
             300.0, self.runtime._source_view_range(self._state(0.0), 100.0))
+
+
+# These Python-3 fixture suites exercise engine-free laws. The native backend
+# contract is tested separately; a missing shipping x86 Python-2 extension must
+# not turn every Windows-hosted fixture into an installation failure.
+def setUpModule():
+    from unittest import mock
+    from types import SimpleNamespace
+    from gui.mods.offline_lan_0922 import native_simulation
+    global _engine_free_platform
+    _engine_free_platform = mock.patch.object(native_simulation, 'sys', SimpleNamespace(platform='linux'))
+    _engine_free_platform.start()
+
+
+def tearDownModule():
+    _engine_free_platform.stop()

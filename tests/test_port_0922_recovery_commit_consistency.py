@@ -67,7 +67,7 @@ class RecoveryCommitTests(unittest.TestCase):
         command.update(throttle=1., turn=turn, brake=False, movement_intent=True,
             target_yaw=1. if turn else 0., recovery_probe_distance=.096,
             recovery_mode='forward_escape')
-        runtime.adapter.decide = lambda *a: dict(command)
+        runtime.adapter.fixture_controls = lambda *a: dict(command)
         from gui.mods.offline_lan_0922.ai.driver import LocalDriver
         runtime.adapter.driver = LocalDriver()
         runtime.adapter.driver._state(11, 0, (16., 0., 16.))

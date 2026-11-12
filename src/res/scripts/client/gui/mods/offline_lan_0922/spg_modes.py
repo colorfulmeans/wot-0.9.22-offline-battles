@@ -35,7 +35,7 @@ def update(runtime, now):
     if getattr(runtime, '_spg_modes_tick', None) == token:
         return
     runtime._spg_modes_tick = token
-    states = list(runtime._ordered_states())
+    states = list(_roster_states(runtime))
     round_id = token[0]
     if not hasattr(runtime, '_spg_modes_round') or runtime._spg_modes_round != round_id:
         runtime._spg_modes_round = round_id
@@ -124,3 +124,8 @@ def update(runtime, now):
                           _spg_deployment='parking')
             slot['owner'] = chosen['id']
             _invalidate(runtime, chosen)
+
+
+def _roster_states(runtime):
+    """Read non-spatial admission identities; default to the original roster."""
+    return getattr(runtime, 'spg_roster_states', runtime._ordered_states)()

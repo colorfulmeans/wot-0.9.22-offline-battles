@@ -311,14 +311,14 @@ class RamContactFollowupTests(unittest.TestCase):
         self.assertEqual((5.0, 2.0), (updated[1]['vx'], updated[1]['vz']))
         self.assertEqual((10.0, 1.0), (tanks[0]['vx'], tanks[0]['vz']))
 
-    def test_existing_ram_curve_is_not_retuned_by_this_fix(self):
-        # Protect the accepted T-44/AT 7/T71-style cases: this follow-up fixes
-        # contact-point proof and duplicated physical impulses, not the global
-        # damage coefficient.
+    def test_community_armour_calibration_preserves_quarter_coefficient(self):
+        # The later community A=4.4 calibration changes armour absorption,
+        # while retaining the outer quarter coefficient and contact proof.
         self.assertAlmostEqual(0.25, tank_collision.RAM_DAMAGE_COEFFICIENT)
+        self.assertAlmostEqual(4.4, tank_collision.RAM_ARMOR_ABSORPTION_FACTOR)
         damage_other, damage_self = tank_collision.ram_damage(
             5.72386, 55883.0, 100175.0, 50.8, 180.0)
-        self.assertEqual((64, 191), (damage_other, damage_self))
+        self.assertEqual((0, 149), (damage_other, damage_self))
 
 
 if __name__ == '__main__':

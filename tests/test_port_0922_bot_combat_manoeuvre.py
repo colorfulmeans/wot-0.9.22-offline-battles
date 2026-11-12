@@ -1,4 +1,4 @@
-"""Windows401 report 172753: completed flanks and bounded local ownership."""
+"""Firing-position arrival and bounded physical movement ownership."""
 import math
 import json
 from pathlib import Path
@@ -6,20 +6,20 @@ import unittest
 from unittest import mock
 
 from test_port_0922_bot_runtime import _load, _flat_open_graph
-from test_port_0922_server_bot_ai import BotPlanner, _state
+from test_port_0922_server_bot_ai import BotPlanner, _bot, _route, _state, _contact
 from test_port_0922_bot_state_codec import _bot_state, STATIC
 from gui.mods.offline_lan_0922.ai.adapter import BotAdapter
 from gui.mods.offline_lan_0922.ai.navigation import TerrainNavigator
 from gui.mods.offline_lan_0922 import bot_state_codec
 
 
-class FlankArrivalTests(unittest.TestCase):
+class FiringPositionArrivalTests(unittest.TestCase):
     def setUp(self):
         self.goal = (-148.837, 1.1, 75.174)
         self.enemy = (-255.7, 1.1, -.66)
         self.adapter = BotAdapter('himmelsdorf', 11,
             navigation_target=lambda bot, pos, goal, *unused: goal)
-        self.order = dict(combat_mode='flank', target_id=20,
+        self.order = dict(combat_mode='gun_angle_adjust', target_id=20,
             move_position=self.goal, aim_position=self.enemy,
             face_position=self.enemy, throttle_override=1.)
 
@@ -35,129 +35,148 @@ class FlankArrivalTests(unittest.TestCase):
         self.assertEqual('arrived', command['recovery_mode'])
         self.assertEqual(0., command['throttle'])
 
-    def test_track_pivot_cannot_restart_completed_flank(self):
+    def test_explicit_firing_hold_cannot_restart_completed_position_move(self):
         self.decide((-150., 1.1, 74.4))
+        held = dict(self.order, combat_mode='engage', throttle_override=0.)
         for unused in range(120):
-            command = self.decide((-150.5, 1.1, 74.14))
+            command = self.decide((-150.5, 1.1, 74.14), held)
             self.assertEqual('arrived', command['recovery_mode'])
             self.assertEqual(0., command['throttle'])
             self.assertEqual(20, command['target_id'])
         self.adapter.forget(14)
-        self.assertNotIn(14, self.adapter._flank_arrivals)
+        self.assertFalse(hasattr(self.adapter, '_flank_arrivals'))
 
     def test_displacement_and_new_orders_release_arrival(self):
         for replacement, position in ((dict(self.order, move_position=(-140., 1.1, 90.)),
                 (-150., 1.1, 74.4)), (self.order, (-155., 1.1, 74.4))):
             self.decide((-150., 1.1, 74.4))
             self.decide(position, replacement)
-            self.assertNotIn(14, self.adapter._flank_arrivals)
+            self.assertFalse(hasattr(self.adapter, '_flank_arrivals'))
 
     def test_normal_route_retains_forward_throttle(self):
         command = self.decide((-150., 1.1, 74.4), dict(self.order,
             combat_mode='route', move_position=(-170., 1.1, 60.)))
         self.assertTrue(command['movement_intent'])
-        self.assertNotIn(14, self.adapter._flank_arrivals)
+        self.assertFalse(hasattr(self.adapter, '_flank_arrivals'))
 
 
 class FriendlyManoeuvreTests(unittest.TestCase):
-    def setUp(self):
-        self.module = _load()
-        self.runtime = self.module.BotRuntime(1)
-        self.state = dict(id=8, team=1, x=0., y=0., z=0., yaw=0.,
-            half_length=3., half_width=1.5, shell_index=0, fire_seq=2)
-        self.runtime.states[8] = self.state
-        self.runtime._gun_yaw_limits[8] = (-.05, .05, True)
-        self.command = dict(target_id=18, fire_range=450.)
-        self.target = dict(kind='bot', alive=True, position=(0., 0., 100.))
-        self.launch = dict(fire_seq=3, shot_yaw=0.)
-        self.verdict = dict(blocker_kind='bot', blocker_id=7, blocker_team=1,
-            blocker_position=(0., 0., 20.), blocker_radius=3.)
+    """The shared task owns friendly recovery and its bounded terminal."""
+    def scene(self, status='clear'):
+        from test_player_combat_stop import Scene
+        scene = Scene(admitted=False)
+        scene.raw_order.update(combat_mode='route', target_kind=None,
+            target_id=None, move_position=(20., 0., -30.),
+            face_position=(20., 0., -30.), throttle_override=None,
+            aim_position=None, fire_allowed=False)
+        scene.candidate.update(key=(0, ('bot', 2), 0, 'penetration'),
+            target_key=('bot', 2), sample=0, line='friendly_blocked',
+            mechanical='reachable', blocker=dict(blocker_kind='bot',
+                blocker_id=7, blocker_team=1, blocker_position=(0., 0., 20.)))
+        scene.probe_status = status
+        scene.runtime.point_recovery_probe = lambda *args: dict(status=scene.probe_status)
+        return scene
 
-    def mark(self, now):
-        with mock.patch.object(self.runtime, '_physics_params_for',
-                               return_value=dict(rotSpd=math.radians(20))):
-            return self.runtime._mark_friendly_reposition(self.state,
-                self.command, self.target, self.launch, self.verdict, now)
+    def test_fixed_gun_keeps_one_checked_destination(self):
+        scene = self.scene()
+        first = scene.apply(10.)
+        phase = scene.owner._physical_recovery
+        self.assertEqual(scene.candidate['key'], phase['key'])
+        for now in (10.1, 11., 13.):
+            command = scene.apply(now)
+            self.assertEqual(first['move_position'], command['move_position'])
+            self.assertIs(phase, scene.owner._physical_recovery)
+            self.assertEqual(10., phase['started'])
+            self.assertFalse(command['fire_allowed'])
 
-    def test_fixed_gun_gets_turn_time_and_keeps_one_destination(self):
-        self.assertTrue(self.mark(10.))
-        marker = dict(self.runtime._friendly_repositions[8])
-        self.assertGreater(marker['deadline'], 16.)
-        self.assertLessEqual(marker['deadline'], 26.)
-        for now in (11., 14.1, 16.):
-            command, expired = self.runtime._friendly_reposition_order(
-                self.state, {18: self.target}, now)
-            self.assertFalse(expired)
-            self.assertEqual(marker['destination'], command['move_position'])
-        self.assertTrue(self.state['local_combat_manoeuvre'])
+    def test_turreted_vehicle_has_the_same_real_progress_exit(self):
+        scene = self.scene()
+        scene.runtime.engine._gun_yaw_limits[1] = (-math.pi, math.pi, False)
+        scene.apply(10.)
+        command = scene.apply(16.1)
+        self.assertEqual('route', command['combat_mode'])
+        self.assertFalse(scene.owner.stop_allowed)
+        self.assertIsNone(scene.owner._physical_recovery)
+        self.assertEqual('point_recovery_drive_stalled', scene.owner.receipt['reason'])
 
-    def test_turreted_vehicle_gets_same_bounded_turn_budget(self):
-        self.runtime._gun_yaw_limits[8] = (-math.pi, math.pi, False)
-        self.mark(10.)
-        marker = self.runtime._friendly_repositions[8]
-        self.assertAlmostEqual(20.5, marker['deadline'])
-        self.assertEqual('bot', marker['target_kind'])
-        self.assertEqual(10.5, marker['time_budget']['granted'])
+    def test_repeated_blocker_does_not_extend_the_task_progress_clock(self):
+        scene = self.scene()
+        scene.apply(10.)
+        phase = scene.owner._physical_recovery
+        for now in (10.2, 11., 14., 15.9):
+            scene.apply(now)
+            self.assertIs(phase, scene.owner._physical_recovery)
+            self.assertEqual(10., phase['progress_at'])
+        self.assertEqual('route', scene.apply(16.1)['combat_mode'])
 
-    def test_repeated_blocked_shot_cannot_extend_active_deadline(self):
-        self.mark(10.)
-        deadline = self.runtime._friendly_repositions[8]['deadline']
-        self.mark(11.)
-        self.assertEqual(deadline, self.runtime._friendly_repositions[8]['deadline'])
+    def test_new_macro_hint_cannot_replace_the_checked_point_task(self):
+        scene = self.scene()
+        scene.apply(10.)
+        phase = scene.owner._physical_recovery
+        scene.raw_order.update(target_id=19, target_kind='bot')
+        command = scene.apply(11.)
+        self.assertIs(phase, scene.owner._physical_recovery)
+        self.assertEqual(2, command['target_id'])
+        self.assertEqual(phase['goal'], command['move_position'])
 
-    def test_new_priority_target_cancels_old_manoeuvre(self):
-        self.mark(10.)
-        self.runtime._server_orders[8] = dict(target_id=19, target_kind='bot')
-        self.assertEqual((None, False), self.runtime._friendly_reposition_order(
-            self.state, {18:self.target}, 11.))
-        self.assertFalse(self.state['local_combat_manoeuvre'])
-        self.assertEqual('target_changed', self.state['_friendly_reposition_event']['outcome'])
+    def test_base_defense_cannot_start_a_new_lane_override(self):
+        scene = self.scene()
+        scene.raw_order['combat_mode'] = 'base_defense'
+        command = scene.apply(10.)
+        self.assertEqual('base_defense', command['combat_mode'])
+        self.assertEqual((20., 0., -30.), command['move_position'])
+        self.assertIsNone(scene.owner._physical_recovery)
+        self.assertFalse(scene.owner.stop_allowed)
 
-    def test_retreat_cannot_start_a_new_lane_override(self):
-        self.command['combat_mode'] = 'low_health_retreat'
-        self.assertFalse(self.mark(10.))
-        self.assertNotIn(8, self.runtime._friendly_repositions)
+    def test_failed_task_cannot_reacquire_from_time_or_route_yaw_alone(self):
+        scene = self.scene()
+        scene.apply(10.)
+        scene.apply(16.1)
+        scene.probe_status = 'blocked'
+        scene.state['yaw'] = .13
+        for now in (16.2, 17., 20., 30.):
+            command = scene.apply(now)
+            self.assertEqual('route', command['combat_mode'])
+            self.assertFalse(scene.owner.stop_allowed)
+            self.assertFalse(command['fire_allowed'])
+        self.assertEqual(1, scene.owner._episode)
 
-    def test_timeout_clears_owner_and_prevents_identical_immediate_retry(self):
-        self.mark(10.)
-        marker = dict(self.runtime._friendly_repositions[8])
-        end = marker['deadline'] + .01
-        self.assertEqual((None, True), self.runtime._friendly_reposition_order(
-            self.state, {18: self.target}, end))
-        self.assertFalse(self.state['local_combat_manoeuvre'])
-        self.assertFalse(self.mark(end + .2))
-        self.assertEqual('timeout', self.state['_friendly_reposition_last_terminal']['outcome'])
-        self.assertEqual(end, self.state['_friendly_reposition_last_terminal']['at'])
-        self.assertEqual(end + .2, self.state['_friendly_reposition_retry']['observed_at'])
-        self.assertTrue(self.mark(end + 8.1))
-        self.assertEqual(-marker['side'], self.runtime._friendly_repositions[8]['side'])
+    def test_target_death_and_priority_handoff_release_the_shared_task(self):
+        for cause in ('target_gone', 'priority_handoff'):
+            with self.subTest(cause=cause):
+                scene = self.scene()
+                scene.apply(10.)
+                if cause == 'target_gone':
+                    scene.target['alive'] = False
+                else:
+                    scene.raw_order['combat_mode'] = 'base_defense'
+                command = scene.apply(11.)
+                self.assertIsNone(scene.owner._physical_recovery)
+                self.assertFalse(scene.owner.stop_allowed)
+                self.assertEqual((20., 0., -30.), command['move_position'])
 
-    def test_target_death_and_priority_handoff_release_owner(self):
-        for order, target, outcome in (({}, dict(self.target, alive=False), 'target_gone'),
-                (dict(combat_mode='low_health_retreat'), self.target, 'priority_handoff'),
-                (dict(combat_mode='base_defense'), self.target, 'priority_handoff')):
-            self.runtime._server_orders[8] = order
-            self.mark(10.)
-            command, expired = self.runtime._friendly_reposition_order(self.state, {18:target}, 11.)
-            self.assertIsNone(command)
-            self.assertFalse(expired)
-            self.assertFalse(self.state['local_combat_manoeuvre'])
-            self.assertEqual(outcome, self.state['_friendly_reposition_event']['outcome'])
-
-    def test_arrival_releases_owner_and_keeps_friendly_shot_gate(self):
-        self.mark(10.)
-        point = self.runtime._friendly_repositions[8]['destination']
-        self.state.update(x=point[0], y=point[1], z=point[2])
-        self.assertEqual((None, False), self.runtime._friendly_reposition_order(
-            self.state, {18:self.target}, 11.))
-        self.assertFalse(self.state['local_combat_manoeuvre'])
-        self.assertEqual('arrived', self.state['_friendly_reposition_event']['outcome'])
+    def test_arrival_requires_same_point_native_recheck(self):
+        scene = self.scene()
+        scene.apply(10.)
+        phase = scene.owner._physical_recovery
+        scene.position(phase['goal'])
+        scene.probe_status = 'blocked'
+        command = scene.apply(11.)
+        self.assertIs(phase, scene.owner._physical_recovery)
+        self.assertTrue(phase['checking'])
+        self.assertFalse(phase['ready'])
+        self.assertFalse(command['fire_allowed'])
+        self.assertEqual('point_recovery_arrived_recheck', scene.owner.receipt['reason'])
 
 
 class LocalActionFeedbackTests(unittest.TestCase):
 
     def setUp(self):
-        self.runtime = _load().BotRuntime(1)
+        self.module = _load()
+        diagnostic = mock.patch.object(self.module, 'detailed_enabled', return_value=True)
+        diagnostic.start()
+        self.addCleanup(diagnostic.stop)
+        self.runtime = self.module.BotRuntime(1)
         graph = json.loads((Path(__file__).resolve().parents[1] /
             'navgraphs/86_himmelsdorf_winter.json').read_text())
         self.nav = TerrainNavigator(lambda *unused: 1.1, baked_graph=graph)
@@ -259,20 +278,30 @@ class LocalActionFeedbackTests(unittest.TestCase):
 
 
 class ServerManoeuvreOwnershipTests(unittest.TestCase):
-    def test_completed_flank_without_lane_yields_to_existing_route_branch(self):
+    def test_retired_tactical_modes_have_no_macro_movement_lease_entry(self):
         planner = BotPlanner()
-        bot = dict(id=14, state=_state(14, 1, -150., 74.4))
-        focus = dict(target_kind='bot', id=20)
-        previous = dict(id=14, target_kind='bot', target_id=20,
-            combat_mode='flank', move_position=dict(x=-148.837,y=1.1,z=75.174),
-            throttle_override=1.)
-        planner._last_orders = dict(orders=[previous])
-        order = {}
-        self.assertFalse(planner._apply_leased_movement_order(order, bot, focus))
-        self.assertEqual('completed_flank_without_lane',
-            order['tactical_evidence']['flank_handoff']['reason'])
-        bot['state'].update(x=-160.)
-        self.assertTrue(planner._apply_leased_movement_order({}, bot, focus))
+        bot = _bot(14, 1, 0, _route('lane', [(-150., 74.4, False),
+                   (-100., 74.4, False)]), 'mediumTank')
+        bot['state'] = _state(14, 1, -150., 74.4)
+        focus = dict(target_kind='bot', id=20, visible=True,
+                     position=dict(x=-148.837, y=1.1, z=75.174))
+        for mode in ('flank', 'support_hold', 'take_cover', 'cover_hold', 'cover_peek',
+                     'cover_return', 'withdraw', 'low_health_retreat',
+                     'magazine_reload_retreat', 'team_turnback'):
+            for x in (-150., -160.):
+                with self.subTest(mode=mode, x=x):
+                    bot['state']['x'] = x
+                    previous = dict(id=14, target_kind='bot', target_id=20,
+                        combat_mode=mode,
+                        move_position=dict(x=-148.837,y=1.1,z=75.174),
+                        throttle_override=1.)
+                    planner._last_orders = dict(orders=[previous])
+                    order = planner._order_for(bot, 0, 1, focus, [focus], 1.)
+                    self.assertFalse(hasattr(planner, '_apply_leased_movement_order'))
+                    self.assertEqual('route', order['combat_mode'])
+                    self.assertEqual(dict(x=-100., y=0., z=74.4), order['move_position'])
+                    self.assertIsNone(order['throttle_override'])
+                    self.assertEqual(dict(target_kind='bot', target_id=20), order['initial_target_hint'])
 
     def test_codec_carries_begin_and_end_without_extra_columns(self):
         state = _bot_state()
@@ -284,30 +313,30 @@ class ServerManoeuvreOwnershipTests(unittest.TestCase):
             self.assertEqual(active, bot_state_codec.decode_row(row, STATIC)['local_combat_manoeuvre'])
         self.assertEqual(1, len(set(lengths)))
 
-    def test_local_motion_pauses_idle_fire_timer_and_release_restarts_it(self):
+    def test_local_manoeuvre_receipt_cannot_start_an_idle_fire_timer(self):
         planner = BotPlanner()
-        bot = dict(id=10, state=_state(10, 1, 0., 0.))
-        bot['state'].update(fire_seq=7, local_combat_manoeuvre=True)
-        def order():
-            return dict(combat_mode='engage', throttle_override=0.,
-                target_id=20, target_kind='bot', aim_position=dict(x=50.,y=0.,z=80.))
-        for now in (0., 8., 20.):
-            command = order()
-            planner._release_unproductive_firing_hold(command, bot,
-                dict(x=0.,y=0.,z=100.), dict(x=0.,y=0.,z=80.), now)
-            self.assertEqual('engage', command['combat_mode'])
-            self.assertEqual('local_combat_manoeuvre_active',
-                command['tactical_evidence']['firing_hold']['reason'])
-        bot['state']['local_combat_manoeuvre'] = False
-        command = order()
-        planner._release_unproductive_firing_hold(command, bot,
-            dict(x=0.,y=0.,z=100.), dict(x=0.,y=0.,z=80.), 21.)
-        self.assertEqual(0., command['tactical_evidence']['firing_hold']['ready_elapsed'])
-        command = order()
-        planner._release_unproductive_firing_hold(command, bot,
-            dict(x=0.,y=0.,z=100.), dict(x=0.,y=0.,z=80.), 30.)
-        self.assertEqual('advance_contact', command['combat_mode'])
-        self.assertEqual(dict(x=50.,y=0.,z=80.),command['move_position'])
+        baseline = BotPlanner()
+        route = _route('lane', [(0, -100, False), (0, 100, False)])
+        bot = _bot(10, 1, 0, route, 'mediumTank')
+        state = _state(10, 1, 0., 0.)
+        state['fire_seq'] = 7
+        player = dict(id=20, team=2, alive=True)
+        for now, active in ((1., True), (8., True), (20., True),
+                            (21., False), (30., False)):
+            state['local_combat_manoeuvre'] = active
+            contact = _contact(20, 50., 80., [10])
+            planner.report_contacts([contact],
+                planner.known_targets([state], [player]), now)
+            command = planner.build_orders(
+                [bot], [state], [player], now)['orders'][0]
+            route_order = baseline.build_orders([bot], [state], [player], now)['orders'][0]
+            self.assertEqual('route', command['combat_mode'])
+            self.assertEqual(route_order['move_position'], command['move_position'])
+            self.assertIsNone(command['throttle_override'])
+            self.assertFalse(command['fire_allowed'])
+            self.assertEqual(dict(target_kind='human', target_id=20), command['initial_target_hint'])
+            self.assertNotIn('firing_hold', command['tactical_evidence'])
+        self.assertFalse(hasattr(planner, '_firing_holds'))
 
 
 class CombatRecoveryHandoffTests(unittest.TestCase):
@@ -344,15 +373,14 @@ class CombatRecoveryHandoffTests(unittest.TestCase):
         self.assertEqual('arrived',command['recovery_mode'])
         self.assertEqual(20,command['target_id'])
 
-    def test_reverse_sweep_prepares_one_body_but_keeps_all_five_checks(self):
-        order = dict(self.order,combat_mode='withdraw',throttle_override=None)
-        with mock.patch.object(self.adapter.driver,'collision_body',wraps=self.adapter.driver.collision_body) as body:
-            checks=[]
-            command=self.adapter._reverse_withdrawal(self.state,order,(0.,0.,0.),
-                (0.,0.,-10.),(0.,0.,-10.),lambda *args: checks.append(args) or True)
-        self.assertIsNotNone(command)
-        self.assertEqual(1,body.call_count)
-        self.assertEqual(5,len(checks))
+    def test_retired_reverse_owner_is_absent_from_adapter(self):
+        self.assertFalse(hasattr(self.adapter, '_reverse_withdrawal'))
+        self.assertFalse(hasattr(self.adapter, '_withdrawal_attempts'))
+        order = dict(self.order,combat_mode='route',throttle_override=None,
+                     move_position=(0.,0.,80.))
+        with mock.patch.object(self.adapter.driver,'drive',wraps=self.adapter.driver.drive) as drive:
+            self.adapter.decide_with_order(self.state,order,lambda *args: True)
+        drive.assert_called_once()
 
     def test_base_defence_keeps_checked_travel_owner(self):
         order = dict(self.order,combat_mode='base_defense',

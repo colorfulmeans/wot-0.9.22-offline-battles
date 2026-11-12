@@ -45,10 +45,12 @@ def check_reused_queries(actual,expected,label):
 
 results=[]
 for case in ['movement','wall','wreck','landing','fatal_landing','airborne_wall','drowning','overturn','new_siege','motion_trace']:
- arms=[]
+ arms=[];initial_state=None
  for selected,reuse in ((Legacy(),False),(backend,False),(backend,True)):
   EngineQuery._ray=original_ray if reuse else uncached_ray
   scene=scene_module.HostScene(case,native_library='');check.setup(scene,case,bot)
+  if initial_state is None:initial_state=copy.deepcopy(scene.runtime.states)
+  else:assert scene.runtime.states==initial_state,(case,'independent initial states differ')
   native_math._backend,native_math._attempted=selected,True
   commands=dict((a,(1.,(a%3-1)*.15,0.)) for a in scene.runtime.states)
   scene.frontier_log[:]=[];start=time.clock();states=[];reports=[]

@@ -449,19 +449,15 @@ class PostBattleContractTests(unittest.TestCase):
         self.assertEqual(0, win['repair_cost'])
         self.assertEqual(0, win['ammo_cost'])
 
-        # A kill is paid by the durability of what was killed, so the frag
-        # count alone moves neither payment.
+        # Kill credit is not a separate income category; XP uses target tier.
         kills = compute_offline_rewards({'kills': 3}, False, True)
-        self.assertEqual(base['xp'], kills['xp'])
+        self.assertGreater(kills['xp'], base['xp'])
         self.assertEqual(base['credits'], kills['credits'])
-        killed = compute_offline_rewards(
-            {'kills': 3}, False, True, killed_durability=1200)
-        self.assertGreater(killed['xp'], base['xp'])
-        self.assertEqual(base['credits'], killed['credits'])
+
         tier_three_loss = compute_offline_rewards({}, False, True, 3)
         tier_three_win = compute_offline_rewards({}, True, True, 3)
-        self.assertEqual(3000, tier_three_loss['credits'])
-        self.assertEqual(3000 * 185 // 100,
+        self.assertEqual(2100, tier_three_loss['credits'])
+        self.assertEqual(3900,
                          tier_three_win['credits'])
 
     def test_an_unreadable_record_says_why_and_is_kept_beside_the_new_one(self):
@@ -1236,11 +1232,13 @@ class PostBattleContractTests(unittest.TestCase):
         player = Player(1, _Socket(), ('127.0.0.1', 1), name='Alice',
                         vehicle='ussr:R11_MS-1', team=1, account_key='a' * 32)
         state.players[1] = player
+        player.critical = dict(crew_roster=['commander', 'driver'], crew_ko=['driver'])
         state._freeze_round_participants((player,))
         state._statistics_row('player', 1)['damage_dealt'] = 900
         self.assertTrue(state.leave_battle(1, {'round_id': 7}))
         receipt = _latest_receipt(state, player.account_key)
         self.assertTrue(receipt['premature_leave'])
+        self.assertEqual(dict(roster=['commander','driver'],wounded=['driver']), receipt['crew_injuries'])
         self.assertEqual(state.round_start_time,
                          receipt['arena_unique_id'] & 0xffffffff)
         self.assertFalse(state._finish_battle(1, 'duplicate'))

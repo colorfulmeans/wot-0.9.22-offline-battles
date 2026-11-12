@@ -1,38 +1,30 @@
 #!/usr/bin/env python3
-"""Bake a deterministic terrain navigation graph from WoT 0.8.2 packages.
+"""Retained deterministic terrain graph engine, derived from f5b0173.
 
 This tool is intentionally offline.  It reads the map terrain, water planes,
 static model transforms, visual bounds, and primitive vertices directly from
 the pinned client packages.  The resulting JSON is small enough to ship with
 the mod, so players never have to scan a map in game.
 
-Map bounds and validation anchors come from the tactical route registry shipped
-with the mod. Its bases are checked against the pinned client's standard-battle
-arena definitions before baking. ``--all`` bakes every stock map with the same
-generic terrain, water, grade, obstacle, and connectivity rules.
+The #1513 adapter supplies map bounds and validation anchors from the current
+owner-reviewed Default. This module contains no tactical route registry,
+sketch projector, or standalone legacy-client baking command.
 """
 
-import argparse
 import base64
-import hashlib
 import heapq
-import importlib.util
 import io
 import json
 import math
 import os
-import shutil
 import struct
 import sys
-import tempfile
-import types
 import zipfile
 import zlib
 import xml.etree.ElementTree as ElementTree
 
 
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
-REPO_ROOT = os.path.dirname(TOOLS_DIR)
 if TOOLS_DIR not in sys.path:
     sys.path.insert(0, TOOLS_DIR)
 
@@ -75,48 +67,12 @@ HAZARD_SHALLOW_WATER = 4
 SHALLOW_WATER_COST_MULTIPLIER = 4.0
 NAVGRAPH_BOUND_MARGIN = 16.0
 MAX_ROUTE_DETOUR = 2.0
-MAX_ROUTE_TURN = math.radians(150.0)
 
 DIRECTIONS = (
     (-1, -1), (0, -1), (1, -1),
     (-1, 0),              (1, 0),
     (-1, 1),  (0, 1),     (1, 1),
 )
-
-def _load_tactical_maps():
-    """Load the Python-2-compatible data modules without importing the game."""
-    package_dir = os.path.join(
-        REPO_ROOT, "scripts", "client", "gui", "mods", "offhangar"
-    )
-    package_names = ("gui", "gui.mods", "gui.mods.offhangar")
-    saved = dict((name, sys.modules.get(name)) for name in package_names)
-    loaded_names = []
-    try:
-        for name in package_names:
-            package = types.ModuleType(name)
-            package.__path__ = [package_dir] if name == "gui.mods.offhangar" else []
-            sys.modules[name] = package
-        module_name = "gui.mods.offhangar.bot_ai_maps"
-        spec = importlib.util.spec_from_file_location(
-            module_name, os.path.join(package_dir, "bot_ai_maps.py")
-        )
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
-        loaded_names.append(module_name)
-        spec.loader.exec_module(module)
-        return dict(module.TACTICAL_MAPS)
-    finally:
-        for name in list(sys.modules):
-            if (name.startswith("gui.mods.offhangar.bot_ai_maps_group_") or
-                    name == "gui.mods.offhangar.bot_ai_maps_extra" or
-                    name in loaded_names):
-                sys.modules.pop(name, None)
-        for name, previous in saved.items():
-            if previous is None:
-                sys.modules.pop(name, None)
-            else:
-                sys.modules[name] = previous
-
 
 def _bake_map_config(tactical_map):
     route_records = []
@@ -150,9 +106,9 @@ def _bake_map_config(tactical_map):
     }
 
 
-TACTICAL_MAPS = _load_tactical_maps()
-MAPS = dict((name, _bake_map_config(tactical_map))
-            for name, tactical_map in TACTICAL_MAPS.items())
+# The current #1513 adapter supplies the reviewed map configuration per bake.
+# An empty registry must never load an older route dataset as a fallback.
+MAPS = {}
 
 
 def _expanded_bounds(map_config, cell_size):
@@ -1270,403 +1226,6 @@ def _node_point(graph, index):
     )
 
 
-def _oriented_route_points(route_record, map_config):
-    """Orient a tactical corridor and include its two objective endpoints."""
-    team = int(route_record["team"])
-    own = map_config["bases"][team - 1]
-    enemy = map_config["bases"][2 - team]
-    points = list(route_record["points"])
-    if len(points) < 2:
-        return points
-
-    def distance_squared(point, base):
-        return ((float(point[0]) - float(base[0])) ** 2 +
-                (float(point[1]) - float(base[1])) ** 2)
-
-    forward = distance_squared(points[0], own) + distance_squared(points[-1], enemy)
-    reverse = distance_squared(points[-1], own) + distance_squared(points[0], enemy)
-    if reverse < forward:
-        points.reverse()
-    if distance_squared(points[0], own) > 1.0:
-        points.insert(0, (float(own[0]), float(own[1]), False))
-    else:
-        points[0] = (float(own[0]), float(own[1]), bool(points[0][2]))
-    if distance_squared(points[-1], enemy) > 1.0:
-        points.append((float(enemy[0]), float(enemy[1]), False))
-    else:
-        points[-1] = (float(enemy[0]), float(enemy[1]), bool(points[-1][2]))
-    return points
-
-
-def _sample_route_path(graph, path, hold_nodes, maximum_points=16,
-                       required_nodes=()):
-    """Reduce a safe grid path while retaining endpoints and tactical holds."""
-    if not path:
-        return []
-    maximum_points = max(2, int(maximum_points))
-    cumulative = [0.0]
-    for first, second in zip(path, path[1:]):
-        first_point = _node_point(graph, first)
-        second_point = _node_point(graph, second)
-        cumulative.append(cumulative[-1] + math.hypot(
-            second_point[0] - first_point[0],
-            second_point[1] - first_point[1],
-        ))
-    selected = set((0, len(path) - 1))
-    selected.update(index for index, node in enumerate(path) if node in hold_nodes)
-    selected.update(index for index, node in enumerate(path)
-                    if node in required_nodes)
-    if len(selected) > maximum_points:
-        raise ValueError("tactical route has more required gates than protocol slots")
-    # Preserve bends before filling long straight gaps. Uniform arc-length
-    # sampling can put two waypoints on opposite sides of a tight obstacle and
-    # make their direct separation tiny even though the graph leg loops around
-    # it. Greedily split the highest-detour gap at its geometric apex first.
-    while len(selected) < min(maximum_points, len(path)):
-        ordered = sorted(selected)
-        gaps = []
-        for first, second in zip(ordered, ordered[1:]):
-            if second - first <= 1:
-                continue
-            first_point = _node_point(graph, path[first])
-            second_point = _node_point(graph, path[second])
-            path_distance = cumulative[second] - cumulative[first]
-            direct = max(
-                graph["cell_size"],
-                math.hypot(second_point[0] - first_point[0],
-                           second_point[1] - first_point[1]),
-            )
-            ratio = path_distance / direct
-            # Curved gaps above 1.25x outrank all straight gaps. Once the
-            # polyline represents every bend, distribute remaining samples by
-            # travelled distance.
-            priority = ratio if ratio > 1.25 else 1.0
-            gaps.append((priority, path_distance, first, second))
-        if not gaps:
-            break
-        unused_priority, unused_distance, first, second = max(gaps)
-        first_point = _node_point(graph, path[first])
-        second_point = _node_point(graph, path[second])
-        candidates = range(first + 1, second)
-        index = max(
-            candidates,
-            key=lambda value: _distance_to_segment(
-                _node_point(graph, path[value]), first_point, second_point),
-        )
-        if _distance_to_segment(
-                _node_point(graph, path[index]), first_point,
-                second_point) < graph["cell_size"] * 0.25:
-            target = (cumulative[first] + cumulative[second]) * 0.5
-            index = min(candidates,
-                        key=lambda value: abs(cumulative[value] - target))
-        selected.add(index)
-    result = []
-    for index in sorted(selected):
-        x, z = _node_point(graph, path[index])
-        result.append([round(x, 3), round(z, 3), path[index] in hold_nodes])
-    return result
-
-
-def _polyline_distance(point, polyline):
-    if not polyline:
-        return float("inf")
-    if len(polyline) == 1:
-        return math.hypot(point[0] - polyline[0][0],
-                          point[1] - polyline[0][1])
-    return min(_distance_to_segment(point, first, second)
-               for first, second in zip(polyline, polyline[1:]))
-
-
-def _corridor_height_at(graph, index, corridor):
-    if not corridor or len(corridor[0]) < 3:
-        return None
-    point = _node_point(graph, index)
-    if len(corridor) == 1:
-        return float(corridor[0][2])
-    best = None
-    for first, second in zip(corridor, corridor[1:]):
-        dx = float(second[0]) - float(first[0])
-        dz = float(second[1]) - float(first[1])
-        length_squared = dx * dx + dz * dz
-        if length_squared <= 1e-10:
-            fraction = 0.0
-        else:
-            fraction = (((point[0] - float(first[0])) * dx +
-                         (point[1] - float(first[1])) * dz) /
-                        length_squared)
-            fraction = max(0.0, min(1.0, fraction))
-        projected_x = float(first[0]) + dx * fraction
-        projected_z = float(first[1]) + dz * fraction
-        distance = math.hypot(point[0] - projected_x,
-                              point[1] - projected_z)
-        height = (float(first[2]) +
-                  (float(second[2]) - float(first[2])) * fraction)
-        candidate = (distance, height)
-        if best is None or candidate[0] < best[0]:
-            best = candidate
-    return best[1] if best is not None else None
-
-
-def _corridor_graph_path(graph, start, goal, corridor):
-    """Find a simple base-to-base path biased toward a tactical polyline."""
-    width = graph["width"]
-    height = graph["height"]
-    cell_size = graph["cell_size"]
-    goal_point = _node_point(graph, goal)
-    queue = [(0.0, 0.0, start)]
-    costs = {start: 0.0}
-    previous = {}
-    while queue:
-        unused_priority, cost, current = heapq.heappop(queue)
-        if cost != costs.get(current):
-            continue
-        if current == goal:
-            break
-        x = current % width
-        z = current // width
-        mask = graph["links"][current]
-        for direction_index, (dx, dz) in enumerate(DIRECTIONS):
-            if not (mask & (1 << direction_index)):
-                continue
-            nx = x + dx
-            nz = z + dz
-            if nx < 0 or nx >= width or nz < 0 or nz >= height:
-                continue
-            neighbour = nz * width + nx
-            point = _node_point(graph, neighbour)
-            corridor_offset = min(180.0, _polyline_distance(point, corridor))
-            distance = cell_size * (math.sqrt(2.0) if dx and dz else 1.0)
-            desired_height = _corridor_height_at(graph, neighbour, corridor)
-            height_cost = 0.0
-            if desired_height is not None:
-                actual_height = float(graph["heights_mm"][neighbour]) / 1000.0
-                height_cost = distance * min(
-                    6.0, abs(actual_height - desired_height) / 8.0)
-            hazards = graph.get("hazards")
-            is_shallow_water = (hazards is not None and
-                                neighbour < len(hazards) and
-                                int(hazards[neighbour]) &
-                                HAZARD_SHALLOW_WATER)
-            shallow_water_cost = (distance * SHALLOW_WATER_COST_MULTIPLIER
-                                  if is_shallow_water else 0.0)
-            new_cost = (cost + distance * (1.0 + corridor_offset / 45.0) +
-                        shallow_water_cost + height_cost)
-            if new_cost >= costs.get(neighbour, float("inf")):
-                continue
-            costs[neighbour] = new_cost
-            previous[neighbour] = current
-            heuristic = math.hypot(point[0] - goal_point[0],
-                                   point[1] - goal_point[1])
-            heapq.heappush(queue, (new_cost + heuristic, new_cost, neighbour))
-    if goal not in costs:
-        return ()
-    path = [goal]
-    while path[-1] != start:
-        path.append(previous[path[-1]])
-    path.reverse()
-    return tuple(path)
-
-
-def _route_maximum_detour(graph, waypoints):
-    maximum = 1.0
-    for first, second in zip(waypoints, waypoints[1:]):
-        first_node, first_offset = _nearest_node(graph, first)
-        second_node, second_offset = _nearest_node(graph, second)
-        if first_node is None or second_node is None:
-            return float("inf")
-        path, distance = _graph_path(graph, first_node, second_node)
-        if not path:
-            return float("inf")
-        direct = max(
-            graph["cell_size"],
-            math.hypot(second[0] - first[0], second[1] - first[1]),
-        )
-        maximum = max(
-            maximum, (distance + first_offset + second_offset) / direct
-        )
-    return maximum
-
-
-def _route_geometry_issue(waypoints):
-    """Return why a sampled route loops back on itself, or ``None``."""
-    points = [(float(point[0]), float(point[1])) for point in waypoints]
-    for first, second, third in zip(points, points[1:], points[2:]):
-        first_heading = math.atan2(second[1] - first[1],
-                                   second[0] - first[0])
-        second_heading = math.atan2(third[1] - second[1],
-                                    third[0] - second[0])
-        turn = abs(second_heading - first_heading)
-        if turn > math.pi:
-            turn = math.pi * 2.0 - turn
-        if turn >= MAX_ROUTE_TURN:
-            return "hairpin %.1f degrees" % math.degrees(turn)
-
-    def orientation(first, second, third):
-        return ((second[0] - first[0]) * (third[1] - first[1]) -
-                (second[1] - first[1]) * (third[0] - first[0]))
-
-    def on_segment(first, second, point):
-        epsilon = 1e-7
-        return (abs(orientation(first, second, point)) <= epsilon and
-                min(first[0], second[0]) - epsilon <= point[0] <=
-                max(first[0], second[0]) + epsilon and
-                min(first[1], second[1]) - epsilon <= point[1] <=
-                max(first[1], second[1]) + epsilon)
-
-    def intersects(first, second, third, fourth):
-        first_side = orientation(first, second, third)
-        second_side = orientation(first, second, fourth)
-        third_side = orientation(third, fourth, first)
-        fourth_side = orientation(third, fourth, second)
-        if (((first_side > 0.0 and second_side < 0.0) or
-             (first_side < 0.0 and second_side > 0.0)) and
-                ((third_side > 0.0 and fourth_side < 0.0) or
-                 (third_side < 0.0 and fourth_side > 0.0))):
-            return True
-        return (on_segment(first, second, third) or
-                on_segment(first, second, fourth) or
-                on_segment(third, fourth, first) or
-                on_segment(third, fourth, second))
-
-    segments = list(zip(points, points[1:]))
-    for first_index, first in enumerate(segments):
-        for second_index in range(first_index + 2, len(segments)):
-            if intersects(first[0], first[1],
-                          segments[second_index][0],
-                          segments[second_index][1]):
-                return "self-intersection at segments %d/%d" % (
-                    first_index, second_index)
-    return None
-
-
-def bake_tactical_routes(graph, map_config, maximum_projection=180.0):
-    """Project tactical intent onto the retained graph and emit safe routes.
-
-    Hand-authored points select a lane, but they are not trusted locomotion
-    coordinates. Every point is projected to the one component that connects
-    both bases, every segment is recomputed over validated graph links, and the
-    result is sampled to the protocol's sixteen-waypoint limit.
-    """
-    routes = {"1": [], "2": []}
-    maximum_offset = 0.0
-    soft_fallbacks = []
-    soft_fallback_causes = {}
-    for route_record in map_config.get("routes", ()):
-        source_points = _oriented_route_points(route_record, map_config)
-        projected = []
-        for point in source_points:
-            node, offset = _nearest_node(
-                graph, point, max_distance=float(maximum_projection) + 0.001)
-            if node is None:
-                raise ValueError("route point has no retained navigation node: %r" %
-                                 (point[:2],))
-            maximum_offset = max(maximum_offset, offset)
-            if offset > float(maximum_projection):
-                raise ValueError("route point projection is implausible: %.1f m" % offset)
-            projected.append(node)
-        if not projected:
-            continue
-        if len(source_points) == 1:
-            full_path = (projected[0],)
-            hold_nodes = set(projected if bool(source_points[0][2]) else ())
-            waypoints = _sample_route_path(graph, full_path, hold_nodes, 2)
-        else:
-            corridor = []
-            for point, node in zip(source_points, projected):
-                corridor.append((point[0], point[1],
-                                 float(graph["heights_mm"][node]) / 1000.0))
-            # One representative hold point is the tactical lane gate;
-            # ordinary points and remaining holds shape the corridor around it.
-            # Making every sketch point mandatory turns a harmless point behind
-            # one building into a U-turn, while making all points soft lets a
-            # hill route collapse onto the direct city road. The hold farthest
-            # from the base line best preserves the route's distinguishing lane.
-            gate_indexes = [0]
-            hold_indexes = [index for index, point in enumerate(source_points)
-                            if bool(point[2]) and index not in
-                            (0, len(source_points) - 1)]
-            if hold_indexes:
-                base_line = (source_points[0], source_points[-1])
-                gate_indexes.append(max(
-                    hold_indexes,
-                    key=lambda index: _distance_to_segment(
-                        source_points[index], base_line[0], base_line[1]),
-                ))
-            gate_indexes.append(len(source_points) - 1)
-            gate_indexes = sorted(set(gate_indexes))
-            full_path = []
-            for gate_number, (start_index, goal_index) in enumerate(
-                    zip(gate_indexes, gate_indexes[1:])):
-                segment = _corridor_graph_path(
-                    graph, projected[start_index], projected[goal_index],
-                    tuple(corridor[start_index:goal_index + 1]))
-                if not segment:
-                    raise ValueError(
-                        "tactical corridor cannot connect route gate %d" %
-                        gate_number
-                    )
-                if full_path and segment[0] == full_path[-1]:
-                    full_path.extend(segment[1:])
-                else:
-                    full_path.extend(segment)
-            full_path = tuple(full_path)
-            hold_nodes = set()
-            for point in source_points:
-                if not bool(point[2]):
-                    continue
-                hold_nodes.add(min(
-                    full_path,
-                    key=lambda node: math.hypot(
-                        _node_point(graph, node)[0] - point[0],
-                        _node_point(graph, node)[1] - point[1]),
-                ))
-            waypoints = _sample_route_path(
-                graph, full_path, hold_nodes, 16,
-                set(projected[index] for index in gate_indexes)
-            )
-            detour = _route_maximum_detour(graph, waypoints)
-            geometry_issue = _route_geometry_issue(waypoints)
-            if detour > MAX_ROUTE_DETOUR or geometry_issue is not None:
-                # Some old hand sketches place their most lateral hold just
-                # behind an impassable ridge. Preserve the entire sketch as a
-                # soft corridor instead of forcing a multi-hundred-metre U-turn.
-                full_path = _corridor_graph_path(
-                    graph, projected[0], projected[-1], tuple(corridor))
-                if not full_path:
-                    raise ValueError("soft tactical corridor cannot connect the team bases")
-                # Once a hard gate proved geometrically unsafe, do not re-add
-                # nearby hold nodes as mandatory samples. They do not alter the
-                # graph path, but can make the 16-point protocol polyline double
-                # back around the same obstacle and reintroduce the hairpin.
-                hold_nodes = set()
-                waypoints = _sample_route_path(
-                    graph, full_path, hold_nodes, 16,
-                    (projected[0], projected[-1]),
-                )
-                route_key = "%d:%s" % (
-                    int(route_record["team"]), route_record["id"])
-                soft_issue = _route_geometry_issue(waypoints)
-                if soft_issue is not None:
-                    raise ValueError(
-                        "soft tactical corridor has invalid geometry: %s" %
-                        soft_issue
-                    )
-                soft_fallbacks.append(route_key)
-                soft_fallback_causes[route_key] = (
-                    geometry_issue or "detour %.2fx" % detour)
-        routes[str(int(route_record["team"]))].append({
-            "id": route_record["id"],
-            "capacity": route_record["capacity"],
-            "risk": round(route_record["risk"], 3),
-            "role_weights": dict(route_record["role_weights"]),
-            "waypoints": waypoints,
-        })
-    graph["bake"]["maximum_route_projection"] = round(maximum_offset, 3)
-    graph["bake"]["soft_route_fallbacks"] = soft_fallbacks
-    graph["bake"]["soft_route_fallback_causes"] = soft_fallback_causes
-    return routes
-
-
 def validate_graph(graph, map_config):
     components = _connected_components(graph)
     if not components:
@@ -1994,7 +1553,9 @@ def bake_graph(resources, map_name, cell_size=4.0, soft_models=None):
         },
     }
     retain_base_component(graph, map_config)
-    graph["routes"] = bake_tactical_routes(graph, map_config)
+    # Physical graph construction never rewrites owner-authored route geometry.
+    # The #1513 adapter publishes exact Default coordinates after this stage.
+    graph["routes"] = {"1": [], "2": []}
     graph["validation"] = validate_graph(graph, map_config)
     return graph
 
@@ -2008,127 +1569,3 @@ def write_graph(path, graph):
         json.dump(graph, output, sort_keys=True, separators=(",", ":"))
         output.write("\n")
     os.replace(temporary, path)
-
-
-def default_output(map_name):
-    return os.path.join(
-        REPO_ROOT,
-        "scripts", "client", "gui", "mods", "offhangar", "navgraphs",
-        map_name + ".json",
-    )
-
-
-def _file_sha256(path):
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _publish_staged_batch(staging_dir, map_names):
-    """Publish a fully validated batch; callers never invoke this on failure."""
-    target_dir = os.path.dirname(default_output(map_names[0]))
-    if not os.path.isdir(target_dir):
-        os.makedirs(target_dir)
-    files = []
-    for map_name in map_names:
-        source = os.path.join(staging_dir, map_name + ".json")
-        files.append({
-            "map": map_name,
-            "file": map_name + ".json",
-            "sha256": _file_sha256(source),
-        })
-    manifest = {
-        "format": FORMAT_NAME + "-manifest",
-        "version": FORMAT_VERSION,
-        "game_version": GAME_VERSION,
-        "maps": files,
-    }
-    manifest_path = os.path.join(staging_dir, "manifest.json")
-    write_graph(manifest_path, manifest)
-    for map_name in map_names:
-        os.replace(os.path.join(staging_dir, map_name + ".json"),
-                   default_output(map_name))
-    # The manifest is the batch completion marker and is always promoted last.
-    os.replace(manifest_path, os.path.join(target_dir, "manifest.json"))
-
-
-def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--client", required=True,
-                        help="Path to the pinned World of Tanks 0.8.2 client")
-    selection = parser.add_mutually_exclusive_group()
-    selection.add_argument("--map", choices=sorted(MAPS))
-    selection.add_argument("--all", action="store_true",
-                           help="Bake and validate every stock 0.8.2 map")
-    parser.add_argument("--cell-size", type=float, default=4.0)
-    parser.add_argument("--output")
-    args = parser.parse_args(argv)
-    if args.all and args.output:
-        parser.error("--output can only be used with one --map")
-    map_names = sorted(MAPS) if args.all else [args.map or "07_lakeville"]
-    packages = os.path.join(os.path.abspath(args.client), "res", "packages")
-    shared_package = os.path.join(packages, "shared_content.pkg")
-    destructibles_path = os.path.join(os.path.abspath(args.client),
-                                      "res", "scripts", "destructibles.xml")
-    for path in (shared_package, destructibles_path):
-        if not os.path.isfile(path):
-            parser.error("required client resource not found: %s" % path)
-    with open(destructibles_path, "rb") as destructibles_file:
-        soft_models = soft_destructible_models(destructibles_file.read())
-
-    failures = []
-    staging_dir = tempfile.mkdtemp(prefix="offhangar-navgraphs-") if args.all else None
-    for map_name in map_names:
-        try:
-            actual_bases = read_client_ctf_bases(args.client, map_name)
-            validate_tactical_bases(map_name, MAPS[map_name], actual_bases)
-        except Exception as error:
-            failures.append((map_name, str(error)))
-            print("FAILED %s: %s" % (map_name, error))
-            continue
-        map_package = os.path.join(packages, map_name + ".pkg")
-        if not os.path.isfile(map_package):
-            failures.append((map_name, "map package not found"))
-            print("FAILED %s: map package not found" % map_name)
-            continue
-        output = (os.path.join(staging_dir, map_name + ".json")
-                  if staging_dir is not None else args.output or default_output(map_name))
-        resources = PackageResources((map_package, shared_package))
-        try:
-            graph = bake_graph(resources, map_name, args.cell_size, soft_models)
-        except Exception as error:
-            failures.append((map_name, str(error)))
-            print("FAILED %s: %s" % (map_name, error))
-            continue
-        finally:
-            resources.close()
-        write_graph(output, graph)
-        validation = graph["validation"]
-        print("Baked %s: %d/%d navigable nodes, %d model instances" % (
-            map_name,
-            sum(value is not None for value in graph["heights_mm"]),
-            len(graph["heights_mm"]),
-            graph["bake"]["model_instances"],
-        ))
-        print("Validated: %d components, largest %.1f%%, base route %.1f m" % (
-            validation["components"],
-            validation["largest_fraction"] * 100.0,
-            validation["base_path_metres"],
-        ))
-        print("Output: %s" % os.path.abspath(output))
-    if failures:
-        print("Bake failed for %d/%d map(s)." % (len(failures), len(map_names)))
-        if staging_dir is not None:
-            shutil.rmtree(staging_dir)
-        return 1
-    if staging_dir is not None:
-        _publish_staged_batch(staging_dir, map_names)
-        shutil.rmtree(staging_dir)
-    print("Bake completed for %d map(s)." % len(map_names))
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

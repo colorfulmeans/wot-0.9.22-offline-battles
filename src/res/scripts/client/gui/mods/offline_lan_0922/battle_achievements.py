@@ -179,6 +179,13 @@ _UNIQUE_BATTLE_HEROES = (
     "supporter", "scout", "evileye", "sniper2",
 )
 
+# Battle Hero and Epic medals qualify a losing/drawing actor for the
+# victory-equivalent resistance bonus. Approachable badges (ironMan, sniper,
+# kamikaze, mastery and marks) do not. Names are the #1513 receipt records.
+COURAGEOUS_RESISTANCE_ACHIEVEMENTS = frozenset(_UNIQUE_BATTLE_HEROES).union(
+    CONDITION_RECORD_NAMES.get(name, name) for name in ACHIEVEMENT_CONDITIONS
+    if name.startswith('medal')).union(('heroesOfRassenay', 'huntsman'))
+
 # "坦克与自行反坦克炮" - every tier-delta medal counts tanks and tank
 # destroyers, never artillery.
 _DIRECT_FIRE_CLASSES = ("lightTank", "mediumTank", "heavyTank", "AT-SPG")

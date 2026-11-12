@@ -23,8 +23,9 @@ assist values, not their sum.
 The percentile distributions themselves are not derivable from client data and
 were never shipped, so ``mastery_catalog`` carries captured retail tables.  The
 comparison population is therefore retail players, not this installation's
-Bots: the bar is the real one, and how easily an offline battle clears it is a
-gameplay question, not a scaling question.
+Bots. The captured EU mastery rows are adjusted only for this port's regional
+special base-XP factors; reference bonuses already present are not applied twice.
+Gun-mark damage distributions are unchanged.
 
 This module is pure data.  It runs on the embedded CPython 2.7.7 runtime.
 """
@@ -32,6 +33,7 @@ This module is pure data.  It runs on the embedded CPython 2.7.7 runtime.
 from __future__ import division
 
 from gui.mods.offline_lan_0922 import mastery_catalog
+from gui.mods.offline_lan_0922 import xp_coefficients
 
 
 # Retail awards one, two and three marks at these percentiles.
@@ -105,9 +107,15 @@ def vehicle_profile(vehicle_type_cd, tier=None, tags=None):
 
 def mastery_thresholds(vehicle_type_cd, tier=None, tags=None):
     """Return the four retail base-XP thresholds, or ``None`` when unknown."""
-    return _lookup(mastery_catalog.MASTERY_XP,
+    row = _lookup(mastery_catalog.MASTERY_XP,
                    mastery_catalog.MASTERY_XP_FALLBACK,
                    vehicle_type_cd, tier, tags)
+    if row is None:
+        return None
+    local, reference = xp_coefficients.mastery_scale(
+        _whole(vehicle_type_cd), _whole(vehicle_type_cd) in mastery_catalog.MASTERY_XP)
+    # Round upwards: a fractional boundary must not award a class early.
+    return tuple((int(value)*local+reference-1)//reference for value in row)
 
 
 def marks_curve(vehicle_type_cd, tier=None, tags=None):

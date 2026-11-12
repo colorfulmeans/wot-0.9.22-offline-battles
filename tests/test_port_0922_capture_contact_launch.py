@@ -13,7 +13,7 @@ from gui.mods.offline_lan_0922 import tank_collision
 
 
 class CaptureReloadTests(unittest.TestCase):
-    def test_canonical_membership_holds_empty_magazine_then_releases(self):
+    def test_canonical_membership_preserves_capture_without_reload_retreat(self):
         h = server_fixture
         planner = h.BotPlanner()
         route = h._route('capture', [(0, 0, False), (0, 450, False)])
@@ -24,44 +24,55 @@ class CaptureReloadTests(unittest.TestCase):
         contact = h._contact(7, 0, 460, [3])
         defense = dict(bases={'1':[dict(id='1:0', x=0.,y=0.,z=0.)],
                               '2':[dict(id='2:0', x=0.,y=0.,z=450.)]},
+            capture_bases={'2':[dict(id='2:0', x=0.,y=0.,z=450.,radius=50.)]},
             states={'1':dict(points=30, time_left=60., invaders=1, stopped=False)},
             contributors={'1':[dict(kind='human',id=7)],
                           '2':[dict(kind='bot',id=3,points=0)]})
         for now in (1., 4., 10., 25.):
             planner.report_contacts([contact], planner.known_targets([state], players), now)
             order = planner.build_orders(manifest, [state], players, now, defense)['orders'][0]
-            self.assertEqual('magazine_reload_hold', order['combat_mode'])
+            self.assertEqual('hold', order['combat_mode'])
             self.assertEqual(0., order['throttle_override'])
-            self.assertEqual(7, order['target_id'])
+            self.assertIsNone(order['target_id'])
+            self.assertEqual(dict(target_kind='human', target_id=7), order['initial_target_hint'])
+            self.assertEqual('2:0', order['capture_area']['id'])
             self.assertFalse(order['fire_allowed'])
-            self.assertTrue(order['tactical_evidence']['withdrawal']['active_capture'])
-            self.assertNotIn(3, planner._retreat_states)
-        # A completed reload returns to combat without needing to leave capture.
+            self.assertEqual([3], planner._base_defense[1]['capture_protection']['protected'])
+            self.assertNotIn('withdrawal', order['tactical_evidence'])
+            self.assertFalse(hasattr(planner, '_retreat_states'))
+        # Reload completion does not grant macro fire/movement authority or
+        # abandon the actual capture circle; native policy owns any shot.
         state.update(clip=4, reload_time=0.)
         planner.report_contacts([contact], planner.known_targets([state], players), 28.)
         ready = planner.build_orders(manifest, [state], players, 28., defense)['orders'][0]
-        self.assertTrue(ready['fire_allowed'])
+        self.assertFalse(ready['fire_allowed'])
+        self.assertIsNone(ready['target_id'])
+        self.assertEqual(7, ready['initial_target_hint']['target_id'])
+        self.assertEqual(0., ready['throttle_override'])
         self.assertNotEqual('base_defense', ready['combat_mode'])
         # Actual capture exit releases only this guard and normal defense applies.
         defense['contributors']['2'] = []
         state.update(z=380., clip=0, reload_time=27.)
         out = planner.build_orders(manifest,[state],players,31.,defense)['orders'][0]
         self.assertEqual('base_defense', out['combat_mode'])
-        self.assertFalse(out['tactical_evidence']['withdrawal']['active_capture'])
+        self.assertEqual([], planner._base_defense[1]['capture_protection']['protected'])
+        self.assertNotIn('withdrawal', out['tactical_evidence'])
 
-    def test_reload_guard_is_membership_not_route_label_or_old_points(self):
+    def test_reload_candidate_keeps_route_without_a_retreat_or_combat_hold(self):
         h=server_fixture; p=h.BotPlanner()
         bot=h._bot(3,1,0,h._route('capture',[(0,0,False),(0,450,False)]),'heavyTank')
         bot['state']=h._weapon_state(h._state(3,1,0,440),clip=0,clip_size=4,reload_time=27.,fire_seq=18)
         focus=dict(id=7,target_kind='human',visible=True,shootable_by_bot_ids=[3],position=dict(x=0.,y=0.,z=460.))
-        order=p._order_for(bot,0,1,focus,[focus],1.,active_capture=False)
-        self.assertIn(order['combat_mode'], ('magazine_reload_retreat','magazine_reload_hold'))
-        self.assertFalse(order['tactical_evidence']['withdrawal']['active_capture'])
-        self.assertIn(3,p._retreat_states)
-        held=p._order_for(bot,0,1,focus,[focus],2.,active_capture=True)
-        self.assertEqual('magazine_reload_hold',held['combat_mode'])
-        self.assertNotIn(3,p._retreat_states)
-        self.assertEqual('active_capture_reload',held['tactical_evidence']['withdrawal']['released'])
+        for now in (1., 2., 30.):
+            order=p._order_for(bot,0,1,focus,[focus],now)
+            self.assertEqual('route',order['combat_mode'])
+            self.assertEqual(dict(x=0.,y=0.,z=450.),order['move_position'])
+            self.assertIsNone(order['throttle_override'])
+            self.assertIsNone(order['target_id'])
+            self.assertEqual(dict(target_kind='human',target_id=7),order['initial_target_hint'])
+            self.assertFalse(order['fire_allowed'])
+            self.assertNotIn('withdrawal',order['tactical_evidence'])
+        self.assertFalse(hasattr(p,'_retreat_states'))
 
 
 class MausPhysicalCorridorTests(unittest.TestCase):
@@ -106,7 +117,7 @@ class TortoiseHandoffTests(unittest.TestCase):
         self.f=runtime_fixture.BotRuntimeTests();self.f.setUp()
     def tearDown(self):
         self.f.tearDown()
-    def test_real_runtime_contact_receipt_survives_contact_response_and_releases_laying(self):
+    def test_real_runtime_contact_receipt_releases_rear_without_old_position_finder(self):
         h=runtime_fixture
         descriptor=h._combat_descriptor(turret_yaw_limits=(-.349,.349),turret_speed=1.)
         rt=self.f.module.BotRuntime(1,descriptor_resolver=lambda unused:descriptor,
@@ -118,7 +129,7 @@ class TortoiseHandoffTests(unittest.TestCase):
         rt.battle_start(self.f.start)
         point=(10.,0.,-100.)
         rt._apply_orders(dict(bot_order_revision=1,bot_orders=[dict(id=11,team=2,
-            combat_mode='cover_hold',target_kind='human',target_id=2,
+            combat_mode='engage',target_kind='human',target_id=2,
             move_position=(0.,0.,0.),aim_position=point,face_position=point,
             fire_range=500.,fire_allowed=False,throttle_override=0.)]))
         player=h._admit_player(dict(id=2,team=1,alive=True,x=10.,y=0.,z=-100.))
@@ -137,8 +148,11 @@ class TortoiseHandoffTests(unittest.TestCase):
                 if released:
                     self.assertNotIn('_rear_aim_episode',state)
             self.assertTrue(released)
-            self.assertIn('_gun_angle_adjustment',state)
-            self.assertIsNotNone(state['_gun_angle_adjustment']['destination'])
+            # This bare BOT physics fixture does not install a shared actor
+            # binding. Its expired rear contact may not resurrect the deleted
+            # independent gun-angle position finder or invent a destination.
+            self.assertNotIn('_gun_angle_adjustment',state)
+            self.assertFalse(hasattr(rt,'_gun_angle_order'))
             self.assertEqual(0,state['fire_seq'])
 
     def test_stationary_contact_expiry_cannot_recreate_rear_episode_and_relocates(self):
@@ -148,7 +162,7 @@ class TortoiseHandoffTests(unittest.TestCase):
             _rear_aim_episode=dict(identity=('bot',8),target_id=8,fire_seq=8,start=1.),
             _rear_contact_refusal=dict(identity=('bot',8),position=(-3.158,-7.225,41.474),yaw=2.057431014,fraction=0.))
         target=dict(kind='bot',id=8,alive=True,position=(1.,-7.225,160.))
-        order=dict(combat_mode='cover_hold',target_id=8,target_kind='bot',fire_allowed=False,
+        order=dict(combat_mode='engage',target_id=8,target_kind='bot',fire_allowed=False,
             move_position=(-3.158,-7.225,41.474),throttle_override=0.)
         out=rt._rear_laying_order(state,order,{8:target},2.)
         self.assertNotIn('_rear_aim_episode',state)
@@ -158,50 +172,100 @@ class TortoiseHandoffTests(unittest.TestCase):
         for backend in (None,(1.,0.,1)):
             with mock.patch.object(driver.native_math,'call',return_value=backend) as native:
                 self.assertEqual((0.,0.,False),driver.combat_hull_aim(state['yaw'],bearing,-.349,.349,
-                    0.,0.,'arrived',True,combat_mode='cover_hold',movement_intent=False,allow_rear_start=False))
+                    0.,0.,'arrived',True,combat_mode='engage',movement_intent=False,allow_rear_start=False))
                 native.assert_not_called()
                 self.assertEqual((0.,0.,False),driver._reference_combat_hull_aim(
                     state['yaw'],bearing,-.349,.349,0.,0.,'arrived',True,
-                    combat_mode='cover_hold',movement_intent=False,allow_rear_start=False))
-        rt._gun_angle_order(state,out,{8:target},2.,lambda *args:True)
-        moved=rt._gun_angle_order(state,out,{8:target},4.,lambda *args:True)
-        self.assertIn(moved['combat_mode'],('gun_angle_adjust','withdraw'))
-        self.assertNotEqual(order['move_position'],moved['move_position'])
-        self.assertNotEqual(0.,moved['throttle_override'])
-        self.assertEqual(8,moved['target_id'])
+                    combat_mode='engage',movement_intent=False,allow_rear_start=False))
+        from test_player_combat_stop import Scene
+        shared=Scene()
+        shared.candidate.update(key=(0,('bot',2),0,'penetration'),sample=0)
+        shared.runtime.point_recovery_probe=lambda candidate,destination,now:dict(
+            status='clear',fire_permission=False)
+        recovered=shared.apply(0.)
+        self.assertEqual('gun_angle_adjust',recovered['combat_mode'])
+        self.assertNotEqual(shared.target['position'],recovered['move_position'])
+        self.assertFalse(recovered['fire_allowed'])
+        self.assertFalse(hasattr(rt,'_gun_angle_order'))
         # Neither the cooldown nor contact receipt suppresses normal forward aim.
         self.assertTrue(driver.combat_hull_aim(0.,.5,-.349,.349,0.,0.,'arrived',True,
-            combat_mode='cover_hold',movement_intent=False,allow_rear_start=False)[2])
+            combat_mode='engage',movement_intent=False,allow_rear_start=False)[2])
         self.assertTrue(driver.combat_hull_aim(0.,2.,-.349,.349,0.,0.,'arrived',True,
-            combat_mode='cover_hold',movement_intent=False,allow_rear_start=True)[2])
+            combat_mode='engage',movement_intent=False,allow_rear_start=True)[2])
 
 
-    def test_pivot_handoff_cleans_up_on_completion_failure_target_and_priority_change(self):
-        for terminal in ('arrived','stalled','blocked','new_target','front_arc','base_defense'):
-            with self.subTest(terminal=terminal):
-                rt=self.f.module.BotRuntime(1)
-                state=dict(id=23,x=0.,y=0.,z=0.,yaw=0.,speed=0.,
-                    profile={'class_tag':'AT-SPG'},_gun_angle_pivot_refusal=('bot',8))
-                target=dict(kind='bot',id=8,alive=True,position=(10.,0.,-100.))
-                targets={8:target,9:dict(target,id=9)}
-                order=dict(target_id=8,target_kind='bot',combat_mode='cover_hold',
-                    move_position=(0.,0.,0.),aim_position=target['position'],
-                    face_position=target['position'],throttle_override=0.)
-                rt._gun_yaw_limits[23]=(-.349,.349,True)
-                clear=lambda *args:terminal!='blocked'
-                rt._gun_angle_order(state,order,targets,1.,clear)
-                rt._gun_angle_order(state,order,targets,3.,clear)
-                if terminal=='arrived':state['z']=8.
-                elif terminal=='new_target':order['target_id']=9
-                elif terminal=='front_arc':target['position']=(0.,0.,100.)
-                elif terminal=='base_defense':order['combat_mode']='base_defense'
-                result=rt._gun_angle_order(state,order,targets,10.,clear)
-                self.assertNotIn('_gun_angle_pivot_refusal',state)
-                self.assertNotIn('_gun_angle_adjustment',state)
-                if terminal in ('stalled','blocked'):
-                    self.assertEqual('advance_contact',result['combat_mode'])
-                    self.assertEqual(8,result['target_id'])
-                    self.assertTrue(rt._gun_angle_rejected(state,('bot',8),10.))
+    def test_shared_point_recovery_arrival_rechecks_before_fire_and_never_finds_a_second_position(self):
+        from test_player_combat_stop import Scene
+        scene=Scene()
+        scene.candidate.update(key=(0,('bot',2),0,'penetration'),sample=0)
+        scene.runtime.point_recovery_probe=lambda *args:dict(status='clear',fire_permission=False)
+        first=scene.apply(0.)
+        goal=scene.owner._physical_recovery['goal']
+        self.assertEqual('gun_angle_adjust',first['combat_mode'])
+        self.assertFalse(hasattr(scene.runtime.engine,'_gun_angle_order'))
+        scene.position(goal)
+        arrived=scene.apply(.1)
+        self.assertEqual('engage',arrived['combat_mode'])
+        self.assertFalse(arrived['fire_allowed'])
+        self.assertTrue(scene.owner._physical_recovery['checking'])
+        self.assertIsNone(scene.owner._physical_recovery['goal'])
+        # A preview at a future position never becomes present-position fire
+        # evidence simply because the original driver reached that position.
+        self.assertEqual(0,scene.state['fire_seq'])
+
+    def test_shared_point_recovery_blocked_and_stalled_restore_the_original_route(self):
+        from test_player_combat_stop import Scene
+        for failure in ('blocked','stalled'):
+            with self.subTest(failure=failure):
+                scene=Scene()
+                scene.raw_order.update(combat_mode='route',target_id=None,target_kind=None,
+                    move_position=(20.,0.,-30.),throttle_override=None,fire_allowed=False)
+                scene.candidate.update(key=(0,('bot',2),0,'penetration'),sample=0)
+                scene.runtime.point_recovery_probe=(lambda *args:dict(
+                    status='blocked' if failure=='blocked' else 'clear',
+                    fire_permission=False))
+                first=scene.apply(0.)
+                scene.state['_gun_angle_pivot_refusal']=('bot',2)
+                if failure=='blocked':
+                    for tick in range(1,20):
+                        last=scene.apply(tick*.1)
+                        if not scene.owner.combat_owned:
+                            break
+                else:
+                    self.assertEqual('gun_angle_adjust',first['combat_mode'])
+                    last=scene.apply(10.)
+                self.assertEqual('route',last['combat_mode'])
+                self.assertEqual((20.,0.,-30.),last['move_position'])
+                self.assertIsNone(scene.owner._physical_recovery)
+                self.assertFalse(scene.owner.stop_allowed)
+                self.assertNotIn('_gun_angle_pivot_refusal',scene.state)
+                self.assertNotIn('_gun_angle_adjustment',scene.state)
+                self.assertFalse(last['fire_allowed'])
+
+    def test_shared_point_recovery_respects_new_target_and_high_priority_travel(self):
+        from test_player_combat_stop import Scene
+        scene=Scene()
+        scene.raw_order.update(combat_mode='route',target_id=None,target_kind=None,
+            move_position=(20.,0.,-30.),throttle_override=None,fire_allowed=False)
+        scene.candidate.update(key=(0,('bot',2),0,'penetration'),sample=0)
+        scene.runtime.point_recovery_probe=lambda *args:dict(status='clear',fire_permission=False)
+        first=scene.apply(0.)
+        goal=first['move_position']
+        other=dict(scene.target,id=9,network_id=9,position=(10.,0.,-100.))
+        scene.runtime._targets=(scene.target,other)
+        scene.candidate['target']=other
+        scene.decide('firing_position')
+        switched=scene.apply(.1)
+        self.assertEqual(2,switched['target_id'])
+        self.assertEqual(goal,switched['move_position'])
+        self.assertFalse(switched['fire_allowed'])
+        scene.raw_order.update(combat_mode='base_defense',target_id=None,target_kind=None,
+            move_position=(80.,0.,80.),throttle_override=None)
+        priority=scene.apply(.2)
+        self.assertEqual('base_defense',priority['combat_mode'])
+        self.assertEqual((80.,0.,80.),priority['move_position'])
+        self.assertIsNone(scene.owner._physical_recovery)
+        self.assertFalse(scene.owner.stop_allowed)
 
 
 

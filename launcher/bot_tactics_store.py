@@ -53,7 +53,7 @@ def default_spg_positions(name, graph, profile=None):
     if entry is None:
         for path in (_source.parents[3]/'server',_bundled.parents[3]/'server'):
             if path.is_dir() and str(path) not in sys.path:sys.path.insert(0,str(path))
-        from server_bot_ai import BotPlanner
+        from gui.mods.offline_lan_0922.vehicle_control.strategy import BotPlanner
         planner=BotPlanner()
         routes,_=runtime.default_routes(profile or contract.empty(),name,graph)
         result=[]

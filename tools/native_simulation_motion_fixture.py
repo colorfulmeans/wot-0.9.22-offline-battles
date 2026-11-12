@@ -37,6 +37,9 @@ def _graph(map_name='01_karelia', waypoint_count=2):
         'game_version': '0.9.22.0.1-cn-1513', 'map': map_name,
         'cell_size': 4.0, 'origin': (0.0, 0.0), 'bounds': (0, 0, 8, 0),
         'width': 3, 'height': 1, 'heights_mm': (0, 0, 0),
+        # Link bits 3 and 4 represent west/east in the eight-direction schema.
+        'directions': ((-1, -1), (0, -1), (1, -1), (-1, 0),
+                       (1, 0), (-1, 1), (0, 1), (1, 1)),
         'links': (1 << 4, (1 << 3) | (1 << 4), 1 << 3),
         'hazards': (0, 0, 0),
         'spawn_anchors': ((0.0, 0.0), (8.0, 0.0)),
@@ -339,6 +342,20 @@ def graph():
 
 
 
+class _AllocationRandom(object):
+    """Fix only the fixture's initial route lottery, not process randomness."""
+
+    def __init__(self, source, seed):
+        self._source = source
+        self._seed = seed
+
+    def __getattr__(self, name):
+        return getattr(self._source, name)
+
+    def SystemRandom(self):
+        return self._source.Random(self._seed)
+
+
 class HostScene(object):
     def __init__(self, mode, runtime_class=None, native_library=None):
         self.mode = str(mode)
@@ -390,11 +407,19 @@ class HostScene(object):
             spawn_resolver=self.spawn,
             baked_graph=graph(), control_seconds=bot_runtime.WORKER_CONTROL_SECONDS)
         self.owner._bots = self.runtime
-        self.runtime.battle_start(dict(round_id=5, map='01_karelia',
-            bot_authority_id=1, bot_skill_mode='brutal', bots=[
-                dict(id=11+i, team=1 if i<14 else 2,
-                     slot=i if i<14 else i-14, name='HostBot-%d'%i)
-                for i in range(29)]))
+        # Paired native/reference arms must begin with the same complete state,
+        # including the shipping Default route lottery. Keep the production
+        # allocator intact and do not replace stdlib random.SystemRandom.
+        source_random = bot_runtime.random
+        try:
+            bot_runtime.random = _AllocationRandom(source_random, 1513)
+            self.runtime.battle_start(dict(round_id=5, map='01_karelia',
+                bot_authority_id=1, bot_skill_mode='brutal', bots=[
+                    dict(id=11+i, team=1 if i<14 else 2,
+                         slot=i if i<14 else i-14, name='HostBot-%d'%i)
+                    for i in range(29)]))
+        finally:
+            bot_runtime.random = source_random
         self.runtime.debug_logging = False
         for state in self.runtime.states.values():
             point, yaw = self.spawn(state['team'], state['slot'])

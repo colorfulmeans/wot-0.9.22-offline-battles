@@ -6,6 +6,55 @@ from gui.mods.offline_lan_0922 import compat, native_input_diagnostics as logs
 
 
 class ModelRefreshDiagnosticsTests(unittest.TestCase):
+    def test_captured_explosion_supersedes_only_current_dead_destroyed_completion(self):
+        for completion_order in (('destroyed', 'exploded'), ('exploded', 'destroyed')):
+            with self.subTest(order=completion_order):
+                damage=types.SimpleNamespace(modelState='exploded')
+                vehicle=types.SimpleNamespace(id=23,health=0)
+                appearance=types.SimpleNamespace(_CompoundAppearance__vehicle=vehicle,
+                    _CompoundAppearance__currentDamageState=damage)
+                vehicle.appearance=appearance
+                installed=[]
+                def refresh(subject,state,resources):
+                    self.assertEqual(damage.modelState,state)
+                    installed.append((state,resources))
+                    return 'stock-result'
+                owner=types.SimpleNamespace(_battle_active=True,
+                    _runtime=types.SimpleNamespace(bigworld=types.SimpleNamespace(entity=lambda identity:vehicle)),
+                    _original_compound_models_refresh=refresh)
+                with mock.patch.object(logs,'detailed_enabled',return_value=True):
+                    for state in completion_order:
+                        result=compat._run_model_refresh_callback(owner,appearance,state,state+'-resource')
+                        self.assertEqual('stock-result' if state=='exploded' else None,result)
+                self.assertEqual([('exploded','exploded-resource')],installed)
+                self.assertEqual('exploded',damage.modelState)
+                self.assertEqual({'returned','superseded'},
+                    {r['result'] for r in owner._model_refresh_callbacks})
+
+    def test_unknown_or_rebound_lifecycles_keep_stock_failure(self):
+        for mode in ('alive','rebound_appearance','reused_id','not_battle','unknown_state'):
+            with self.subTest(mode=mode):
+                vehicle=types.SimpleNamespace(id=23,health=0)
+                damage=types.SimpleNamespace(modelState='exploded')
+                appearance=types.SimpleNamespace(_CompoundAppearance__vehicle=vehicle,
+                    _CompoundAppearance__currentDamageState=damage)
+                vehicle.appearance=appearance
+                current=vehicle
+                if mode=='alive':vehicle.health=1
+                if mode=='rebound_appearance':vehicle.appearance=object()
+                if mode=='reused_id':current=object()
+                if mode=='unknown_state':damage.modelState='unknown'
+                error=AssertionError('unreviewed lifecycle')
+                original=mock.Mock(side_effect=error)
+                owner=types.SimpleNamespace(_battle_active=mode!='not_battle',
+                    _runtime=types.SimpleNamespace(bigworld=types.SimpleNamespace(entity=lambda identity:current)),
+                    _original_compound_models_refresh=original)
+                with mock.patch.object(logs,'detailed_enabled',return_value=False):
+                    with self.assertRaises(AssertionError) as caught:
+                        compat._run_model_refresh_callback(owner,appearance,'destroyed',['resource'])
+                self.assertIs(error,caught.exception)
+                original.assert_called_once()
+
     def test_instance_history_survives_unrelated_global_callback_traffic(self):
         owner=types.SimpleNamespace(_battle_active=True,
             _original_compound_models_refresh=lambda *a:42)

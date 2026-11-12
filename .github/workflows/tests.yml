@@ -81,13 +81,24 @@ jobs:
           python-version: "3.11"
       - name: Install pinned test dependencies
         run: python -m pip install Pillow==12.3.0 numpy==2.3.5 moderngl==5.12.0 glcontext==3.0.0
-      - name: Check traffic, withdrawal and slope aiming independently
+      - name: Verify single shared vehicle-control ownership and actor contracts
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python tools/check_shared_vehicle_control.py --check
+      - name: Check traffic, retired tactics and slope aiming independently
         env:
           PYTHONDONTWRITEBYTECODE: "1"
           PYTHONPATH: tests:server:src/res/scripts/client
         run: |
           set -euo pipefail
           patterns=(
+            'test_shared*.py'
+            'test_report_141918_control_regression.py'
+            'test_native_motion_fixture_initial_state.py'
+            'test_player*.py'
+            'test_retired_tactical_cleanup.py'
+            'test_current_default_route_authority.py'
+            'test_navigation_rebake_default_authority.py'
             'test_port_0922_ai.py'
             'test_port_0922_house_corner_feedback.py'
             'test_diagnostic_log_modes.py'
@@ -111,7 +122,6 @@ jobs:
             'test_bot_shot_ammo_policy.py'
             'test_bot_ammo_late_results.py'
             'test_bot_tier_consumables.py'
-            'test_bot_fittings.py'
             'test_artillery_motion_reference.py'
             'test_artillery_acceptance_followup.py'
             'test_port_0922_contact*.py'
@@ -177,6 +187,54 @@ jobs:
           done
           python tools/run_test_suite.py --jobs 4 --logs build/bot-test-results/traffic "${arguments[@]}"
 
+      - name: Check coherent 2015 earnings and atomic native settlement
+        if: ${{ !cancelled() }}
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          PYTHONPATH: tests:server:src/res/scripts/client
+        run: >-
+          python tools/run_test_suite.py --jobs 3
+          --logs build/bot-test-results/earnings
+          --pattern test_port_0922_offline_rewards.py
+          --pattern test_port_0922_postbattle.py
+          --pattern test_port_0922_lan_protocol.py
+          --pattern test_port_0922_crew_settlement.py
+          --pattern test_port_0922_friendly_fire.py
+          --pattern test_port_0922_economy.py
+          --pattern test_port_0922_economy_payloads.py
+          --pattern test_port_0922_economy_regressions.py
+
+      - name: Check equipment effects, physical crew skills and elite ammunition
+        if: ${{ !cancelled() }}
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          PYTHONPATH: tests:server:src/res/scripts/client
+        run: >-
+          python tools/run_test_suite.py --jobs 3
+          --logs build/bot-test-results/fittings-ammunition
+          --pattern test_bot_fittings.py
+          --pattern test_vehicle_fitting_context.py
+          --pattern test_port_0922_equipment_skill_effects.py
+          --pattern test_fire_decay_model.py
+          --pattern test_shot_dispersion.py
+          --pattern test_equipment_followup.py
+          --pattern test_equipment_acceptance_matrix.py
+          --pattern test_port_0922_crew_settlement.py
+          --pattern test_port_0922_roof_crush_test.py
+          --pattern test_port_0922_equipment_mechanics.py
+          --pattern test_port_0922_consumable_audit.py
+          --pattern test_bot_tier_consumables.py
+          --pattern test_port_0922_conditional_crew.py
+          --pattern test_port_0922_loadout.py
+          --pattern test_port_0922_equipment_policy.py
+          --pattern test_port_0922_bonds_and_directives.py
+          --pattern test_port_0922_environment_modules.py
+          --pattern test_port_0922_critical_damage.py
+          --pattern test_port_0922_server_projectiles.py
+          --pattern test_port_0922_lan_client_projectiles.py
+          --pattern test_special_default_loadouts.py
+          --pattern test_elite_premium_ammo.py
+
       - name: Check customization economy and durable rental settlement
         if: ${{ !cancelled() }}
         env:
@@ -201,6 +259,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           docker run --rm -v "$PWD:/work" -w /work python:2.7.18 python -c "import os; paths=[os.path.join(base,name) for base,dirs,files in os.walk('src/res/scripts/client') for name in files if name.endswith('.py')]; [compile(open(p,'rb').read(),p,'exec') for p in paths]; print('%d client modules compile under Python 2.7' % len(paths))"
+      - name: Exercise 29 shared actors with real worker scheduling and record work
+        if: ${{ !cancelled() }}
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: >-
+          python tools/check_shared_multi_bot_combat.py
+          --actors 29 --frames 60 --warmup 10 --schedule worker10
+          --output build/bot-test-results/shared-multi-bot-combat.json
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
@@ -283,6 +349,10 @@ jobs:
               /tmp/offline_math_batch_native.so
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_simulation_weapons.py \
               /tmp/offline_math_batch_native.so /src/src/res/scripts/client
+            g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror \
+              -I native tools/check_native_trigger.cpp \
+              native/offline_simulation_weapons.cpp -o /tmp/wot-native-trigger-check
+            /tmp/wot-native-trigger-check
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_destructibles.py \
               /tmp/offline_math_batch_native.so
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_box_geometry.py \
@@ -372,7 +442,7 @@ jobs:
           -e WOT_OFFLINE_DEPOT_STYLE_SWF=/work/build/depot/lobby.swf
           -e WOT_OFFLINE_BUILD_IDENTITY="colorfulmeans-${{ github.run_id }}-${{ github.run_attempt }}"
           -w /work python:2.7.18
-          sh -c 'python tests/test_port_0922_barracks_sorting.py -v && python build_wotmod.py'
+          sh -c 'python tests/test_port_0922_barracks_sorting.py -v && python tests/test_player_embedded_contract.py -v && python build_wotmod.py'
       - name: Verify all current client bytecode
         run: docker run --rm -v "$PWD:/work" -w /work python:2.7.18 python tools/verify_release0100_code.py dist/org.colorfulmeans.offline_lan_0922_1.1.1.wotmod
       - name: Validate 0.9.22 wotmod package
@@ -641,7 +711,6 @@ jobs:
         shell: pwsh
         run: pwsh -NoProfile -File launcher/build_launcher.ps1
       - uses: actions/upload-artifact@v4
-        id: launcher_download
         with:
           name: wot-0.9.22-offline-battles-launcher
           # Upload the runnable folder; Actions supplies the only outer ZIP.
@@ -651,9 +720,9 @@ jobs:
       - name: Extract the actual download once
         uses: actions/download-artifact@v4
         with:
-          artifact-ids: ${{ steps.launcher_download.outputs.artifact-id }}
-          merge-multiple: true
-          github-token: ${{ github.token }}
+          # Same-run name lookup stays on the Actions artifact service.
+          # An immediate REST ID lookup can return Not Found just after upload.
+          name: wot-0.9.22-offline-battles-launcher
           path: ${{ runner.temp }}/launcher-download
       - name: Verify that the bundled servers run from the launcher
         shell: pwsh

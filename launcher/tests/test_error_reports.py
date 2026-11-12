@@ -1156,18 +1156,27 @@ class ErrorReportTest(unittest.TestCase):
                 core.LauncherError, "No launcher game session"):
             error_reports.create_report()
 
-    def test_explorer_command_selects_the_exact_zip(self):
+    def test_explorer_command_selects_the_zip_at_its_resolved_path(self):
         report = os.path.join(self.root, "report with spaces.zip")
+        physical = os.path.join(self.root, "LocalCache", "report with spaces.zip")
         self._write(report, b"zip")
-        calls = []
+        for location in (report, physical):
+            with self.subTest(redirected=location != report):
+                runner = mock.Mock()
+                with mock.patch.object(error_reports.os.path, "realpath",
+                                       return_value=location) as resolve:
+                    error_reports.select_in_explorer(report, runner=runner)
 
-        error_reports.select_in_explorer(
-            report, runner=lambda *args, **kwargs: calls.append(
-                (args, kwargs)))
+                resolve.assert_called_once_with(report)
+                self.assertEqual(["explorer.exe", "/select,", location],
+                                 runner.call_args.args[0])
 
-        self.assertEqual(
-            ["explorer.exe", "/select,", os.path.normpath(report)],
-            calls[0][0][0])
+    def test_missing_report_never_opens_an_explorer_window(self):
+        runner = mock.Mock()
+        with self.assertRaisesRegex(core.LauncherError, "ZIP is missing"):
+            error_reports.select_in_explorer(
+                os.path.join(self.root, "missing.zip"), runner=runner)
+        runner.assert_not_called()
 
 
 if __name__ == "__main__":

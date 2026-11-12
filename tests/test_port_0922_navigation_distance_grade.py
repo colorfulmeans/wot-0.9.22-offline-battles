@@ -1,9 +1,11 @@
 """Legacy selection and observational slope receipts must not change driving."""
 import contextlib
 import copy
+import importlib
 import io
 import math
 import unittest
+from unittest import mock
 from test_port_0922_navigation import TerrainGrid, StaticHullNavigationTests
 import test_port_0922_bot_runtime as bots
 
@@ -83,9 +85,15 @@ class SurfaceObservationTests(unittest.TestCase):
         def failed(*args):raise ValueError('native surface unavailable')
         runtime._navigation_surface_probe=failed
         runtime._queue_navigation_surface_trace(state,{},0.)
-        with contextlib.redirect_stdout(io.StringIO()) as output:
+        diagnostics=importlib.import_module(
+            'gui.mods.offline_lan_0922.native_input_diagnostics')
+        with mock.patch.object(diagnostics, 'write_json_record') as record:
             runtime._drain_navigation_surface_trace(0.)
-        self.assertIn('ValueError',output.getvalue())
+        record.assert_called_once()
+        label, payload=record.call_args[0]
+        self.assertEqual('BOT SLOPE', label)
+        self.assertEqual('ValueError', payload['observation']['surface']['error'])
+        self.assertFalse(payload['decision_input'])
         self.assertEqual(before,state)
 
     def test_new_round_discards_queued_old_positions(self):
@@ -99,22 +107,18 @@ class SurfaceObservationTests(unittest.TestCase):
 
 class RawSurfaceContractTests(unittest.TestCase):
     def test_signed_normal_is_directional_and_missing_stays_unknown(self):
-        import ast
-        from pathlib import Path
         from types import SimpleNamespace
-        source=(Path(__file__).resolve().parents[1]/'src/res/scripts/client/gui/mods/offline_lan_0922/battle_runtime.py').read_text(encoding='utf-8')
-        cls=next(n for n in ast.parse(source).body if isinstance(n,ast.ClassDef) and n.name=='BattleRuntime')
-        method=next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=='_navigation_surface_observation')
-        namespace=dict(math=math,VEHICLE_SKIP_FLAGS=128)
-        exec(compile(ast.Module(body=[method],type_ignores=[]),'surface_probe','exec'),namespace)
+        from gui.mods.offline_lan_0922.collision_flags import VEHICLE_SKIP_FLAGS
+        from gui.mods.offline_lan_0922.vehicle_control.geometry import SharedBattleGeometry
+        method=SharedBattleGeometry._navigation_surface_observation
         calls=[];hits=[((0.,0.,4.),(0.,1.,-.5)),None]
         def collide(*args):calls.append(args);return hits.pop(0)
         runtime=SimpleNamespace(_avatar=SimpleNamespace(spaceID=7),_vector=lambda p:p,
             _runtime=SimpleNamespace(bigworld=SimpleNamespace(wg_collideSegment=collide)))
-        first=namespace['_navigation_surface_observation'](runtime,(0.,0.,4.),0.)
+        first=method(runtime,(0.,0.,4.),0.)
         self.assertAlmostEqual(math.degrees(math.atan(.5)),first['directional_angle_degrees'])
-        self.assertEqual((7,(0.,8.,4.),(0.,-30.,4.),128),calls[0])
-        missing=namespace['_navigation_surface_observation'](runtime,(0.,0.,4.),math.pi)
+        self.assertEqual((7,(0.,8.,4.),(0.,-30.,4.),VEHICLE_SKIP_FLAGS),calls[0])
+        missing=method(runtime,(0.,0.,4.),math.pi)
         self.assertEqual('missing',missing['status'])
         self.assertNotIn('directional_angle_degrees',missing)
 

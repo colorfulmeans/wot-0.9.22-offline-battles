@@ -147,7 +147,7 @@ class RuntimeReceiptTests(unittest.TestCase):
 
     def test_order_evidence_freezes_input_points_without_changing_the_order(self):
         from gui.mods.offline_lan_0922.bot_runtime import _order_evidence
-        order=dict(combat_mode='withdraw',move_position=dict(x=1.,y=2.,z=3.),
+        order=dict(combat_mode='engage',move_position=dict(x=1.,y=2.,z=3.),
                    face_position=[4.,5.,6.],throttle_override=0.)
         saved=copy.deepcopy(order)
         receipt=_order_evidence(order)
@@ -159,28 +159,28 @@ class RuntimeReceiptTests(unittest.TestCase):
 
     def test_server_order_transformations_survive_cached_execution(self):
         from unittest import mock
-        self.runtime._server_orders[11] = dict(combat_mode='withdraw',
+        self.runtime._server_orders[11] = dict(combat_mode='advance_contact',
             move_position=(10.,0.,20.), fire_allowed=False,
-            tactical_evidence=dict(at=500.,selection=dict(outcome='no_local_lane')))
-        def hold(state, order, targets, now, clear):
+            tactical_evidence=dict(at=500.,selection=dict(outcome='movement_lease')))
+        def hold(state, order, targets, now):
             return dict(order, move_position=(state['x'],state['y'],state['z']),
-                        throttle_override=0., combat_mode='under_fire_withdraw')
-        with mock.patch.object(self.runtime,'_rear_laying_order',side_effect=lambda s,o,t,n:o), \
-                mock.patch.object(self.runtime,'_artillery_position_order',side_effect=lambda s,o,t,n:o), \
-                mock.patch.object(self.runtime,'_gun_angle_order',side_effect=hold):
+                        throttle_override=0., combat_mode='engage')
+        with mock.patch.object(self.runtime,'_rear_laying_order',side_effect=hold), \
+                mock.patch.object(self.runtime,'_artillery_position_order',side_effect=lambda s,o,t,n:o):
             self.runtime.update(.04,1.)
             first=copy.deepcopy(self.runtime._decision_cache[11][3]['order_evidence'])
             self.runtime.update(.04,1.04)
         current=self.runtime._decision_cache[11][3]['order_evidence']
         self.assertEqual(first,current)
         self.assertEqual(1.,current['sampled_at'])
-        self.assertEqual(['server_live_target','rear_laying','artillery_position','gun_angle'],
+        self.assertEqual(['server_live_target','rear_laying','artillery_position'],
                          [stage['stage'] for stage in current['stages']])
-        self.assertEqual('withdraw',current['stages'][0]['order']['combat_mode'])
+        self.assertEqual('advance_contact',current['stages'][0]['order']['combat_mode'])
         self.assertEqual(0.,current['final_order']['throttle_override'])
+        self.assertEqual('engage',current['final_order']['combat_mode'])
         self.assertEqual(500.,current['server_selection']['at'])
-        self.assertEqual('no_local_lane',current['server_selection']['selection']['outcome'])
-        self.assertEqual('withdraw',current['received_order']['combat_mode'])
+        self.assertEqual('movement_lease',current['server_selection']['selection']['outcome'])
+        self.assertEqual('advance_contact',current['received_order']['combat_mode'])
 
     def test_refresh_creates_new_identity_without_mutating_old_witness(self):
         self.runtime.update(.04, 1.)
@@ -240,7 +240,7 @@ class RuntimeReceiptTests(unittest.TestCase):
         self.assertEqual(list(range(43, 91)), [r['query_index'] for r in receipt['queries']])
 
     def test_no_probe_and_same_callback_hold_are_explicit(self):
-        self.fixture.adapters[0].decide = lambda *args: dict(throttle=0., turn=0., fire_allowed=False)
+        self.fixture.adapters[0].fixture_controls = lambda *args: dict(throttle=0., turn=0., fire_allowed=False)
         self.runtime.update(.04, 1.)
         receipt = self.runtime._decision_cache[11][3]['planning_receipt']
         self.assertEqual(0, receipt['query_count'])
@@ -267,7 +267,7 @@ class RuntimeReceiptTests(unittest.TestCase):
                 def decide(state, clear):
                     clear(state['yaw'], distance)
                     return dict(throttle=0., turn=0., fire_allowed=False)
-                self.runtime.adapter.decide = decide
+                self.runtime.adapter.fixture_controls = decide
                 self.runtime.update(.04, float(index + 1))
                 receipt = self.runtime._decision_cache[11][3]['planning_receipt']
                 self.assertEqual(expected, receipt['queries'][0]['reason'])
@@ -375,27 +375,36 @@ class LeaseAndEntryReceiptTests(unittest.TestCase):
             shootable_by_bot_ids=[11])
         cases=((dict(contact,radio_bot_until={}), 'not_known_to_bot'),
                (dict(contact,visible=False), 'not_visible'),
-               (dict(contact,shootable_by_bot_ids=[]), 'no_local_lane'),
-               (dict(contact,position=dict(x=0.,y=0.,z=5000.)), 'outside_engagement_range'),
+               (dict(contact,shootable_by_bot_ids=[]), 'eligible'),
+               (dict(contact,position=dict(x=0.,y=0.,z=5000.)), 'eligible'),
                (contact, 'eligible'))
         for candidate,reason in cases:
-            p._assign_targets([bot],[candidate],1.)
+            p._initial_target_hints([bot],[candidate],1.)
             receipt=p._target_decisions[11]
             self.assertEqual(reason,receipt['candidates'][0]['reason'])
             self.assertIn('radio_until',receipt['candidates'][0])
             self.assertEqual(bot['state']['clip'],receipt['weapon']['clip'])
             self.assertNotEqual('evaluating',receipt['outcome'])
-            self.assertIn('lease_after',receipt)
-        p._assign_targets([bot],[],2.)
-        self.assertEqual('no_team_contacts',p._target_decisions[11]['outcome'])
+            self.assertEqual('initial_hint',receipt['owner'])
+            self.assertNotIn('lease_after',receipt)
+            if reason == 'eligible' and not candidate['shootable_by_bot_ids']:
+                self.assertFalse(receipt['candidates'][0]['local_lane'])
+                self.assertFalse(receipt['candidates'][0]['ready'])
+                self.assertEqual('evaluation_pending',receipt['outcome'])
+                self.assertEqual(('human',2),receipt['selected'])
+        p._initial_target_hints([bot],[],2.)
+        self.assertEqual('no_live_contact',p._target_decisions[11]['outcome'])
         order=p.build_orders(f.manifest,f.states,[],3.)['orders'][0]
         evidence=order['tactical_evidence']
         self.assertEqual('server_monotonic_seconds',evidence['clock_basis'])
         self.assertEqual(order['combat_mode'],evidence['final']['combat_mode'])
         self.assertEqual(order['fire_allowed'],evidence['final']['fire_allowed'])
-        self.assertIn('retreat_before',evidence)
-        self.assertIn('retreat_after',evidence)
-        self.assertEqual('empty_magazine_only',evidence['withdrawal']['reason'])
+        self.assertNotIn('retreat_before',evidence)
+        self.assertNotIn('retreat_after',evidence)
+        self.assertNotIn('withdrawal',evidence)
+        self.assertNotIn('firing_hold',evidence)
+        self.assertFalse(hasattr(p,'_retreat_states'))
+        self.assertFalse(hasattr(p,'_firing_holds'))
         p.reset(4)
         self.assertEqual({},p._target_decisions)
 

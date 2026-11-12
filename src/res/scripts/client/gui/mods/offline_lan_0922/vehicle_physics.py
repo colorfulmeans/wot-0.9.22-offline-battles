@@ -973,6 +973,32 @@ def derive_suspension_params(descriptor):
 	}
 
 
+def ground_pose_for_yaw(pitch, roll, old_yaw, new_yaw):
+	'''Preserve a measured world-space support plane under a body yaw change.'''
+	nx, ny, nz = suspension_point_offset(dict(x=0.0, y=1.0, z=0.0), pitch, roll)
+	delta = (float(new_yaw) - float(old_yaw) + math.pi) % (2.0 * math.pi) - math.pi
+	local_x = math.cos(delta) * nx - math.sin(delta) * nz
+	local_z = math.sin(delta) * nx + math.cos(delta) * nz
+	return math.atan2(local_z, ny), math.atan2(-local_x, math.hypot(ny, local_z))
+
+
+def collision_state_pose(state, position=None, yaw=None, actor_key=None):
+	'''Project a public vehicle pose without inventing a Bot actor identity.'''
+	pose = dict((name, state.get(name, 0.0))
+			for name in ('x', 'y', 'z', 'yaw', 'pitch', 'roll'))
+	if position is not None:
+		pose.update(x=position[0], y=position[1], z=position[2])
+	if yaw is not None:
+		pose['yaw'] = yaw
+	if actor_key is not None:
+		pose['actor_key'] = actor_key
+	chassis = dict(pose)
+	chassis['pitch'] = state.get(
+		'terrain_pitch', pose['pitch'] - state.get('suspension_pitch', 0.0))
+	pose['chassis'] = chassis
+	return pose
+
+
 def canonical_body_rotation(yaw, pitch, roll):
 	'''Keep the rendered nose and the horizontal drive axis in one YPR chart.
 

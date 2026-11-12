@@ -17,10 +17,6 @@ PAYLOAD_FILES = {
     "0.9.22": (
         "server/lan_battle_server.py",
         "server/offline_rewards.py",
-        "server/server_bot_ai.py",
-        "server/server_route_recovery.py",
-        "server/server_route_tasks.py",
-        "server/server_empty_ammo.py",
         "server/vehicle_overlay_store.py",
         "server/windows_server.py",
     ),

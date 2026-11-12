@@ -13,10 +13,11 @@ class BaseCircleArrivalTests(unittest.TestCase):
     def test_inside_circle_far_from_terminal_hands_over_with_target(self):
         scene = self.helper.scene((32., -250.))
         order = self.helper.order(scene)
-        self.assertEqual('engage', order['combat_mode'])
+        self.assertEqual('hold', order['combat_mode'])
         self.assertEqual(0., order['throttle_override'])
-        self.assertEqual(8, order['target_id'])
-        self.assertTrue(order['fire_allowed'])
+        self.assertIsNone(order['target_id'])
+        self.assertEqual(8, order['initial_target_hint']['target_id'])
+        self.assertFalse(order['fire_allowed'])
         self.assertEqual('circle', order['tactical_evidence']['route_terminal']['arrival_kind'])
 
     def test_capture_stops_at_circle_edge_and_does_not_recenter_after_push(self):
@@ -50,6 +51,22 @@ class BaseCircleArrivalTests(unittest.TestCase):
         fourth = self.helper.order(scene, 4., contact=False)
         self.assertEqual(0., fourth['throttle_override'])
 
+    def test_blocked_enemy_hint_cannot_stop_capture_at_terminal_outside_circle(self):
+        scene = self.helper.scene((84.523, -194.48))
+        scene[3]['capture_bases']['1'][0].update(x=100., z=-250., radius=30.)
+        first = self.helper.order(scene, lane=False)
+        self.assertEqual('route', first['combat_mode'])
+        self.assertEqual(2., first['move_position']['x'])
+
+        scene[2][0].update(x=2., z=-250.)
+        order = self.helper.order(scene, 2., lane=False)
+
+        self.assertEqual(8, order['initial_target_hint']['target_id'])
+        self.assertEqual('base_capture', order['combat_mode'])
+        self.assertEqual(100., order['move_position']['x'])
+        self.assertIsNone(order['target_id'])
+        self.assertFalse(order['fire_allowed'])
+
     def test_enemy_circle_entry_retires_remaining_macro_gates(self):
         scene = self.helper.scene((70., 346.))
         self.helper.order(scene, contact=False)
@@ -73,9 +90,35 @@ class BaseCircleArrivalTests(unittest.TestCase):
             with self.subTest(field=field):
                 scene = self.helper.scene((32., -250.))
                 scene[2][0][field] = True
-                order = self.helper.order(scene)
+                # Exercise travel admission without a valid combat owner.
+                order = self.helper.order(scene, contact=False)
+                self.assertEqual('route', order['combat_mode'])
                 self.assertNotEqual(0., order['throttle_override'])
                 self.assertEqual('physical_or_capture_not_arrived', order['tactical_evidence']['route_terminal']['outcome'])
+                route_state = scene[0]._route_states[17]
+                self.assertNotIn('terminal_hold', route_state)
+                self.assertNotIn('completed_terminal', route_state)
+                self.assertNotIn(17, scene[0]._capture_arrivals)
+                self.assertNotIn('capture_hold', order['tactical_evidence'])
+
+    def test_initial_contact_during_invalid_physics_cannot_stop_or_finish_circle_arrival(self):
+        for field in ('airborne', 'route_wreck_blocked'):
+            with self.subTest(field=field):
+                scene = self.helper.scene((32., -250.))
+                scene[2][0][field] = True
+                order = self.helper.order(scene)
+                self.assertEqual('route', order['combat_mode'])
+                self.assertIsNone(order['throttle_override'])
+                self.assertIsNone(order['target_id'])
+                self.assertEqual(8, order['initial_target_hint']['target_id'])
+                self.assertFalse(order['fire_allowed'])
+                self.assertEqual('physical_or_capture_not_arrived',
+                    order['tactical_evidence']['route_terminal']['outcome'])
+                route_state = scene[0]._route_states[17]
+                self.assertNotIn('terminal_hold', route_state)
+                self.assertNotIn('completed_terminal', route_state)
+                self.assertNotIn(17, scene[0]._capture_arrivals)
+                self.assertNotIn('capture_hold', order['tactical_evidence'])
 
     def defense_scene(self, x, class_tag='SPG', radius=50.):
         planner = BotPlanner()
@@ -132,7 +175,7 @@ class BaseCircleArrivalTests(unittest.TestCase):
         order = next(o for o in planner.build_orders(bots, states, players, 1., defense)['orders'] if o.get('defense_base_id'))
         bot = next(b for b in planner._alive_bots(bots, states) if b['id'] == order['id'])
         previous = dict(order)
-        with mock.patch('server_bot_ai.bot_tactics.route_config') as config:
+        with mock.patch('gui.mods.offline_lan_0922.vehicle_control.strategy.bot_tactics.route_config') as config:
             planner._apply_authored_route_order(order, bot, dict(x=999., y=0., z=999.), 2.)
             config.assert_not_called()
         self.assertEqual(previous, order)

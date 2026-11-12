@@ -60,15 +60,50 @@ Replay preflight uses the same 8-GiB cumulative decompressed bound as recording
 and playback. Data is streamed; the 2-MiB record limit, footer/count and gzip
 integrity checks still apply. Compressed file size is not the replay size bound.
 
-Use the launcher's built-in vehicle editor and error-report controls. The player
-download includes START_DIAGNOSTIC_TEST.bat for detailed gameplay diagnostics,
-and the normal EXE for regular play. The normal EXE
+Use the launcher’s Testing tab to enable detailed diagnostics or select a
+single-player test scene before starting a battle. The ordinary launcher is
+the package’s only entry. With diagnostics off, it
 uses small key-event logs. Detailed geometry logs are limited to 2 MiB/minute
 and 32 MiB per client process, with explicit suppression notices. Exhausted
 budgets skip further JSON encoding; motion histories also skip construction
 until the budget reopens. Test captures split rotation catalog/native costs
 without changing collision queries. Errors and
 lifecycle messages remain enabled after the diagnostic budget is exhausted.
+
+The same Testing tab enables optional player automation and its mouse control
+panel. Every battle starts manual; the grave key left of 1 toggles takeover
+outside chat, menu and text input. Driving, aim/fire and consumables are
+independent switches. The panel offers Attack, Return to base, Defend base,
+Hold position, Capture base, Halt, Release to manual and the existing bounded
+drive, gun, held-aim, equipment and siege test commands. A submitted command is
+not complete until its matching visible-client receipt says so; fire completion
+means committed physical rounds, not a proved hit.
+
+Each LAN participant computes their own player navigation, traffic, target and
+fire-admission decisions in their visible client. The required room worker still
+owns Bots and world simulation, but does not execute player commands. Player
+route searches, recovery, ammunition and command ownership are independent of
+Bot actors. Players and Bots use one vehicle_control implementation, with
+separate actor state and physical input/output bindings. The foreground binding
+observes the local player's real vehicle and sends native input; Bot bindings
+use their existing worker-owned vehicles. Neither creates shadow physics.
+The old duplicated decision trees and their synchronization tools are removed;
+there is no legacy behaviour fallback. Tactical retreat, cover-peeking and
+flanking are removed, while blocked-waypoint skipping, bounded recovery and
+real collision checks remain. Shared attack planning validates current ammunition
+first and budgets other candidates independently. Obstruction is not proof that
+armour cannot be penetrated. Ordinary acquisition starts with the nearest live
+enemy, using lower armour only at equal distance; valid current penetration
+engagements are not interrupted by attacker or player-priority scores. Artillery
+ranks reachable targets by proved-arc HE damage estimates, retaining all native
+obstruction and launch checks.
+Releasing control stops future decisions without cancelling any unlaunched
+shells in an already committed multi-shell trigger. Each physical shell still
+uses the current native barrel and dispersion and settles separately. Manual
+firing and Bots use this same trigger contract. Install matching packages on all
+participants and restart the room before testing a changed build. Python/CI
+results are not a substitute for observing native #1513 driving and dual-LAN
+handover; see README.md and COMPATIBILITY_REVIEW.md for the current boundary.
 
 Customize save -> Appearance inventory has My style and Preset styles pages,
 with nation/type/vehicle filters, garage-only targets and vehicle-name search.
@@ -117,6 +152,12 @@ Independent development, equipment, ammunition, consumables and coupled crew
 presets inherit from the existing scope hierarchy. Ammunition uses digit ratios;
 all zero carries no ammunition. Magazine ratios count magazines, not rounds.
 Stock development only allows no equipment, in the dropdown and validation.
+Room and lineup difficulty now select physical fitting presets, not artificial
+gunner delays or errors. Module development, crew training/skills, equipment,
+directives, consumables and other explicit fitting choices remain distinct.
+Native aiming time, gun dispersion and reload effects still apply; the shared
+controller adds no rating-based reaction, patience, scatter, aim-point or lead
+penalties, and no player-priority or attacker-retaliation target override.
 
 Both room interfaces default to Random per-team vehicle types. Random shows
 all five class icons checked and disabled, while preserving the manual mask.
@@ -438,7 +479,8 @@ Previously pending female requests retry automatically; do not add duplicates.
 Effective settings preview is a read-only table of settings, values and rule
 sources. It includes rules already added to the current draft, not unsubmitted
 form fields. All selected scopes are resolved; inherited difficulty retains
-room rating sampling. Opening this window does not save or apply the profile.
+the room's fitting-rating sampling. Opening this window does not save or apply
+the profile.
 
 The current default-seed revision replaces obsolete Default progress and old
 Default backups once, without keeping a backup or importing legacy progress.

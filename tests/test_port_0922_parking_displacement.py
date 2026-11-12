@@ -7,7 +7,7 @@ import test_port_0922_spg_initial_positions as spgs
 import test_port_0922_withdrawal_runtime as withdrawal
 import test_port_0922_bot_runtime as harness
 from test_port_0922_server_bot_ai import _state, _bot, _route, _contact
-from server_bot_ai import BotPlanner
+from gui.mods.offline_lan_0922.vehicle_control.strategy import BotPlanner
 
 
 class WaitDisplacementTests(unittest.TestCase):
@@ -61,7 +61,7 @@ class WaitDisplacementTests(unittest.TestCase):
         self.setUp()
         self.assertEqual(0, self.orders(2, [human])['parking_slot'])
 
-    def test_small_shove_keeps_clock_holds_current_pose_and_can_aim(self):
+    def test_small_shove_keeps_clock_and_current_pose_while_exposing_candidate(self):
         self.states[0]['x'] = 0
         self.orders(1)
         self.states[0]['x'] = 4
@@ -72,8 +72,9 @@ class WaitDisplacementTests(unittest.TestCase):
         self.assertEqual('waiting', order['parking_phase'])
         self.assertEqual(4, order['move_position']['x'])
         self.assertEqual(0, order['throttle_override'])
-        self.assertEqual(2, order['target_id'])
-        self.assertTrue(order['fire_allowed'])
+        self.assertIsNone(order['target_id'])
+        self.assertEqual(dict(target_kind='human', target_id=2), order['initial_target_hint'])
+        self.assertFalse(order['fire_allowed'])
         self.assertEqual(1, self.orders(11)['route_index'])
 
     def test_large_or_vertical_shove_redeploys_without_resetting_wait_clock(self):
@@ -169,18 +170,18 @@ class SPGDisplacementTests(unittest.TestCase):
         self.assertEqual('artillery_deploy', runtime._artillery_position_order(state, order, {}, 3.2)['combat_mode'])
 
 
-class RetreatEndpointTests(unittest.TestCase):
-    def test_legacy_low_health_endpoint_does_not_own_travel(self):
+class RetiredRetreatEndpointTests(unittest.TestCase):
+    def test_low_health_has_no_retreat_endpoint_or_state(self):
         planner=BotPlanner()
         state=_state(11,1,0,100);state['health']=200
         bot=_bot(11,1,0,_route('road',[(0,0,False),(0,100,False),(0,200,False)]),'AT-SPG')
         planner._route_states[11]=dict(route_id='road',index=1)
-        planner._apply_retreat_order({},dict(bot,state=state),dict(x=0,y=0,z=0),
-            dict(x=0,y=0,z=200),1,'low_health_retreat','low_health_defend')
+        self.assertFalse(hasattr(planner,'_apply_retreat_order'))
+        self.assertFalse(hasattr(planner,'_retreat_states'))
         for now in (8,9,25):
             order=planner.build_orders([bot],[state],[],now)['orders'][0]
-            self.assertNotIn(order['combat_mode'],('low_health_retreat','low_health_defend'))
-            self.assertNotIn(11,planner._retreat_states)
+            self.assertEqual('route',order['combat_mode'])
+            self.assertEqual(200.,order['move_position']['z'])
 
 
 class OccupiedTravelPointTests(unittest.TestCase):
@@ -229,40 +230,18 @@ class OccupiedTravelPointTests(unittest.TestCase):
                 dict(self.order, combat_mode='parking_approach'), dict(now=1, speed=0))
 
 
-class ShortRetreatRuntimeTests(unittest.TestCase):
+class PhysicalRecoveryAimTests(unittest.TestCase):
     setUp = withdrawal.RuntimeWithdrawalTests.setUp
     tearDown = withdrawal.RuntimeWithdrawalTests.tearDown
     contact_runtime = withdrawal.RuntimeWithdrawalTests.contact_runtime
 
-    def test_long_retreat_recovery_and_wide_target_keep_movement_ownership(self):
+    def test_physical_reverse_and_blockage_keep_movement_ownership(self):
         aim = self.fixture.module.ai_driver.combat_hull_aim
-        for mode, allow, yaw in (('reverse_withdraw', False, .2),
-                ('reverse_withdraw', True, 1.), ('blocked', True, .2)):
+        for mode, yaw in (('reverse_turn', .2),
+                ('short_reverse_escape', 1.), ('blocked', .2)):
             self.assertEqual((-.2, -.72, False), aim(
                 0, yaw, -.1, .1, -.2, -.72, mode, True,
-                combat_mode='under_fire_withdraw', movement_intent=True,
-                withdrawal_aim=allow))
-
-    def test_fixed_gun_lays_and_fires_while_short_reverse_escape_progresses(self):
-        runtime = self.contact_runtime((100, 0, 100), 'route')
-        runtime.visibility_probe = lambda *args: True
-        runtime.firing_lane_probe = lambda *args: True
-        runtime._apply_orders(dict(bot_order_revision=2, bot_orders=[dict(
-            id=11, team=2, combat_mode='under_fire_withdraw', target_kind='human', target_id=2,
-            move_position=(0, 0, -20), aim_position=(20, 0, 100), face_position=(20, 0, 100),
-            fire_range=500, fire_allowed=True, throttle_override=None)]))
-        player = harness._admit_player(dict(id=2, team=1, alive=True, x=20, y=0, z=100))
-        import contextlib
-        import io
-        aimed = False
-        with contextlib.redirect_stdout(io.StringIO()):
-            for frame in range(1, 91):
-                runtime.update(.05, frame*.05, players=[player])
-                aimed = aimed or runtime.states[11]['hull_aiming']
-        self.assertTrue(aimed)
-        self.assertLess(runtime.states[11]['z'], -5)
-        self.assertGreater(runtime.states[11]['fire_seq'], 0)
-        self.assertLess(abs(runtime.states[11]['yaw']), .5)
+                combat_mode='route', movement_intent=True))
 
 
 class SPGFirePositionTests(unittest.TestCase):

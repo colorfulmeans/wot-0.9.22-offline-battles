@@ -1,4 +1,4 @@
-"""Useful route-owned withdrawal goals and explicitly dated diagnostic evidence."""
+"""Reload observations preserve route tasks and dated physical evidence."""
 import copy
 import math
 from pathlib import Path
@@ -13,7 +13,7 @@ from test_port_0922_server_bot_ai import (
 import test_port_0922_server_bot_ai as server_fixture
 
 
-class WithdrawalGoalTests(unittest.TestCase):
+class ReloadEngagementGoalTests(unittest.TestCase):
     def order(self, class_tag='AT-SPG', anchor=None, reached=False):
         fixture = server_fixture.ServerBotTacticsTests()
         fixture.setUp()
@@ -32,27 +32,38 @@ class WithdrawalGoalTests(unittest.TestCase):
         players = fixture._report(planner, [_contact(2, x, 148, [11])])
         return planner.build_orders(fixture.manifest, fixture.states, players, 1.)['orders'][0]
 
-    def test_rejoining_ranged_vehicles_retreat_to_previous_route_point(self):
+    def test_reloading_low_health_candidates_do_not_replace_the_route(self):
         for class_tag in ('AT-SPG', 'mediumTank', 'heavyTank'):
             with self.subTest(class_tag=class_tag):
                 order = self.order(class_tag)
-                self.assertEqual(order['combat_mode'], 'magazine_reload_retreat')
-                self.assertEqual(order['move_position'], dict(x=160., y=0., z=128.))
+                self.assertEqual(order['combat_mode'], 'route')
+                self.assertEqual(order['move_position'], dict(x=250., y=0., z=128.))
                 self.assertEqual(order['route_anchor'], dict(x=192., y=0., z=128.))
-                self.assertEqual(order['target_id'], 2)
+                self.assertIsNone(order['throttle_override'])
+                self.assertIsNone(order['target_id'])
+                self.assertEqual(dict(target_kind='human', target_id=2), order['initial_target_hint'])
                 self.assertFalse(order['fire_allowed'])
 
-    def test_useful_existing_join_segment_is_preserved(self):
+    def test_join_segment_remains_route_metadata_not_a_reload_destination(self):
         anchor = dict(x=175., y=0., z=128.)
-        self.assertEqual(self.order(anchor=anchor)['move_position'], anchor)
+        order = self.order(anchor=anchor)
+        self.assertEqual(order['route_anchor'], anchor)
+        self.assertEqual(order['route_id'], 'lane')
+        self.assertEqual(order['route_index'], 1)
+        self.assertTrue(order['route_join'])
+        self.assertEqual(order['move_position'], dict(x=250., y=0., z=128.))
+        self.assertEqual(order['combat_mode'], 'route')
+        self.assertFalse(order['fire_allowed'])
 
-    def test_reached_retreat_point_uses_existing_engagement_hold(self):
+    def test_previous_route_point_does_not_become_a_reload_hold(self):
         order = self.order(reached=True)
-        self.assertEqual(order['combat_mode'], 'magazine_reload_retreat')
-        self.assertEqual(order['tactical_phase'], 'magazine_reload_hold')
-        self.assertEqual(order['throttle_override'], 0.)
-        self.assertEqual(order['move_position'], dict(x=160., y=0., z=128.))
-        self.assertEqual(order['target_id'], 2)
+        self.assertEqual(order['combat_mode'], 'route')
+        self.assertNotIn('tactical_phase', order)
+        self.assertIsNone(order['throttle_override'])
+        self.assertEqual(order['move_position'], dict(x=250., y=0., z=128.))
+        self.assertIsNone(order['target_id'])
+        self.assertEqual(dict(target_kind='human', target_id=2), order['initial_target_hint'])
+        self.assertFalse(order['fire_allowed'])
 
 
 class ShortEscapeReceiptTests(unittest.TestCase):

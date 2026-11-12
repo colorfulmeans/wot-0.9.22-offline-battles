@@ -4,14 +4,16 @@ from __future__ import division
 
 # Vehicle fitting policy contains no ammunition decisions.
 VEHICLE_GUNS = {'china:Ch05_T34_2': '_100mm_59-100T',
+ 'china:Ch31_M3G_FT': '_57mm_ZiS_2',
  'france:F33_S_35CA': 'Canon_de_105_mle_1930_Schneider_AC',
+ 'germany:G08_Pz38t': '_47mm_PaK_38t_L43',
  'germany:G09_Hetzer': '_105mm_StuH42_L28',
  'germany:G100_Gtraktor_Krupp': '_75mm_KwK_37_L24A',
  'germany:G101_StuG_III': '_105mm_StuH42_L28',
  'germany:G81_Pz_IV_AusfH': '_105mm_StuH42_L28Pz',
  'germany:G83_Pz_IV_AusfA': '_75mm_KwK_37_L24',
  'germany:G97_Waffentrager_IV': '_128mm_K44_2_L61',
- 'germany:G99_RhB_Waffentrager': '_128mm_K44_L55',
+ 'japan:J09_Chi_He': '_57mm_Gun_Shin',
  'japan:J20_Type_2605': '_150mm_45_41st_Year_Type',
  'japan:J23_Mi_To': '_120mm_Short_Barrel_Gun',
  'japan:J24_Mi_To_130_tons': '_150mm_Howitzer_Type96',
@@ -19,6 +21,7 @@ VEHICLE_GUNS = {'china:Ch05_T34_2': '_100mm_59-100T',
  'japan:J27_O_I_120': '_150mm_Howitzer_Type96',
  'japan:J28_O_I_100': '_150mm_Howitzer_Type96',
  'sweden:S19_Sav_M43': '_105mm_kan_m_44_sav',
+ 'uk:GB15_Stuart_I': '_2pdr_Gun_Mk_IX',
  'uk:GB24_Centurion_Mk3': '_105mm_Gun_L7',
  'uk:GB48_FV215b_183': '_183mm_L4',
  'uk:GB72_AT15': '_32-pounder_AT_Gun_OQF',
@@ -72,6 +75,7 @@ GUN_AMMUNITION = {'china:_57mm_Gun_Type_97': ('_57mm_HE_Type_97', '_57mm_HEAT_Ty
  'usa:_75mm_Howitzer_M1A1': ('_75mm_M48', '_75mm_HEAT_M66'),
  'usa:_75mm_Howitzer_M3': ('_75mm_M48', '_75mm_HEAT_M66'),
  'ussr:_122mm_S-41': ('_122mm_OF420S', '_122mm_BP450S'),
+ 'ussr:_122mm_cannon_mod_1930': ('_122mm_OF420SO',),
  'ussr:_122mm_cannon_M-30S': ('_122mm_OF420S', '_122mm_BP450S'),
  'ussr:_122mm_cannon_U-11': ('_122mm_OF420S', '_122mm_BP450S'),
  'ussr:_130mm_B-13-S2': ('_130mm_PB-46A', '_130mm_PB-46', '_130mm_OF-46'),
@@ -80,6 +84,13 @@ GUN_AMMUNITION = {'china:_57mm_Gun_Type_97': ('_57mm_HE_Type_97', '_57mm_HEAT_Ty
  'ussr:_152mm_ML-20_mod_1937': ('_152mm_53-OF-530', '_152mm_53BP540'),
  'ussr:_76mm_KT-28': ('_76mm_UOF-354K', '_76mm_BP-354'),
  'ussr:_76mm_KT-28A': ('_76mm_UOF-354K',)}
+
+# These premium AP rounds trade penetration for damage. Keep their silver AP
+# alternatives on elite Bots, independently of the selected development preset.
+ELITE_PENETRATION_EXCEPTIONS = frozenset((
+    ('ussr:R49_SU100Y', '_130mm_B-13-S2'),
+    ('ussr:R111_ISU130', '_130mm_S-26A'),
+))
 
 GOLD_SHELLS = frozenset(('china:_100mm_TC-412G',
  'china:_100mm_UBR-412P',

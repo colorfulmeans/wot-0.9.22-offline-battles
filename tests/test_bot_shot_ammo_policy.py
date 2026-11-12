@@ -21,6 +21,25 @@ def profile(kinds=('ARMOR_PIERCING', 'ARMOR_PIERCING_CR', 'HIGH_EXPLOSIVE'), cli
 
 
 class AmmoPolicyTests(unittest.TestCase):
+    def test_runtime_dual_he_priority_preserves_phase_and_allocation(self):
+        from gui.mods.offline_lan_0922.default_loadouts import GOLD_SHELLS
+        gold = next(iter(GOLD_SHELLS))
+        nation, name = gold.split(':',1)
+        raw = profile(('ARMOR_PIERCING','HIGH_EXPLOSIVE','HIGH_EXPLOSIVE'))
+        raw.update(vehicle_name=nation+':test',ammo_ratios=[60,30,10])
+        raw['shells'][2]['name'] = name
+        before = allocation(raw,100,3)
+        p = self.setup_policy(raw)
+        p.desired = 1
+        self.assertEqual(2,p.choose(self.state))
+        self.shot(shell=2,damage=30)
+        self.state['ammo_remaining'][2] = 0
+        self.assertEqual(1,p.choose(self.state))
+        self.shot(shell=1,damage=30)
+        self.assertEqual(0,p.choose(self.state))
+        self.assertEqual(2,p.phase_fired)
+        self.assertEqual(before,allocation(raw,100,3))
+
     def setup_policy(self, p=None):
         self.policy = ShotPolicy(p or profile())
         self.state = dict(shell_index=0, clip=(p or {}).get('clip_size', 1),
@@ -162,9 +181,14 @@ class AmmoPolicyTests(unittest.TestCase):
     def test_batchat_artillery_backup_returns_only_at_magazine_end(self):
         p = self.setup_policy(profile(('HIGH_EXPLOSIVE',)*2, clip=3, arty=True))
         self.shot(hit=False); self.shot(hit=False)
+        self.assertEqual(1, p.choose(self.state))
+        # The weapon queues that decision at the full-reload edge.
+        self.shot(hit=True)
         for i in range(3):
             self.assertEqual(1, p.choose(self.state)); self.shot(shell=1, hit=True)
         self.assertEqual(0, p.choose(self.state))
+        self.state['ammo_remaining'][0] = 0
+        self.assertEqual(1, p.choose(self.state))
 
     def test_exhausted_backup_skipped_and_single_or_empty_inventory(self):
         p = self.setup_policy()
