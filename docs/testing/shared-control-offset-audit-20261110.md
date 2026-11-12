@@ -12,6 +12,8 @@ In the 14:25 report, a clear HE point on #24 moved from 23 m to about
 to 14:22:04.096 the UDES 03 hull turned from −1.44° to −13.93° while the
 requested hull heading moved from −2.61° to −52.23°. The historical
 minimum error could not recognize the measured turn as progress.
+Isolated playback of the three recorded yaw pairs kept the old progress
+clock at 216.287 s and renewed the new clock at 220.354 s.
 During an active siege lay, the same current clear point can renew the
 existing watchdog when the observed hull advances toward the preceding
 commanded heading and the command remains in the same direction. Actual
@@ -36,8 +38,10 @@ was ready when automatic driving and firing resumed at 15:09:33.
 - The player entered siege in episode 1 and tracked the same clear sample
   on #19 for over six seconds. At 15:11:21.703 the recorded turn toward
   the preceding command reduced its remaining angle from 2.059° to
-  1.936°. The physical trigger fired HE at 15:11:22.590 and #19 took 528
-  penetration damage. Another HE round dealt 79 explosive damage to #28.
+  1.936°. The physical trigger fired HE at 15:11:22.590. The client
+  reported 528 raw penetration damage. The server removed #19's remaining
+  84 hit points and confirmed the kill. Another HE round dealt 79 explosive
+  damage to #28.
   Both auto-trigger receipts match server impacts. The regression
   reproduced the growing-error failure from the preceding report. The
   sampled live turns in this session had shrinking error.
@@ -63,6 +67,12 @@ clear point whose bearing moves faster than the hull, a real stop and hull
 jitter. The 36 isolated player files passed all 916 tests. The three shared
 worker and ownership files passed 60 reference tests. The detailed-log
 toggle and CPython 2.7 compilation were checked separately.
+
+The pushed runtime passed Bot behavior, native geometry, navigation,
+Windows server and Windows editor checks. The full client suite passed
+530 of 531 files. The remaining file reproduced the same three Bot reload
+assertions and values as baseline `d6d8f34b`. The launcher passed all 49
+files. [Runtime checks](https://github.com/colorfulmeans/wot-0.9.22-offline-battles/actions/runs/43174071306) · [Baseline checks](https://github.com/colorfulmeans/wot-0.9.22-offline-battles/actions/runs/43168854396).
 
 ## November 12 follow-up — Siege yaw rounding with HE loaded
 
