@@ -4,7 +4,11 @@ Native observation fixtures feed production policy, source inversion,
 stationary collision certificates and hydraulic actuation. These tests do
 not establish physical Windows client timing/rendering acceptance.
 """
+from contextlib import redirect_stdout
+from io import StringIO
+import json
 import math
+import os
 import unittest
 from unittest import mock
 
@@ -93,6 +97,47 @@ class ActualSiegeAimTests(unittest.TestCase):
         self.assertAlmostEqual(candidate['solution']['hydraulic_pitch'],
                                scene.battle._local_siege_aim_pitch, places=6)
         self.assertFalse(scene.battle._projectile_meta)
+
+    def test_failed_native_inverse_attempts_are_logged_only_with_opt_in(self):
+        scene = self.scene(enabled_pitch=(0., 0.))
+        row = scene.evaluated_row()
+        policy, helper = scene.runtime.attack_policy, scene.runtime.siege_aim
+        angles = (.2, -.1)
+        for enabled in ('0', '1'):
+            with self.subTest(enabled=enabled):
+                output = StringIO()
+                with mock.patch.dict(os.environ, {'WOT_OFFLINE_DIAGNOSTICS': '1',
+                        'WOT_OFFLINE_COMBAT_DIAGNOSTICS': enabled}), \
+                        mock.patch.object(scene.battle._runtime, 'get_shot_angles',
+                                          return_value=angles) as getter, redirect_stdout(output):
+                    self.assertIsNone(helper.candidate(policy.frame, scene.now, row))
+                self.assertEqual(siege_planning.NATIVE_SOURCE_CALLS, getter.call_count)
+                self.assertEqual('actual_hydraulic_native_source_pending', helper.status()['reason'])
+                records = [json.loads(line.split('BATTLE REVIEW ', 1)[1])
+                           for line in output.getvalue().splitlines()
+                           if 'BATTLE REVIEW ' in line and 'siege_hydraulic_inverse' in line]
+                self.assertEqual(int(enabled), len(records))
+                if records:
+                    inverse = records[0]['inverse']
+                    self.assertEqual('attempts_exhausted', inverse['failure'])
+                    self.assertEqual(siege_planning.NATIVE_SOURCE_CALLS, len(inverse['attempts']))
+                    self.assertTrue(all(entry['angles'] == list(angles)
+                                        for entry in inverse['attempts']))
+
+    def test_only_small_native_yaw_error_is_accepted_for_laying(self):
+        scene = self.scene()
+        runtime = scene.runtime
+        frame = runtime.attack_policy.evaluator.snapshot(scene.now)
+        hydraulic = active_hydraulic_pose(runtime, frame)
+        shell = frame['shells'][0]
+        solution = dict(point=(0., 0., 100.), direction=(0., 0., 1.), hydraulic_pitch=0.)
+        for angles, expected in (((1.42e-7, 0.), solution['point']),
+                                 ((1.1e-6, 0.), None),
+                                 ((1.42e-7, 1.42e-7), None)):
+            with self.subTest(angles=angles), mock.patch.object(
+                    scene.battle._runtime, 'get_shot_angles', return_value=angles):
+                self.assertEqual(expected,
+                    runtime.siege_aim._motion_source(frame, hydraulic, solution, shell))
 
     def test_source_is_revoked_on_target_motion_shell_change_or_mode_exit(self):
         for change in ('target', 'shell', 'mode'):

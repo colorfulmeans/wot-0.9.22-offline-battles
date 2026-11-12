@@ -300,19 +300,36 @@ class StationaryPlanner(object):
                 raise _Deferred('stationary_native_support_pending')
             # The original sampler's broad residual accepts drivable steps;
             # those are not evidence for transporting this exact plane.
-            if _finite(plane['residual']) > _POSITION_EPSILON:
+            residual = _finite(plane['residual'])
+            if residual > _POSITION_EPSILON:
+                if combat_detail_enabled():
+                    combat_detail(self.runtime, 'stationary_support_plane',
+                        self.runtime.actor_id, now, 'sample_fit_residual',
+                        lambda: dict(position=position, yaw=yaw, residual=residual,
+                                     position_tolerance=_POSITION_EPSILON,
+                                     center_y=plane.get('center_y'), normal=plane.get('normal')))
                 raise _Deferred('stationary_support_plane_changes')
             plane = dict(plane, position=tuple(position), yaw=float(yaw))
             self._supports[key] = plane
         return self._supports[key]
 
-    def _same_support(self, source, plane):
+    def _same_support(self, source, plane, now):
         predicted_y = (source['center_y'] + source['gradient_x'] *
             (plane['position'][0] - source['position'][0]) + source['gradient_z'] *
             (plane['position'][2] - source['position'][2]))
-        if (abs(_finite(plane['center_y']) - predicted_y) > _POSITION_EPSILON or
+        height_error = _finite(plane['center_y']) - predicted_y
+        if (abs(height_error) > _POSITION_EPSILON or
                 any(abs(_finite(plane['normal'][axis]) - _finite(source['normal'][axis])) >
                     NATIVE_ANGLE_TOLERANCE for axis in range(3))):
+            if combat_detail_enabled():
+                combat_detail(self.runtime, 'stationary_support_plane',
+                    self.runtime.actor_id, now, 'transported_plane_mismatch',
+                    lambda: dict(source_position=source['position'], source_yaw=source['yaw'],
+                        position=plane['position'], yaw=plane['yaw'], predicted_y=predicted_y,
+                        sampled_y=plane['center_y'], height_error=height_error,
+                        source_normal=source['normal'], normal=plane['normal'],
+                        position_tolerance=_POSITION_EPSILON,
+                        normal_tolerance=NATIVE_ANGLE_TOLERANCE))
             raise _Deferred('stationary_support_plane_changes')
         # The existing rotation resolver transports X/Z, not a vertical
         # suspension path. A track pivot climbing a slope needs that owner.
@@ -455,7 +472,7 @@ class StationaryPlanner(object):
         for angle in (middle, last):
             at = vehicle_physics.track_pivot_position(position, body[0], angle, offset)
             plane = self._support(frame, at, angle, now, deadline)
-            self._same_support(source, plane)
+            self._same_support(source, plane, now)
             observations.append(plane)
         bounds = tuple(self.runtime.geometry._arena_bounds)
         swept = vehicle_physics.track_pivot_sweep_bounds(start, first, last, offset, shape[0], shape[1])

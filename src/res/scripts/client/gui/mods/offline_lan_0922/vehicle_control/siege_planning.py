@@ -15,11 +15,13 @@ from .actor_observation import observation
 from .. import shot_geometry
 from ..gun_mechanics import _field
 from .. import hull_aiming
+from ..native_input_diagnostics import combat_detail, combat_detail_enabled
 from .native_aim import (active_hydraulic_pose, hydraulic_reach,
                          NATIVE_ANGLE_TOLERANCE)
 
 
 NATIVE_SOURCE_CALLS = 6
+NATIVE_SOURCE_YAW_TOLERANCE = 1.e-6
 
 
 def _point(value):
@@ -84,13 +86,15 @@ class ActualSiegeAim(object):
                 self._has_laying_lane(policy, row)]
         return min(rows, key=policy._penetration_order) if rows else None
 
-    def _motion_source(self, frame, hydraulic, solution, shell):
+    def _motion_source(self, frame, hydraulic, solution, shell, trace=None):
         """At most six calls to the installed flat-body inverse contract."""
         owner, descriptor = self.runtime.owner, frame['descriptor']
         minimum, maximum = hull_aiming.absolute_pitch_limits(descriptor)
         correction = float(solution['hydraulic_pitch'])
         getter = getattr(owner._runtime, 'get_shot_angles', None)
         if not callable(getter):
+            if trace is not None:
+                trace['failure'] = 'native_getter_unavailable'
             return None
         body, position = hydraulic['body'], hydraulic['position']
         matrix = owner._runtime.math.Matrix()
@@ -107,24 +111,60 @@ class ActualSiegeAim(object):
             body[0], body[1], body[2], current[0], current[1])[0]
         distance = min(100., max(5., float(_field(shell['shot'], 'speed')) * .12))
         source = _point(solution['point'])
+        tolerance = 1.e-7
+        if trace is not None:
+            trace.update(desired_angles=desired, current_angles=current, origin=origin,
+                gun_pitch_limits=(minimum, maximum), desired_correction=correction,
+                tolerance=tolerance, yaw_tolerance=NATIVE_SOURCE_YAW_TOLERANCE, attempts=[])
         for attempt in range(NATIVE_SOURCE_CALLS):
             self.receipt['native_calls'] += 1
             actual = getter(descriptor, matrix, current, owner._vector(source))
             actual = float(actual[0]), float(actual[1])
             errors = _angle(desired[0] - actual[0]), desired[1] - actual[1]
             if any(math.isnan(v) or math.isinf(v) for v in errors):
+                if trace is not None:
+                    trace['attempts'].append(dict(point=source, nonfinite_angles=True))
+                    trace['failure'] = 'nonfinite_angles'
                 return None
             produced, reachable = hull_aiming.minimal_correction(
                 actual[1], minimum, maximum, hydraulic['minimum'], hydraulic['maximum'])
-            if reachable and max(abs(errors[0]), abs(errors[1]),
-                                 abs(produced - correction)) <= 1.e-7:
+            if trace is not None:
+                trace['attempts'].append(dict(point=source, angles=actual,
+                    angle_error=errors, correction=produced, within_limits=reachable,
+                    correction_error=produced - correction))
+            # The native world-point vector rounds at the scale of the map.
+            # Its yaw quantization applies to this actuator input only.
+            if (reachable and abs(errors[0]) <= NATIVE_SOURCE_YAW_TOLERANCE and
+                    max(abs(errors[1]), abs(produced - correction)) <= tolerance):
+                if trace is not None:
+                    trace['accepted_with_yaw_tolerance'] = abs(errors[0]) > tolerance
                 return source
             if attempt:
                 local[0] = _angle(local[0] + errors[0])
                 local[1] += errors[1]
             direction = shot_geometry.transform_vehicle_vector(_direction(*local), *body)
             source = tuple(origin[axis] + direction[axis] * distance for axis in range(3))
+        if trace is not None:
+            trace['failure'] = 'attempts_exhausted'
         return None
+
+    def _report_aim(self, stage, now, row, solution, hydraulic, reach, inverse=None):
+        runtime = self.runtime
+        plan = row.get('stationary_plan') or {}
+        combat_detail(runtime, stage, runtime.actor_id, now, self.receipt['reason'],
+            lambda: dict(point_key=row.get('key'), line=row.get('line'),
+                mechanical=row.get('mechanical'), point=solution.get('point'),
+                solution_needs_hull=solution.get('needs_hull'),
+                hull_yaw=solution.get('hull_yaw'), reach=reach,
+                flat_position=hydraulic['position'], flat_body=hydraulic['body'],
+                hydraulic_correction=hydraulic['correction'],
+                hydraulic_limits=(hydraulic['minimum'], hydraulic['maximum']),
+                stationary_status=plan.get('status'), stationary_line=plan.get('line'),
+                stationary_pending=row.get('stationary_pending'),
+                stationary_progress=row.get('stationary_progress_token'),
+                policy_reason=runtime.attack_policy.decision.get('reason'),
+                episode=runtime.combat_stop.receipt.get('episode'),
+                inverse=inverse))
 
     def candidate(self, frame, now, preferred=None):
         self._lease = None
@@ -167,6 +207,8 @@ class ActualSiegeAim(object):
             if (needs_hull and self.runtime.attack_policy.decision.get('reason') ==
                     'stationary_domain_review_pending'):
                 self.receipt.update(reason='stationary_hull_review_pending')
+                if combat_detail_enabled():
+                    self._report_aim('siege_hull_review', now, row, solution, hydraulic, reach)
                 return None
             limits = _field(_field(frame['descriptor'], 'gun'), 'turretYawLimits')
             turret = reach['local_yaw'] if limits is None else max(float(limits[0]),
@@ -177,9 +219,13 @@ class ActualSiegeAim(object):
                 needs_hydraulic=abs(correction - hydraulic['correction']) > NATIVE_ANGLE_TOLERANCE,
                 hydraulic_pitch=correction, siege_correction=correction,
                 reachable=False, source_verified=False)
-            source = self._motion_source(frame, hydraulic, solution, shell)
+            inverse = {} if combat_detail_enabled() else None
+            source = self._motion_source(frame, hydraulic, solution, shell, inverse)
             if source is None:
                 self.receipt.update(reason='actual_hydraulic_native_source_pending')
+                if inverse is not None:
+                    self._report_aim('siege_hydraulic_inverse', now, row, solution,
+                                     hydraulic, reach, inverse)
                 return None
             result = dict(row, solution=solution,
                 mechanical='hull_laying' if needs_hull else 'hydraulic_laying')
@@ -195,6 +241,9 @@ class ActualSiegeAim(object):
             self.receipt.update(status='ready', reason='actual_enabled_hydraulic_input', candidates=1,
                 target=target['key'], sample=row['sample'], shell=shell['index'],
                 needs_hull=needs_hull, needs_hydraulic=solution['needs_hydraulic'])
+            if inverse is not None and inverse.get('accepted_with_yaw_tolerance'):
+                self._report_aim('siege_hydraulic_yaw_tolerance', now, row, solution,
+                                 hydraulic, reach, inverse)
             return result
         except (AttributeError, TypeError, ValueError, KeyError, IndexError,
                 RuntimeError, OverflowError, ZeroDivisionError):
