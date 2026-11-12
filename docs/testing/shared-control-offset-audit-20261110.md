@@ -1,5 +1,64 @@
 # PR119 control-offset correction — November 10, 2026
 
+## November 12 follow-up — Siege yaw rounding with HE loaded
+
+The diagnostic report `wot-error-report-20261112-124953-978e2610b91c.zip`
+captured a clear, mechanically reachable UDES 03 point whose six native
+inverse calls left at least `1.0205e-7` radians of yaw error. The motion
+source's former `1e-7` radian check rejected the input even with acceptable
+pitch and hydraulic correction.
+
+Runtime `e907d09488a80cdc5a454cdcd88a2a8689cceacb` uses a `1e-6` radian yaw tolerance
+for the native siege aiming input. Pitch and hydraulic correction use
+`1e-7` radians. The motion input carries aiming authority.
+Actual barrel, lane, armour and first-trigger checks authorize the shot.
+The support-plane review records fit residuals or sampled and predicted
+plane values under **Collect detailed diagnostic logs**. It applies the
+existing support decision and feeds the original driver.
+
+The Windows HD #1513 test used build `local-qa-siege-he-yaw`, the same
+Redshire 15 vs 15 preset, team 1 UDES 03, and a 13/13/14 rack. The launcher
+test command received `shell_ready` at 14:20:12.200 with shell index 2,
+one chambered round, zero reload time and `can_fire=true`. The client
+confirmed HE again after automatic control resumed at 14:20:13.005.
+
+- After 2.011 seconds of route confirmation, siege was enabled at
+  14:21:45.861. At 14:21:45.890 the clear point on enemy UDES 03 #24
+  published a native aiming input with yaw residual `1.0674e-7` radians.
+  The same HE point was accepted at the physical trigger at 14:21:49.485.
+  The server settled the shot as a penetration for 460 damage.
+- At 14:22:34.279 UDES 03 fired HE at PFM-42 #18 for 406 penetration
+  damage. At 14:22:41.648 it used the HE fallback against #24 for 197
+  damage. All three automatic HE launches matched server impact receipts.
+- The 19 player yaw acceptance records all satisfied the pitch and
+  hydraulic thresholds. The 18 support-fit rejects reported residuals
+  from 0.0143 to 0.0795 metres. This identifies the sampled-plane fit
+  check, with a threshold of 0.0001 metres.
+- The player still released engagement at 14:22:05.656 on
+  `native_pivot_stalled`, with #24 present, HE ready, and the sampled line
+  clear. Its gun was at the yaw stop and the hull turned as the required
+  bearing moved farther away. It resumed the route, moved roughly 39 m,
+  then confirmed PFM-42 #18 for 2.031 seconds and reentered siege.
+- Allied UDES 03 #10 fired eight server-settled rounds, with its last at
+  14:24:31. It entered a further engagement at 14:24:48.352, then held
+  the same position from 14:24:53 to 14:24:57 while turning. It moved
+  again shortly before enemy #27 destroyed it at 14:25:02. The cause of
+  the later period without a shot remains open.
+
+The report is `wot-error-report-20261112-142558-89535d27f5a4.zip`. The
+player died at 14:22:43.997. The launcher ended the session at 14:25:48,
+which accounts for the final `worker_disconnected` receipt.
+
+All 914 tests in the 36 isolated player test files passed. The focused
+six-file run passed 175 tests, including diagnostic mode and physical
+trigger cases. The same slope rejection emitted a support record only
+with the detailed checkbox enabled. All 264 client modules compiled with
+CPython 2.7.18. The Windows test ZIP
+`wot_PR119_e907d094_Windows_2026-11-12.zip` passed the x64 launcher,
+nested archive and 267-source staging checks. The installed mod differs
+from `local-qa-siege-r4` in `siege_planning.pyc` and
+`stationary_plan.pyc`.
+
 ## November 12 follow-up — Bot projectile publication and UDES 03 siege
 
 The 02:40:54 report from the Redshire 15 vs 15 scene contained 1,553 local
