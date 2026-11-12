@@ -421,7 +421,7 @@ class CombatStop(object):
     def _mode_entry_target(self, order):
         """Admit the native mode protocol, not an unchecked recovery move."""
         runtime = self.runtime
-        if (not runtime.siege_capable() or
+        if ('drive' not in runtime.features or not runtime.siege_capable() or
                 int(getattr(runtime.entity, 'siegeState', 0)) == siege_mechanics.ENABLED):
             return None
         mission = getattr(runtime, '_mission', None) or {}
