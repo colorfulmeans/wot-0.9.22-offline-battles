@@ -295,19 +295,34 @@ class StationaryPlanner(object):
             if self._support_left <= 0:
                 raise _Deferred('stationary_probe_budget_pending', True)
             self._support_left -= 1
-            plane = self.runtime.geometry._sample_ground_plane(position, yaw, frame['descriptor'])
+            geometry = self.runtime.geometry
+            samples, ground_probe = None, None
+            if combat_detail_enabled():
+                samples = []
+
+                def ground_probe(x, z, hint):
+                    height = geometry._ground_y(x, z, hint)
+                    samples.append((x, z, height))
+                    return height
+
+            plane = geometry._sample_ground_plane(position, yaw, frame['descriptor'], ground_probe)
             if not isinstance(plane, dict):
+                if samples is not None:
+                    combat_detail(self.runtime, 'stationary_support_plane',
+                        self.runtime.actor_id, now, 'sample_plane_unavailable',
+                        lambda: dict(position=position, yaw=yaw, samples=samples))
                 raise _Deferred('stationary_native_support_pending')
             # The original sampler's broad residual accepts drivable steps;
             # those are not evidence for transporting this exact plane.
             residual = _finite(plane['residual'])
             if residual > _POSITION_EPSILON:
-                if combat_detail_enabled():
+                if samples is not None:
                     combat_detail(self.runtime, 'stationary_support_plane',
                         self.runtime.actor_id, now, 'sample_fit_residual',
                         lambda: dict(position=position, yaw=yaw, residual=residual,
                                      position_tolerance=_POSITION_EPSILON,
-                                     center_y=plane.get('center_y'), normal=plane.get('normal')))
+                                     center_y=plane.get('center_y'), normal=plane.get('normal'),
+                                     samples=samples))
                 raise _Deferred('stationary_support_plane_changes')
             plane = dict(plane, position=tuple(position), yaw=float(yaw))
             self._supports[key] = plane

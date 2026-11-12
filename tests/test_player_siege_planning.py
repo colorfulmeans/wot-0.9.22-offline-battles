@@ -133,11 +133,42 @@ class ActualSiegeAimTests(unittest.TestCase):
         solution = dict(point=(0., 0., 100.), direction=(0., 0., 1.), hydraulic_pitch=0.)
         for angles, expected in (((1.42e-7, 0.), solution['point']),
                                  ((1.1e-6, 0.), None),
-                                 ((1.42e-7, 1.42e-7), None)):
+                                 ((1.42e-7, 1.1e-6), None)):
             with self.subTest(angles=angles), mock.patch.object(
                     scene.battle._runtime, 'get_shot_angles', return_value=angles):
                 self.assertEqual(expected,
                     runtime.siege_aim._motion_source(frame, hydraulic, solution, shell))
+
+    def test_pitch_rounding_uses_best_reachable_native_input_after_strict_attempts(self):
+        scene = self.scene(enabled_pitch=(-.3490658402442932, 0.))
+        runtime = scene.runtime
+        frame = runtime.attack_policy.evaluator.snapshot(scene.now)
+        hydraulic = active_hydraulic_pose(runtime, frame)
+        correction = .1296901442021811
+        solution = dict(point=(0., 0., 100.), direction=(0., 0., 1.),
+                        hydraulic_pitch=correction)
+        # The smallest pitch/correction residual of the six Redshire calls.
+        residual = 2.272338354702974e-7
+        angles = [(2.57e-7, correction + error) for error in
+                  (1.3e-6, 5.1e-7, 3.7e-7, 4.2e-7, residual, 4.4e-7)]
+        for strict in (False, True):
+            with self.subTest(strict=strict):
+                trace = {}
+                attempts = angles if not strict else angles[:3] + [(0., correction + 5.e-8)]
+                with mock.patch.object(scene.battle._runtime, 'get_shot_angles',
+                                       side_effect=attempts) as getter:
+                    source = runtime.siege_aim._motion_source(
+                        frame, hydraulic, solution, frame['shells'][0], trace)
+                self.assertEqual(len(attempts), getter.call_count)
+                self.assertEqual(trace['attempts'][3 if strict else 4]['point'], source)
+                self.assertEqual(not strict, trace.get('accepted_with_pitch_tolerance', False))
+                self.assertFalse(scene.launches())
+        # A small error beyond hydraulic travel is still out of range.
+        solution['hydraulic_pitch'] = hydraulic['maximum']
+        with mock.patch.object(scene.battle._runtime, 'get_shot_angles',
+                               return_value=(0., hydraulic['maximum'] + residual)):
+            self.assertIsNone(runtime.siege_aim._motion_source(
+                frame, hydraulic, solution, frame['shells'][0]))
 
     def test_source_is_revoked_on_target_motion_shell_change_or_mode_exit(self):
         for change in ('target', 'shell', 'mode'):

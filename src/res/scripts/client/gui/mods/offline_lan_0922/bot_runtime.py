@@ -12855,13 +12855,12 @@ class BotRuntime(SharedEngineControl):
         return BotRuntime._exact_shot_direction(state, descriptor)
 
     @staticmethod
-    def _local_gun_angles_for_world(state, world_yaw, world_pitch):
+    def _local_gun_angles_for_world(state, world_yaw, world_pitch, body=None):
+        if body is None:
+            body = (state.get('yaw', 0.0), state.get('pitch', 0.0), state.get('roll', 0.0))
         try:
             return shot_geometry.world_direction_to_local_gun_angles(
-                ai_driver.barrel_direction(world_yaw, world_pitch),
-                state.get('yaw', 0.0),
-                state.get('pitch', 0.0),
-                state.get('roll', 0.0))
+                ai_driver.barrel_direction(world_yaw, world_pitch), *body)
         except (TypeError, ValueError, OverflowError):
             return None
 
@@ -13611,6 +13610,10 @@ class BotRuntime(SharedEngineControl):
     @timed('bot.gun_aim')
     def _update_gun_aim(self, state, command, target, step, weapon_tick=None):
         """Slew the rendered turret and barrel through the 0.8.2 limits."""
+        if command.get('_siege_aim_deferred'):
+            state['gun_aligned'] = False
+            state.pop('_diagnostic_aim_intent', None)
+            return state.get('yaw', 0.0), 0.0
         descriptor = self._descriptors.get(state['id'], {})
         ballistic_solution = command.get('_ballistic_solution')
         planning_pending = bool(command.get('_shared_aim_pending'))
@@ -13674,7 +13677,7 @@ class BotRuntime(SharedEngineControl):
             state, descriptor, desired_yaw, world_pitch, step,
             self._turret_motion_probe)
         local_angles = self._local_gun_angles_for_world(
-            state, desired_yaw, world_pitch)
+            state, desired_yaw, world_pitch, state.pop('_gun_aim_body', None))
         if local_angles is None:
             local_angles = (
                 _angle_delta(desired_yaw, state['yaw']), world_pitch)

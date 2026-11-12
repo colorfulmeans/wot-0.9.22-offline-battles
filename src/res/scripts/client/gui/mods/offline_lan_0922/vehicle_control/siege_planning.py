@@ -22,6 +22,7 @@ from .native_aim import (active_hydraulic_pose, hydraulic_reach,
 
 NATIVE_SOURCE_CALLS = 6
 NATIVE_SOURCE_YAW_TOLERANCE = 1.e-6
+NATIVE_SOURCE_PITCH_FALLBACK_TOLERANCE = 1.e-6
 
 
 def _point(value):
@@ -112,10 +113,12 @@ class ActualSiegeAim(object):
         distance = min(100., max(5., float(_field(shell['shot'], 'speed')) * .12))
         source = _point(solution['point'])
         tolerance = 1.e-7
+        best = None
         if trace is not None:
             trace.update(desired_angles=desired, current_angles=current, origin=origin,
                 gun_pitch_limits=(minimum, maximum), desired_correction=correction,
-                tolerance=tolerance, yaw_tolerance=NATIVE_SOURCE_YAW_TOLERANCE, attempts=[])
+                tolerance=tolerance, yaw_tolerance=NATIVE_SOURCE_YAW_TOLERANCE,
+                pitch_fallback_tolerance=NATIVE_SOURCE_PITCH_FALLBACK_TOLERANCE, attempts=[])
         for attempt in range(NATIVE_SOURCE_CALLS):
             self.receipt['native_calls'] += 1
             actual = getter(descriptor, matrix, current, owner._vector(source))
@@ -132,18 +135,28 @@ class ActualSiegeAim(object):
                 trace['attempts'].append(dict(point=source, angles=actual,
                     angle_error=errors, correction=produced, within_limits=reachable,
                     correction_error=produced - correction))
-            # The native world-point vector rounds at the scale of the map.
-            # Its yaw quantization applies to this actuator input only.
-            if (reachable and abs(errors[0]) <= NATIVE_SOURCE_YAW_TOLERANCE and
-                    max(abs(errors[1]), abs(produced - correction)) <= tolerance):
-                if trace is not None:
-                    trace['accepted_with_yaw_tolerance'] = abs(errors[0]) > tolerance
-                return source
+            if reachable and abs(errors[0]) <= NATIVE_SOURCE_YAW_TOLERANCE:
+                pitch_error = max(abs(errors[1]), abs(produced - correction))
+                if pitch_error <= tolerance:
+                    if trace is not None:
+                        trace['accepted_with_yaw_tolerance'] = abs(errors[0]) > tolerance
+                    return source
+                if pitch_error <= NATIVE_SOURCE_PITCH_FALLBACK_TOLERANCE:
+                    quality = pitch_error, abs(errors[0])
+                    if best is None or quality < best[0]:
+                        best = (quality, source, attempt)
             if attempt:
                 local[0] = _angle(local[0] + errors[0])
                 local[1] += errors[1]
             direction = shot_geometry.transform_vehicle_vector(_direction(*local), *body)
             source = tuple(origin[axis] + direction[axis] * distance for axis in range(3))
+        # A rounded map-coordinate input may still lay the hydraulics.
+        # Physical barrel and launch proofs use their own tolerances.
+        if best is not None:
+            if trace is not None:
+                trace.update(accepted_with_pitch_tolerance=True, selected_attempt=best[2],
+                             accepted_with_yaw_tolerance=best[0][1] > tolerance)
+            return best[1]
         if trace is not None:
             trace['failure'] = 'attempts_exhausted'
         return None
@@ -241,9 +254,13 @@ class ActualSiegeAim(object):
             self.receipt.update(status='ready', reason='actual_enabled_hydraulic_input', candidates=1,
                 target=target['key'], sample=row['sample'], shell=shell['index'],
                 needs_hull=needs_hull, needs_hydraulic=solution['needs_hydraulic'])
-            if inverse is not None and inverse.get('accepted_with_yaw_tolerance'):
-                self._report_aim('siege_hydraulic_yaw_tolerance', now, row, solution,
-                                 hydraulic, reach, inverse)
+            if inverse is not None:
+                if inverse.get('accepted_with_pitch_tolerance'):
+                    self._report_aim('siege_hydraulic_pitch_tolerance', now, row, solution,
+                                     hydraulic, reach, inverse)
+                elif inverse.get('accepted_with_yaw_tolerance'):
+                    self._report_aim('siege_hydraulic_yaw_tolerance', now, row, solution,
+                                     hydraulic, reach, inverse)
             return result
         except (AttributeError, TypeError, ValueError, KeyError, IndexError,
                 RuntimeError, OverflowError, ZeroDivisionError):

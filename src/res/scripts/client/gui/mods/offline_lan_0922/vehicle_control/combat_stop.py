@@ -422,15 +422,14 @@ class CombatStop(object):
         """Admit the native mode protocol, not an unchecked recovery move."""
         runtime = self.runtime
         if (not runtime.siege_capable() or
-                int(getattr(runtime.entity, 'siegeState', 0)) == siege_mechanics.ENABLED or
-                not self.can_request_movement):
+                int(getattr(runtime.entity, 'siegeState', 0)) == siege_mechanics.ENABLED):
             return None
         mission = getattr(runtime, '_mission', None) or {}
         explicit = bool(not self.explicit_travel and (
             mission.get('explicit') and mission.get('action') == 'attack' and
                 mission.get('destination') is None or
             order.get('team_command') in ('ATTACK', 'ATTACKENEMY', 'SUPPORTMEWITHFIRE')))
-        if explicit:
+        if explicit and self.can_request_movement:
             requested = order.get('combat_task_target') or {}
             key = _key(dict(kind=requested.get('target_kind'), id=requested.get('target_id')))
             return next((row for row in self.targets if _key(row) == key),
@@ -448,28 +447,35 @@ class CombatStop(object):
         rows = policy._rows_for('penetration', loaded, fresh_line=True)
         if preferred is not None:
             rows = [policy.current_row(preferred, require_line=True)] + list(rows)
-        for row in rows:
-            if row is None or row.get('shell_index') != loaded or not self.contains(row.get('target')):
-                continue
-            key, line = row.get('key'), row.get('line')
-            failed = self._siege_failed_points.get(key)
-            if failed is not None and line in _BLOCKED_LANES:
-                failed['blocked'] = True
-            if (line != 'clear' or not isinstance(row.get('solution'), dict) or
-                    row.get('mechanical') not in ('reachable', 'hull_laying', 'mechanical_limited') or
-                    row.get('scope') == 'excluded' or
-                    row.get('armor') == 'failed' and not row.get('route_he_contact') and
-                    not policy._attack_result(row, row.get('mode', 'penetration'))):
-                continue
-            if failed is None or failed['blocked'] or (
-                    _distance(runtime.state['position'], failed['position']) >= WAYPOINT_ARRIVAL_RADIUS or
-                    _distance(row['target']['position'], failed['target_position']) >= WAYPOINT_ARRIVAL_RADIUS):
-                return row
-            if combat_detail_enabled():
-                combat_detail(runtime, 'siege_route_point', runtime.actor_id, runtime.now,
-                    'waiting_for_new_attack_point',
-                    lambda: dict(point=key, episode=self._episode, failure=failed['reason']))
-        return None
+        elif (policy.frame or {}).get('siege_aim_deferred'):
+            rows.sort(key=lambda row: row['key'] != policy.selected)
+        return next((row for row in rows if self._siege_route_row(row)), None)
+
+    def _siege_route_row(self, row):
+        runtime = self.runtime
+        if (row is None or row.get('shell_index') != runtime.gun.shot_index or
+                not self.candidate_consumable(row)):
+            return False
+        key, line = row.get('key'), row.get('line')
+        failed = self._siege_failed_points.get(key)
+        if failed is not None and line in _BLOCKED_LANES:
+            failed['blocked'] = True
+        if (line != 'clear' or not isinstance(row.get('solution'), dict) or
+                row.get('mechanical') not in (
+                    'reachable', 'hull_laying', 'mechanical_limited', 'siege_aim_deferred') or
+                row.get('scope') == 'excluded' or
+                row.get('armor') == 'failed' and not row.get('route_he_contact') and
+                not runtime.attack_policy._attack_result(row, row.get('mode', 'penetration'))):
+            return False
+        if failed is None or failed['blocked'] or (
+                _distance(runtime.state['position'], failed['position']) >= WAYPOINT_ARRIVAL_RADIUS or
+                _distance(row['target']['position'], failed['target_position']) >= WAYPOINT_ARRIVAL_RADIUS):
+            return True
+        if combat_detail_enabled():
+            combat_detail(runtime, 'siege_route_point', runtime.actor_id, runtime.now,
+                'waiting_for_new_attack_point',
+                lambda: dict(point=key, episode=self._episode, failure=failed['reason']))
+        return False
 
     def _reopened_lay(self, proposal):
         """Fence failure to its point; require positive current lay evidence."""
@@ -1040,12 +1046,16 @@ class CombatStop(object):
                         for state in states) or getattr(runtime, '_siege_pending', None) is not None or
                     observation(runtime).mode_pending())
 
-    def waiting_for_siege(self):
+    def siege_aim_deferred(self):
+        """The travel and transitioning gun can provide a line, then lay after the echo."""
         runtime = self.runtime
-        return bool(self.combat_owned and runtime.siege_capable() and
+        return bool(runtime.siege_capable() and
                     (self.mode_pending() or
                      int(runtime.state.get('siege_state', 0)) != siege_mechanics.ENABLED or
                      int(getattr(runtime.entity, 'siegeState', 0)) != siege_mechanics.ENABLED))
+
+    def waiting_for_siege(self):
+        return self.combat_owned and self.siege_aim_deferred()
 
     def _stop(self, order, reason, now, face=None):
         self.receipt.update(status='stopped', reason=reason, at=now)

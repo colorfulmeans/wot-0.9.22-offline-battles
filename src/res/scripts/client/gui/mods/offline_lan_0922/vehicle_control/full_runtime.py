@@ -362,10 +362,13 @@ class _NativeAimInput(object):
         self.runtime = runtime
         self.saved = None
         self.bound_source = None
+        self._release = None
+        self.clear_aim()
+
+    def clear_aim(self):
         self.point = self.source_point = self.target = self.solution = None
         self.motion_point = None
         self.verified = False
-        self._release = None
 
     def shot_point(self):
         point = self.source_point or self.motion_point
@@ -439,9 +442,7 @@ class _NativeAimInput(object):
             lease['releasing'] = False
         if self._release is lease:
             self.saved = self.bound_source = self._release = None
-            self.source_point = self.point = self.target = self.solution = None
-            self.motion_point = None
-            self.verified = False
+            self.clear_aim()
 
     def aim(self, state, target, command, intention):
         runtime = self.runtime
@@ -751,13 +752,23 @@ class _PlayerBehaviorEngine(shared_runtime.BotRuntime):
         # The native foreground actuator consumes track_world and owns the
         # hydraulic body matrix. A second predicted pitch here would aim
         # through a pose that the real barrel has not reached yet.
-        owner = self.player_runtime.owner
+        runtime = self.player_runtime
+        owner = runtime.owner
         stabilised = getattr(owner, '_local_stabilised_pose', owner._local_body_pose)
         body = owner._runtime.math.Matrix(stabilised())
         correction = float(getattr(owner, '_local_siege_aim_pitch', 0.))
         state['terrain_pitch'] = float(getattr(owner, '_local_terrain_pitch', body.pitch))
         state['suspension_pitch'] = correction
         state['pitch'], state['roll'] = float(body.pitch), float(body.roll)
+        if int(getattr(runtime.entity, 'siegeState', 0)) == siege_mechanics.ENABLED:
+            # Hydraulic pitch on a rolled chassis also changes the gun
+            # basis yaw. Keep the route yaw on the physical chassis.
+            state['_gun_aim_body'] = (float(body.yaw), state['pitch'], state['roll'])
+            if combat_detail_enabled():
+                combat_detail(runtime, 'siege_aim_pose', runtime.actor_id, runtime.now,
+                    runtime.combat_stop._episode, lambda: dict(
+                        siege_state=siege_mechanics.ENABLED, chassis_yaw=state['yaw'],
+                        aim_body=state['_gun_aim_body'], hydraulic_pitch=correction))
         return correction
 
     def _contacts_for(self, source, players, now, team_spotted=None,
@@ -788,6 +799,10 @@ class _PlayerBehaviorEngine(shared_runtime.BotRuntime):
             command, throttle, turn, path_clear, motion_probe, now)
 
     def _update_gun_aim(self, state, command, target, step, weapon_tick=None):
+        if command.get('_siege_aim_deferred'):
+            self.player_runtime.weapon.clear_aim()
+            return shared_runtime.BotRuntime._update_gun_aim(
+                self, state, command, target, step, weapon_tick)
         # Retain the full copied law and every recovery/intention transition.
         # Only its actuator's predicted angles are replaced by native feedback.
         shadow = dict(state)

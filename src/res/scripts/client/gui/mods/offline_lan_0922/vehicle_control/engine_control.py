@@ -7,10 +7,17 @@ import math
 from .planning import SharedOrderPlanning
 from .evaluation_budget import EvaluationBudget
 from .actor_observation import observation
+from ..native_input_diagnostics import combat_detail, combat_detail_enabled
 
 
 def _angle(value):
     return (float(value) + math.pi) % (2. * math.pi) - math.pi
+
+
+def _siege_aim_waits(runtime):
+    combat = runtime.combat_stop
+    return ('fire' in runtime.features and
+            (combat.active or combat.mode_pending()) and combat.siege_aim_deferred())
 
 
 class SharedEngineControl(SharedOrderPlanning):
@@ -26,6 +33,15 @@ class SharedEngineControl(SharedOrderPlanning):
         if runtime is None or (state.get('profile') or {}).get('class_tag') == 'SPG':
             return command, target
         owner, policy = runtime.combat_stop, runtime.attack_policy
+        if _siege_aim_waits(runtime):
+            runtime._shared_aim_intention = None
+            if combat_detail_enabled():
+                mode = observation(runtime).native_siege_state()
+                combat_detail(runtime, 'siege_aim_wait', runtime.actor_id, now,
+                    (mode, owner.combat_owned, owner._episode), lambda: dict(
+                        siege_state=mode, combat_owned=owner.combat_owned, episode=owner._episode))
+            return dict(command, fire_allowed=False, aim_position=None,
+                        _ballistic_solution=None, _siege_aim_deferred=True), None
         if (not owner.active or owner.explicit_travel or runtime._mission_brakes() or
                 not runtime._live() or policy.decision.get('action') == 'unchanged'):
             runtime._shared_aim_intention = None
@@ -146,6 +162,9 @@ class SharedEngineControl(SharedOrderPlanning):
         runtime = self._control_for(state)
         if runtime is None:
             return self._physical_cadenced_ballistic_solution(state, target, descriptor, shell_index, now, force)
+        if _siege_aim_waits(runtime):
+            self._ballistic_solution_cache.pop(state['id'], None)
+            return None, False
         # BotRuntime inherits this boundary. Import its physical timing values
         # only after the owner exists, not while Python 2 is defining that
         # class through this module. The values still have one physical owner.

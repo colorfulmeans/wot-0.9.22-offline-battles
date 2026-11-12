@@ -16,6 +16,7 @@ from unittest import mock
 import test_player_fire_admission_complete as fire_tests
 from gui.mods.offline_lan_0922 import (
     ballistics, gun_mechanics, gun_pitch_limits, shot_geometry, siege_mechanics)
+from gui.mods.offline_lan_0922.vehicle_control import attack_policy
 from gui.mods.offline_lan_0922.vehicle_control.player_binding import PlayerControl
 
 
@@ -346,37 +347,80 @@ class SiegeEngagementTests(unittest.TestCase):
     def test_travel_zero_pitch_enters_before_point_proof_and_actual_lay_waits_echo(self):
         scene = self.scene(enabled=False)
         runtime = scene.runtime
-        self.advance_until(scene, lambda: runtime._siege_pending is not None,
-                           actuate=False)
-        request = runtime._siege_pending
-        self.assertTrue(request['enabled'])
-        self.assertIsNone(runtime._siege_aim_candidate)
-        self.assertIsNone(runtime.siege_aim_candidate())
-        self.assertTrue(runtime.combat_stop.active)
-        self.assertTrue(runtime.combat_stop.waiting_for_siege())
-        self.assertIsNone(runtime.combat_stop.pivot)
-        sequence = request['sequence']
-        self.assertFalse(scene.launches())
-        scene.echo_mode(siege_mechanics.SWITCHING_ON, sequence)
-        for unused in range(3):
-            scene.tick(actuate=False)
-            self.assertIs(request, runtime._siege_pending)
+        engine = runtime.engine
+        with mock.patch.object(attack_policy, '_mechanical', wraps=attack_policy._mechanical) as limits, \
+                mock.patch.object(engine, '_local_gun_angles_for_world',
+                                  wraps=engine._local_gun_angles_for_world) as aim:
+            clear_since = runtime.combat_stop.receipt['confirmation_since']
+            for unused in range(19):
+                scene.tick(actuate=False)
+                self.assertFalse(runtime.combat_stop.combat_owned)
+                self.assertIsNone(runtime._siege_pending)
+            self.advance_until(scene, lambda: runtime._siege_pending is not None,
+                               actuate=False)
+            admitted = next(row['position']['admitted_at'] for row in scene.trace
+                            if 'admitted_at' in row['position'])
+            self.assertGreaterEqual(admitted - clear_since, 2.)
+            request = runtime._siege_pending
+            self.assertTrue(request['enabled'])
+            self.assertIsNone(runtime._siege_aim_candidate)
+            self.assertIsNone(runtime.siege_aim_candidate())
+            self.assertTrue(runtime.combat_stop.active)
             self.assertTrue(runtime.combat_stop.waiting_for_siege())
             self.assertIsNone(runtime.combat_stop.pivot)
-            self.assertFalse(runtime._siege_request(False))
+            sequence = request['sequence']
+            episode = runtime.combat_stop._episode
             self.assertFalse(scene.launches())
-        scene.echo_mode(siege_mechanics.ENABLED, sequence)
-        self.assertIsNone(runtime._siege_pending)
-        enabled_at = scene.now
-        self.advance_until(scene, lambda: runtime.siege_aim_candidate() is not None,
-                           actuate=False)
-        self.assertFalse(runtime.combat_stop.waiting_for_siege())
-        self.assertIsNotNone(runtime.combat_stop.pivot)
-        self.assertGreaterEqual(runtime.combat_stop.pivot['progress_at'], enabled_at)
-        self.assertEqual('native_lay', runtime.combat_stop.receipt['reason'])
-        self.assertFalse(scene.launches())
+            scene.echo_mode(siege_mechanics.SWITCHING_ON, sequence)
+            for unused in range(3):
+                scene.tick(actuate=False)
+                self.assertIs(request, runtime._siege_pending)
+                self.assertTrue(runtime.combat_stop.waiting_for_siege())
+                self.assertEqual(episode, runtime.combat_stop._episode)
+                self.assertIsNone(runtime.combat_stop.pivot)
+                self.assertFalse(runtime._siege_request(False))
+                self.assertFalse(scene.launches())
+            limits.assert_not_called()
+            aim.assert_not_called()
+            scene.echo_mode(siege_mechanics.ENABLED, sequence)
+            self.assertIsNone(runtime._siege_pending)
+            enabled_at = scene.now
+            self.advance_until(scene, lambda: runtime.siege_aim_candidate() is not None,
+                               actuate=False)
+            self.assertTrue(limits.called)
+            self.assertTrue(aim.called)
+            self.assertLess(scene.now - enabled_at, 2.)
+            self.assertEqual(episode, runtime.combat_stop._episode)
+            self.assertFalse(runtime.combat_stop.waiting_for_siege())
+            self.assertIsNotNone(runtime.combat_stop.pivot)
+            self.assertGreaterEqual(runtime.combat_stop.pivot['progress_at'], enabled_at)
+            self.assertEqual('native_lay', runtime.combat_stop.receipt['reason'])
+            self.assertFalse(scene.launches())
         self.advance_until(scene, lambda: bool(scene.launches()))
         self.assertEqual(1, len(scene.launches()))
+
+    def test_enabled_player_gun_uses_complete_hydraulic_body_on_a_cross_slope(self):
+        scene = self.scene()
+        runtime = scene.runtime
+        # Redshire report, allied hull yaw before and after hydraulic pitch.
+        flat_yaw = .20128965377807617
+        scene.flat_body.setRotateYPR((flat_yaw, .029512988403439522, -.04998251050710678))
+        correction = .012710755690932274
+        scene.battle._local_siege_aim_pitch = correction
+        scene.battle._local_siege_aim_matrix.setRotateYPR((0., correction, 0.))
+        scene.body = fire_tests.SpatialPose(scene.flat_body)
+        scene.body.preMultiply(scene.battle._local_siege_aim_matrix)
+        scene.update_barrel_observation()
+        runtime.state['yaw'] = flat_yaw
+        target = next(row for row in runtime.visible_targets() if row['engine_id'] == scene.target.id)
+        command = dict(_ballistic_solution=dict(yaw=scene.body.yaw, pitch=scene.body.pitch,
+            aim_position=target['position'], _origin=scene.origin))
+        runtime.engine._update_gun_aim(runtime.state, command, target, .1)
+        intent = runtime.state['_diagnostic_aim_intent']
+        self.assertGreater(abs(scene.body.yaw - flat_yaw), .0006)
+        self.assertAlmostEqual(0., intent['turret_yaw'], places=10)
+        self.assertAlmostEqual(0., intent['gun_pitch'], places=10)
+        self.assertEqual(flat_yaw, runtime.state['yaw'])
 
     def test_synthetic_siege_magazine_uses_same_native_mode_owner(self):
         # No currently shipped vehicle is required for this independent axes

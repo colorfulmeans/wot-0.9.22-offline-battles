@@ -405,7 +405,10 @@ class AttackPolicy(object):
 
     @staticmethod
     def _stamp(frame, shell, target):
-        return (frame['identity'], frame.get('planning_pose', frame['pose']),
+        identity = frame['identity']
+        if frame.get('siege_aim_deferred'):
+            identity += ('siege_aim_deferred',)
+        return (identity, frame.get('planning_pose', frame['pose']),
                 target.get('pose'), target.get('velocity'),
                 shell.get('signature', (int(shell['index']),
                                        bool(shell.get('is_he')),
@@ -487,7 +490,8 @@ class AttackPolicy(object):
                     mode == 'he_fallback' and not shell.get('is_he')):
                 continue
             for target in frame.get('targets', ()):
-                trial = self._single_point_trial(shell, target)
+                trial = (None if frame.get('siege_aim_deferred') else
+                         self._single_point_trial(shell, target))
                 if mode == 'penetration' and trial is not None and trial['failed']:
                     continue
                 # Missing geometry remains an explicit unknown obligation.
@@ -1483,6 +1487,8 @@ class AttackPolicy(object):
         return groups
 
     def next_at_edge(self, native_fence=True, queued=None, trigger=None):
+        if self.frame is not None and self.frame.get('siege_aim_deferred'):
+            return None, 'siege_aim_deferred'
         if self.ordered is not None and self.frame is not None and not self.frame.get('artillery'):
             if self._frame_invalid:
                 return None, 'observation_changed'
@@ -2205,6 +2211,8 @@ class AttackPolicy(object):
             self._current_he_observations.clear()
             self._current_he_deferred.clear()
             return self._choose('navigate', 'ammunition_exhausted')
+        if frame.get('siege_aim_deferred') and self.reload_authority is not None:
+            return self._early_reload_decision(loaded)
         if frame.get('targets') and self._lay_recovery is not None:
             refused, retry_at = self._lay_recovery
             if now < retry_at:
@@ -2214,7 +2222,7 @@ class AttackPolicy(object):
                                      reason='native_lay_stalled')
                 return self._choose('firing_position', 'native_lay_stalled', candidate)
             self._lay_recovery = None
-        if self.ordered is not None:
+        if self.ordered is not None and not frame.get('siege_aim_deferred'):
             result = self.ordered.update(self, now)
             if combat_detail_enabled():
                 runtime = self.runtime
@@ -2232,7 +2240,7 @@ class AttackPolicy(object):
                                      for row in self.rows.values() if row['shell_index'] == loaded and
                                      row['target_key'] == self.ordered.target)))
             return result
-        if not frame.get('targets'):
+        if not frame.get('targets') or frame.get('siege_aim_deferred'):
             self._current_he_observations.clear()
             self._current_he_deferred.clear()
             empty_clip = (int(frame.get('clip_size', 1)) > 1 and frame['clip'] <= 0 and
@@ -2244,6 +2252,12 @@ class AttackPolicy(object):
                 return self._choose('reload_clip' if empty_clip else 'switch_shell',
                     'empty_clip' if empty_clip else 'current_ammunition_exhausted',
                     shell_index=planned, early_reload=False)
+            if frame.get('targets'):
+                row = self._frontier(now, accepts=self.runtime.combat_stop._siege_route_row)
+                if row is not None:
+                    self.selected = row['key']
+                return self._choose('wait', 'siege_route_line_ready' if row is not None else
+                                    'siege_route_line_pending')
             return self._choose('wait', 'no_relevant_enemy')
         continuing_he = self._continue_current_he(now)
         if continuing_he is not None:
@@ -2512,7 +2526,8 @@ class AttackPolicy(object):
     def background(self, now):
         """One independent, fair all-shell/all-target frontier after control."""
         now = float(now)
-        if (self.frame is None or self.frame.get('artillery') or self._frame_invalid or
+        if (self.frame is None or self.frame.get('artillery') or
+                self.frame.get('siege_aim_deferred') or self._frame_invalid or
                 self._background_at == now):
             return self.next_shell
         if self.ordered is not None:
@@ -3046,7 +3061,8 @@ class NativeAttackEvaluator(object):
         planning_pose = _planning_pose(pose)
         ordered = getattr(getattr(runtime, 'attack_policy', None), 'ordered', None) is not None
         siege_capable = getattr(runtime, 'siege_capable', None)
-        stable_planning_pose = ordered or bool(callable(siege_capable) and siege_capable())
+        siege = bool(callable(siege_capable) and siege_capable())
+        stable_planning_pose = ordered or siege
         if stable_planning_pose:
             previous = getattr(self, '_planning_anchor', None)
             if _same_native_planning_pose(previous, planning_pose):
@@ -3057,6 +3073,7 @@ class NativeAttackEvaluator(object):
             combat_signature=combat_signature,
             source=source, pose=pose, planning_pose=planning_pose, ordered=ordered,
             stable_planning_pose=stable_planning_pose,
+            siege_aim_deferred=siege and runtime.combat_stop.siege_aim_deferred(),
             position=pose[0], body=body, origin=origin,
             descriptor=descriptor, entity=entity, loaded=int(gun.shot_index),
             ammo=tuple(gun.ammo), clip=int(gun.clip), clip_size=int(gun.clip_size),
@@ -3166,7 +3183,8 @@ class NativeAttackEvaluator(object):
             debris = frame['observed_at']
         frame.update(blockers=blockers, lane_missing=missing, debris=debris, lane_regions={},
                      line_revision=(frame['scene'], blockers, missing, debris))
-        if frame.get('ordered') and not frame.get('artillery') and frame.get('targets'):
+        if ((frame.get('ordered') or frame.get('siege_aim_deferred')) and
+                not frame.get('artillery') and frame.get('targets')):
             try:
                 hostiles = native_hostile_roster(self.runtime, frame['observed_at'],
                                                  bounds_cache=self.hostile_bounds)
@@ -3394,6 +3412,11 @@ class NativeAttackEvaluator(object):
         proof = stationary_scope.assess(self.runtime, frame, shell, target, predicted)
         result.update(scope=proof['scope'], scope_reason=proof['reason'], scope_proof=proof)
 
+    @staticmethod
+    def _prediction_stamp(frame, shell, target):
+        return (frame['planning_pose'], target['pose'], shell['signature'],
+                target.get('velocity'), frame['identity'], frame.get('siege_aim_deferred', False))
+
     def begin_atomic(self, frame, jobs, now):
         self.atomic_receipt = dict(world_chords=0, armour_collision_batches=0,
             friendly_path_calls=0, world_budget=None, priced_candidates=0,
@@ -3417,8 +3440,7 @@ class NativeAttackEvaluator(object):
                 self.atomic_receipt['reason'] = 'atomic_frame_budget_exhausted'
                 break
             cached = self.predictions.get(key[:3])
-            stamp = (frame['planning_pose'], target['pose'], shell['signature'],
-                     target.get('velocity'), frame['identity'])
+            stamp = self._prediction_stamp(frame, shell, target)
             prediction = cached[1] if cached is not None and cached[0] == stamp else None
             if prediction is None:
                 continue
@@ -3468,6 +3490,7 @@ class NativeAttackEvaluator(object):
             if scene != frame['scene']:
                 return False
             live = dict(scene=scene, observed_at=self.runtime.now, ordered=frame.get('ordered'),
+                        siege_aim_deferred=frame.get('siege_aim_deferred'),
                         artillery=frame.get('artillery'), targets=frame['targets'])
             self._observe_lanes(live)
             if rows is None and live['line_revision'] != frame['line_revision']:
@@ -3510,8 +3533,7 @@ class NativeAttackEvaluator(object):
         try:
             owner, entity, shot = self.owner, target['entity'], shell['shot']
             key = (shell['index'], target['key'], sample)
-            stamp = (frame['planning_pose'], target['pose'], shell['signature'],
-                     target['velocity'], frame['identity'])
+            stamp = self._prediction_stamp(frame, shell, target)
             previous = self.predictions.get(key)
             if previous is not None and previous[0] == stamp:
                 return previous[1]
@@ -3536,7 +3558,10 @@ class NativeAttackEvaluator(object):
             yaw = math.atan2(aim[0] - frame['origin'][0], aim[2] - frame['origin'][2])
             direction = (math.sin(yaw) * math.cos(pitch), -math.sin(pitch),
                          math.cos(yaw) * math.cos(pitch))
-            reach = _mechanical(frame['descriptor'], direction, frame['body'])
+            if frame.get('siege_aim_deferred'):
+                reach = dict(status='siege_aim_deferred', reason='siege_aim_deferred')
+            else:
+                reach = _mechanical(frame['descriptor'], direction, frame['body'])
             path = ballistics.ballistic_path(frame['origin'], yaw, pitch, speed, gravity, flight)
             solution = dict(target=entity.id, sample=sample, sample_value=samples[sample],
                 point=tuple(aim), aim_position=tuple(aim), source_point=tuple(aim),
@@ -3689,7 +3714,8 @@ class NativeAttackEvaluator(object):
             evaluated_frame = frame
             raw = predicted
             planner = getattr(self, 'stationary_planner', None)
-            if (planner is not None and (predicted.get('unreachable') or
+            if (planner is not None and not frame.get('siege_aim_deferred') and
+                    (predicted.get('unreachable') or
                     predicted['reach']['status'] != 'reachable')):
                 if not predicted.get('unreachable'):
                     reported.update(mechanical=predicted['reach']['status'],
@@ -3736,7 +3762,8 @@ class NativeAttackEvaluator(object):
                     self.atomic_receipt['world_budget'] = self.atomic_receipt['priced_world_chords']
             if predicted.get('unreachable'):
                 result.update(mechanical='mechanical_limited', reason=predicted['reason'])
-                self._point_scope(frame, shell, target, predicted, result)
+                if not frame.get('siege_aim_deferred'):
+                    self._point_scope(frame, shell, target, predicted, result)
                 return reported
             path, reach = predicted['path'], predicted['reach']
             solution = dict(predicted['solution'], source_pose=frame['pose'], mode=mode,
@@ -3818,6 +3845,9 @@ class NativeAttackEvaluator(object):
                     result.update(refusal)
                     return reported
             result['line'] = 'clear'
+            if reach['status'] == 'siege_aim_deferred':
+                result['reason'] = reach['reason']
+                return reported
             route_lay = reach['status'] == 'hull_laying'
             ordered_he = frame.get('ordered') and shell.get('is_he')
             if reach['status'] != 'reachable':
