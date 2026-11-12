@@ -792,6 +792,8 @@ class CombatStop(object):
             combat_detail(runtime, 'combat_route_release', runtime.actor_id, now, reason,
                 lambda: dict(episode=self._episode, point=(candidate or {}).get('key'),
                     pose=tuple(runtime.state['position']), route_index=self.task_order.get('route_index'),
+                    pivot_idle_seconds=now - pivot['progress_at'] if pivot else None,
+                    rotation_refused_until=runtime.state.get('_native_rotation_refused_until'),
                     reloading=bool((runtime.attack_policy.frame or {}).get('reloading'))))
         self._publish_owner()
         # The route was never replaced. Returning exactly its current task
@@ -1337,6 +1339,7 @@ class CombatStop(object):
                 result.pop('stable_hull_face', None)
                 return result
             return self._release_to_route(order, now, 'native_pivot_stalled')
+        pivot.pop('siege_turn', None)
         if now - pivot['progress_at'] >= MECHANICAL_STALL_SECONDS:
             return self._release_to_route(order, now, 'native_pivot_geometry_stalled')
         return dict(self._stop(order, 'native_pivot_geometry_pending', now,
@@ -1352,7 +1355,8 @@ class CombatStop(object):
             self.pivot = runtime._native_hull_laying = None
         yaw = float(state['yaw'])
         desired_yaw = float(solution.get('hull_yaw', solution.get('yaw', yaw)))
-        error = abs(_angle(desired_yaw - yaw))
+        signed_error = _angle(desired_yaw - yaw)
+        error = abs(signed_error)
         hydraulic = float(observation(runtime).hydraulic_state().get('pitch',
                                   state.get('suspension_pitch', 0.)))
         needs_hydraulic = bool(solution.get('needs_hydraulic'))
@@ -1371,16 +1375,49 @@ class CombatStop(object):
         if identity != pivot['target']:
             pivot.update(target=identity, best_error=error, best_pitch_error=pitch_error,
                          progress_yaw=yaw, progress_pitch=hydraulic)
-        progressed = (abs(_angle(yaw - pivot['progress_yaw'])) >= NATIVE_ANGLE_TOLERANCE and
-                      error < pivot['best_error'] - NATIVE_ANGLE_TOLERANCE or
-                      needs_hydraulic and abs(hydraulic - pivot['progress_pitch']) >= NATIVE_ANGLE_TOLERANCE and
-                      pitch_error < pivot['best_pitch_error'] - NATIVE_ANGLE_TOLERANCE)
+            pivot.pop('siege_turn', None)
+        hull_step = _angle(yaw - pivot['progress_yaw'])
+        previous_turn = pivot.pop('siege_turn', None)
+        follows_turn = False
+        old_error = old_remaining = None
+        in_siege = state.get('siege_state') == siege_mechanics.ENABLED
+        if (in_siege and solution.get('needs_hull') and pivot.get('key') is not None and
+                candidate and candidate.get('key') == pivot['key'] and candidate.get('line') == 'clear'):
+            pivot['siege_turn'] = (yaw, desired_yaw)
+            if previous_turn is not None:
+                previous_yaw, previous_goal = previous_turn
+                old_error = _angle(previous_goal - previous_yaw)
+                old_remaining = _angle(previous_goal - yaw)
+                # A close target can sweep faster than the hull. Measure
+                # physical progress against the heading issued before it moved.
+                # Net advance past the last progress pose excludes yaw jitter.
+                follows_turn = (old_error * signed_error > 0. and
+                    abs(old_remaining) < abs(old_error) - NATIVE_ANGLE_TOLERANCE and
+                    hull_step * math.copysign(1., signed_error) >= NATIVE_ANGLE_TOLERANCE)
+        yaw_improved = (abs(hull_step) >= NATIVE_ANGLE_TOLERANCE and
+                        error < pivot['best_error'] - NATIVE_ANGLE_TOLERANCE)
+        pitch_improved = (needs_hydraulic and
+                          abs(hydraulic - pivot['progress_pitch']) >= NATIVE_ANGLE_TOLERANCE and
+                          pitch_error < pivot['best_pitch_error'] - NATIVE_ANGLE_TOLERANCE)
+        progressed = follows_turn or yaw_improved or pitch_improved
         if progressed:
             pivot.update(best_error=min(error, pivot['best_error']),
                          best_pitch_error=min(pitch_error, pivot['best_pitch_error']),
                          progress_at=float(now), progress_yaw=yaw, progress_pitch=hydraulic)
-        if (now < state.get('_native_rotation_refused_until', 0.) or
-                now - pivot['progress_at'] >= MECHANICAL_STALL_SECONDS):
+        rotation_refused = now < state.get('_native_rotation_refused_until', 0.)
+        idle_time = now - pivot['progress_at']
+        stalled = idle_time >= MECHANICAL_STALL_SECONDS
+        if in_siege and combat_detail_enabled():
+            reason = ('rotation_refused' if rotation_refused else
+                      'stall_elapsed' if stalled else 'tracking')
+            combat_detail(runtime, 'siege_pivot_progress', runtime.actor_id, now, reason,
+                lambda: dict(point=(candidate or {}).get('key'), line=(candidate or {}).get('line'),
+                    target_position=target.get('position'), aim_position=solution.get('point'),
+                    yaw=yaw, desired_yaw=desired_yaw, yaw_error=signed_error,
+                    previous_error=old_error, previous_remaining=old_remaining,
+                    hull_step=hull_step, follows_turn=follows_turn, progressed=progressed,
+                    pitch_error=pitch_error, idle_seconds=idle_time, episode=self._episode))
+        if rotation_refused or stalled:
             self.release_laying('native_pivot_stalled', now)
             return None
         runtime._last_navigation = dict(status='aligning', action='firing_position',

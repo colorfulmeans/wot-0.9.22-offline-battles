@@ -12,6 +12,7 @@ import math
 
 from .. import hull_aiming, siege_mechanics
 from ..gun_mechanics import _field
+from ..native_input_diagnostics import combat_detail, combat_detail_enabled
 from .attack_policy import AttackPolicy
 from .combat_control import CombatControl
 from .combat_stop import CombatStop
@@ -320,11 +321,16 @@ class BotControlBinding(MissionControl, CombatControl):
     def physical_motion(self):
         state = self.state
         critical = state.get('critical') if state is not None else None
-        if not isinstance(critical, dict) or 'destroyed' not in critical:
+        # A fresh worker snapshot can carry an explicit empty damage record.
+        if not isinstance(critical, dict) or (critical and 'destroyed' not in critical):
             raise ValueError('worker native critical observation is unavailable')
         if not isinstance(state.get('airborne'), bool):
             raise ValueError('worker native support observation is unavailable')
-        return (tuple(sorted(str(name) for name in critical['destroyed'])),
+        if not critical and combat_detail_enabled():
+            combat_detail(self, 'bot_stationary_critical', self.actor_id, self.now,
+                'canonical_empty', lambda: dict(position=state['position'],
+                    siege_state=state['siege_state'], destroyed=[]))
+        return (tuple(sorted(str(name) for name in critical.get('destroyed', ()))),
                 state['airborne'], float(state['speed']),
                 float(self.engine._turn_speeds.get(self.actor_id, 0.)),
                 float(state['vertical_speed']), int(state['siege_state']))

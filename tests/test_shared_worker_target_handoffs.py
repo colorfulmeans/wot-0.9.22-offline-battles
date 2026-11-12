@@ -11,9 +11,34 @@ import unittest
 
 from test_shared_bot_friendly_recovery import RecoveryWorld
 from gui.mods.offline_lan_0922.vehicle_control.attack_policy import ATOMIC_WALL_SECONDS
+from gui.mods.offline_lan_0922.vehicle_control.stationary_scope import _native_motion
 
 
 class SharedWorkerTargetHandoffTests(unittest.TestCase):
+    def test_stationary_observation_accepts_an_empty_worker_critical_record(self):
+        scene = RecoveryWorld()
+        scene.setUp()
+        self.addCleanup(scene.doCleanups)
+        scene.configure_workers(2, diverse=False)
+        binding = scene.make_binding(scene.engine, 11)
+        state = binding.state
+        state['critical'] = dict(destroyed=[])
+        undamaged = _native_motion(binding)
+
+        state['critical'] = {}
+        self.assertEqual(undamaged, _native_motion(binding))
+        state['critical'] = dict(destroyed=['engineHealth', 'leftTrackHealth'])
+        self.assertEqual(('engineHealth', 'leftTrackHealth'), _native_motion(binding)[0])
+        for unavailable in (None, dict(devices=[])):
+            with self.subTest(unavailable=unavailable):
+                state['critical'] = unavailable
+                with self.assertRaisesRegex(ValueError, 'critical observation is unavailable'):
+                    _native_motion(binding)
+        state['critical'] = {}
+        state['airborne'] = None
+        with self.assertRaisesRegex(ValueError, 'support observation is unavailable'):
+            _native_motion(binding)
+
     def scene_with_proved_target(self):
         scene = RecoveryWorld()
         scene.setUp()

@@ -946,6 +946,54 @@ class SiegeOriginalOwnershipTests(unittest.TestCase):
         self.assertEqual(episode, scene.owner._episode)
         self.assertEqual('siege_point_review', scene.owner.receipt['reason'])
 
+    def test_siege_pivot_tracks_a_clear_point_whose_bearing_outpaces_the_hull(self):
+        scene = Scene(siege=siege_mechanics.ENABLED)
+        key = (0, ('bot', 2), 0, 'penetration')
+        scene.candidate.update(key=key, line='clear', mechanical='hull_laying')
+        self.motion(scene, pitch=0., yaw=-.05)
+        motion = scene.runtime._siege_aim_candidate
+        motion.update(key=key, line='clear')
+        motion['solution'].update(needs_hull=True, needs_hydraulic=False)
+        scene.apply(0.)
+        pivot, episode = scene.owner.pivot, scene.owner._episode
+        for now, hull, bearing in ((1., -.02, -.15), (3., -.09, -.34),
+                                   (5., -.14, -.62), (7., -.19, -.9)):
+            scene.state['yaw'] = hull
+            motion['solution']['hull_yaw'] = bearing
+            command = scene.apply(now)
+            self.assertIs(pivot, scene.owner.pivot)
+            self.assertEqual(now, pivot['progress_at'])
+            self.assertEqual(episode, scene.owner._episode)
+            self.assertFalse(command['fire_allowed'])
+        self.assertTrue(scene.owner.combat_owned)
+
+        motion['solution']['hull_yaw'] = -1.1
+        scene.apply(10.)
+        self.assertEqual(7., pivot['progress_at'])
+        motion['solution']['hull_yaw'] = -1.3
+        command = scene.apply(7. + MECHANICAL_STALL_SECONDS)
+        self.assertFalse(command['fire_allowed'])
+        self.assertFalse(scene.owner.combat_owned)
+        self.assertEqual('native_pivot_stalled', scene.owner._failed_recovery['reason'])
+
+    def test_siege_pivot_does_not_renew_for_hull_jitter_away_from_a_clear_point(self):
+        scene = Scene(siege=siege_mechanics.ENABLED)
+        key = (0, ('bot', 2), 0, 'penetration')
+        scene.candidate.update(key=key, line='clear', mechanical='hull_laying')
+        self.motion(scene, pitch=0., yaw=-.2)
+        motion = scene.runtime._siege_aim_candidate
+        motion.update(key=key, line='clear')
+        motion['solution'].update(needs_hull=True, needs_hydraulic=False)
+        scene.apply(0.)
+        pivot = scene.owner.pivot
+        for now, hull, bearing in ((3., .02, -.3), (5., .01, -.4), (6., .015, -.5)):
+            scene.state['yaw'] = hull
+            motion['solution']['hull_yaw'] = bearing
+            self.assertFalse(scene.apply(now)['fire_allowed'])
+        self.assertEqual(0., pivot['progress_at'])
+        self.assertFalse(scene.owner.combat_owned)
+        self.assertEqual('native_pivot_stalled', scene.owner._failed_recovery['reason'])
+
     def test_siege_review_does_not_release_on_an_old_clock_during_reload(self):
         scene = Scene(siege=siege_mechanics.ENABLED)
         scene.decide('wait', candidate=False, reason='stationary_alternatives_pending')
