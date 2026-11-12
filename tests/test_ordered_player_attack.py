@@ -16,7 +16,7 @@ class OrderedPlayerAttackTests(unittest.TestCase):
     def siege_he(self, points, movable=True):
         scene = Observations(targets=2, points=points, he_validation='single_point')
         owner = SimpleNamespace(combat_owned=True, stop_allowed=movable,
-            receipt=dict(selected=('bot', 1)), can_review_route_attack=lambda: False,
+            receipt=dict(selected=('bot', 1), episode=1), can_review_route_attack=lambda: False,
             candidate_consumable=lambda row: True)
         runtime = SimpleNamespace(combat_stop=owner, siege_capable=lambda: True)
         scene.policy = AttackPolicy(runtime, evaluator=scene, ordered_he=True)
@@ -71,6 +71,17 @@ class OrderedPlayerAttackTests(unittest.TestCase):
                 self.assertEqual(action, decision['action'], decision)
                 self.assertEqual({('bot', 1)}, {row[3] for row in scene.calls})
                 self.assertFalse(scene.policy.apply_order({})['fire_allowed'])
+
+    def test_new_siege_admission_uses_confirmed_target_while_old_target_is_visible(self):
+        scene = self.siege_he(1)
+        scene.value(2, line='world_blocked', armor='unknown')
+        scene.passed(2, target=2)
+        self.assertEqual('firing_position', scene.tick(0.)['action'])
+        scene.policy.runtime.combat_stop.receipt.update(episode=2, selected=('bot', 2))
+        scene.calls.clear()
+        result = scene.tick(.1)
+        self.assertEqual(('aim', ('bot', 2)), (result['action'], result['candidate']['target_key']))
+        self.assertEqual({('bot', 2)}, {row[3] for row in scene.calls})
 
     def test_equal_penetration_damage_order_qualifies_a_distinct_higher_load(self):
         scene = self.scene(targets=1, points=1, he=False)

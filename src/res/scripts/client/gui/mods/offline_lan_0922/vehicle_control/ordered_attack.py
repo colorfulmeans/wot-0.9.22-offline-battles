@@ -18,6 +18,7 @@ class OrderedAttack(object):
         self.target = None
         self.loaded = None
         self.loaded_he = False
+        self.engagement = None
         self.sample = None
         self.he_sample = None
         self.he_identity = None
@@ -414,6 +415,19 @@ class OrderedAttack(object):
         if shell is None or shell.get('unavailable'):
             return policy._choose('wait', 'ordered_shell_descriptor_pending')
         self._sync(frame, shell)
+        combat = getattr(policy.runtime, 'combat_stop', None)
+        receipt = combat.receipt if combat is not None and combat.combat_owned else {}
+        episode, held = receipt.get('episode'), receipt.get('selected')
+        if (shell['is_he'] and episode is not None and episode != self.engagement and
+                held in self.order and self.target != held):
+            # A confirmed route admission owns its new contact after the
+            # native mode echo. The previous HE target may still be visible.
+            self.target, self.sample = held, None
+            self.he_sample = self.he_identity = None
+            self.cursor = 0
+            if policy.selected is not None and policy.selected[1] != held:
+                policy.selected = None
+        self.engagement = episode
         if frame['ammo'][shell['index']] <= 0 or (frame['clip_size'] > 1 and
                 frame['clip'] <= 0 and not frame.get('reloading')):
             index, reason = ((shell['index'], 'keep_mounted_shell') if frame['ammo'][shell['index']] > 0
@@ -432,7 +446,6 @@ class OrderedAttack(object):
         groups = dict((key, []) for key in self.order)
         for job in jobs:
             groups[job[0][1]].append(job)
-        combat = getattr(policy.runtime, 'combat_stop', None)
         confirming = (combat is not None and not combat.combat_owned and
                       combat._route_requires_confirmation(combat.task_order))
         if confirming:

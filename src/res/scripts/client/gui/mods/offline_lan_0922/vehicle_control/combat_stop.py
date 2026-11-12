@@ -917,9 +917,20 @@ class CombatStop(object):
                 return self._continue_laying(order, now)
             current = policy.decision.get('candidate') or {}
             row = policy.current_row(current, require_line=True) if current else None
+            if (phase['reason'] == 'current_target_stable_obstruction' and
+                    runtime.siege_capable() and row is not None and row.get('key') == phase['key']):
+                # A destination's clear preview only allowed the move. Use
+                # the existing, supported native siege turn at the new pose.
+                motion = runtime.siege_aim_candidate(target)
+                if motion is not None and motion.get('key') == phase['key']:
+                    laying = self._lay_order(order, target, motion['solution'], now, motion)
+                    if laying is not None:
+                        return laying
             if (current.get('key') == phase['key'] and row is not None and
                     row.get('line') == 'clear' and
-                    row.get('mechanical') == 'hull_laying'):
+                    row.get('mechanical') == 'hull_laying' and
+                    (phase['reason'] != 'current_target_stable_obstruction' or
+                     not runtime.siege_capable())):
                 # A real line after travel can still require normal in-place
                 # hull laying. That actuator never selects another location.
                 solution = row.get('solution')
