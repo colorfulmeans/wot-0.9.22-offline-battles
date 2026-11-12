@@ -32,6 +32,12 @@ def install_plan_observations(scene, around_center=True, track_center=1.5, slope
         scene.ground_calls.append((x, z, hint))
         return scene.ground_function(x, z)
 
+    def support_hit(start, end, unused_filter):
+        height = ground(start.x, start.z, start.y - 2.)
+        if height is not None and end.y <= height <= start.y:
+            return battle._vector((start.x, height, start.z)), battle._vector((0., 1., 0.))
+        return None
+
     def catalog(*args, **kwargs):
         scene.catalog_calls.append((args, kwargs))
         return dict(status=scene.catalog_status, token=None, accepted_now=False,
@@ -44,6 +50,7 @@ def install_plan_observations(scene, around_center=True, track_center=1.5, slope
             accepted_now=False, requires_commit=False, kinds='-'),
         _spatial_revision_1513=lambda: scene.scene_revision)
     battle._destructibles = scene.sensor
+    battle._collide_down = support_hit
     runtime.geometry._ground_y = ground
     # The broader runtime fixture has no debris. Restore the production
     # landed-turret consumer here so an observed obstacle is really tested.

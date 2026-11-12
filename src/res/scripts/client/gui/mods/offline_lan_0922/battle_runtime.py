@@ -22717,52 +22717,8 @@ class BattleRuntime(SharedBattleGeometry):
         the body to its centre-column floor. ``follow_gap`` retains the
         straddle fallback when a complete supporting face is unavailable.
         """
-        half_length = 2.5
-        half_width = 1.5
-        try:
-            # Support belongs to the tracks/chassis.  The mounted hull can be
-            # narrower, so using its armour bbox leaves real track ends
-            # unprobed and lets a narrow slot swallow the vehicle.  Reuse the
-            # descriptor-derived chassis shape which the Bot and ram paths
-            # already use; its x/z footprint is deliberately independent from
-            # the mounted hull's vertical extension.
-            support_shape = tank_collision.chassis_shape(descriptor)
-            half_width = max(0.3, float(support_shape[0]))
-            half_length = max(1.5, float(support_shape[1]))
-        except (RuntimeError, TypeError, ValueError, IndexError,
-                AttributeError):
-            pass
-        sine, cosine = math.sin(yaw), math.cos(yaw)
-        highest = None
-        centre = None
-        front = None
-        rear = None
-        for distance in (half_length, 0.0, -half_length):
-            x = position[0] + sine * distance
-            z = position[2] + cosine * distance
-            value = self._support_column(
-                x, z, position[1], maximum_y)
-            if value is None:
-                continue
-            if highest is None or value > highest:
-                highest = value
-            if distance == 0.0:
-                centre = value
-            elif distance > 0.0:
-                front = value
-            else:
-                rear = value
-        lateral = tuple(
-            self._support_column(
-                position[0] + offset[0], position[2] + offset[1],
-                position[1], maximum_y)
-            for offset in tank_collision.chassis_span_offsets(
-                yaw, half_width, half_length)[1])
-        # Height and attitude must use the same sampled support layer. A
-        # higher bridge/ledge found by the broad presentation query is not it.
-        plane = vehicle_physics.sampled_chassis_support(
-            front, rear, lateral[0], lateral[1], centre,
-            yaw, half_length * 2.0, half_width * 2.0)
+        highest, centre, front, rear, lateral, plane = self._sample_chassis_support(
+            position, yaw, descriptor, maximum_y)
         self._local_legacy_support_sample = (
             position[0], position[2], yaw, plane)
         if plane is not None:
@@ -22782,6 +22738,48 @@ class BattleRuntime(SharedBattleGeometry):
         if highest is None or bridged > highest:
             highest = bridged
         return highest, bridged
+
+    def _sample_chassis_support(self, position, yaw, descriptor, maximum_y=None,
+                                trace=None):
+        """Read the five support columns and solve the chassis pose."""
+        half_length = 2.5
+        half_width = 1.5
+        try:
+            # Support belongs to the tracks/chassis.  The mounted hull can be
+            # narrower, so using its armour bbox leaves real track ends
+            # unprobed and lets a narrow slot swallow the vehicle.  Reuse the
+            # descriptor-derived chassis shape which the Bot and ram paths
+            # already use; its x/z footprint is deliberately independent from
+            # the mounted hull's vertical extension.
+            support_shape = tank_collision.chassis_shape(descriptor)
+            half_width = max(0.3, float(support_shape[0]))
+            half_length = max(1.5, float(support_shape[1]))
+        except (RuntimeError, TypeError, ValueError, IndexError,
+                AttributeError):
+            pass
+        def probe(name, offset):
+            x, z = position[0] + offset[0], position[2] + offset[1]
+            if trace is None:
+                return self._support_column(x, z, position[1], maximum_y)
+            layers = []
+            height = self._support_column(x, z, position[1], maximum_y, layers)
+            trace.append(dict(point=name, x=x, z=z, height=height, layers=layers))
+            return height
+
+        longitudinal, sides = tank_collision.chassis_span_offsets(
+            yaw, half_width, half_length)
+        front = probe('front', longitudinal[0])
+        centre = probe('center', (0., 0.))
+        rear = probe('rear', longitudinal[1])
+        highest = max([value for value in (front, centre, rear)
+                       if value is not None] or [None])
+        lateral = (probe('right', sides[0]), probe('left', sides[1]))
+        # Height and attitude must use the same sampled support layer. A
+        # higher bridge/ledge found by the broad presentation query is not it.
+        plane = vehicle_physics.sampled_chassis_support(
+            front, rear, lateral[0], lateral[1], centre,
+            yaw, half_length * 2.0, half_width * 2.0)
+        return highest, centre, front, rear, lateral, plane
 
     def _report_local_suspension_trial(self, outcome):
         """Publish each distinct player suspension activation outcome once.

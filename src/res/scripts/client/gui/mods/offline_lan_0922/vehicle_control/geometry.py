@@ -1496,7 +1496,7 @@ class SharedBattleGeometry(object):
             self, start_position, start_yaw, end_position, end_yaw,
             speed, descriptor, now, dt, commit_enabled=False,
             rotation_speed_cap=None, pitch=0.0, roll=0.0,
-            drive_speed_cap=None):
+            drive_speed_cap=None, support_arc=None):
         """Resolve the complete translating and rotating catalog hull sweep.
 
         Each slice is a fixed-orientation zonotope understood by the pinned
@@ -1528,7 +1528,19 @@ class SharedBattleGeometry(object):
             # Narrow test/extension adapters may expose a dynamic attribute in
             # place of the pinned sensor function.  It is not hull evidence.
             return clear
-        posed_bbox = _destructible_posed_bbox(bbox, pitch, roll)
+        if support_arc is None:
+            posed_bbox = _destructible_posed_bbox(bbox, pitch, roll)
+        else:
+            # The stationary preview has a measured pose at both ends and
+            # the midpoint. Enclose their elevations before sweeping the yaw.
+            heights = []
+            for pose in support_arc:
+                bounds = _destructible_posed_bbox(bbox, pose['pitch'], pose['roll'])
+                dy = pose['position'][1] - start_position[1]
+                heights.append((bounds[0][1] + dy, bounds[1][1] + dy))
+            posed_bbox = ((bbox[0][0], min(row[0] for row in heights), bbox[0][2]),
+                          (bbox[1][0], max(row[1] for row in heights), bbox[1][2]))
+            end_position = (end_position[0], start_position[1], end_position[2])
         resolver_name = ('_catalog_motion_blocked' if commit_enabled else
                          '_catalog_motion_proposal')
         resolver = getattr(self._destructibles, resolver_name, None)
@@ -1726,7 +1738,7 @@ class SharedBattleGeometry(object):
             self, position, start_yaw, end_yaw, descriptor,
             pitch=None, roll=None, record_local=True, pivot_offset=0.0,
             contact_trace=None, include_static=False, translation=(0.0, 0.0),
-            follow_ground=False):
+            follow_ground=False, support_arc=None):
         """Recast every rotating body slice against the live native BSP.
 
         The catalog owns each destructible's original shape.  Once a structure
@@ -1770,8 +1782,11 @@ class SharedBattleGeometry(object):
         yaw_delta = _angle_delta(float(start_yaw), float(end_yaw))
         if abs(yaw_delta) <= 1.0e-8:
             return True
-        steps = int(math.ceil(
-            abs(yaw_delta) / DESTRUCTIBLE_POSE_MAX_ANGLE_STEP))
+        steps = int(math.ceil(abs(yaw_delta) / DESTRUCTIBLE_POSE_MAX_ANGLE_STEP))
+        if support_arc is not None:
+            if abs(yaw_delta) > DESTRUCTIBLE_POSE_MAX_ANGLE_STEP + 1.0e-9:
+                raise ValueError('stationary support arc exceeds one collision slice')
+            steps = 1
         if not 1 <= steps <= DESTRUCTIBLE_POSE_MAX_SWEEP_STEPS:
             raise RuntimeError(
                 'native world rotation sweep exceeds its bound')
@@ -1823,6 +1838,10 @@ class SharedBattleGeometry(object):
                 position, start_yaw, slice_yaw, pivot_offset)
             slice_position = (slice_position[0]+translation[0]*lower,
                               slice_position[1], slice_position[2]+translation[1]*lower)
+            if support_arc is not None:
+                midpoint = support_arc[1]
+                slice_position = midpoint['position']
+                sweep_pitch, sweep_roll = midpoint['pitch'], midpoint['roll']
             slice_start_yaw = float(start_yaw) + yaw_delta * lower
             slice_end_yaw = float(start_yaw) + yaw_delta * upper
             slice_start_position = vehicle_physics.track_pivot_position(
@@ -2005,7 +2024,7 @@ class SharedBattleGeometry(object):
     def _resolve_bot_rotation(
             self, bot_id, position, start_yaw, end_yaw, descriptor, dt, now,
             rotation_speed_cap, pivot_offset=0.0, translation=(0.0, 0.0),
-            commit_enabled=True):
+            commit_enabled=True, support_arc=None):
         """Keep a Bot's complete pivot outside live and damaged structures."""
         # Further split the captured rotation cost only in the test entry.
         # Admission, query order and realised contact ownership stay identical.
@@ -2018,6 +2037,12 @@ class SharedBattleGeometry(object):
             position, start_yaw, end_yaw, pivot_offset)
         end_position = (end_position[0]+translation[0], end_position[1],
                         end_position[2]+translation[1])
+        preview = {}
+        if support_arc is not None:
+            if commit_enabled:
+                raise ValueError('a stationary support preview cannot commit motion')
+            end_position = support_arc[-1]['position']
+            preview['support_arc'] = support_arc
         bot_state = getattr(self._bots, 'states', {}).get(int(bot_id), {})
         bot_state.pop('_rotation_contact_trace', None)
         pitch = _number(bot_state.get(
@@ -2033,7 +2058,7 @@ class SharedBattleGeometry(object):
             descriptor, now, dt,
             rotation_speed_cap=rotation_speed_cap,
             drive_speed_cap=drive_speed_cap,
-            pitch=pitch, roll=roll)
+            pitch=pitch, roll=roll, **preview)
         status = detail.get('status')
         if status not in (
                 'clear', 'crushed', 'soft', 'hard', 'approach',
@@ -2085,7 +2110,7 @@ class SharedBattleGeometry(object):
             pivot_offset=pivot_offset, contact_trace=contact_trace,
             include_static=True, translation=translation,
             follow_ground=bool(bot_state.get('grounded_once') and not bot_state.get('airborne')
-                and not bot_state.get('_edge_support_active')))
+                and not bot_state.get('_edge_support_active')), **preview)
         if not clear:
             self._bot_motion_kinds[int(bot_id)] = 'world'
             bot_state['_rotation_contact_trace'] = contact_trace

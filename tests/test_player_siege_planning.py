@@ -14,7 +14,7 @@ from unittest import mock
 
 from test_player_siege_engagement import SiegeScene
 from test_player_stationary_plan import install_plan_observations, NativePlanScene
-from gui.mods.offline_lan_0922 import shot_geometry, siege_mechanics
+from gui.mods.offline_lan_0922 import shot_geometry, siege_mechanics, tank_collision
 from gui.mods.offline_lan_0922.vehicle_control import siege_planning
 from gui.mods.offline_lan_0922.vehicle_control.native_aim import (
     active_hydraulic_pose, hydraulic_body, hydraulic_reach, mechanical_reach)
@@ -317,6 +317,73 @@ class ActualHydraulicStationaryTests(unittest.TestCase):
         self.assertAlmostEqual(0., plan['proof']['source_support']['pitch'])
         self.assertLess(sum(abs(receipt['end_yaw'] - receipt['start_yaw'])
                             for receipt in plan['proof']['arc']), math.pi)
+
+    def test_hydraulic_turn_follows_five_point_chassis_support_on_uneven_ground(self):
+        scene = self.scene(enabled_pitch=(0., 0.), hydraulic_center=1.5)
+        descriptor = scene.entity.typeDescriptor
+        width, length = tank_collision.chassis_shape(descriptor)[:2]
+        scene.ground_function = lambda x, z: .02 * x + .07 * (z / length) ** 2
+        battle = scene.battle
+        battle._terrain_support(scene.position, 0., descriptor)
+        real_plane = battle._local_legacy_support_sample[3]
+        scene.position = (0., real_plane['center_y'], 0.)
+        battle.local_pose = lambda: (scene.position, scene.flat_body.yaw)
+        for body in (scene.flat_body, scene.body):
+            body.setRotateYPR((0., real_plane['pitch'], real_plane['roll']))
+            body.translation = scene.position
+        battle._local_ground_plane = real_plane
+        scene.update_barrel_observation()
+        scene.pose(scene.target, (math.sin(-.7) * 100., 8., math.cos(-.7) * 100.))
+        scene.ground_calls.clear()
+        frame, plan = scene.plan()
+        self.assertEqual('proved', plan['status'], plan)
+        proof = plan['proof']
+        self.assertGreater(proof['source_support']['contact_residual'], .05)
+        self.assertEqual(
+            {(0., length), (0., 0.), (0., -length), (width, 0.), (-width, 0.)},
+            {tuple(row[:2]) for row in scene.ground_calls[:5]})
+        self.assertLess(plan['flat_body'][0], -.5)
+        self.assertNotAlmostEqual(scene.position[1], proof['projected_position'][1])
+        self.assertAlmostEqual(proof['arc'][-1]['support'][-1]['center_y'],
+                               proof['projected_position'][1])
+        self.assertEqual(real_plane, battle._local_legacy_support_sample[3])
+        self.assertFalse(proof['fire_permission'])
+        self.assertTrue(scene.planner.current(frame, proof))
+
+    def test_hydraulic_review_does_not_admit_missing_midpoint_support(self):
+        scene = self.scene(enabled_pitch=(0., 0.))
+        scene.pose(scene.target, (math.sin(.6) * 100., 12., math.cos(.6) * 100.))
+        length = tank_collision.chassis_shape(scene.entity.typeDescriptor)[1]
+        angle = math.pi / 72.
+        missing = math.sin(angle) * length, math.cos(angle) * length
+        scene.ground_function = lambda x, z: (None if
+            math.hypot(x - missing[0], z - missing[1]) < .001 else 0.)
+        unused, plan = scene.plan()
+        self.assertEqual('pending', plan['status'])
+        self.assertEqual('stationary_native_support_pending', plan['reason'])
+        self.assertFalse(scene.catalog_calls)
+
+    def test_chassis_collision_surfaces_require_detailed_diagnostics(self):
+        for enabled in ('0', '1'):
+            with self.subTest(detailed=enabled):
+                scene = self.scene(enabled_pitch=(0., 0.))
+                output = StringIO()
+                with mock.patch.dict(os.environ, {'WOT_OFFLINE_DIAGNOSTICS': '1',
+                                                  'WOT_OFFLINE_COMBAT_DIAGNOSTICS': enabled}):
+                    with redirect_stdout(output):
+                        unused, plan = scene.plan()
+                self.assertEqual('proved', plan['status'], plan)
+                rows = [json.loads(line.split('BATTLE REVIEW ', 1)[1])
+                        for line in output.getvalue().splitlines()
+                        if 'BATTLE REVIEW ' in line and 'stationary_chassis_support' in line]
+                if enabled == '0':
+                    self.assertEqual([], rows)
+                    continue
+                self.assertTrue(rows)
+                self.assertEqual({'front', 'rear', 'left', 'right', 'center'},
+                                 {col['point'] for col in rows[0]['columns']})
+                self.assertTrue(all(col['layers'][0]['normal'] == [0., 1., 0.]
+                                    for col in rows[0]['columns']))
 
     def test_blocked_shortest_active_arc_never_retries_reverse_long_arc(self):
         scene = self.scene(enabled_pitch=(0., 0.))

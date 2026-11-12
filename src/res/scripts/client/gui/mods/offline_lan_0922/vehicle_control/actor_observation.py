@@ -100,6 +100,10 @@ class PlayerObservation(object):
     def support_plane(self):
         return getattr(self.owner, '_local_ground_plane', None)
 
+    def chassis_support_at(self, position, yaw, descriptor, maximum_y, trace):
+        return self.owner._sample_chassis_support(
+            position, yaw, descriptor, maximum_y, trace)[-1]
+
     def support_rise_blocked(self):
         return bool(getattr(self.owner, '_local_support_rise_blocked', False))
 
