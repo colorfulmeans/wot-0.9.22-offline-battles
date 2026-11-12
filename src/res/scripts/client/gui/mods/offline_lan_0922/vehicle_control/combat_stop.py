@@ -156,16 +156,7 @@ class CombatStop(object):
         self.stop_allowed = bool(self.combat_owned and self.can_request_movement)
         if self.combat_owned and previous_target not in visible:
             # A departing target retires its own lay, not the engagement.
-            self._intent_target = selected
-            self._motion_order = self._failed_recovery = None
-            self._review_progress = None
-            self.pivot = runtime._native_hull_laying = None
-            self._last_attackable_at = runtime.now
-            if combat_detail_enabled():
-                combat_detail(runtime, 'combat_target_handoff', runtime.actor_id,
-                    runtime.now, (previous_target, selected),
-                    lambda: dict(previous=previous_target, next_target=selected,
-                                 episode=self._episode))
+            self._handoff_target(selected, runtime.now, 'target_departed')
         phase = self._physical_recovery
         if (not self.can_request_movement or phase is not None and (
                 phase.get('target') not in visible or
@@ -579,6 +570,20 @@ class CombatStop(object):
                 position is not None and target.get('position') is not None and
                 _distance(target['position'], position) >= RECOVERY_REOPEN_DISTANCE)
 
+    def _handoff_target(self, selected, now, reason):
+        previous = self._intent_target
+        self._retire_physical_recovery(reason, now)
+        self._intent_target = selected
+        self._motion_order = self._failed_recovery = self._siege_point = None
+        self._review_progress = None
+        self.pivot = self.runtime._native_hull_laying = None
+        self._last_attackable_at = now
+        if combat_detail_enabled():
+            combat_detail(self.runtime, 'combat_target_handoff', self.runtime.actor_id,
+                now, (previous, selected),
+                lambda: dict(previous=previous, next_target=selected,
+                             cause=reason, episode=self._episode))
+
     def resolve(self, order, now):
         """Commit one movement owner after the existing native policy runs."""
         if not self.active:
@@ -589,6 +594,10 @@ class CombatStop(object):
             # engagement, not a parked combat task with a route-like label.
             return self._release_to_route(order, now,
                 policy.decision.get('reason', 'combat_no_executable_contact'))
+        if self.combat_owned and policy.decision.get('reason') == 'blocked_target_handoff':
+            selected = policy.current_target_key()
+            if selected != self._intent_target and any(_key(row) == selected for row in self.targets):
+                self._handoff_target(selected, now, 'blocked_target_handoff')
         proposal = self._proposal()
         verified_shot = self._verified_shot()
         target = proposal.get('target') if proposal is not None else None
@@ -1068,6 +1077,23 @@ class CombatStop(object):
             result['face_position'] = face
         return result
 
+    def _review_has_time(self, policy, now, siege):
+        frame = policy.frame or {}
+        scope = self._intent_target, frame.get('loaded')
+        completed = frozenset(row['key'] for row in policy.rows.values()
+            if (row.get('target_key'), row.get('shell_index')) == scope and
+            row.get('key') is not None and
+            policy.current_row(row, require_line=True) is not None and
+            (policy._reviewed(row, row['mode']) or policy._obstructed_lane(row) is not None))
+        previous = self._review_progress
+        if previous is None or previous[0] != scope:
+            self._review_progress = (scope, completed, now)
+        elif completed.difference(previous[1]) or siege and frame.get('reloading'):
+            # A new terminal observation for this target is progress.
+            # Revisiting it or planning another pose cannot renew the hold.
+            self._review_progress = (scope, previous[1] | completed, now)
+        return now - self._review_progress[2] < MECHANICAL_STALL_SECONDS
+
     def apply_order(self, order, now):
         """Supply only combat stop/release intent, before the original driver."""
         if not self.stop_allowed:
@@ -1079,6 +1105,10 @@ class CombatStop(object):
             # Enter because the original BOT admitted combat, not because a
             # speculative future barrel or penetration plan happened to pass.
             return dict(self._stop(order, 'engagement_waits_native_siege', now,
+                                   tuple(runtime.state['position'])),
+                        stable_hull_face=True, fire_allowed=False, aim_position=None)
+        if decision.get('reason') == 'blocked_target_handoff':
+            return dict(self._stop(order, 'blocked_target_handoff', now,
                                    tuple(runtime.state['position'])),
                         stable_hull_face=True, fire_allowed=False, aim_position=None)
         if action == 'aim':
@@ -1094,8 +1124,8 @@ class CombatStop(object):
             # preview, must establish a usable line before recovery succeeds.
             target = candidate['target']
             self._last_attackable_at = now
+            self._review_progress = None
             if runtime.siege_capable():
-                self._review_progress = None
                 self._siege_point = dict(candidate)
             identity = runtime.engine._artillery_target_identity(target)
             for name in ('_gun_angle_refusal', '_gun_angle_pivot_refusal'):
@@ -1150,6 +1180,19 @@ class CombatStop(object):
                 return self._physical_order(self._physical_target_order(order, target), target, now,
                     self._physical_recovery['reason'])
             return self._release_to_route(order, now, 'recovery_target_missing')
+        if action == 'firing_position' and decision.get('reason') == 'current_target_stable_obstruction':
+            candidate = decision.get('candidate')
+            fresh = policy.current_row(candidate, require_line=True)
+            lane = policy._obstructed_lane(fresh)
+            if (lane is not None and lane.get('line') == 'world_blocked' and
+                    not fresh.get('scatter_blocked') and
+                    fresh.get('shell_index') == runtime.gun.shot_index and
+                    self.contains(fresh.get('target')) and
+                    _key(fresh['target']) == self._intent_target):
+                self._review_progress = None
+                self.pivot = runtime._native_hull_laying = None
+                return self._physical_order(order, fresh['target'], now, decision['reason'], fresh)
+            return self._release_to_route(order, now, 'blocked_target_recovery_evidence_expired')
         # Load/trigger accounting does not replace an admitted movement
         # task. Its temporarily withheld actuator input is not a geometric
         # failure or a request to leave the native combat mode.
@@ -1169,24 +1212,12 @@ class CombatStop(object):
             stationary_wait or action == 'firing_position')
         he_review = decision.get('reason') in (
             'ordered_he_penetration_pending', 'he_damage_comparison_pending')
-        review = 'siege' if siege_review else 'he' if he_review else None
         reviewing = False
-        if review is not None:
-            if siege_review:
-                # An epoch number only records invalidation. Count work that
-                # survived it, not a new serial on every unchanged pose.
-                work = max([0] + [sum(row['stationary_progress_token'][1:])
-                    for row in getattr(policy, 'rows', {}).values()
-                    if row.get('stationary_progress_token')])
-            else:
-                work = (getattr(policy, 'he_comparison', None) or {}).get('observed', 0)
-            old = self._review_progress
-            if (old is None or old[0] != review or work > old[1] or
-                    siege_review and (policy.frame or {}).get('reloading')):
-                self._review_progress = (review, work, now)
-            reviewing = now - self._review_progress[2] < MECHANICAL_STALL_SECONDS
-            if siege_review and not reviewing:
-                return self._release_to_route(order, now, 'siege_stationary_review_stalled')
+        if siege_review or he_review:
+            reviewing = self._review_has_time(policy, now, siege_review)
+            if not reviewing:
+                return self._release_to_route(order, now, 'siege_stationary_review_stalled'
+                                              if siege_review else 'he_current_review_stalled')
         else:
             self._review_progress = None
         if self._route_attack and not siege:

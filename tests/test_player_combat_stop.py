@@ -52,6 +52,8 @@ class Scene:
             _executable=AttackPolicy._executable,
             _attack_result=AttackPolicy._attack_result,
             _needs_firing_position=AttackPolicy._needs_firing_position,
+            _obstructed_lane=AttackPolicy._obstructed_lane,
+            _reviewed=AttackPolicy._reviewed,
             _planned_evidence=AttackPolicy._planned_evidence,
             _plannable=AttackPolicy._plannable,
             frame=dict(loaded=0, reloading=False), receipts=[])
@@ -144,6 +146,60 @@ class Scene:
 
 
 class OriginalOwnershipBoundaryTests(unittest.TestCase):
+    def test_blocked_siege_target_hands_off_without_reentering_from_route(self):
+        scene = Scene(siege=siege_mechanics.ENABLED)
+        episode = scene.owner._episode
+        other = dict(scene.target, id=3, network_id=3, position=(8., 0., 70.), z=70.)
+        scene.runtime._targets = (scene.target, other)
+        scene.raw_order.update(combat_mode='route', move_position=(20., 0., 40.))
+        scene.policy.selected = (0, ('bot', 3), 0, 'penetration')
+        scene.decide('wait', candidate=False, reason='blocked_target_handoff')
+        result = scene.apply(.1)
+        self.assertTrue(scene.owner.combat_owned)
+        self.assertEqual(episode, scene.owner._episode)
+        self.assertEqual(3, result['target_id'])
+        self.assertIsNone(scene.owner._route_confirmation)
+        self.assertTrue(result['stable_hull_face'])
+        self.assertFalse(result['fire_allowed'])
+
+    def test_siege_completed_block_reaches_original_probe_and_releases_on_failure(self):
+        scene = Scene(siege=siege_mechanics.ENABLED)
+        scene.raw_order.update(combat_mode='route', move_position=(0., 0., 60.))
+        scene.stationary(line='unknown')['line'] = 'world_blocked'
+        scene.decide('firing_position', reason='current_target_stable_obstruction')
+        scene.runtime.point_recovery_probe = mock.Mock(return_value=dict(status='blocked'))
+        first = scene.apply(1.)
+        self.assertGreater(scene.runtime.point_recovery_probe.call_count, 0)
+        self.assertEqual('point_recovery_probe_pending', scene.owner.receipt['reason'])
+        self.assertEqual(scene.state['position'], first['move_position'])
+        self.assertFalse(first['fire_allowed'])
+        for tick in range(1, 10):
+            result = scene.apply(1. + tick * .1)
+            if not scene.owner.combat_owned:
+                break
+        self.assertFalse(scene.owner.combat_owned)
+        self.assertEqual('point_recovery_no_checked_position', scene.owner.receipt['reason'])
+        self.assertEqual((0., 0., 60.), result['move_position'])
+
+    def test_other_tank_and_repeat_obstruction_do_not_renew_siege_review(self):
+        scene = Scene(siege=siege_mechanics.ENABLED)
+        scene.raw_order.update(combat_mode='route', move_position=(0., 0., 60.))
+        scene.decide('wait', candidate=False, reason='stationary_alternatives_pending')
+        current = dict(key=(0, ('bot', 2), 0, 'penetration'), target_key=('bot', 2),
+                       shell_index=0, mode='penetration', line='world_blocked')
+        other = dict(current, key=(0, ('bot', 3), 0, 'penetration'), target_key=('bot', 3))
+        scene.policy.rows = {'current': current, 'other': other}
+        scene.apply(1.)
+        for tick in (2., 4., 6.):
+            current['observed_at'] = tick
+            other['stationary_progress_token'] = (1, int(tick) * 10, 0, 0)
+            scene.apply(tick)
+            self.assertTrue(scene.owner.combat_owned)
+        result = scene.apply(7.)
+        self.assertFalse(scene.owner.combat_owned)
+        self.assertEqual('siege_stationary_review_stalled', scene.owner.receipt['reason'])
+        self.assertEqual((0., 0., 60.), result['move_position'])
+
     def test_departed_target_transfers_existing_engagement_without_route_confirmation(self):
         scene = Scene()
         previous = scene.owner._episode

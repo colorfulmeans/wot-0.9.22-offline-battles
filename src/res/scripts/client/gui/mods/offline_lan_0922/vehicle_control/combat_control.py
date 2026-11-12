@@ -211,6 +211,7 @@ class CombatControl(object):
             return
         if (self._mission_brakes() or
                 not self.combat_stop.combat_owned or
+                self.attack_policy.decision.get('reason') == 'blocked_target_handoff' or
                 self.attack_policy.decision.get('action') not in
                     ('aim', 'preaim', 'wait', 'firing_position')):
             return
@@ -578,7 +579,7 @@ class CombatControl(object):
         policy, gun = self.attack_policy, self.gun
         frame = policy.frame
         loaded = int(gun.shot_index)
-        if (policy.ordered is None and frame is not None and frame['loaded'] == loaded and
+        if (policy.ordered_load() is None and frame is not None and frame['loaded'] == loaded and
                 frame['ammo'] == tuple(gun.ammo)
                 and 0 < min(gun.clip, gun.ammo[loaded]) <= gun.burst_count
                 and gun.reload_time > 0.
@@ -611,6 +612,7 @@ class CombatControl(object):
             return
         policy = self.attack_policy
         frame = policy.frame
+        ordered = policy.ordered_load()
         stale_frame = (frame is None or policy._frame_invalid or
                        frame['loaded'] != gun.shot_index or frame['ammo'] != tuple(gun.ammo))
         if at_trigger:
@@ -623,10 +625,8 @@ class CombatControl(object):
                     lambda: dict(loaded=gun.shot_index, clip=gun.clip, queued=gun.pending_index,
                         plan=(plan or {}).get('key'), shot_seq=self._last_committed_shot_seq,
                         ranking_status=policy.next_status, coverage=policy.background_coverage,
-                        committed_with_shell=(policy.ordered.committed_rounds
-                                              if policy.ordered is not None else None),
-                        he_fallback_streak=(policy.ordered.he_fallback_rounds
-                                            if policy.ordered is not None else None),
+                        committed_with_shell=(ordered.committed_rounds if ordered is not None else None),
+                        he_fallback_streak=(ordered.he_fallback_rounds if ordered is not None else None),
                         previous_plan=((lease or {}).get('plan') or {}).get('key')))
         else:
             index, plan, reason = policy.next_shell, policy.next_plan, policy.next_status
@@ -679,7 +679,7 @@ class CombatControl(object):
         if applied and gun.shot_index != loaded_before:
             policy.load_started(int(gun.shot_index), plan)
         self._record_shell('queue', 'NEXT_SHELLS', index, applied,
-                           (reason if policy.ordered is not None else 'ranked_plan')
+                           (reason if ordered is not None else 'ranked_plan')
                            if applied else 'native_setting_refused',
                            force=at_trigger, plan=plan)
         return plan if applied else None

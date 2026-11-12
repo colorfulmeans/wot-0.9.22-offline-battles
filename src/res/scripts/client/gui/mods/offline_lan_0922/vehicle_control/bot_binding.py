@@ -206,7 +206,7 @@ class BotControlBinding(MissionControl, CombatControl):
         self.weapon = _BotAimObservation(self)
         self.combat_stop = CombatStop(self)
         self.siege_aim = ActualSiegeAim(self)
-        self.attack_policy = AttackPolicy(self)
+        self.attack_policy = AttackPolicy(self, ordered_he=True)
         ammo = self.engine._ammo_states.get(self.actor_id)
         if (ammo is not None and int(ammo.next) != int(ammo.loaded) and
                 not (ammo.reload_pending and self.gun.clip == 0)):

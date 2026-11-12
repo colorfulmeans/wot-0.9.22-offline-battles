@@ -1,7 +1,9 @@
 """Production policy using finite native-observation fixtures."""
 import unittest
+from types import SimpleNamespace
 
 from test_player_rebuilt_attack_policy import Observations
+from gui.mods.offline_lan_0922.vehicle_control.attack_policy import AttackPolicy
 from gui.mods.offline_lan_0922.vehicle_control.ordered_attack import OrderedAttack
 
 
@@ -10,6 +12,65 @@ class OrderedPlayerAttackTests(unittest.TestCase):
         scene = Observations(**options)
         scene.policy.ordered = OrderedAttack()
         return scene
+
+    def siege_he(self, points, movable=True):
+        scene = Observations(targets=2, points=points, he_validation='single_point')
+        owner = SimpleNamespace(combat_owned=True, stop_allowed=movable,
+            receipt=dict(selected=('bot', 1)), can_review_route_attack=lambda: False,
+            candidate_consumable=lambda row: True)
+        runtime = SimpleNamespace(combat_stop=owner, siege_capable=lambda: True)
+        scene.policy = AttackPolicy(runtime, evaluator=scene, ordered_he=True)
+        scene.frame.update(loaded=2, ordered=True)
+        return scene
+
+    def test_siege_he_skips_block_then_recovers_same_vehicle_point_when_clear(self):
+        scene = self.siege_he(2)
+        scene.value(2, line='enemy_blocked', armor='unknown')
+        scene.he(10., sample=0)
+        scene.he(55., sample=1)
+        scene.passed(2, target=2)
+        decision = scene.tick(0.)
+        self.assertEqual(('aim', ('bot', 1), 1, 'he_fallback'),
+                         (decision['action'], decision['candidate']['target_key'],
+                          decision['candidate']['sample'], decision['candidate']['mode']))
+        self.assertTrue(scene.calls)
+        self.assertEqual({('bot', 1)}, {row[3] for row in scene.calls})
+        self.assertFalse(any(row[4:] == (0, 'he_fallback') for row in scene.calls))
+        scene.frame['line_revision'] += 1
+        scene.passed(2)
+        decision = scene.tick(.2)
+        self.assertEqual(('aim', 0, 'penetration'), (decision['action'],
+                         decision['candidate']['sample'], decision['candidate']['mode']))
+
+    def test_all_blocked_siege_he_uses_existing_clear_lane_then_checks_new_target(self):
+        scene = self.siege_he(1)
+        scene.value(2, line='unknown', mechanical='hull_laying', armor='unknown',
+            stationary_plan=dict(status='proved', proof=dict(proved=True), line='world_blocked'))
+        scene.passed(2, target=2)
+        scene.policy.frame = scene.snapshot(0.)
+        other = next(job for job in scene.policy._jobs(shell_index=2) if job[0][1] == ('bot', 2))
+        scene.policy._evaluate(other, 0., 'background')
+        scene.calls.clear()
+        decision = scene.tick(.1)
+        self.assertEqual(('wait', 'blocked_target_handoff'), (decision['action'], decision['reason']))
+        self.assertEqual(('bot', 2), scene.policy.current_target_key())
+        self.assertEqual({('bot', 1)}, {row[3] for row in scene.calls})
+        self.assertFalse(scene.policy.apply_order({})['fire_allowed'])
+        self.assertEqual('aim', scene.tick(.2)['action'])
+
+    def test_siege_he_only_requests_position_for_stable_block_with_motion_permission(self):
+        for lane, movable, action in (('world_blocked', True, 'firing_position'),
+                                      ('world_blocked', False, 'navigate'),
+                                      ('friendly_blocked', True, 'navigate'),
+                                      ('enemy_blocked', True, 'navigate')):
+            with self.subTest(lane=lane, movable=movable):
+                scene = self.siege_he(1, movable=movable)
+                scene.value(2, line=lane, armor='unknown')
+                scene.value(2, target=2, line='pending', armor='unknown')
+                decision = scene.tick(0.)
+                self.assertEqual(action, decision['action'], decision)
+                self.assertEqual({('bot', 1)}, {row[3] for row in scene.calls})
+                self.assertFalse(scene.policy.apply_order({})['fire_allowed'])
 
     def test_equal_penetration_damage_order_qualifies_a_distinct_higher_load(self):
         scene = self.scene(targets=1, points=1, he=False)

@@ -204,9 +204,11 @@ class ActualSiegeAim(object):
             if (row.get('pose_stamp') != self.runtime.attack_policy._stamp(frame, shell, target) or
                     solution.get('target_pose') != target['pose']):
                 return None
-            planned = row.get('stationary_plan') or {}
+            policy = self.runtime.attack_policy
+            planned = policy._planned_evidence(row) or {}
             if (planned.get('status') == 'proved' and planned.get('line') == 'clear' and
-                    planned.get('armor') in ('passed', 'failed') and
+                    (planned.get('armor') in ('passed', 'failed') or
+                     row.get('mode') == 'he_fallback' and policy._executable(planned, 'he_fallback')) and
                     isinstance(planned.get('solution'), dict)):
                 solution = dict(planned['solution'])
             direction = _point(solution['direction'])
@@ -217,6 +219,12 @@ class ActualSiegeAim(object):
             correction = (float(solution['hydraulic_pitch']) if solution.get('stationary_plan')
                           and 'hydraulic_pitch' in solution else reach['hydraulic_pitch'])
             needs_hull = bool(solution.get('needs_hull') or reach.get('needs_hull'))
+            if (needs_hull and frame.get('ordered') and shell.get('is_he') and
+                    not policy._executable(planned, row.get('mode', 'penetration'))):
+                self.receipt.update(reason='stationary_hull_review_pending')
+                if combat_detail_enabled():
+                    self._report_aim('siege_hull_review', now, row, solution, hydraulic, reach)
+                return None
             if (needs_hull and self.runtime.attack_policy.decision.get('reason') ==
                     'stationary_domain_review_pending'):
                 self.receipt.update(reason='stationary_hull_review_pending')
