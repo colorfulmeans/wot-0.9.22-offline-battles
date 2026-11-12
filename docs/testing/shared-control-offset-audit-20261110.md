@@ -1,5 +1,69 @@
 # PR119 control-offset correction — November 10, 2026
 
+## November 12 follow-up — Empty Bot critical records and siege turn progress
+
+Runtime `e467a85e790d3653b0549a669aa56b26ab1775eb` uses the canonical
+empty worker `critical` object as an observed empty destroyed-module list.
+Missing records and incomplete nonempty records still defer the projection.
+The worker still reads its native support and motion observations.
+
+In the 14:25 report, a clear HE point on #24 moved from 23 m to about
+6.5 m away as the target crossed the player's heading. From 14:22:00.036
+to 14:22:04.096 the UDES 03 hull turned from −1.44° to −13.93° while the
+requested hull heading moved from −2.61° to −52.23°. The historical
+minimum error could not recognize the measured turn as progress.
+During an active siege lay, the same current clear point can renew the
+existing watchdog when the observed hull advances toward the preceding
+commanded heading and the command remains in the same direction. Actual
+net advance is required. A genuine six-second stall or rotation refusal
+ends the lay. The physical trigger checks authorize fire.
+The additional turn and empty-record observations use **Collect detailed
+diagnostic logs**.
+
+Windows HD #1513 ran the same Redshire 15 vs 15 preset as team 1 UDES 03,
+with 29 Bots and a 13/13/14 rack. At 15:09:32 the native `select_shell`
+command returned `shell_ready` for compact descriptor 3722, slot 2, with
+one chambered round, zero reload time and `can_fire=true`. The same shell
+was ready when automatic driving and firing resumed at 15:09:33.
+
+- At 15:10:35.889 allied UDES 03 #10 supplied an empty `critical` record
+  during siege. It then laid against #24 and fired at 15:10:37.582.
+  Projectile `1:b:10:1` was published and echoed, and the server settled
+  a penetration for 422 damage. The archived worker log contains zero
+  `worker native critical observation is unavailable` records. Three
+  hydraulic body mismatch observations were reported for #10. #10 was
+  destroyed at 15:10:52 after combat with #24.
+- The player entered siege in episode 1 and tracked the same clear sample
+  on #19 for over six seconds. At 15:11:21.703 the recorded turn toward
+  the preceding command reduced its remaining angle from 2.059° to
+  1.936°. The physical trigger fired HE at 15:11:22.590 and #19 took 528
+  penetration damage. Another HE round dealt 79 explosive damage to #28.
+  Both auto-trigger receipts match server impacts. The regression
+  reproduced the growing-error failure from the preceding report. The
+  sampled live turns in this session had shrinking error.
+- The player released siege at 15:11:36.524 and 15:11:49.835 on
+  `siege_stationary_review_stalled`. The turn watchdog had no active pivot
+  in either release. The two positions repeatedly rejected sampled support
+  planes with residuals of 0.022377 m and 0.081437 m against the existing
+  0.0001 m threshold. The appropriate support representation for these
+  poses remains unproved. The player was destroyed at 15:12:08. The
+  launcher ended the session at 15:14:15.
+
+The native report is `wot-error-report-20261112-151422-566152f773bd.zip`.
+The Windows test ZIP `wot_PR119_e467a85e_Windows_2026-11-12.zip` contains
+build `local-qa-siege-pivot-e467a85e`. Both archives passed integrity checks.
+The launcher is x64 and the client mod contains 306 stored members. The
+two changed client modules and their staged source copies are `bot_binding`
+and `combat_stop`.
+
+The new regression tests reproduced the empty-record exception and the
+missed physical progress before the fix. The stationary observation keeps
+the missing-state and damaged-module cases. The siege regression covers a
+clear point whose bearing moves faster than the hull, a real stop and hull
+jitter. The 36 isolated player files passed all 916 tests. The three shared
+worker and ownership files passed 60 reference tests. The detailed-log
+toggle and CPython 2.7 compilation were checked separately.
+
 ## November 12 follow-up — Siege yaw rounding with HE loaded
 
 The diagnostic report `wot-error-report-20261112-124953-978e2610b91c.zip`
