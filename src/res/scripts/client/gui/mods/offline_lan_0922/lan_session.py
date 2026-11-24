@@ -2720,11 +2720,25 @@ class LANSession(object):
         try:
             accepted = store.accept(message)
         except Exception as error:
+            receipt_id = _message_value(message, 'receipt_id')
+            elapsed_ms = max(0.0, time.time() - started) * 1000.0
+            if getattr(error, 'permanent', False):
+                # The content can never be accepted. Report it once and ACK
+                # it, so the server stops resending it on every connection.
+                sys.stdout.write(
+                    '[Offline LAN 0.9.22] battle receipt discarded as invalid: '
+                    '%s receipt_id=%s elapsed_ms=%.3f\n' % (
+                        error, receipt_id, elapsed_ms))
+                acknowledge = getattr(
+                    client, 'acknowledge_battle_receipt', None)
+                if callable(acknowledge):
+                    acknowledge(receipt_id)
+                return
+            # Garage or save failures can succeed later: keep it unacknowledged.
             sys.stdout.write(
                 '[Offline LAN 0.9.22] battle receipt was rejected: %s '
                 'receipt_id=%s elapsed_ms=%.3f\n' % (
-                    error, _message_value(message, 'receipt_id'),
-                    max(0.0, time.time() - started) * 1000.0))
+                    error, receipt_id, elapsed_ms))
             traceback.print_exc(file=sys.stdout)
             return
         if accepted:

@@ -1285,6 +1285,36 @@ class LANSessionTests(unittest.TestCase):
         self.assertEqual(1, text.count('battle receipt accepted'))
         self.assertIn('receipt_id=r1 elapsed_ms=500.000', text)
 
+    def test_invalid_receipt_is_acknowledged_once_and_not_retried(self):
+        class InvalidReceipt(ValueError):
+            permanent = True
+
+        store = mock.Mock(account_key='account')
+        store.progress.return_value = {'battles': 0}
+        store.accept.side_effect = InvalidReceipt(
+            'battle receipt medal bonds do not match the reward')
+        session = self.module.LANSession(
+            {}, postbattle_store=store, lobby_ready=lambda: True)
+        session.client = self.client
+        session._publish_postbattle_progress = mock.Mock(return_value=True)
+        session._publish_postbattle_results = mock.Mock(return_value=True)
+        output = io.StringIO()
+        with mock.patch.object(self.module.sys, 'stdout', output), \
+                mock.patch.object(self.module.time, 'time',
+                                  side_effect=[20.0, 20.5]):
+            session._on_event('battle_receipt', {'receipt_id': 'r1'})
+
+        self.assertEqual(['r1'], self.client.receipt_acks)
+        store.accept.assert_called_once_with({'receipt_id': 'r1'})
+        session._publish_postbattle_progress.assert_not_called()
+        session._publish_postbattle_results.assert_not_called()
+        text = output.getvalue()
+        self.assertIn(
+            'battle receipt discarded as invalid: battle receipt medal bonds '
+            'do not match the reward receipt_id=r1 elapsed_ms=500.000', text)
+        self.assertNotIn('Traceback', text)
+        self.assertNotIn('was rejected', text)
+
     def test_lobby_view_notification_starts_postbattle_drain_without_retry(self):
         store = mock.Mock()
         store.progress.return_value = {'battles': 0}

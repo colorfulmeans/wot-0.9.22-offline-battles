@@ -50,6 +50,17 @@ except NameError:
     integer_types = (int,)
 
 
+class InvalidReceipt(ValueError):
+    """A receipt whose content can never be accepted by this client.
+
+    Raised only for content validation, never for garage application or save
+    failures, so the session can acknowledge and drop it instead of having
+    the server resend it on every connection.
+    """
+
+    permanent = True
+
+
 SCHEMA = 1
 STATE_FILE_NAME = 'postbattle_state.json'
 # Bounds only this process's archived receipt bodies, which serve a repeated
@@ -1268,7 +1279,12 @@ class PostBattleStore(object):
         return None
 
     def accept(self, value):
-        receipt = _receipt(value)
+        try:
+            receipt = _receipt(value)
+        except InvalidReceipt:
+            raise
+        except ValueError as error:
+            raise InvalidReceipt(str(error))
         if receipt['account_key'] != self._account_key:
             raise ValueError('battle receipt belongs to another account')
         capable = _stun_capable(receipt)
