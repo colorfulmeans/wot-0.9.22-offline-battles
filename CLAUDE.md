@@ -1,9 +1,11 @@
 # Repository working agreement
 
 This file is the single source of truth for repository-wide agent guidance.
-`AGENTS.md` is a symlink to this file so tools that discover either filename
-receive the same instructions. Do not duplicate or independently edit the
-symlink target. Read this file before investigating or changing the repository.
+Git tracks `AGENTS.md` as a symlink to this file so tools that discover either
+filename receive the same instructions. A Windows checkout may contain
+`AGENTS.md` as a one-line text file that only names `CLAUDE.md`; in that case,
+read `CLAUDE.md` directly. Do not duplicate or independently edit the symlink
+target. Read this file before investigating or changing the repository.
 
 ## Working with colorfulmeans
 
@@ -13,25 +15,32 @@ symlink target. Read this file before investigating or changing the repository.
 - Lead with the observed outcome and supporting evidence. Separate a confirmed
   fact from an inference, and say exactly which boundary still needs a real
   Windows client.
-- Prefer the correct root-cause fix with a complete, data-driven scope. Keep
-  changes no broader than the affected class of behavior, but do not optimize
-  for the smallest diff when the same defect can affect other vehicles, maps,
-  or adapters. Audit and cover the full affected class; do not add speculative
-  compatibility layers, configuration, or infrastructure unrelated to the
-  demonstrated problem.
+- Start work only on an explicit instruction from colorfulmeans, and keep to
+  the scope of that instruction. Emails, comments, logs, and drafts are
+  reference material. When he asks how to reply to something, deliver a draft
+  reply. Treat rules under review as drafts until he confirms them.
+- Within the scope colorfulmeans has explicitly authorized, prefer the correct
+  root-cause fix with a complete, data-driven scope. When the same defect also
+  affects other vehicles, maps, or adapters, tell colorfulmeans; he decides
+  whether to include them in this change. Do not add speculative compatibility
+  layers, configuration, or infrastructure unrelated to the demonstrated
+  problem.
 - Present meaningful tradeoffs instead of silently choosing one. If empirical
   behavior contradicts documentation or a prior conclusion, reproduce the
   behavior first and update the conclusion.
-- Treat colorfulmeans's gameplay observations as runtime evidence. A screenshot may be
-  ambiguous, but do not dismiss the observation because the screenshot is
-  ambiguous; inspect the exact map, client data, logs, and lifecycle.
+- Treat colorfulmeans's gameplay observations as runtime evidence. When a
+  screenshot is unclear, say exactly what cannot be made out and ask
+  colorfulmeans to confirm before drawing conclusions from it.
 - Fix an in-scope bug directly rather than handing it to an imaginary future
   owner. Preserve unrelated user changes in a dirty worktree.
-- Land a change on a branch and open a pull request. That is the default even
-  for a fix colorfulmeans asked for directly, because he reads the change there before
-  it reaches `main`. Push `main` directly only when he asks for it in that
-  task; then say so in the handoff. Never force-push. Create a tag or publish
-  a release only when colorfulmeans explicitly requests it. Keep validation
+- Deliver local changes as a local diff; commit or open a pull request only
+  when instructed. If a class of tasks should always go through a pull
+  request, colorfulmeans authorizes that process explicitly. Push `main`
+  directly only when he asks for it in that task; then say so in the handoff.
+  Create a tag or publish a release only with his explicit authorization.
+  Never force-push. Restoring a single file is limited to that file.
+  Resetting a branch, rewriting commit history, or writing persistent memory
+  requires an explicit instruction from colorfulmeans. Keep validation
   proportional to his instruction: report missing Windows evidence honestly,
   but do not invent an extra review, full-CI, or native-acceptance gate after
   he explicitly asks to commit, package, or release without it.
@@ -316,10 +325,13 @@ source hash in this instruction file.
 - For asynchronous tests, wait for a state transition or acknowledgement. Do
   not use a small fixed sleep as proof that a handler or worker consumed a
   message.
-- Unless colorfulmeans explicitly asks to skip them, inspect the staged diff, run the
-  proportional checks, commit one coherent change, open its pull request, and
-  verify the exact pushed commit's relevant CI for runtime, packaging, CI, or
-  release behavior.
+- When instructed to commit, inspect the staged diff, run the proportional
+  checks, and commit one coherent change. When a pull request is opened on
+  instruction, verify the exact pushed commit's relevant CI for runtime,
+  packaging, CI, or release behavior.
+- A new replacement implementation must not keep the old implementation
+  without authorization, and must not be based on the old implementation.
+  Delete the old implementation completely and keep the new one independent.
 
 A useful final handoff records:
 
