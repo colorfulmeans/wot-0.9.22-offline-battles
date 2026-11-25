@@ -51,26 +51,8 @@ def default_spg_positions(name, graph, profile=None):
     if baseline is not None:
         return [p for p in baseline if p['id'] not in deleted]
     if entry is None:
-        for path in (_source.parents[3]/'server',_bundled.parents[3]/'server'):
-            if path.is_dir() and str(path) not in sys.path:sys.path.insert(0,str(path))
-        from server_bot_ai import BotPlanner
-        planner=BotPlanner()
-        routes,_=runtime.default_routes(profile or contract.empty(),name,graph)
-        result=[]
-        for team in (1,2):
-            own,enemy=graph['bases'][team-1],graph['bases'][2-team]
-            axis=tuple(dict(x=p[0],y=0,z=p[1]) for p in (own,enemy))
-            for index,route in enumerate(routes.get(str(team),())):
-                if route.get('_editor_class'):continue
-                weights=route.get('class_weights') or {}
-                if weights.get('SPG',0)<=0 and route.get('role_weights',{}).get('artillery',0)<=0:continue
-                wire=dict(route,waypoints=[dict(x=p[0],y=0,z=p[1]) for p in route['waypoints']])
-                point=planner._artillery_anchor(dict(id=index,route=wire),axis)['point']
-                heading=math.degrees(math.atan2(enemy[0]-point['x'],enemy[1]-point['z']))
-                result.append(dict(id='spg_%d_%s'%(team,route['id']),team=team,
-                    label=labels.route_label(route['id'],'en'),point=[point['x'],point['z']],
-                    radius=16.,heading=heading,priority=5))
-        return [p for p in result if p['id'] not in deleted]
+        # Without Default or sourced parking an SPG holds its own position.
+        return []
     grid = spg_positions._Graph(graph, entry['bounds'])
     result = []
     for team in (1, 2):

@@ -93,22 +93,22 @@ class SPGDisplacementTests(unittest.TestCase):
     tearDown = spgs.InitialPositionIntegrationTests.tearDown
     _runtime = spgs.InitialPositionIntegrationTests._runtime
     _fixture_bot = spgs.InitialPositionIntegrationTests._fixture_bot
-    def test_replacement_closes_region_after_sustained_failure_not_first_occupancy(self):
+    def test_stalled_deployment_closes_region_after_twenty_seconds_not_first_failure(self):
         runtime=self._runtime()
         initial=dict(zone='home',catalog='test',cell=0,map='08_ruinberg',source='launcher_manual_v1',
                      point=dict(x=0.,y=0.,z=50.),radius=12.,vehicle='test')
-        state=dict(id=1,team=1,_spg_initial=initial,
-                   _spg_replacement_zone=(1,'home'))
+        state=dict(id=1,team=1,_spg_initial=initial)
         runtime._spg_mode_slots={(1,'home'):dict(owner=1,disabled=False,plan=initial)}
         for now in (0.,10.,19.9):
-            self.assertIs(initial,runtime._retry_spg_deployment(state,initial,50.,now,occupied=[(0,0,50)]))
+            self.assertFalse(runtime._spg_deployment_stalled(state,initial,50.,now))
             self.assertFalse(runtime._spg_mode_slots[(1,'home')]['disabled'])
-        self.assertIsNone(runtime._retry_spg_deployment(state,initial,50.,20.,occupied=[(0,0,50)]))
+        self.assertTrue(runtime._spg_deployment_stalled(state,initial,50.,20.))
         self.assertTrue(runtime._spg_mode_slots[(1,'home')]['disabled'])
         self.assertIsNone(runtime._spg_mode_slots[(1,'home')]['owner'])
         self.assertNotIn('_spg_initial',state)
+        self.assertEqual('waiting',state['_spg_deployment'])
 
-    def test_occupied_manual_zone_tries_same_zone_before_another(self):
+    def test_occupied_position_queues_then_holds_in_place_after_twenty_seconds(self):
         runtime = self._runtime()
         runtime.baked_graph = spgs._graph()
         cfg, planning = self.module.bot_tactics, self.module.bot_tactics_runtime
@@ -128,24 +128,26 @@ class SPGDisplacementTests(unittest.TestCase):
         runtime._contact_players = [human]
         with mock.patch.object(runtime, '_player_collision_profile', return_value={'shape': (1.7, 3.5, -.8, 2.)}):
             order = runtime._artillery_position_order(state, {'combat_mode': 'artillery_deploy'}, {}, 1)
-        self.assertEqual('home', state['_spg_initial']['zone'])
-        self.assertNotEqual(old['point'], state['_spg_initial']['point'])
-        self.assertIsNone(order['throttle_override'])
+            self.assertEqual('artillery_hold', order['combat_mode'])
+            self.assertEqual('occupied_parking_queue', state['_spg_position_event'])
+            self.assertEqual(old, state['_spg_initial'])
+            order = runtime._artillery_position_order(state, {'combat_mode': 'artillery_deploy'}, {}, 21.1)
+        self.assertNotIn('_spg_initial', state)
+        self.assertEqual('deployment_stalled_hold_in_place', state['_spg_position_event'])
+        self.assertEqual('artillery_hold', order['combat_mode'])
+        self.assertEqual(0., order['throttle_override'])
 
-    def test_no_free_parking_holds_and_rechecks_when_body_leaves(self):
+    def test_occupied_position_holds_and_resumes_when_body_leaves(self):
         runtime = self._runtime()
         plan, bot, state = self._fixture_bot(40)
         state.update(_spg_initial=plan, profile={'class_tag': 'SPG'})
         runtime.states = {11: state}
         runtime._contact_players = [dict(id=1, alive=True, world_pose=True, **plan['point'])]
-        with mock.patch.object(runtime, '_player_collision_profile', return_value={'shape': (1.7, 3.5, -.8, 2.)}), \
-                mock.patch.object(self.module.spg_positions, 'assign_initial_positions', return_value=({}, {})) as select:
+        with mock.patch.object(runtime, '_player_collision_profile', return_value={'shape': (1.7, 3.5, -.8, 2.)}):
             order = runtime._artillery_position_order(state, {'combat_mode': 'artillery_deploy', 'fire_allowed': True}, {}, 1)
             self.assertEqual('artillery_hold', order['combat_mode'])
             self.assertEqual(0, order['throttle_override'])
             self.assertTrue(order['fire_allowed'])
-            runtime._artillery_position_order(state, {'combat_mode': 'artillery_deploy'}, {}, 1.2)
-            self.assertEqual(1, select.call_count)
             runtime._contact_players = []
             order = runtime._artillery_position_order(state, {'combat_mode': 'artillery_deploy'}, {}, 2.1)
             self.assertEqual('artillery_deploy', order['combat_mode'])

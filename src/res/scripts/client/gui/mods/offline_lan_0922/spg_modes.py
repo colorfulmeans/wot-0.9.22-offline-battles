@@ -21,12 +21,12 @@ def release_parking(runtime, state, failed=False):
         if slot['owner'] == state['id']:
             slot.update(owner=None, disabled=slot['disabled'] or failed)
     state.pop('_spg_initial', None)
-    state.pop('_spg_replacement_zone', None)
     state.pop('_spg_arrived_identity', None)
     state.pop('_spg_deployment_progress', None)
     state.pop('_authored_spg_zone', None)
     state.pop('_authored_spg_used_initial', None)
-    state['_spg_deployment'] = 'automatic'
+    # Without a parking position an SPG holds where it is and fires when it can.
+    state['_spg_deployment'] = 'waiting'
     _invalidate(runtime, state)
 
 
@@ -49,8 +49,7 @@ def update(runtime, now):
             if '_spg_mode_round' in s:
                 for name in list(s):
                     if name.startswith('_authored_spg_') or name in (
-                            '_spg_automatic_attack', '_empty_spg_home_reached',
-                            '_spg_replacement_zone'):
+                            '_spg_automatic_attack', '_empty_spg_home_reached'):
                         s.pop(name, None)
             s['_spg_mode_round'] = round_id
             s['_spg_mode'] = 'deployment'
@@ -62,7 +61,7 @@ def update(runtime, now):
                 s['_spg_deployment'] = 'parking'
             else:
                 s.pop('_spg_initial', None)
-                s['_spg_deployment'] = 'automatic'
+                s['_spg_deployment'] = 'waiting'
             _invalidate(runtime, s)
         if empty_ammo.confirmed(s,s.get('profile')) or s.get('_empty_ammo_active'):
             if s['_spg_mode'] != 'empty':
@@ -104,6 +103,9 @@ def update(runtime, now):
                 chosen['_spg_mode'] = 'sortie'
                 selected.append(chosen)
             for s in candidates:
+                # Position holders keep deploying; the others hold where they are.
+                if s.get('_spg_initial'):
+                    continue
                 if s.get('_spg_deployment') != 'waiting':_invalidate(runtime, s)
                 s['_spg_deployment'] = 'waiting'
             continue
@@ -120,7 +122,6 @@ def update(runtime, now):
             shape = chosen.get('collision_shape')
             if shape:
                 plan['clearance'] = (float(shape[0])**2 + float(shape[1])**2)**.5 + 2.
-            chosen.update(_spg_initial=plan, _spg_replacement_zone=key,
-                          _spg_deployment='parking')
+            chosen.update(_spg_initial=plan, _spg_deployment='parking')
             slot['owner'] = chosen['id']
             _invalidate(runtime, chosen)

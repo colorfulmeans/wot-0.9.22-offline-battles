@@ -206,7 +206,7 @@ class WreckRouteSwitchTests(unittest.TestCase):
         target=dict(id='enemy',point=dict(x=0,y=0,z=-280),radius=50)
         order=self.planner._order_for(bot,0,1,None,[],0,team_bots=[bot],
             capture_target=target,no_known_enemies=True)
-        self.assertEqual('artillery_deploy',order['combat_mode'])
+        self.assertEqual('artillery_hold',order['combat_mode'])
         self.assertNotEqual(target['point'],order['move_position'])
 
     def test_artillery_with_living_regulars_retains_its_staging_policy(self):

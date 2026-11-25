@@ -819,7 +819,7 @@ class BotAdapter(object):
                         (('combat', strategic.get('target_kind'), strategic['target_id'])
                         if strategic.get('target_id') is not None and
                         not strategic.get('parking_phase') and strategic.get('combat_mode') not in
-                        ('base_defense', 'artillery_deploy', 'artillery_relocate') else None)),
+                        ('base_defense', 'artillery_deploy') else None)),
                     arrival_radius=strategic.get('arrival_radius') if stop_at_target else None)
         # Preserve the mature face-position intent which is separate from the
         # gun target.  At a route/cover stop it gives armoured turreted tanks

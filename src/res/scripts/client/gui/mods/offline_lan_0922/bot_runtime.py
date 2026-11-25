@@ -4315,7 +4315,6 @@ class BotRuntime(object):
                     raw.get('spg_initial'), map_name, state.get('vehicle'), team=state.get('team'), tactics=self._bot_tactics)
                 if plan is not None:
                     state['_spg_initial'] = plan
-                    state.setdefault('_spg_selection_origin', _position(state))
                     state['_spg_initial_status'] = 'restored'
                 else:
                     state.pop('_spg_initial', None)
@@ -4346,7 +4345,6 @@ class BotRuntime(object):
             plan = plans.get(actor)
             if plan is not None:
                 state['_spg_initial'] = plan
-                state['_spg_selection_origin'] = _position(state)
             else:
                 state.pop('_spg_initial', None)
             state['_spg_initial_status'] = outcomes[actor]
@@ -7817,11 +7815,8 @@ class BotRuntime(object):
             'local_combat_manoeuvre': bool(state.get('local_combat_manoeuvre')),
             'spg_deployment': dict(
                 observed_at=now, initial=state.get('_spg_initial'),
+                deployment=state.get('_spg_deployment'),
                 progress=state.get('_spg_deployment_progress'),
-                retries=state.get('_spg_parking_retries', 0),
-                failed_points=list(state.get('_spg_failed_parking') or ()),
-                cycle=state.get('_spg_deployment_cycle', 0),
-                retry_receipt=state.get('_spg_deployment_retry_receipt'),
                 position_event=state.get('_spg_position_event'),
                 occupied=state.get('_spg_parking_occupied')),
             'motion_control_gates': list(state.get('_motion_control_gates') or ()),
@@ -15093,86 +15088,34 @@ class BotRuntime(object):
         except (KeyError, IndexError, TypeError, ValueError):
             return False
 
-    @timed('parking.retry_deployment')
-    def _retry_spg_deployment(self, state, initial, distance, now, occupied=None):
-        """Retire a parking goal only after sustained lack of net progress."""
+    @timed('parking.deployment_progress')
+    def _spg_deployment_stalled(self, state, initial, distance, now):
+        """Return True once a parking approach makes no net progress for 20 s.
+
+        Waiting for an occupied position counts as no progress. A stalled SPG
+        gives up its position, which is closed for the round, and holds where
+        it is; it never picks another parking point.
+        """
         identity = spg_positions.plan_identity(initial)
         progress = state.get('_spg_deployment_progress')
-        obstructed = occupied is not None
-        if state.get('_spg_replacement_zone'):
-            obstructed=False
-        if not obstructed and (progress is None or progress['identity'] != identity):
+        if progress is None or progress['identity'] != identity:
             state['_spg_deployment_progress'] = dict(
                 identity=identity, best=distance, since=now)
-            return initial
-        if not obstructed and distance < progress['best'] - 0.25:
+            return False
+        if distance < progress['best'] - 0.25:
             progress.update(best=distance, since=now)
-        if not obstructed and now - progress['since'] < 20.0:
-            return initial
-        if not obstructed:progress['since'] = now
-        if state.get('_spg_replacement_zone'):
-            spg_modes.release_parking(self,state,failed=True)
-            state['_spg_position_event']='replacement_failed_region_closed'
-            return None
-        retries = int(state.get('_spg_parking_retries', 0))
-        if not obstructed:state['_spg_parking_retries'] = retries + 1
-        failed = state.setdefault('_spg_failed_parking', [])
-        point = tuple(initial['point'][axis] for axis in ('x', 'y', 'z'))
-        if not obstructed and point not in failed:
-            failed.append(point)
-        if occupied is None:occupied = self._physical_parking_occupancy(state)
-        kwargs = dict(actor_ids=(state['id'],), excluded=failed +
-            [point for point, until in state.get('_spg_fire_failed_parking', ()) if until > now],
-            occupied=occupied, excluded_zones=spg_modes.parking_exclusions(self,state))
-        states = list(self._ordered_states())
-        try:
-            origin = state.get('_spg_selection_origin')
-            grid = (bot_tactics_runtime.graph_view(initial['map'], self.baked_graph)
-                    if origin is not None and self.baked_graph is not None else None)
-            if grid is not None and grid.closest(_position(state)) is None:
-                # Use the original connected component only to rank parking
-                # destinations when the live hull occupies a coarse bake hole.
-                # Movement still starts at the live pose and must pass normal
-                # navigation and native hull collision; this grants no jump.
-                if origin is not None and grid.closest(origin) is not None:
-                    states = [dict(other, **dict(zip(('x', 'y', 'z'), origin)))
-                              if other['id'] == state['id'] else other for other in states]
-            if initial['source'] == 'launcher_manual_v1':
-                plans, unused = bot_tactics_runtime.assign_manual_positions(
-                    self._bot_tactics, initial['map'], self.baked_graph, states,
-                    preferred_zone=initial['zone'], **kwargs)
-            else:
-                plans, unused = spg_positions.assign_initial_positions(
-                    initial['map'], self.baked_graph, states,
-                    deleted_positions=bot_tactics.map_settings(self._bot_tactics, initial['map']).get('deleted_positions', ()), **kwargs)
-        except (KeyError, IndexError, TypeError, ValueError, OverflowError):
-            plans = {}
-        replacement = plans.get(state['id'])
-        if replacement is None:
-            # Exhaustion ends this exclusion cycle, not deployment itself.
-            # Keep this failed point excluded; reconsider earlier points only
-            # after the normal progress timeout (or occupied-goal cooldown).
-            # Every new selection still uses connectivity/clearance/occupancy.
-            state['_spg_failed_parking'] = [point]
-            state['_spg_deployment_cycle'] = int(state.get('_spg_deployment_cycle', 0)) + 1
-            state['_spg_deployment_retry_receipt'] = dict(
-                at=now, outcome='no_safe_alternate_cycle_reset',
-                cycle=state['_spg_deployment_cycle'], attempts=retries + int(not obstructed),
-                failed_count=len(failed), point=point, occupied=bool(obstructed))
-            state['_spg_position_event'] = 'no_safe_alternate_parking'
-            return initial
-        state['_spg_deployment_retry_receipt'] = dict(
-            at=now, outcome='alternate_selected',
-            cycle=state.get('_spg_deployment_cycle', 0),
-            attempts=retries + int(not obstructed), failed_count=len(failed),
-            point=point, replacement=replacement['point'], occupied=bool(obstructed))
-        state['_spg_initial'] = replacement
-        state.pop('_spg_arrived_identity', None)
-        state.pop('_spg_deployment_progress', None)
-        state['_spg_position_event'] = 'blocked_deployment_alternate_parking'
-        self._decision_cache.pop(state['id'], None)
-        self._cancel_artillery_intent(state['id'], reason='deployment_relocated', now=now)
-        return replacement
+        if now - progress['since'] < 20.0:
+            return False
+        spg_modes.release_parking(self, state, failed=True)
+        state['_spg_position_event'] = 'deployment_stalled_hold_in_place'
+        return True
+
+    @staticmethod
+    def _spg_hold_in_place(state, order):
+        position = _position(state)
+        return dict(order, move_position=position, route_anchor=position,
+                    route_join=False, throttle_override=0.0,
+                    combat_mode='artillery_hold', spg_deployment='waiting')
 
     def _observe_spg_fire_position(self, state, command, target, planning,
                                    gun_state, ammo_state, reload_factor, now,
@@ -15255,7 +15198,6 @@ class BotRuntime(object):
         failed.append((_position(state), now + 120.0))
         state['_spg_fire_failed_parking'] = failed[-8:]
         excluded = [point for point, unused in failed]
-        excluded.extend(state.get('_spg_failed_parking', ()))
         failures = state.setdefault('_spg_zone_failures', {})
         zone = initial['zone']
         failures[zone] = failures.get(zone, 0) + 1
@@ -15313,155 +15255,81 @@ class BotRuntime(object):
 
     @timed('parking.position_order')
     def _artillery_position_order(self, state, order, targets, now):
-        """Leave a confirmed muzzle-side obstruction via the existing driver.
+        """Drive an SPG to its parking position; a stalled approach holds.
 
-        No unproved lane is a movement trigger. Use only existing rear route
-        waypoints, never teleport or alter the collision/navmesh policy. Keep
-        an adopted firing position instead of returning to the blocked anchor.
+        An SPG without a position holds where it is. One that makes no net
+        progress toward its position for 20 seconds, including while the
+        position is occupied, gives the position up and holds in place.
         """
         if str((state.get('profile') or {}).get('class_tag') or '') != 'SPG':
             return order
-        if state.get('_spg_mode') in ('sortie','empty') or state.get('_spg_deployment') in ('automatic','waiting'):
+        if state.get('_spg_mode') in ('sortie','empty') or state.get('_spg_deployment') == 'waiting':
             return order
         mode = order.get('combat_mode')
         if mode not in ('artillery_hold', 'artillery_deploy'):
             state.pop('_spg_deployment_progress', None)
         initial = state.get('_spg_initial')
-        if initial is not None and mode in ('artillery_hold', 'artillery_deploy'):
-            # The server retains its original anchor after worker-owned
-            # relocation and may still call this deployment. The fresh local
-            # arrival/failure episode, not that stale mode, owns another retry.
-            if (order.get('fire_allowed') and
-                    targets.get(order.get('target_id')) is not None):
-                initial = self._retry_spg_fire_position(state, initial, now)
-            # The new initial goal is not an ordinary route waypoint. In
-            # particular, do not replace it with the legacy 16..80 m route
-            # heuristic or stop fifteen metres short of its usable area.
-            state.pop('_spg_position', None)
-            destination = tuple(initial['point'][axis] for axis in ('x', 'y', 'z'))
-            identity = spg_positions.plan_identity(initial)
-            queue = False
-            if now >= state.get('_spg_parking_check_at', -1e9):
-                state['_spg_parking_check_at'] = now + TACTICAL_REFRESH_SECONDS
-                if state.get('_spg_arrived_identity') == identity:
-                    state['_spg_displaced_safe'] = self._spg_displaced_hold(state, initial)
-                    if (not state['_spg_displaced_safe'] and
-                            _distance(_position(state), destination) > initial['radius']):
-                        state.pop('_spg_arrived_identity', None)
-                # An arrived hull already occupies its own firing area. A
-                # neighbour touching it must not trigger self-eviction.
-                if state.get('_spg_arrived_identity') != identity:
-                    occupied = self._physical_parking_occupancy(state)
-                    blocked = not spg_positions.parking_point_available(
-                        destination, initial['clearance'], state['team'], (), occupied)
-                    state['_spg_parking_occupied'] = blocked
-                    if blocked and now >= state.get('_spg_occupied_retry_at', -1e9):
-                        state['_spg_occupied_retry_at'] = now + 5.0
-                        initial = self._retry_spg_deployment(state, initial,
-                            _distance(_position(state), destination), now, occupied)
-                        if initial is None:return spg_route_travel.automatic(self,state,order)
-                        destination = tuple(initial['point'][axis] for axis in ('x', 'y', 'z'))
-                        identity = spg_positions.plan_identity(initial)
-                        state['_spg_parking_occupied'] = not spg_positions.parking_point_available(
-                            destination, initial['clearance'], state['team'], (), occupied)
-                else:
-                    state['_spg_parking_occupied'] = False
-            queue = state.get('_spg_parking_occupied', False)
-            arrived = _distance(_position(state), destination) <= initial['radius']
-            if (state.get('_spg_arrived_identity') == identity and
-                    state.get('_spg_displaced_safe') and not state.get('airborne') and
-                    not state.get('_overturned')):
-                destination = _position(state)
-                arrived = True
-            if arrived and not queue:
-                state['_spg_arrived_identity'] = identity
-                state['_spg_parking_occupied'] = queue = False
-            if queue:
-                result = dict(order)
-                result.update(move_position=_position(state), route_anchor=_position(state),
-                    route_join=False, throttle_override=0.0, combat_mode='artillery_hold')
-                state['_spg_position_event'] = 'occupied_parking_queue'
-                return result
-            if arrived:
-                state.pop('_spg_deployment_progress', None)
+        if initial is None or mode not in ('artillery_hold', 'artillery_deploy'):
+            return order
+        # The server retains its original anchor after worker-owned
+        # relocation and may still call this deployment. The fresh local
+        # arrival/failure episode, not that stale mode, owns another retry.
+        if (order.get('fire_allowed') and
+                targets.get(order.get('target_id')) is not None):
+            initial = self._retry_spg_fire_position(state, initial, now)
+        destination = tuple(initial['point'][axis] for axis in ('x', 'y', 'z'))
+        identity = spg_positions.plan_identity(initial)
+        if now >= state.get('_spg_parking_check_at', -1e9):
+            state['_spg_parking_check_at'] = now + TACTICAL_REFRESH_SECONDS
+            if state.get('_spg_arrived_identity') == identity:
+                state['_spg_displaced_safe'] = self._spg_displaced_hold(state, initial)
+                if (not state['_spg_displaced_safe'] and
+                        _distance(_position(state), destination) > initial['radius']):
+                    state.pop('_spg_arrived_identity', None)
+            # An arrived hull already occupies its own firing area. A
+            # neighbour touching it must not trigger self-eviction.
+            if state.get('_spg_arrived_identity') != identity:
+                occupied = self._physical_parking_occupancy(state)
+                state['_spg_parking_occupied'] = not spg_positions.parking_point_available(
+                    destination, initial['clearance'], state['team'], (), occupied)
             else:
-                initial = self._retry_spg_deployment(
-                    state, initial, _distance(_position(state), destination), now)
-                if initial is None:return spg_route_travel.automatic(self,state,order)
-                destination = tuple(initial['point'][axis] for axis in ('x', 'y', 'z'))
-                arrived = _distance(_position(state), destination) <= initial['radius']
+                state['_spg_parking_occupied'] = False
+        queue = state.get('_spg_parking_occupied', False)
+        arrived = _distance(_position(state), destination) <= initial['radius']
+        if (state.get('_spg_arrived_identity') == identity and
+                state.get('_spg_displaced_safe') and not state.get('airborne') and
+                not state.get('_overturned')):
+            destination = _position(state)
+            arrived = True
+        if arrived and not queue:
+            state['_spg_arrived_identity'] = identity
+            state['_spg_parking_occupied'] = queue = False
+            state.pop('_spg_deployment_progress', None)
+        elif self._spg_deployment_stalled(
+                state, initial, _distance(_position(state), destination), now):
+            return self._spg_hold_in_place(state, order)
+        if queue:
             result = dict(order)
-            result.update(move_position=destination, route_anchor=destination,
-                          route_join=False, throttle_override=0.0 if arrived else None,
-                          combat_mode='artillery_hold' if arrived else 'artillery_deploy')
-            if state.get('_spg_obstruction') is not None and arrived:
-                state['_spg_position_event'] = 'library_position_fire_obstructed'
-            if state.get('_spg_fire_relocating'):
-                if arrived:
-                    state.pop('_spg_fire_relocating', None)
-                else:
-                    # Finish relocation before starting another frozen launch
-                    # against the same failed lane at the old firing position.
-                    result.update(target_id=None, target_kind=None, fire_allowed=False,
-                        aim_position=destination, face_position=destination)
-            # Neither reaching a position nor its source recommendation grants
-            # fire permission. Keep the selected target and all real fire gates.
+            result.update(move_position=_position(state), route_anchor=_position(state),
+                route_join=False, throttle_override=0.0, combat_mode='artillery_hold')
+            state['_spg_position_event'] = 'occupied_parking_queue'
             return result
-        if mode not in ('artillery_hold', 'artillery_deploy'):
-            state.pop('_spg_position', None)
-            return order
-        anchor = _point(order.get('move_position'), _position(state))
-        position = state.get('_spg_position')
-        if position is not None and position['anchor'] != anchor:
-            state.pop('_spg_position', None)
-            position = None
-        evidence = state.get('_spg_obstruction')
-        target = targets.get(order.get('target_id'))
-        if (mode == 'artillery_hold' and target is not None and
-                evidence is not None and now - evidence['since'] >= 3.0 and
-                now - evidence['last'] <= 2.0 and abs(state.get('speed', 0.0)) < 0.2 and
-                _distance(evidence['stamp'][0], _position(state)) <= 0.25 and
-                abs(_angle_delta(evidence['stamp'][1], state['yaw'])) <= 0.05):
-            visited = list(position['visited']) if position else [anchor]
-            points = (state.get('route') or {}).get('waypoints') or ()
-            choices = []
-            if len(visited) <= 3 and len(points) > 1:
-                first, last = points[0], points[-1]
-                dx, dz = float(last[0])-float(first[0]), float(last[1])-float(first[1])
-                length2 = max(1.0, dx*dx + dz*dz)
-                for index, point in enumerate(points):
-                    candidate = (float(point[0]), state['y'], float(point[1]))
-                    distance = _distance(_position(state), candidate)
-                    progress = ((candidate[0]-first[0])*dx +
-                                (candidate[2]-first[1])*dz) / length2
-                    if (not 16.0 <= distance <= 80.0 or not -0.12 <= progress <= 0.30 or
-                            any((candidate[0]-old[0])**2 + (candidate[2]-old[2])**2 < 225.0
-                                for old in visited)):
-                        continue
-                    choices.append((distance, index, candidate))
-            if choices:
-                unused_distance, index, candidate = min(choices)
-                visited.append(candidate)
-                position = {'anchor': anchor, 'point': candidate, 'index': index,
-                            'visited': visited, 'since': now}
-                state['_spg_position'] = position
-                state['_spg_position_event'] = 'adopted_rear_waypoint'
-                self._cancel_artillery_intent(state['id'], reason='rear_waypoint_adopted', now=now)
-            else:
-                state['_spg_position_event'] = 'no_safe_rear_waypoint'
-            state.pop('_spg_obstruction', None)
-        if position is None:
-            return order
         result = dict(order)
-        destination = position['point']
-        arrived = _distance(_position(state), destination) <= 15.0
         result.update(move_position=destination, route_anchor=destination,
-                      route_index=position['index'], route_join=False,
-                      throttle_override=0.0 if arrived else None,
-                      combat_mode='artillery_hold' if arrived else 'artillery_relocate')
-        if not arrived:
-            result.update(target_id=None, target_kind=None, fire_allowed=False,
-                          aim_position=destination, face_position=destination)
+                      route_join=False, throttle_override=0.0 if arrived else None,
+                      combat_mode='artillery_hold' if arrived else 'artillery_deploy')
+        if state.get('_spg_obstruction') is not None and arrived:
+            state['_spg_position_event'] = 'library_position_fire_obstructed'
+        if state.get('_spg_fire_relocating'):
+            if arrived:
+                state.pop('_spg_fire_relocating', None)
+            else:
+                # Finish relocation before starting another frozen launch
+                # against the same failed lane at the old firing position.
+                result.update(target_id=None, target_kind=None, fire_allowed=False,
+                    aim_position=destination, face_position=destination)
+        # Neither reaching a position nor its source recommendation grants
+        # fire permission. Keep the selected target and all real fire gates.
         return result
 
     def _record_artillery_gate(self, state, command, target, solution,
@@ -15493,11 +15361,7 @@ class BotRuntime(object):
         if (planning.get('state') == 'failed' and
                 planning.get('reason') == 'world_blocked' and
                 planning.get('local_blockage') and target is not None):
-            state['_spg_obstruction'] = {
-                'stamp': blocked['stamp'] if blocked else stamp,
-                'since': blocked['since'] if blocked else now,
-                'last': now, 'blocks': planning.get('blocks', ()),
-            }
+            state['_spg_obstruction'] = {'stamp': blocked['stamp'] if blocked else stamp}
         elif target is None or planning.get('state') == 'clear':
             state.pop('_spg_obstruction', None)
         if now - state.get('_spg_gate_logged', -1e9) < 1.0:
@@ -15553,7 +15417,6 @@ class BotRuntime(object):
             'last_proof_transition': dict((key, (state.get('_spg_proof_history') or [{}])[-1].get(key))
                 for key in ('reason', 'at', 'reproof')),
             'position_event': state.get('_spg_position_event'),
-            'deployment_retry': state.get('_spg_deployment_retry_receipt'),
             'position_failure_seconds': round((state.get('_spg_fire_position_failure') or {}).get('elapsed', 0.0), 3),
             'position_failure_proofs': len((state.get('_spg_fire_position_failure') or {}).get('proofs', ())),
             'position_retry_seconds': max(0.0, round(state.get('_spg_fire_position_retry_at', now) - now, 3)),
@@ -15738,7 +15601,7 @@ class BotRuntime(object):
                 _distance(position, _point(order.get('move_position'), position)) > 1.5 and
                 not order.get('parking_phase') and order.get('combat_mode') not in
                 ('base_defense', 'support_hold', 'cover_hold', 'hold',
-                 'artillery_deploy', 'artillery_relocate')):
+                 'artillery_deploy')):
             lease = dict(start=now, origin=position, goal=tuple(order['move_position']),
                          fire_seq=int(state.get('fire_seq', 0)),
                          target_id=order.get('target_id'),
@@ -15762,7 +15625,7 @@ class BotRuntime(object):
             goal_distance = _distance(position, goal) if 'goal' in lease else None
             priority_hold = bool(order.get('parking_phase') or order.get('combat_mode') in
                 ('base_defense', 'support_hold', 'cover_hold', 'hold',
-                 'artillery_deploy', 'artillery_relocate'))
+                 'artillery_deploy'))
             completed = (travel >= 2.0 * float(state.get('half_length', 3.5)) + 1.5 or
                 (goal_distance is not None and goal_distance <= 1.5) or fired or priority_hold)
             observation.update(travel=travel, goal_distance=goal_distance,
@@ -15801,7 +15664,7 @@ class BotRuntime(object):
                    target is None or not target.get('alive', True) or
                    order.get('parking_phase') or
                    order.get('combat_mode') in
-                   ('base_defense', 'artillery_deploy', 'artillery_relocate'))
+                   ('base_defense', 'artillery_deploy'))
         fired = int(state.get('fire_seq', 0)) != episode['fire_seq']
         expired = motion_blocked or now - episode['start'] >= 8.0
         contact_refusal = state.pop('_rear_contact_refusal', None)
@@ -15860,7 +15723,7 @@ class BotRuntime(object):
         eligible = bool(target is not None and hull_aiming and
             not command.get('parking_phase') and
             command.get('combat_mode') not in (
-                'base_defense', 'artillery_deploy', 'artillery_relocate') and
+                'base_defense', 'artillery_deploy') and
             (state.get('profile') or {}).get('class_tag') != 'SPG')
         handoff = bool(eligible and receipt.get('blocked'))
         receipt.update(at=now, target=identity, hull_aiming=bool(hull_aiming),

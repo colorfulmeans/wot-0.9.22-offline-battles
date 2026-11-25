@@ -62,8 +62,11 @@ class EditorUITests(unittest.TestCase):
 
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
-        # Exercise the historical source-graph fixture independently of the adopted baseline.
-        patcher=mock.patch.object(storage.contract,'default_map',return_value={})
+        # Exercise the historical source-graph routes independently of the adopted
+        # baseline. Parking keeps the Default positions that every shipped map has.
+        default_map=storage.contract.default_map
+        patcher=mock.patch.object(storage.contract,'default_map',
+            side_effect=lambda name:{k:v for k,v in default_map(name).items() if k=='positions'})
         patcher.start();self.addCleanup(patcher.stop)
         storage.Store(self.temp.name).save(storage.contract.empty('Editable fixture'),apply=True)
         self.root=tk.Tk();self.root.withdraw()
@@ -238,7 +241,8 @@ class EditorUITests(unittest.TestCase):
             self.ui.edit_point_condition();ask.assert_not_called()
         self.ui.save(True);self.assertFalse(self.error_mock.called,self.error_mock.call_args)
         self.assertNotIn('points',self.ui.store.active()['maps']['31_airfield']['positions'][0])
-        self.ui.reset_builtin();self.assertFalse(self.ui.entry()['positions'])
+        original=next(p for p in storage.contract.default_map('31_airfield')['positions'] if 'builtin_positions:'+p['id']==ids[0])
+        self.ui.reset_builtin();self.assertEqual([original],self.ui.entry()['positions'])
         self.ui.new_route();self.assertEqual('routes',self.ui.selection[0]);self.assertEqual('spg_attack',self.ui._selected()['purpose'])
 
     def test_wait_editor_detaches_symmetry_but_retains_both_route_geometries(self):

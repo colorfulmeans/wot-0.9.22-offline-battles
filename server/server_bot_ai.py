@@ -717,8 +717,6 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
         defenders = self._update_base_defense(
             bots, contacts, defense, now)
         self._cover_reservations = set()
-        team_axes = dict((team, self._team_base_axis(team, bots))
-                         for team in (1, 2))
         capture_targets = dict((team, self._capture_target(defense, team))
                                for team in (1, 2))
         team_order_by_bot = self._team_orders_by_bot(team_orders, bots)
@@ -727,7 +725,6 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
         for team in (1, 2):
             team_bots = sorted((bot for bot in bots if bot["team"] == team),
                                key=lambda value: value["id"])
-            team_axis = team_axes[team]
             protected_ids = set(defenders.get(team, {}))
             # Pressure transfer must never retire an active capture hold.
             # Include physical arrivals before this tick creates their hold,
@@ -761,7 +758,7 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
                 order = self._order_for(
                     bot, index, len(team_bots), assignments.get(bot["id"]),
                     self._contacts_for_bot(bot, contacts[team], now), now,
-                    defenders.get(team, {}).get(bot["id"]), team_axis,
+                    defenders.get(team, {}).get(bot["id"]),
                     team_bots, capture_targets[team],
                     not self._contacts_for_bot(bot, contacts[team], now),
                     active_capture=('bot', bot['id']) in
@@ -2338,73 +2335,12 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
                 result[route_id] = route
         return result
 
-    @staticmethod
-    def _team_base_axis(team, bots):
-        """Infer one direction-neutral own/enemy axis from uploaded routes.
+    def _artillery_anchor(self, bot):
+        """Return the SPG's initial plan, or the position it holds without one.
 
-        Baked routes start at their team's own base, so the opposing team's
-        route starts provide the cleanest enemy-base endpoint. If no opposing
-        bot exists, the farthest own-route endpoint is the conservative fallback
-        because a local rear-guard route may end near its own base. The
-        calculation is invariant under map rotation and reflection.
-        """
-        starts = {1: [], 2: []}
-        own_ends = []
-        for bot in bots:
-            route = bot.get("route") if isinstance(bot.get("route"), dict) else {}
-            waypoints = route.get("waypoints")
-            if not isinstance(waypoints, list) or len(waypoints) < 2:
-                continue
-            bot_team = _integer(bot.get("team"))
-            if bot_team not in (1, 2):
-                continue
-            starts[bot_team].append(_point(waypoints[0]))
-            if bot_team == team:
-                own_ends.append(_point(waypoints[-1]))
-        own_starts = starts.get(team, ())
-        if not own_starts or not own_ends:
-            return None
-        own = {
-            "x": round(sum(value["x"] for value in own_starts) /
-                       len(own_starts), 3),
-            "y": round(sum(value["y"] for value in own_starts) /
-                       len(own_starts), 3),
-            "z": round(sum(value["z"] for value in own_starts) /
-                       len(own_starts), 3),
-        }
-        enemy_starts = starts.get(3 - team, ())
-        if enemy_starts:
-            enemy_ends = enemy_starts
-        else:
-            distances = [math.hypot(value["x"] - own["x"],
-                                    value["z"] - own["z"])
-                         for value in own_ends]
-            farthest = max(distances)
-            # Average equally distant through-route endpoints instead of
-            # breaking a geometric tie with ids or world-axis signs.
-            threshold = max(1.0, farthest * 0.02)
-            enemy_ends = [value for value, distance in
-                          zip(own_ends, distances)
-                          if farthest - distance <= threshold]
-        enemy = {
-            "x": round(sum(value["x"] for value in enemy_ends) /
-                       len(enemy_ends), 3),
-            "y": round(sum(value["y"] for value in enemy_ends) /
-                       len(enemy_ends), 3),
-            "z": round(sum(value["z"] for value in enemy_ends) /
-                       len(enemy_ends), 3),
-        }
-        if math.hypot(enemy["x"] - own["x"],
-                      enemy["z"] - own["z"]) < 1.0:
-            return None
-        return own, enemy
-
-    def _artillery_anchor(self, bot, team_axis):
-        """Prefer the canonical sourced initial plan; otherwise keep legacy.
-
-        The authority resolves community areas against the loaded #1513 graph
-        before publishing the manifest. A missing plan explicitly keeps the
-        old rear-route fallback; neither path proves a clear firing arc.
+        The authority resolves parking areas against the loaded #1513 graph
+        before publishing the manifest. An SPG without a plan holds where it
+        first received an artillery order. Neither proves a clear firing arc.
         """
         initial = spg_positions.canonical_plan(bot.get("spg_initial"), tactics=self.tactics)
         if initial is not None:
@@ -2412,73 +2348,16 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
             # actual #1513 graph. It is independent of ordinary route catalogues.
             return {"point": dict(initial["point"]), "face": dict(initial["face"]),
                     "index": 0, "parking_radius": initial["radius"]}
-        route = bot.get("route") if isinstance(bot.get("route"), dict) else {}
-        waypoints = route.get("waypoints")
-        route_signature = (
-            str(route.get("id") or ""),
-            tuple((_number(value.get("x")), _number(value.get("y")),
-                   _number(value.get("z")))
-                  for value in waypoints)
-            if isinstance(waypoints, list) else (),
-        )
         cached = self._artillery_anchors.get(bot["id"])
-        if (isinstance(cached, dict) and
-                cached.get("route_signature") == route_signature):
-            return {
-                "point": dict(cached["point"]),
-                "face": dict(cached["face"]),
-                "index": cached["index"],
-            }
-        if not isinstance(waypoints, list) or not waypoints:
+        if not isinstance(cached, dict):
             position = _point(bot.get("state"))
-            result = {
-                "point": position,
-                "face": position,
-                "index": 0,
-            }
-            self._artillery_anchors[bot["id"]] = dict(
-                result, route_signature=route_signature)
-            return result
-        points = [_point(value) for value in waypoints]
-        if team_axis is None:
-            own = points[0]
-            enemy = points[-1]
-        else:
-            own, enemy = team_axis
-        axis_x = enemy["x"] - own["x"]
-        axis_z = enemy["z"] - own["z"]
-        axis_length = math.hypot(axis_x, axis_z)
-        if axis_length < 1.0:
-            own = points[0]
-            enemy = points[-1]
-            axis_x = enemy["x"] - own["x"]
-            axis_z = enemy["z"] - own["z"]
-            axis_length = max(1.0, math.hypot(axis_x, axis_z))
-        axis_squared = axis_length * axis_length
-        desired_radius = _clamp(axis_length * 0.16, 35.0, 120.0)
-        candidates = []
-        for point_index, point in enumerate(points):
-            offset_x = point["x"] - own["x"]
-            offset_z = point["z"] - own["z"]
-            radius = math.hypot(offset_x, offset_z)
-            progress = (offset_x * axis_x + offset_z * axis_z) / axis_squared
-            outside_rear = max(0.0, progress - 0.30,
-                               -0.12 - progress)
-            base_overlap = max(0.0, desired_radius * 0.35 - radius)
-            score = (outside_rear * axis_length * 8.0 +
-                     base_overlap * 5.0 +
-                     abs(radius - desired_radius) +
-                     abs(progress - 0.12) * axis_length * 0.20)
-            candidates.append((score, point_index, point))
-        unused_score, point_index, point = min(candidates)
-        result = {
-            "point": dict(point),
-            "face": dict(enemy),
-            "index": point_index,
+            cached = {"point": position, "face": position, "index": 0}
+            self._artillery_anchors[bot["id"]] = cached
+        return {
+            "point": dict(cached["point"]),
+            "face": dict(cached["face"]),
+            "index": cached["index"],
         }
-        self._artillery_anchors[bot["id"]] = dict(
-            result, route_signature=route_signature)
-        return result
 
     @staticmethod
     def _nearest_route(contact, catalog):
@@ -3785,10 +3664,10 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
             order["throttle_override"] = None
         return True
 
-    def _apply_artillery_order(self, order, bot, team_axis):
+    def _apply_artillery_order(self, order, bot):
         self._engage_anchors.pop(bot["id"], None)
         self._cover_states.pop(bot["id"], None)
-        anchor = self._artillery_anchor(bot, team_axis)
+        anchor = self._artillery_anchor(bot)
         point = anchor["point"]
         state = bot.get("state") if isinstance(bot.get("state"), dict) else {}
         distance = math.hypot(point["x"] - _number(state.get("x")),
@@ -3887,7 +3766,7 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
         order["stable_hull_face"] = True
 
     def _order_for(self, bot, index, count, focus, contacts, now,
-                   travel_override=None, team_axis=None, team_bots=None,
+                   travel_override=None, team_bots=None,
                    capture_target=None, no_known_enemies=False, active_capture=False):
         route_id, route_index, move, route_anchor, route_join = self._route(bot, now)
         retreat_point = self._retreat_point(bot, route_anchor)
@@ -3990,7 +3869,7 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
                 self._set_target(
                     order, bot, focus, profile, personality,
                     bool(focus.get("visible")))
-            self._apply_artillery_order(order, bot, team_axis)
+            self._apply_artillery_order(order, bot)
             self._firing_holds.pop(bot["id"], None)
             return order
 

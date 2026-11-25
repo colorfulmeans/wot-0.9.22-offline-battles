@@ -2320,51 +2320,22 @@ class ServerBotArtilleryTests(unittest.TestCase):
         self.assertEqual('artillery_hold', order['combat_mode'])
         self.assertEqual(1250.0, order['fire_range'])
 
-    def test_mirrored_spgs_choose_stable_rear_non_hold_anchors(self):
+    def test_spg_without_a_plan_holds_the_position_it_started_from(self):
         planner = BotPlanner()
-        manifest = [
-            _bot(11, 1, 0, _route('field', [
-                (0, 0, False), (0, 60, False),
-                (0, 160, True), (0, 600, False),
-            ])),
-            _bot(26, 2, 0, _route('field', [
-                (0, 600, False), (0, 540, False),
-                (0, 440, True), (0, 0, False),
-            ])),
-        ]
-        states = [_state(11, 1, 0, 0), _state(26, 2, 0, 600)]
+        manifest = [_bot(11, 1, 0, _route('field', [
+            (0, 0, False), (0, 60, False), (0, 160, True), (0, 600, False),
+        ]))]
+        states = [_state(11, 1, 0, 0)]
 
-        deploying = dict((order['id'], order) for order in
-                         planner.build_orders(
-                             manifest, states, [], 1.0)['orders'])
+        first = planner.build_orders(manifest, states, [], 1.0)['orders'][0]
+        self.assertEqual('artillery_hold', first['combat_mode'])
+        self.assertEqual(0.0, first['throttle_override'])
+        self.assertEqual(0.0, first['move_position']['z'])
 
-        self.assertEqual('artillery_deploy', deploying[11]['combat_mode'])
-        self.assertEqual('artillery_deploy', deploying[26]['combat_mode'])
-        self.assertEqual(1, deploying[11]['route_index'])
-        self.assertEqual(1, deploying[26]['route_index'])
-        self.assertEqual(60.0, deploying[11]['move_position']['z'])
-        self.assertEqual(540.0, deploying[26]['move_position']['z'])
-        self.assertEqual(
-            600.0,
-            deploying[11]['move_position']['z'] +
-            deploying[26]['move_position']['z'])
-        self.assertFalse(manifest[0]['route']['waypoints'][1]['hold'])
-        self.assertFalse(manifest[1]['route']['waypoints'][1]['hold'])
-
-        states[0]['z'] = 60.0
-        states[1]['z'] = 540.0
-        holding = dict((order['id'], order) for order in
-                       planner.build_orders(
-                           manifest, states, [], 2.0)['orders'])
-
-        self.assertEqual('artillery_hold', holding[11]['combat_mode'])
-        self.assertEqual('artillery_hold', holding[26]['combat_mode'])
-        self.assertEqual(0.0, holding[11]['throttle_override'])
-        self.assertEqual(0.0, holding[26]['throttle_override'])
-        self.assertEqual(deploying[11]['move_position'],
-                         holding[11]['move_position'])
-        self.assertEqual(deploying[26]['move_position'],
-                         holding[26]['move_position'])
+        states[0]['z'] = 5.0
+        later = planner.build_orders(manifest, states, [], 2.0)['orders'][0]
+        self.assertEqual('artillery_hold', later['combat_mode'])
+        self.assertEqual(first['move_position'], later['move_position'])
 
     def test_target_does_not_pull_spg_off_anchor(self):
         planner = BotPlanner()

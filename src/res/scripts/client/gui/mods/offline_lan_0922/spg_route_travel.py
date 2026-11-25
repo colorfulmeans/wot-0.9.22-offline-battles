@@ -121,10 +121,9 @@ def apply(runtime,state,order,now):
                         state['_authored_spg_used_initial']=copy.deepcopy(state.get('_spg_initial'))
                 return order
             state.pop('_authored_spg_travel', None)
-            if state.get('_spg_deployment') == 'waiting':
-                return dict(order,combat_mode='artillery_hold',move_position=(state['x'],state['y'],state['z']),
-                    throttle_override=0.,spg_deployment='waiting',route_join=False)
-            return automatic(runtime,state,order)
+            # Without a parking position an SPG holds where it is and fires when it can.
+            return dict(order,combat_mode='artillery_hold',move_position=(state['x'],state['y'],state['z']),
+                throttle_override=0.,spg_deployment='waiting',route_join=False)
         attack=state.get('_authored_spg_attack')
         if attack is None and not state.get('_spg_automatic_attack'):
             attack=spg_route_recovery.select_route(runtime,state,None,prefer_spg=True)
@@ -140,7 +139,7 @@ def apply(runtime,state,order,now):
                         face_position=(base[0],state['y'],base[1]),throttle_override=None,
                         combat_mode='spg_route_travel',route_join=True,
                         route_anchor=(pose[0],state['y'],pose[1]),authored_spg_connection='sortie_return')
-            return automatic(runtime,state,order)
+            return _sortie_without_attack_route(runtime,state,order)
         if not active or active['kind'] not in ('sortie_return','attack'):
             base=runtime.baked_graph['objective_bases'][state['team']-1]
             active=_task(runtime,state,'sortie_return',[list(base)+[0]],('sortie_return',attack['id']),0)
@@ -220,8 +219,8 @@ def apply(runtime,state,order,now):
     return result
 
 
-def automatic(runtime,state,order):
-    """Unassigned deployment drives automatically; sortie fallback keeps its mode."""
+def _sortie_without_attack_route(runtime,state,order):
+    """A sortie without an attack route fires in place or takes the enemy base."""
     pose=(state['x'],state['y'],state['z'])
     if not order.get('empty_ammo') and order.get('target_id') is not None and order.get('fire_allowed'):
         return dict(order,combat_mode='engage',move_position=pose,throttle_override=0.,route_join=False)

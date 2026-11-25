@@ -242,8 +242,11 @@ class NavigationUITests(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         patcher=mock.patch.object(ui.messagebox,'showerror',side_effect=lambda *a,**kw: (_ for _ in ()).throw(AssertionError(str(a))))
         patcher.start();self.addCleanup(patcher.stop)
-        # Exercise the historical source-graph fixture independently of the adopted baseline.
-        patcher=mock.patch.object(storage.contract,'default_map',return_value={})
+        # Exercise the historical source-graph routes independently of the adopted
+        # baseline. Parking keeps the Default positions that every shipped map has.
+        default_map=storage.contract.default_map
+        patcher=mock.patch.object(storage.contract,'default_map',
+            side_effect=lambda name:{k:v for k,v in default_map(name).items() if k=='positions'})
         patcher.start();self.addCleanup(patcher.stop)
         storage.Store(self.temp.name).save(storage.contract.empty('Editable fixture'),apply=True)
         self.root=tk.Tk();self.root.withdraw();self.addCleanup(self.root.destroy)

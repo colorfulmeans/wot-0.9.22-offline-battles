@@ -288,20 +288,19 @@ class InitialPositionIntegrationTests(unittest.TestCase):
         self.assertIsNone(order['target_id'])
         self.assertFalse(order['fire_allowed'])
 
-    def test_worker_does_not_override_library_with_legacy_near_wall_route_point(self):
+    def test_obstructed_library_position_is_kept_and_reported(self):
         runtime=self._runtime();plan,bot,state=self._fixture_bot(0.)
         state.update(_spg_initial=plan,profile={'class_tag':'SPG'},
                      route={'waypoints':[(0,100),(0,200),(0,400)]},
-                     _spg_obstruction={'since':0.,'last':10.},_spg_position={'point':(0.,0.,0.)})
+                     _spg_obstruction={'stamp':((0.,0.,0.),0.,('human',2))})
         order={'combat_mode':'artillery_hold','target_id':2,'fire_allowed':False,
                'move_position':plan['point']}
         result=runtime._artillery_position_order(state,order,{2:{}},10.)
         self.assertEqual(tuple(plan['point'][v] for v in ('x','y','z')),result['move_position'])
-        self.assertNotIn('_spg_position',state)
         self.assertFalse(result['fire_allowed'])
         self.assertEqual('library_position_fire_obstructed',state['_spg_position_event'])
 
-    def test_jammed_deployment_selects_another_safe_unreserved_parking_goal(self):
+    def test_jammed_deployment_gives_up_the_position_and_holds_in_place(self):
         runtime = self._runtime()
         runtime.baked_graph = _graph()
         states = _states(runtime.baked_graph, 1)
@@ -310,22 +309,20 @@ class InitialPositionIntegrationTests(unittest.TestCase):
             state['_spg_initial'] = plans[state['id']]
         runtime.states = {state['id']: state for state in states}
         state = states[0]
-        original = copy.deepcopy(state['_spg_initial'])
         pose = tuple(state[k] for k in ('x', 'y', 'z', 'yaw'))
         order = {'combat_mode': 'artillery_deploy', 'fire_allowed': False}
         runtime._artillery_position_order(state, order, {}, 0.)
+        waiting = runtime._artillery_position_order(state, order, {}, 19.9)
+        self.assertEqual('artillery_deploy', waiting['combat_mode'])
         result = runtime._artillery_position_order(state, order, {}, 20.1)
-        alternate = state['_spg_initial']
-        self.assertNotEqual(original['point'], alternate['point'])
-        self.assertEqual('blocked_deployment_alternate_parking', state['_spg_position_event'])
+        self.assertNotIn('_spg_initial', state)
+        self.assertEqual('waiting', state['_spg_deployment'])
+        self.assertEqual('deployment_stalled_hold_in_place', state['_spg_position_event'])
+        self.assertEqual('artillery_hold', result['combat_mode'])
+        self.assertEqual(0., result['throttle_override'])
+        self.assertEqual(pose[:3], result['move_position'])
         self.assertEqual(pose, tuple(state[k] for k in ('x', 'y', 'z', 'yaw')))
-        self.assertEqual(tuple(alternate['point'][k] for k in ('x', 'y', 'z')), result['move_position'])
-        self.assertIsNotNone(positions.canonical_plan(alternate, '08_ruinberg', state['vehicle'], team=state['team']))
-        grid = positions._Graph(runtime.baked_graph, positions.CATALOG['maps']['08_ruinberg']['bounds'])
-        goal = tuple(alternate['point'][k] for k in ('x', 'y', 'z'))
-        index = grid.closest(goal)
-        self.assertIn(index, grid.distances(tuple(state[k] for k in ('x', 'y', 'z'))))
-        self.assertTrue(grid.parking_clear(index, alternate['clearance']))
+        self.assertEqual(order, runtime._artillery_position_order(state, order, {}, 21.))
 
     def test_slow_net_progress_does_not_expire_deployment(self):
         runtime = self._runtime(); plan, bot, state = self._fixture_bot(40.)
@@ -335,84 +332,18 @@ class InitialPositionIntegrationTests(unittest.TestCase):
             state['x'] = plan['point']['x'] + 40. - now * .03
             runtime._artillery_position_order(state, order, {}, float(now))
         self.assertEqual(plan, state['_spg_initial'])
-        self.assertNotIn('_spg_failed_parking', state)
 
-    def test_fourth_blocked_goal_still_selects_a_checked_connected_alternate(self):
-        runtime=self._runtime();runtime.baked_graph=_graph()
-        states=_states(runtime.baked_graph,1)
-        plans,unused=positions.assign_initial_positions('08_ruinberg',runtime.baked_graph,states)
-        state=states[0];state['_spg_initial']=plans[state['id']]
-        runtime.states={s['id']:s for s in states}
-        pose=tuple(state[k] for k in ('x','y','z','yaw'))
-        seen=[]
-        grid=positions._Graph(runtime.baked_graph,positions.CATALOG['maps']['08_ruinberg']['bounds'])
-        connected=grid.distances(pose[:3])
-        for attempt in range(5):
-            initial=state['_spg_initial'];point=tuple(initial['point'][k] for k in ('x','y','z'))
-            seen.append(point)
-            runtime._retry_spg_deployment(state,initial,100.,attempt*21.)
-            replacement=runtime._retry_spg_deployment(state,initial,100.,attempt*21.+20.1)
-            goal=tuple(replacement['point'][k] for k in ('x','y','z'))
-            self.assertNotIn(goal,seen)
-            self.assertIn(grid.closest(goal),connected)
-            self.assertTrue(grid.parking_clear(grid.closest(goal),replacement['clearance']))
-            self.assertEqual('alternate_selected',state['_spg_deployment_retry_receipt']['outcome'])
-        self.assertEqual(5,state['_spg_parking_retries'])
-        self.assertEqual(pose,tuple(state[k] for k in ('x','y','z','yaw')))
-
-    def test_airfield_su14_bake_hole_can_select_alternate_without_moving_pose(self):
-        runtime = self._runtime()
-        graph = _graph('31_airfield')
-        cfg = self.module.bot_tactics
-        planning = self.module.bot_tactics_runtime
-        raw = cfg.empty('Airfield parking regression')
-        raw['maps']['31_airfield'] = dict(
-            mode='regular', resource_sha256=cfg.MAPS['31_airfield']['resource_sha256'],
-            routes=[], positions=[
-                dict(id='first', label='First', team=2, point=[-385.7907, -270.5806],
-                     radius=16., heading=0., priority=9),
-                dict(id='alternate', label='Alternate', team=2, point=[-431.9712, -212.3531],
-                     radius=16., heading=0., priority=5)])
-        runtime._bot_tactics = cfg.canonical(raw)
-        runtime.baked_graph = graph
-        origin = (-334., -.39, -238.)
-        state = dict(id=30, team=2, slot=14, vehicle='ussr:R27_SU-14',
-                     profile={'class_tag': 'SPG'}, collision_shape=(1.615939, 5.117723, -.8, 2.),
-                     x=origin[0], y=origin[1], z=origin[2], yaw=-1.49669,
-                     speed=0., alive=True)
-        plans, unused = planning.assign_manual_positions(runtime._bot_tactics, '31_airfield', graph, [state])
-        state.update(_spg_initial=plans[30], _spg_selection_origin=origin)
-        original = copy.deepcopy(state['_spg_initial'])
-        state.update(x=-341.144229, y=-.32783, z=-224.72558)
-        runtime.states = {30: state}
-        grid = planning.graph_view('31_airfield', graph)
-        self.assertIsNone(grid.closest(tuple(state[k] for k in ('x', 'y', 'z'))))
-        self.assertIsNotNone(grid.closest(origin))
-        pose = tuple(state[k] for k in ('x', 'y', 'z', 'yaw'))
-        order = {'combat_mode': 'artillery_deploy'}
-        runtime._artillery_position_order(state, order, {}, 0.)
-        runtime._artillery_position_order(state, order, {}, 20.1)
-        self.assertEqual('blocked_deployment_alternate_parking', state['_spg_position_event'])
-        self.assertNotEqual(original['point'], state['_spg_initial']['point'])
-        self.assertEqual(pose, tuple(state[k] for k in ('x', 'y', 'z', 'yaw')))
-        self.assertIn(grid.closest(tuple(state['_spg_initial']['point'][k] for k in ('x', 'y', 'z'))),
-                      grid.distances(origin))
-
-    def test_rocking_does_not_renew_timeout_or_permanently_exhaust_retries(self):
+    def test_rocking_does_not_renew_the_deployment_timeout(self):
         runtime = self._runtime(); plan, bot, state = self._fixture_bot(40.)
         state.update(_spg_initial=plan, profile={'class_tag': 'SPG'})
         runtime.states = {state['id']: state}
         order = {'combat_mode': 'artillery_deploy'}
-        with mock.patch.object(self.module.spg_positions, 'assign_initial_positions', return_value=({}, {})) as select:
-            for now in range(110):
-                state['x'] = plan['point']['x'] + 40. + (.1 if now % 2 else 0.)
-                runtime._artillery_position_order(state, order, {}, float(now))
-            self.assertEqual(5, select.call_count)
-        self.assertEqual('no_safe_alternate_parking', state['_spg_position_event'])
-        self.assertEqual(5, state['_spg_deployment_cycle'])
-        self.assertEqual(100., state['_spg_deployment_retry_receipt']['at'])
-        self.assertEqual(1, len(state['_spg_failed_parking']))
-        self.assertEqual(plan, state['_spg_initial'])
+        for now in range(21):
+            state['x'] = plan['point']['x'] + 40. + (.1 if now % 2 else 0.)
+            result = runtime._artillery_position_order(state, order, {}, float(now))
+        self.assertEqual('deployment_stalled_hold_in_place', state['_spg_position_event'])
+        self.assertEqual('waiting', state['_spg_deployment'])
+        self.assertEqual('artillery_hold', result['combat_mode'])
 
     def test_arrived_parking_never_retries(self):
         runtime = self._runtime(); plan, bot, state = self._fixture_bot(0.)

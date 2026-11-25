@@ -40,7 +40,7 @@ class ModeTests(unittest.TestCase):
         spg_modes.update(self.runtime,0)
         self.assertEqual(3,sum(bool(s.get('_spg_initial')) for s in self.states))
         self.assertEqual(3,len(self.runtime._spg_mode_slots))
-        self.assertEqual('automatic',self.states[3]['_spg_deployment'])
+        self.assertEqual('waiting',self.states[3]['_spg_deployment'])
 
     def test_pre_battle_none_round_initializes_without_requiring_any_bots(self):
         self.runtime.round_id=None;self.states[:]=[]
@@ -67,7 +67,7 @@ class ModeTests(unittest.TestCase):
         slot=self.runtime._spg_mode_slots[(1,'1')];replacement=next(s for s in self.states if s['id']==slot['owner'])
         spg_modes.release_parking(self.runtime,replacement,failed=True);spg_modes.update(self.runtime,2)
         self.assertTrue(slot['disabled']);self.assertIsNone(slot['owner'])
-        self.assertEqual('automatic',replacement['_spg_deployment'])
+        self.assertEqual('waiting',replacement['_spg_deployment'])
         self.assertFalse(self.runtime._spg_mode_slots[(1,'2')]['disabled'])
         self.runtime.round_id=2;spg_modes.update(self.runtime,3)
         self.assertFalse(any(s['disabled'] for s in self.runtime._spg_mode_slots.values()))
@@ -83,7 +83,8 @@ class ModeTests(unittest.TestCase):
         self.assertEqual({4,5,6},{s['id'] for s in self.states if s.get('_spg_mode')=='sortie'})
         selected[0]['alive']=False;spg_modes.update(self.runtime,9)
         self.assertEqual(3,sum(s.get('_spg_mode')=='sortie' and s['alive'] for s in self.states))
-        self.assertTrue(all(s.get('_spg_deployment')=='waiting' for s in self.states[:3] if s['_spg_mode']=='deployment'))
+        # Position holders that stay behind keep deploying to their positions.
+        self.assertTrue(all(s.get('_spg_deployment')=='parking' for s in self.states[:3] if s['_spg_mode']=='deployment'))
 
     def test_empty_sortie_frees_normal_slot_and_keeps_unlimited_empty_travel(self):
         self.regular['alive']=False;spg_modes.update(self.runtime,0)

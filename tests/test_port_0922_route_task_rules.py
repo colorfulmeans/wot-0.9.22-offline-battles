@@ -387,10 +387,10 @@ class AuthoredArtilleryTravelTests(unittest.TestCase):
         self.assertEqual('artillery_hold',result['combat_mode'])
         self.assertEqual(0.,result['throttle_override'])
 
-    def test_relocation_ignores_legacy_parking_links(self):
+    def test_moving_to_another_position_ignores_legacy_parking_links(self):
         self.zone['links']={'b':[[0,100,0],[50,150,0],[100,100,0]]}
         self.state.update(x=0,z=100);self.state['_spg_initial']['zone']='b'
-        result=self.apply('artillery_relocate',move_position=(100,0,100))
+        result=self.apply('artillery_deploy',move_position=(100,0,100))
         self.assertEqual((100,0,100),result['move_position'])
         self.assertNotIn('authored_spg_connection',result)
 
@@ -398,7 +398,7 @@ class AuthoredArtilleryTravelTests(unittest.TestCase):
         self.state.update(x=0,z=100)
         self.state['_authored_spg_zone']=copy.deepcopy(self.zone)
         self.state['_spg_initial']['zone']='b'
-        result=self.apply('artillery_relocate',move_position=(100,0,100))
+        result=self.apply('artillery_deploy',move_position=(100,0,100))
         self.assertEqual((100,0,100),result['move_position'])
         self.assertNotIn('authored_spg_connection',result)
         self.state.update(x=100,z=100);self.apply('artillery_hold')
@@ -450,9 +450,9 @@ class AuthoredArtilleryTravelTests(unittest.TestCase):
         self.assertEqual((5,0,100),resumed['move_position'])
         self.assertIsNone(self.state.get('_authored_spg_travel'))
 
-    def test_defense_during_automatic_relocation_remembers_last_arrived_parking(self):
+    def test_defense_while_moving_to_another_position_remembers_last_arrived_parking(self):
         self.state.update(x=0,z=100);self.apply('artillery_hold')
-        self.state['_spg_initial']['zone']='b';self.apply('artillery_relocate')
+        self.state['_spg_initial']['zone']='b';self.apply('artillery_deploy')
         self.apply('base_defense');self.state.update(x=0,z=0)
         self.apply('artillery_hold')
         self.assertEqual('a',self.state['_spg_initial']['zone'])

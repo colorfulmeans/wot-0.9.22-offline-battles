@@ -139,7 +139,7 @@ def _reference_combat_hull_aim(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
 	if _rear_laying_deferred(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
 			rear_turn, allow_rear_start):
 		return float(turn), float(throttle), False
-	if movement_intent and combat_mode in ('artillery_deploy', 'artillery_relocate'):
+	if movement_intent and combat_mode == 'artillery_deploy':
 		# Deployment keeps the current travel steering even for a rear threat.
 		# A stationary firing area may lay the hull after physical arrival.
 		return float(turn), float(throttle), False
@@ -243,7 +243,7 @@ def combat_hull_aim(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
     if _rear_laying_deferred(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
                             rear_turn, allow_rear_start):
         return float(turn), float(throttle), False
-    if movement_intent and combat_mode in ('artillery_deploy', 'artillery_relocate'):
+    if movement_intent and combat_mode == 'artillery_deploy':
         return float(turn), float(throttle), False
     held = recovery_mode in ('avoid', 'blocked', 'reverse_turn',
         'pivot_recovery', 'forward_escape', 'short_forward_escape',

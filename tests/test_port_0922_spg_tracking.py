@@ -165,50 +165,18 @@ class SPGTrackingTests(unittest.TestCase):
         state = {'id': 11, 'x': 0., 'y': 0., 'z': 0., 'yaw': 0., 'speed': 0.,
                  'profile': {'class_tag': 'SPG'},
                  'route': {'waypoints': ((0., -30., False), (0., 0., False), (0., 200., False))},
-                 '_spg_obstruction': {'stamp': ((0., 0., 0.), 0., ('human', 2)),
-                                      'since': 1., 'last': 5.}}
+                 '_spg_obstruction': {'stamp': ((0., 0., 0.), 0., ('human', 2))}}
         order = {'combat_mode': 'artillery_hold', 'move_position': (0., 0., 0.),
                  'target_id': 1000002, 'target_kind': 'human', 'fire_allowed': True}
         targets = {1000002: {'id': 1000002, 'kind': 'human', 'network_id': 2,
                             'position': (200., 0., 0.)}}
         return runtime, state, order, targets
 
-    def test_near_wall_relocation_uses_rear_waypoint_without_moving_pose(self):
+    def test_obstructed_hold_without_a_position_stays_in_place(self):
         runtime, state, order, targets = self._position_fixture()
-        result = runtime._artillery_position_order(state, order, targets, 5.)
-        self.assertEqual((0., 0., -30.), result['move_position'])
-        self.assertEqual('artillery_relocate', result['combat_mode'])
-        self.assertIsNone(result['target_id'])
-        self.assertFalse(result['fire_allowed'])
-        self.assertEqual((0., 0., 0.), tuple(state[k] for k in ('x', 'y', 'z')))
-        # Once reached, do not return to the old obstructed server anchor.
-        state['z'] = -30.
-        held = runtime._artillery_position_order(state, order, targets, 20.)
-        self.assertEqual('artillery_hold', held['combat_mode'])
-        self.assertEqual((0., 0., -30.), held['move_position'])
-        self.assertEqual(1000002, held['target_id'])
-
-    def test_missing_or_stale_evidence_never_moves_an_artillery_hold(self):
-        for change in ('absent', 'stale', 'moving', 'pose_changed'):
-            runtime, state, order, targets = self._position_fixture()
-            if change == 'absent': state.pop('_spg_obstruction')
-            elif change == 'stale': state['_spg_obstruction']['last'] = 0.
-            elif change == 'moving': state['speed'] = 3.
-            else: state['x'] = 1.
-            self.assertEqual(order, runtime._artillery_position_order(state, order, targets, 5.))
-
-    def test_base_defense_preempts_a_local_relocation(self):
-        runtime, state, order, targets = self._position_fixture()
-        runtime._artillery_position_order(state, order, targets, 5.)
+        self.assertEqual(order, runtime._artillery_position_order(state, order, targets, 5.))
         defense = dict(order, combat_mode='base_defense')
         self.assertEqual(defense, runtime._artillery_position_order(state, defense, targets, 6.))
-        self.assertNotIn('_spg_position', state)
-
-    def test_no_route_does_not_invent_a_destination_or_teleport(self):
-        runtime, state, order, targets = self._position_fixture()
-        state['route'] = {}
-        self.assertEqual(order, runtime._artillery_position_order(state, order, targets, 5.))
-        self.assertEqual('no_safe_rear_waypoint', state['_spg_position_event'])
 
     def test_arc_status_distinguishes_close_world_hit_and_missing_proof(self):
         from gui.mods.offline_lan_0922.artillery_arc_queue import ArcProbeQueue
@@ -261,4 +229,3 @@ class SPGTrackingTests(unittest.TestCase):
         self.assertEqual([], native_calls)
         self.assertEqual(1, output.getvalue().count('SPG FIRE GATE '))
         self.assertIn('planning_pending', output.getvalue())
-        self.assertNotIn('_spg_position', state)

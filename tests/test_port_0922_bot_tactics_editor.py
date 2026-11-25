@@ -337,20 +337,19 @@ class RealRuntimeIntegrationTests(unittest.TestCase):
         zone['points']=[zone['point']+[1,12.],[-106.,306.,0,0.]]
         with self.assertRaises(cfg.TacticsError):cfg.canonical(message['bot_tactics'])
 
-    def test_blocked_manual_parking_retries_inside_authored_regions(self):
+    def test_blocked_manual_parking_holds_in_place_after_twenty_seconds(self):
         rt = self.runtime(); message = self.message()
         with contextlib.redirect_stdout(io.StringIO()):
             rt.battle_start(message)
         state = rt.states[11]
-        original = copy.deepcopy(state['_spg_initial'])
+        self.assertEqual('launcher_manual_v1', state['_spg_initial']['source'])
         order = {'combat_mode': 'artillery_deploy'}
-        rt._artillery_position_order(state, order, {}, 0.)
-        rt._artillery_position_order(state, order, {}, 20.1)
-        alternate = state['_spg_initial']
-        self.assertNotEqual(original['point'], alternate['point'])
-        self.assertEqual('launcher_manual_v1', alternate['source'])
-        self.assertIsNotNone(cfg.canonical_manual_plan(
-            alternate, rt._bot_tactics, '08_ruinberg', state['vehicle'], state['team']))
+        self.assertEqual('artillery_deploy', rt._artillery_position_order(state, order, {}, 0.)['combat_mode'])
+        result = rt._artillery_position_order(state, order, {}, 20.1)
+        self.assertNotIn('_spg_initial', state)
+        self.assertEqual('waiting', state['_spg_deployment'])
+        self.assertEqual('artillery_hold', result['combat_mode'])
+        self.assertEqual(tuple(float(state[axis]) for axis in 'xyz'), tuple(result['move_position']))
 
     def test_manifest_server_orders_and_navigation_share_same_manual_goal(self):
         from lan_battle_server import BattleState

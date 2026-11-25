@@ -99,14 +99,13 @@ class RuntimeReceiptTests(unittest.TestCase):
             self.assertFalse(state['_primary_world_contact']['trace_available'])
             self.assertEqual({},state['_primary_world_contact']['trace'])
 
-    def test_serialized_stall_contains_contact_probe_and_spg_retry_values(self):
+    def test_serialized_stall_contains_contact_probe_and_spg_deployment_values(self):
         self.runtime.update(.04, 1.)
         state = self.runtime.states[11]
         command = self.runtime._decision_cache[11][3]
         state['_motion_stall_log'] = ((state['x'],state['y'],state['z']), -10.)
         state['_spg_deployment_progress'] = dict(identity='report',best=62.1,since=.5)
-        state['_spg_parking_retries'] = 3
-        state['_spg_deployment_retry_receipt'] = dict(at=.7,outcome='alternate_selected')
+        state['_spg_position_event'] = 'deployment_stalled_hold_in_place'
         state['_world_contact_trace'] = dict(reason='ground_profile',hit=(1.,2.,3.))
         self.runtime._apply_world_contact_impact(state, 3., 1.04)
         output = io.StringIO()
@@ -120,9 +119,8 @@ class RuntimeReceiptTests(unittest.TestCase):
         row = next(r['data'] for r in parsed['records'] if r['label']=='BOT MOTION')
         self.assertEqual('ground_profile',row['primary_world_contact']['trace']['reason'])
         self.assertEqual('native_review',row['motion_probe_evidence']['reason'])
-        self.assertEqual(3,row['spg_deployment']['retries'])
         self.assertEqual(62.1,row['spg_deployment']['progress']['best'])
-        self.assertEqual('alternate_selected',row['spg_deployment']['retry_receipt']['outcome'])
+        self.assertEqual('deployment_stalled_hold_in_place',row['spg_deployment']['position_event'])
 
     def test_recovery_trigger_and_escape_terminal_reach_serialized_motion_with_age(self):
         import types
