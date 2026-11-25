@@ -95,6 +95,7 @@ class EnvironmentAttributionTests(unittest.TestCase):
         self.assertEqual(1, state.players[1].frags)
         self.assertNotIn(('player', 2), state.environment_pushes)
 
+    @mock.patch.dict('os.environ', {'WOT_OFFLINE_UI_LANGUAGE': 'zh'})
     def test_postmortem_templates_preserve_colors_and_leave_shots_unchanged(self):
         panel = types.SimpleNamespace(_BasePostmortemPanel__messages={
             'DEATH_FROM_FIRE': ('fire', (1, 2)),
@@ -106,6 +107,12 @@ class EnvironmentAttributionTests(unittest.TestCase):
         self.assertEqual(('弹药架因燃烧而爆炸', (3, 4)), messages['DEATH_FROM_DEVICE_EXPLOSION_AT_FIRE'])
         self.assertEqual(('弹药架因坠落而损毁', (3, 4)), messages['DEATH_FROM_DEVICE_EXPLOSION_AT_WORLD_COLLISION'])
         self.assertEqual(('shot', (5, 6)), messages['DEATH_FROM_DEVICE_EXPLOSION_AT_SHOT'])
+        with mock.patch.dict('os.environ', {'WOT_OFFLINE_UI_LANGUAGE': 'en'}):
+            postmortem_causes.populate_templates(panel)
+        self.assertEqual(('Ammunition rack exploded due to fire', (3, 4)),
+                         messages['DEATH_FROM_DEVICE_EXPLOSION_AT_FIRE'])
+        self.assertEqual(('Ammunition rack destroyed by a fall', (3, 4)),
+                         messages['DEATH_FROM_DEVICE_EXPLOSION_AT_WORLD_COLLISION'])
 
 
 class EnvironmentPresentationTests(unittest.TestCase):

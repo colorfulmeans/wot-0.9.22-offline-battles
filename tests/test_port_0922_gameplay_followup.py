@@ -141,6 +141,7 @@ class ResultAndTimingTests(unittest.TestCase):
         self.assertEqual(250.0, client.worker_rtt_ms)
         self.assertEqual((999, True), client.worker_ping_display(14.0))
 
+    @mock.patch.dict('os.environ', {'WOT_OFFLINE_UI_LANGUAGE': 'zh'})
     def test_speed_reuses_native_font_spans_separator_and_number_formatter(self):
         shell = types.SimpleNamespace(compactDescr=1)
         vehicle = types.SimpleNamespace(gun=types.SimpleNamespace(
@@ -160,6 +161,7 @@ class ResultAndTimingTests(unittest.TestCase):
         self.assertEqual(1, result.count('{BODY}'))
 
 
+    @mock.patch.dict('os.environ', {'WOT_OFFLINE_UI_LANGUAGE': 'zh'})
     def test_reference_shell_rows_use_current_shot_values_and_inline_units(self):
         cases = (
             ('ARMOR_PIERCING_CR', '\u5408\u91d1\u7a7f\u7532\u5f39',
@@ -207,6 +209,7 @@ class ResultAndTimingTests(unittest.TestCase):
                 self.assertEqual(text.encode('utf-8'),
                     battle_shell_tooltip.append_speed(stock.encode('utf-8'), shell, vehicle))
 
+    @mock.patch.dict('os.environ', {'WOT_OFFLINE_UI_LANGUAGE': 'en'})
     def test_reference_shell_preserves_stock_stun_row_and_uses_installed_ammo(self):
         shell = types.SimpleNamespace(
             compactDescr=8, kind='HIGH_EXPLOSIVE', damage=(731, 200),
@@ -216,9 +219,10 @@ class ResultAndTimingTests(unittest.TestCase):
         stock = ('{HEADER}HE{/HEADER}\n/{BODY}Damage: 731<br/>'
                  'Penetration: 81<br/>Stun: 12-20{/BODY}')
         text = battle_shell_tooltip.append_speed(stock, shell, vehicle)
-        self.assertIn('731\u70b9', text)
-        self.assertIn('602\u7c73/\u79d2', text)
-        self.assertIn('3.2\u7c73', text)
+        self.assertIn('{HEADER}High-explosive shell{/HEADER}', text)
+        self.assertIn('Average damage: 731 points', text)
+        self.assertIn('Shell velocity: 602 m/s', text)
+        self.assertIn('Damage radius: 3.2 m', text)
         self.assertIn('Stun: 12-20', text)
 
 

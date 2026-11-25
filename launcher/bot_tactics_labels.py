@@ -109,6 +109,7 @@ ROUTE_NAMES.update({
 })
 
 ENUM_NAMES = {
+    'profile': {'Default': ('默认', 'Default')},
     'class_tag': {
         'total': ('总路线', 'All class routes'),
         'all': ('全部车型', 'All vehicle classes'),

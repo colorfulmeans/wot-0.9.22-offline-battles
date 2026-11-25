@@ -12623,3 +12623,22 @@ production workflow's Python snippet against an actual temporary root: the two
 supported entries pass, and an added development batch file is rejected. The
 strict two-entry archive policy is unchanged. No runtime source or English
 release-note content changes in this repair. No v1.1.1 tag was rewritten.
+
+## v1.1.3 Testing tab and single launch entry (November 25)
+
+The launcher EXE is now the only player entry; START_DIAGNOSTIC_TEST.bat is no
+longer packaged (its source stays in tools/ for development). Detailed logging
+is a saved Testing-tab choice, off by default. Each game launch snapshots it in
+its planned session, and a launcher room snapshots it at room start. The
+launcher passes `WOT_OFFLINE_DIAGNOSTICS` explicitly as "1" or "0" to that
+launch's server, hidden worker and visible client, so a value inherited from
+the launcher process or an earlier launch cannot leak into a child. A
+`--diagnostics` entry still forces the mode for its launcher process without
+changing the saved choice. The checkbox is disabled while a game or launcher
+room runs, so one room's server, worker and joining game share one mode.
+`verify_current_archive` requires the EXE as the sole root launch entry;
+`verify_archive` remains for releases up to 1.1.2.
+
+Launcher tests with a fake Tk prove the wiring, the persisted choice, the
+locked states and the per-child environment. Real Tk layout and a detailed-log
+battle on the Windows client remain acceptance items.

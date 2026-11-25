@@ -350,7 +350,7 @@ class PortSourceTests(unittest.TestCase):
         build_script = (PORT_ROOT / 'build_for_client.sh').read_text(
             encoding='utf-8')
 
-        self.assertEqual('1.1.2', packager.MOD_VERSION)
+        self.assertEqual('1.1.3', packager.MOD_VERSION)
         self.assertEqual(packager.MOD_VERSION, package.PORT_VERSION)
         self.assertEqual(packager.MOD_VERSION, meta_version)
         self.assertIn(
@@ -367,10 +367,10 @@ class PortSourceTests(unittest.TestCase):
             self.assertEqual([packager.MOD_VERSION], values, filename)
         for directory in ('launcher', 'server'):
             source = (PORT_ROOT / directory / 'version_info.txt').read_text()
-            self.assertIn("StringStruct('FileVersion', '1.1.2')", source)
-            self.assertIn("StringStruct('ProductVersion', '1.1.2')", source)
-            self.assertIn('filevers=(1, 1, 2, 0)', source)
-            self.assertIn('prodvers=(1, 1, 2, 0)', source)
+            self.assertIn("StringStruct('FileVersion', '1.1.3')", source)
+            self.assertIn("StringStruct('ProductVersion', '1.1.3')", source)
+            self.assertIn('filevers=(1, 1, 3, 0)', source)
+            self.assertIn('prodvers=(1, 1, 3, 0)', source)
 
     def test_port_sources_are_python_2_compatible_syntax(self):
         source_root = PORT_ROOT / 'src'
@@ -493,7 +493,7 @@ class PortSourceTests(unittest.TestCase):
                 config_path.parent / packager.BUILD_IDENTITY_FILENAME
             ).read_text(encoding='utf-8'))
             self.assertEqual(1, identity['schema'])
-            self.assertEqual('1.1.2', identity['semanticVersion'])
+            self.assertEqual('1.1.3', identity['semanticVersion'])
             self.assertRegex(
                 identity['buildIdentity'],
                 r'^local-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$')
@@ -1163,6 +1163,9 @@ class PortConfigTests(unittest.TestCase):
         self.assertEqual(
             ('10.20.30.40', 28782),
             config_module.parse_endpoint(value))
+        localized = config_module.format_endpoint('10.20.30.40', 28782, language='zh')
+        self.assertEqual('局域网服务器： 10.20.30.40:28782', localized)
+        self.assertEqual(('10.20.30.40', 28782), config_module.parse_endpoint(localized))
         self.assertEqual(
             ('wot-host.local', 28782),
             config_module.parse_endpoint('wot-host.local'))

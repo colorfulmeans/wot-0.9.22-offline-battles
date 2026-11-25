@@ -70,7 +70,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $AppRoot = Join-Path $DistRoot $AppName
-Copy-Item -LiteralPath (Join-Path $RepoRoot "tools/START_DIAGNOSTIC_TEST.bat") -Destination $AppRoot
+# Detailed logging is a Testing-tab choice; the launcher EXE is the only entry.
 $ClientPayloadRoot = Join-Path $AppRoot "_internal\client"
 $ServerPayloadRoot = Join-Path $AppRoot "_internal\servers"
 $ClientPayloads = @(
@@ -103,6 +103,9 @@ Copy-Item -Force `
     (Join-Path $LauncherRoot "LAUNCHER_README.txt") `
     (Join-Path $DistRoot "$AppName\README.txt")
 Copy-Item -Force `
+    (Join-Path $LauncherRoot "LAUNCHER_README.zh-CN.txt") `
+    (Join-Path $DistRoot "$AppName\README.zh-CN.txt")
+Copy-Item -Force `
     (Join-Path $RepoRoot "LICENSE") `
     (Join-Path $DistRoot "$AppName\LICENSE")
 Copy-Item -Force `
@@ -119,7 +122,7 @@ Copy-Item -Force `
 python (Join-Path $RepoRoot "tools/stage_editor_licenses.py") $LicenseRoot
 if ($LASTEXITCODE -ne 0) { throw "Pillow license staging failed" }
 
-foreach ($entry in @("$AppName.exe", "README.txt",
+foreach ($entry in @("$AppName.exe", "README.txt", "README.zh-CN.txt",
                      "LICENSE",
                      "THIRD_PARTY_NOTICES.md", "licenses\Boost-1.0.txt")) {
     if (-not (Test-Path -LiteralPath (Join-Path $DistRoot "$AppName\$entry"))) {

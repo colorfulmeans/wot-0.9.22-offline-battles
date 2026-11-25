@@ -2,6 +2,7 @@
 """Mod-owned UI text; the launcher supplies its resolved display language."""
 
 import os
+import re
 
 LANGUAGE_ENV = 'WOT_OFFLINE_UI_LANGUAGE'
 CHINESE_FONT = 'offline_lan_cjk.font'
@@ -30,7 +31,87 @@ def tr(source):
     return as_text(source)
 
 
+_FAILURE_KEYS = {
+    'socket closed': 'the connection closed',
+    'connection lost': 'the connection closed',
+    'connection reset': 'the connection was reset',
+    'connection failed': 'the connection failed',
+    'connection refused': 'the server refused the connection',
+    'timed out': 'the connection timed out',
+    'protocol': 'incompatible LAN protocol',
+    'protocol mismatch': 'incompatible LAN protocol',
+    'unsupported_client_build': 'incompatible game client version',
+    'unsupported_capabilities': 'incompatible Mod capabilities',
+    'invalid_map': 'the selected map is unavailable',
+    'invalid_team': 'invalid team selection',
+    'invalid_team_size': 'invalid team size',
+    'invalid_bot_tier_mode': 'invalid Bot tier preset',
+    'invalid_bot_skill_mode': 'invalid Bot skill preset',
+    'battle_in_progress': 'a battle is already in progress',
+    'worker_unavailable': 'the room simulator is unavailable',
+}
+
+
+def failure_reason(reason, fallback='see the diagnostic logs for details'):
+    """Display a known failure in the selected language."""
+    value = as_text(reason or '').strip()
+    key = _FAILURE_KEYS.get(value.lower(), value)
+    if key in _ZH:
+        return tr(key)
+    if value.startswith('recorded snapshot rejected:'):
+        return tr('the replay contains an invalid battle snapshot')
+    timeout = re.match(r'^server did not accept client messages for (\d+) seconds$', value)
+    if timeout:
+        return tr('server did not accept client messages for %d seconds') % int(timeout.group(1))
+    return tr(fallback)
+
+
 _ZH = {
+    'Ammunition rack exploded due to fire': u'弹药架因燃烧而爆炸',
+    'Ammunition rack destroyed by a fall': u'弹药架因坠落而损毁',
+    'Armor-piercing shell': u'穿甲弹',
+    'Armor-piercing composite rigid shell': u'合金穿甲弹',
+    'High-explosive anti-tank shell': u'高爆反坦克弹',
+    'High-explosive shell': u'高爆弹',
+    'Average damage': u'平均伤害',
+    'Average penetration': u'平均穿深',
+    'Shell velocity': u'炮弹速度',
+    'Damage radius': u'伤害半径',
+    '%s points': u'%s点',
+    '%s mm': u'%s毫米',
+    '%s m/s': u'%s米/秒',
+    '%s m': u'%s米',
+    ' (m/s)': u' (米/秒)',
+    '*Affected by distance: 50–500 m': u'*受距离影响: 50 - 500米',
+    '*This shell type is unaffected by distance': u'*此类型炮弹不受距离影响',
+    'LAN server host must be text': u'联机服务器地址必须是文本',
+    'LAN server host is invalid': u'联机服务器地址无效',
+    'LAN server port is invalid': u'联机服务器端口无效',
+    'LAN server port must be 1-65535': u'联机服务器端口必须在 1 到 65535 之间',
+    'LAN server must be text': u'联机服务器地址必须是文本',
+    'LAN server is empty': u'请输入联机服务器地址',
+    'the connection closed': u'连接已关闭',
+    'the connection was reset': u'连接已重置',
+    'the connection failed': u'连接失败',
+    'the server refused the connection': u'服务器拒绝了连接',
+    'the connection timed out': u'连接超时',
+    'server did not accept client messages for %d seconds': u'服务器已连续 %d 秒未接收客户端消息',
+    'incompatible LAN protocol': u'联机协议不兼容',
+    'incompatible game client version': u'游戏客户端版本不兼容',
+    'incompatible Mod capabilities': u'Mod 功能版本不兼容',
+    'the selected map is unavailable': u'选中的地图不可用',
+    'invalid team selection': u'队伍选择无效',
+    'invalid team size': u'队伍人数无效',
+    'invalid Bot tier preset': u'BOT 等级预设无效',
+    'invalid Bot skill preset': u'BOT 难度预设无效',
+    'a battle is already in progress': u'已有战斗正在进行',
+    'the room simulator is unavailable': u'房间模拟端不可用',
+    'the replay contains an invalid battle snapshot': u'录像包含无效的战斗快照',
+    'see the diagnostic logs for details': u'详情见诊断日志',
+    'This vehicle is not offered.': u'这辆战车目前不在售。',
+    'This vehicle is not offered for bonds.': u'这辆战车目前无法用债券购买。',
+    'Unknown personal reserve.': u'无法识别此个人储备。',
+    'Unknown offline service action.': u'无法识别此离线服务操作。',
     '%s: %d/%d': u'%s：%d/%d',
     'Reward: %s reserve x1%s': u'奖励：%s储备×1%s',
     'Back': u'返回',
@@ -260,7 +341,7 @@ _ZH = {
     'Battle could not start and the lobby was not restored (%s).': u'无法开始战斗，且未能返回车库（%s）。',
     'LAN room connection lost (%s). Click Battle! to rejoin.': u'房间连接已断开（%s），点击战斗按钮可重新加入。',
     'The LAN room could not be rejoined.': u'无法重新加入房间。',
-    'Joining LAN room at %s...': u'正在加入房间 %s...',
+    'Joining LAN room at %s...': u'正在加入房间（%s）…',
     'Still connecting to LAN room at %s. Opening server settings.': u'仍在连接房间 %s，正在打开服务器设置。',
     '+%d more': u'另有 %d 人',
     'SELECT A MAP, THEN CLICK CREATE TO START': u'选择地图，然后点击创建开始战斗',

@@ -380,6 +380,24 @@ class PostBattleContractTests(unittest.TestCase):
         self.assertEqual(receipt['stats']['piercings'], vehicle['piercings'])
         self.assertEqual(1, vehicle['survivedBattles'])
 
+    def test_invalid_content_is_permanent_but_a_save_failure_is_not(self):
+        store = postbattle_store.PostBattleStore(path=None)
+        receipt = _receipt(store.account_key)
+        receipt['crystal_rewards'] = {'mainGun': 88}
+        with self.assertRaises(postbattle_store.InvalidReceipt) as raised:
+            store.accept(receipt)
+        self.assertIsInstance(raised.exception, ValueError)
+        self.assertTrue(raised.exception.permanent)
+        self.assertIn('medal bonds do not match', str(raised.exception))
+        self.assertEqual(0, store.progress()['battles'])
+
+        failing = postbattle_store.PostBattleStore(path=None)
+        failing._save = mock.Mock(side_effect=IOError('disk full'))
+        with self.assertRaises(IOError) as raised:
+            failing.accept(_receipt(failing.account_key))
+        self.assertFalse(getattr(raised.exception, 'permanent', False))
+        self.assertEqual(0, failing.progress()['battles'])
+
     def test_accelerated_training_keeps_lifetime_dossier_xp_once(self):
         store = postbattle_store.PostBattleStore(path=None)
         calls = []

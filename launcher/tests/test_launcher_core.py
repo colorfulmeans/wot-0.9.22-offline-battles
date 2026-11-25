@@ -702,6 +702,22 @@ class ServerPayloadTest(unittest.TestCase):
             self.assertEqual(expected, environment["WOT_OFFLINE_UI_LANGUAGE"])
             self.assertEqual({"WOT_OFFLINE_UI_LANGUAGE": "zh"}, inherited)
 
+    def test_each_child_receives_the_launch_logging_mode_explicitly(self):
+        inherited = {core.DIAGNOSTICS_ENV: "1"}
+        builders = (
+            lambda **options: core.server_environment(
+                core.PORT_0_9_22, "/game", inherited, **options),
+            lambda **options: core.worker_environment(
+                "/game", environment=inherited, **options),
+            lambda **options: core.visible_client_environment(
+                core.PORT_0_9_22, environment=inherited, **options),
+        )
+        for build in builders:
+            # A stale inherited value never leaks into a normal launch.
+            self.assertEqual("0", build()[core.DIAGNOSTICS_ENV])
+            self.assertEqual("1", build(diagnostics=True)[core.DIAGNOSTICS_ENV])
+        self.assertEqual({core.DIAGNOSTICS_ENV: "1"}, inherited)
+
     def test_visible_client_carries_the_preferred_team(self):
         environment = core.visible_client_environment(
             core.PORT_0_9_22, environment={}, preferred_team=2)

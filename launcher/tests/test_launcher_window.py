@@ -78,6 +78,9 @@ class _Text(_Widget):
     def insert(self, unused_index, text):
         self.lines.append(text)
 
+    def delete(self, first, last):
+        self.lines.clear()
+
     def see(self, unused_index):
         pass
 
@@ -262,6 +265,9 @@ class WindowTest(unittest.TestCase):
         environment = mock.patch.dict(os.environ, {
             'APPDATA': os.path.join(self.settings_dir, 'roaming'),
             'LOCALAPPDATA': os.path.join(self.settings_dir, 'local'),
+            # main() records a normal entry as "0"; the test runner itself
+            # exports "1" for the diagnostic trace contracts.
+            core.DIAGNOSTICS_ENV: '0',
         })
         environment.start()
         self.addCleanup(environment.stop)
@@ -305,7 +311,7 @@ class WindowTest(unittest.TestCase):
             "offerKinds": ("gold", "reward")}))
 
     def test_layout_separates_play_vehicle_and_repair_controls(self):
-        self.assertEqual("1.1.2", wot_launcher.LAUNCHER_VERSION)
+        self.assertEqual("1.1.3", wot_launcher.LAUNCHER_VERSION)
         self.assertEqual(
             "Single player",
             self.window.battle_tabs.tab(self.window.single_panel).get("text"))
@@ -338,18 +344,38 @@ class WindowTest(unittest.TestCase):
             self.window.offline_preferences_button.master,
             self.window.repair_panel)
         self.assertIs(self.window.report_button.master, self.window.game_panel)
+        # The report button sits right of the client status row.
+        self.assertEqual((1, 2), (self.window.report_button.grid_options["row"],
+                                  self.window.report_button.grid_options["column"]))
+        self.assertEqual(1, self.window.client_label.grid_options["row"])
+        self.assertEqual(2, self.window.client_label.grid_options["columnspan"])
         self.assertEqual(
             "Create error report...",
             self.window.report_button.cget("text"))
         self.assertIn("bold", str(self.window.report_button.cget("font")))
+        tabs = self.window.tools_tabs.tabs
         self.assertEqual(
-            "本mod免费传播、开源、欢迎二创，使用无需付费，售卖与本人无关，仅供个人学习交流",
-            self.window.distribution_notice_text.get())
+            tabs.index(self.window.bot_tactics_panel) + 1,
+            tabs.index(self.window.testing_panel))
         self.assertEqual(
-            "readonly", self.window.distribution_notice_entry.cget("state"))
+            tabs.index(self.window.testing_panel) + 1,
+            tabs.index(self.window.repair_panel))
+        self.assertEqual(
+            "Testing",
+            self.window.tools_tabs.tab(self.window.testing_panel).get("text"))
+        for check in (self.window.detailed_logs_check,
+                      self.window.crash_report_check,
+                      self.window.full_crash_dump_check):
+            self.assertIs(self.window.testing_panel, check.master)
+        self.assertEqual(
+            "Collect detailed diagnostic logs",
+            self.window.detailed_logs_check.cget("text"))
+        self.assertEqual(
+            (24, 0), self.window.full_crash_dump_check.grid_options["padx"])
+        self.assertIn("distributed free of charge", self.window.distribution_notice_text.get())
         self.assertIs(
             self.window.distribution_notice_text,
-            self.window.distribution_notice_entry.cget("textvariable"))
+            self.window.distribution_notice_label.cget("textvariable"))
         self.assertFalse(self.window.collect_crash_reports.get())
         self.assertFalse(self.window.full_crash_dumps.get())
         self.assertEqual(
@@ -361,13 +387,27 @@ class WindowTest(unittest.TestCase):
 
     def test_launcher_session_identity_is_visible_and_persisted(self):
         self.assertIn(
-            "Launcher session: version=1.1.2 build=unknown role=launcher",
+            "Launcher session: version=1.1.3 build=unknown role=launcher",
             self._log_text())
         with open(core.launcher_log_path(), encoding="utf-8") as stream:
             persisted = stream.read()
         self.assertIn(
-            "Launcher session: version=1.1.2 build=unknown role=launcher",
+            "Launcher session: version=1.1.3 build=unknown role=launcher",
             persisted)
+
+    def test_language_switch_refreshes_existing_activity_and_distribution_notice(self):
+        raw = "REPLAY_ENTRY: The selected replay file does not exist."
+        self.window._log(raw)
+        self.assertIn(raw, self._log_text())
+        self.window.language_choice.set("中文")
+        self.window._language_selected()
+        self.assertIn("本mod免费传播", self.window.distribution_notice_text.get())
+        self.assertIn("无法播放录像：所选录像文件不存在。", self._log_text())
+        with open(core.launcher_log_path(), encoding="utf-8") as stream:
+            self.assertIn(raw, stream.read())
+        self.window.language_choice.set("English")
+        self.window._language_selected()
+        self.assertIn(raw, self._log_text())
 
     def test_first_run_prompts_once_when_the_launcher_starts(self):
         notice = mock.Mock()
@@ -379,10 +419,12 @@ class WindowTest(unittest.TestCase):
             self.window.run()
             self.window.run()
 
-        request.assert_called_once_with()
+        request.assert_called_once_with(initial=True)
         notice.assert_called_once_with(
-            "免费声明",
-            "本离线mod免费提供，禁止转卖，如果你付费购买，请退款、举报卖给你的人。",
+            "免费声明 / Free Distribution Notice",
+            "本离线mod免费提供，禁止转卖，如果你付费购买，请退款、举报卖给你的人。\n\n"
+            "This offline Mod is distributed free of charge. Resale is prohibited. "
+            "If you paid for it, please request a refund and report the seller.",
             parent=self.window.root)
         self.assertTrue(core.load_settings()["free_notice_seen"])
         reopened = wot_launcher.LauncherWindow(_FakeTk, _FakeTtk, self.dialog)
@@ -403,7 +445,7 @@ class WindowTest(unittest.TestCase):
             self.assertFalse(
                 self.window._prompt_initial_crash_collection())
 
-        confirm.assert_called_once_with()
+        confirm.assert_called_once_with(initial=True)
         download.assert_not_called()
         self.assertFalse(self.window.collect_crash_reports.get())
         self.assertFalse(self.window._procdump_download_consent)
@@ -442,7 +484,7 @@ class WindowTest(unittest.TestCase):
             worker = thread.call_args.kwargs["target"]
             worker()
 
-        confirm.assert_called_once_with()
+        confirm.assert_called_once_with(initial=False)
         thread.return_value.start.assert_called_once_with()
         download.assert_called_once_with(installed_path)
         self.assertTrue(self.window._procdump_download_consent)
@@ -508,8 +550,58 @@ class WindowTest(unittest.TestCase):
 
         self._game()
         self.assertEqual("normal", self.window.crash_report_check.cget("state"))
+        # Full-memory dumps refine crash reports and wait for them.
+        self.assertEqual(
+            "disabled", self.window.full_crash_dump_check.cget("state"))
+        self.window.collect_crash_reports.set(True)
         self.assertEqual(
             "normal", self.window.full_crash_dump_check.cget("state"))
+        self.window.collect_crash_reports.set(False)
+        self.assertEqual(
+            "disabled", self.window.full_crash_dump_check.cget("state"))
+
+    def test_detailed_logs_default_off_persist_and_lock_while_running(self):
+        self._game()
+        self.assertFalse(self.window.detailed_logs.get())
+        self.assertFalse(self.window._diagnostics_requested())
+        self.assertEqual("normal", self.window.detailed_logs_check.cget("state"))
+        self.assertTrue(self.window._save_settings())
+        self.assertEqual({"logs": False}, core.load_settings()["testing"])
+
+        self.window.detailed_logs.set(True)
+        self.assertTrue(self.window._detailed_logs_toggled())
+        self.assertEqual({"logs": True}, core.load_settings()["testing"])
+        reopened = wot_launcher.LauncherWindow(_FakeTk, _FakeTtk, self.dialog)
+        self.assertTrue(reopened.detailed_logs.get())
+
+        self.window._busy = True
+        self.window._update_action_controls()
+        self.assertEqual("disabled", self.window.detailed_logs_check.cget("state"))
+        self.window._busy = False
+        self.window._server = _Process()
+        self.window._update_action_controls()
+        self.assertEqual("disabled", self.window.detailed_logs_check.cget("state"))
+        self.window._server = None
+        self.window._room_worker = _Process()
+        self.window._update_action_controls()
+        self.assertEqual("disabled", self.window.detailed_logs_check.cget("state"))
+        self.window._room_worker = None
+        self.window._update_action_controls()
+        self.assertEqual("normal", self.window.detailed_logs_check.cget("state"))
+
+    def test_diagnostic_entry_forces_logs_without_saving_the_choice(self):
+        with mock.patch.dict(os.environ, {core.DIAGNOSTICS_ENV: "1"}):
+            window = wot_launcher.LauncherWindow(_FakeTk, _FakeTtk, self.dialog)
+        self.assertTrue(window.detailed_logs.get())
+        self.assertTrue(window._diagnostics_requested())
+        self.assertEqual("disabled", window.detailed_logs_check.cget("state"))
+        self.assertIn("--diagnostics", window.testing_help.cget("text"))
+        window.detailed_logs.set(False)
+        self.assertTrue(window._detailed_logs_toggled())
+        self.assertTrue(window.detailed_logs.get())
+        self.assertTrue(window._save_settings())
+        self.assertEqual({"logs": False}, core.load_settings()["testing"])
+        self.assertNotIn("--diagnostics", self.window.testing_help.cget("text"))
 
     def test_full_crash_dump_choice_defaults_off_and_persists(self):
         self.assertFalse(self.window.full_crash_dumps.get())
@@ -675,6 +767,16 @@ class WindowTest(unittest.TestCase):
         self.assertIn("debugging information", message)
         self.assertIn("Microsoft's official site", message)
         self.assertNotIn("password", message)
+        self.assertNotIn("Testing tab", message)
+
+        with mock.patch.dict("sys.modules", {"tkinter": tkinter}):
+            self.assertFalse(self.window._confirm_enable_crash_capture(initial=True))
+        self.assertIn("later in the Testing tab", ask.call_args.args[1])
+        self.window.language_choice.set("中文")
+        self.window._language_selected()
+        with mock.patch.dict("sys.modules", {"tkinter": tkinter}):
+            self.window._confirm_enable_crash_capture(initial=True)
+        self.assertIn("「测试」标签", ask.call_args.args[1])
 
     def test_network_start_always_plans_a_join_session(self):
         self._game()
@@ -773,13 +875,41 @@ class WindowTest(unittest.TestCase):
         install.assert_called_once_with(game_root, core.PORT_0_9_22)
         prepare.assert_called_once_with(game_root, None)
         start_server.assert_called_once_with(
-            game_root, core.PORT_0_9_22, persistent=True, require_owned=True)
+            game_root, core.PORT_0_9_22, persistent=True, require_owned=True,
+            diagnostics=False)
         start_worker.assert_called_once_with(
             game_root, core.LOCAL_HOST, core.DEFAULT_SERVER_PORT,
-            room_owned=True)
+            room_owned=True, diagnostics=False)
         self.assertEqual(
             "%s:%d" % (core.LOCAL_HOST, core.DEFAULT_SERVER_PORT),
             self.window.join_address.get())
+
+    def test_lan_room_keeps_the_logging_choice_made_when_it_starts(self):
+        game_root = self._game("0.9.22.0.1", "1513")
+        self.window.mode.set(core.MODE_JOIN)
+        self.window._refresh_mode()
+        self.window.detailed_logs.set(True)
+        self.assertTrue(self.window._detailed_logs_toggled())
+        with mock.patch(
+                "core.install_client_mod", return_value=["installed"]), \
+                mock.patch(
+                    "wot_launcher.vehicle_overlays.prepare_vehicle_profile",
+                    return_value={"profile": None, "installedMembers": 0,
+                                  "removedMembers": 0}), \
+                mock.patch.object(
+                    self.window, "_start_server", return_value=True) \
+                as start_server, mock.patch.object(
+                    self.window, "_start_worker", return_value=True) \
+                as start_worker:
+            self.assertTrue(self.window._toggle_lan_server())
+            for unused in range(200):
+                if not self.window._maintenance_busy:
+                    break
+                time.sleep(0.01)
+
+        self.assertTrue(start_server.call_args.kwargs["diagnostics"])
+        self.assertTrue(start_worker.call_args.kwargs["diagnostics"])
+        self.assertEqual(game_root, start_server.call_args.args[0])
 
     def test_lan_room_button_pins_the_selected_vehicle_profile(self):
         game_root = self._game("0.9.22.0.1", "1513")
@@ -810,7 +940,7 @@ class WindowTest(unittest.TestCase):
         prepare.assert_called_once_with(game_root, "Fast MS-1")
         start_server.assert_called_once_with(
             game_root, core.PORT_0_9_22, persistent=True, require_owned=True,
-            bot_excluded_vehicles=["ussr:R11_MS-1"])
+            diagnostics=False, bot_excluded_vehicles=["ussr:R11_MS-1"])
         self.assertIn("pins vehicle profile", self._log_text())
         self.assertIn("Fast MS-1", self._log_text())
 
@@ -2213,7 +2343,7 @@ class WindowTest(unittest.TestCase):
                         order.append("server") or True)) as start_server, \
                 mock.patch.object(
                     self.window, "_start_worker",
-                    side_effect=lambda *unused: (
+                    side_effect=lambda *args, **kwargs: (
                         order.append("worker") or True)) as start_worker, \
                 mock.patch.object(
                     self.window, "_run_game",
@@ -2233,15 +2363,52 @@ class WindowTest(unittest.TestCase):
 
         start_server.assert_called_once_with(
             self.settings_dir, core.PORT_0_9_22, loopback_only=True,
-            bot_excluded_vehicles=["ussr:R11_MS-1"])
+            diagnostics=False, bot_excluded_vehicles=["ussr:R11_MS-1"])
         start_worker.assert_called_once_with(
-            self.settings_dir, core.LOCAL_HOST, core.DEFAULT_SERVER_PORT)
+            self.settings_dir, core.LOCAL_HOST, core.DEFAULT_SERVER_PORT,
+            diagnostics=False)
         run_game.assert_called_once_with(
             self.settings_dir, core.PORT_0_9_22, core.LOCAL_HOST,
-            core.DEFAULT_SERVER_PORT, paired_worker=True)
+            core.DEFAULT_SERVER_PORT, paired_worker=True, diagnostics=False)
         self.assertEqual(
             ["profile", "server", "worker", "player", "worker_stop",
              "server_stop", "shutdown_wait", "profile_cleanup"], order)
+
+    def test_session_logging_choice_reaches_server_worker_and_game(self):
+        session = {
+            "client": core.PORT_0_9_22,
+            "host": core.LOCAL_HOST,
+            "tcp_port": core.DEFAULT_SERVER_PORT,
+            "needs_server": True,
+            "mode": core.MODE_SINGLE,
+            wot_launcher.SESSION_DIAGNOSTICS: True,
+        }
+        with mock.patch("core.install_client_mod", return_value=[]), \
+                mock.patch(
+                    "wot_launcher.vehicle_overlays.prepare_vehicle_profile",
+                    return_value={"profile": None, "installedMembers": 0,
+                                  "removedMembers": 0}), \
+                mock.patch(
+                    "wot_launcher.vehicle_overlays.ensure_original_vehicle_data",
+                    return_value=0), \
+                mock.patch(
+                    "core.ensure_0_9_22_preferences_isolation",
+                    return_value="preferences isolated"), \
+                mock.patch("core.write_settings", return_value=[]), \
+                mock.patch.object(
+                    self.window, "_start_server", return_value=True) \
+                as start_server, mock.patch.object(
+                    self.window, "_start_worker", return_value=True) \
+                as start_worker, mock.patch.object(
+                    self.window, "_run_game", return_value=False) as run_game, \
+                mock.patch.object(self.window, "_stop_worker"), \
+                mock.patch.object(self.window, "_stop_server"), \
+                mock.patch("core.wait_for_game_shutdown", return_value=True):
+            self.window._run_session(self.settings_dir, session, "PlayerOne")
+
+        self.assertTrue(start_server.call_args.kwargs["diagnostics"])
+        self.assertTrue(start_worker.call_args.kwargs["diagnostics"])
+        self.assertTrue(run_game.call_args.kwargs["diagnostics"])
 
     def test_startup_repair_runs_in_the_background_and_reports_actions(self):
         game_root = self._game("0.9.22.0.1", "1513")
@@ -2331,7 +2498,9 @@ class WindowTest(unittest.TestCase):
             self.window._save_settings()
             save.assert_not_called()
             info.assert_not_called()
-            self.assertIn('locked old data', error.call_args.args[1])
+            self.assertIn('See the diagnostic logs for details.', error.call_args.args[1])
+        with open(core.launcher_log_path(), encoding="utf-8") as stream:
+            self.assertIn('locked old data', stream.read())
 
     def test_normal_preferences_cleanup_runs_after_confirmation(self):
         game_root = self._game("0.9.22.0.1", "1513")

@@ -1,4 +1,8 @@
-"""Inspect actual archive entries, accepting only Git newline conversion."""
+"""Inspect actual archive entries, accepting only Git newline conversion.
+
+verify_archive keeps checking releases up to 1.1.2, which shipped the
+diagnostic batch; verify_current_archive checks current releases.
+"""
 import importlib.util
 import io
 from pathlib import Path
@@ -61,23 +65,44 @@ class LaunchEntryTests(unittest.TestCase):
 
     def test_download_workflow_checks_actual_root_files_including_the_executable(self):
         workflow = (ROOT / '.github/workflows/build-launcher.yml').read_text(encoding='utf-8')
+        self.assertIn('verify_current_archive(archive)', workflow)
         start = workflow.index('          payload, fake082, fake0922 = sys.argv[1:4]')
         end = workflow.index('          for port in core.SUPPORTED_PORTS:', start)
         snippet = textwrap.dedent(workflow[start:end])
-        with tempfile.TemporaryDirectory() as directory:
-            app = Path(directory)
-            (app / '_internal').mkdir()
-            (app / verifier.NORMAL_ENTRY).write_bytes(b'validated launcher')
-            for name in verifier.ENTRIES:
-                (app / name).write_bytes((ROOT / 'tools' / name).read_bytes())
-            context = dict(io=io, os=os, zipfile=zipfile,
-                           sys=SimpleNamespace(argv=['check', str(app / '_internal'), 'fake082', 'fake0922']),
-                           verify_archive=verifier.verify_archive)
-            with mock.patch('builtins.print'):
-                exec(compile(snippet, '<downloaded-root-check>', 'exec'), context)
-                (app / 'unexpected-test.bat').write_bytes(b'development entry')
-                with self.assertRaisesRegex(ValueError, 'only the normal and diagnostic'):
+        for extra in ('START_DIAGNOSTIC_TEST.bat', 'unexpected-test.bat'):
+            with self.subTest(extra=extra), tempfile.TemporaryDirectory() as directory:
+                app = Path(directory)
+                (app / '_internal').mkdir()
+                (app / verifier.NORMAL_ENTRY).write_bytes(b'validated launcher')
+                context = dict(io=io, os=os, zipfile=zipfile,
+                               sys=SimpleNamespace(argv=['check', str(app / '_internal'), 'fake082', 'fake0922']),
+                               verify_current_archive=verifier.verify_current_archive)
+                with mock.patch('builtins.print'):
                     exec(compile(snippet, '<downloaded-root-check>', 'exec'), context)
+                    (app / extra).write_bytes(b'development entry')
+                    with self.assertRaisesRegex(ValueError, 'only the normal launch entry'):
+                        exec(compile(snippet, '<downloaded-root-check>', 'exec'), context)
+
+    def test_current_release_ships_only_the_launcher_executable(self):
+        def archive(*names):
+            stream = io.BytesIO()
+            with zipfile.ZipFile(stream, 'w') as output:
+                for name in names:
+                    output.writestr(name, b'entry')
+            stream.seek(0)
+            return zipfile.ZipFile(stream)
+
+        nested = '_internal/tools/helper.exe'
+        with archive(verifier.NORMAL_ENTRY, nested, 'README.txt') as current:
+            self.assertEqual((verifier.NORMAL_ENTRY,),
+                             verifier.verify_current_archive(current))
+        for names in ((verifier.NORMAL_ENTRY, 'START_DIAGNOSTIC_TEST.bat'),
+                      (verifier.NORMAL_ENTRY, 'EXTRA.cmd'),
+                      (verifier.NORMAL_ENTRY, 'EXTRA.ps1'),
+                      ('other.exe',), ()):
+            with self.subTest(names=names), archive(*names) as release:
+                with self.assertRaisesRegex(ValueError, 'only the normal launch entry'):
+                    verifier.verify_current_archive(release)
 
     def test_each_required_entry_is_mandatory(self):
         for name in verifier.ENTRIES:

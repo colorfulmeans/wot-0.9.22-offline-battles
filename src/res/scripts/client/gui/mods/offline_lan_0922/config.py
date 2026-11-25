@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import print_function
 
 import json
@@ -44,6 +45,7 @@ WAITING_ROOM_STATE_PATH = os.path.join(
 LEGACY_ENDPOINT_PATH = os.path.join(
     LEGACY_USER_DATA_DIR, ENDPOINT_FILE_NAME)
 ENDPOINT_PREFIX = 'LAN SERVER:'
+_ENDPOINT_PREFIX_ZH = u'局域网服务器：'
 CLIENT_MODE_ENV = 'OFFLINE_LAN_0922_CLIENT_MODE'
 SERVER_HOST_ENV = 'OFFLINE_LAN_0922_SERVER_HOST'
 SERVER_PORT_ENV = 'OFFLINE_LAN_0922_SERVER_PORT'
@@ -801,8 +803,9 @@ def save_slot_state_path(file_name, slot=None, user_data_dir=None):
     return path
 
 
-def format_endpoint(host, port):
-    return '%s %s:%s' % (ENDPOINT_PREFIX, host, int(port))
+def format_endpoint(host, port, language='en'):
+    prefix = _ENDPOINT_PREFIX_ZH if language == 'zh' else ENDPOINT_PREFIX
+    return '%s %s:%s' % (prefix, host, int(port))
 
 
 def _validate_endpoint(host, raw_port):
@@ -826,8 +829,12 @@ def parse_endpoint(value, default_port=28782):
     if not isinstance(value, string_types):
         raise ValueError('LAN server must be text')
     value = value.strip()
+    chinese_prefix = (_ENDPOINT_PREFIX_ZH.encode('utf-8')
+                      if isinstance(value, bytes) else _ENDPOINT_PREFIX_ZH)
     if value.upper().startswith(ENDPOINT_PREFIX):
         value = value[len(ENDPOINT_PREFIX):].strip()
+    elif value.startswith(chinese_prefix):
+        value = value[len(chinese_prefix):].strip()
     if not value:
         raise ValueError('LAN server is empty')
     if ':' in value:
