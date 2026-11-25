@@ -4273,7 +4273,8 @@ class BotRuntime(object):
                                                   for p in route['waypoints'])
                 plans[raw['id']] = restored
             outcomes = dict((actor, 'restored') for actor in plans)
-        elif message.get('battle_mode', 'regular') == 'regular':
+        else:
+            # Training rooms allocate Bot routes exactly like standard battles.
             self._initial_allocation_seed = random.SystemRandom().getrandbits(64)
             catalog = (getattr(self.adapter.director, 'map_data', None) or {}).get('routes', {})
             plans, outcomes, usage = bot_tactics_runtime.assign_initial_routes(
@@ -4282,8 +4283,6 @@ class BotRuntime(object):
             # Discard the director's provisional role/load-balanced occupancy.
             self.adapter.director.route_usage = dict((key, value) for key, value in usage.items()
                                                      if not key[1].startswith('spg:'))
-        else:
-            plans, outcomes = {}, {}
         for actor, status in sorted(outcomes.items()):
             if actor in plans:
                 self.states[actor]['route'] = plans[actor]
@@ -4303,7 +4302,6 @@ class BotRuntime(object):
         A missing/invalid optional plan cannot abort a round or affect other Bots.
         """
         map_name = tactical_maps.normalize_map_name(message.get('map', ''))
-        mode = message.get('battle_mode', 'regular')
         states = list(self._ordered_states())
         if restoring_authority:
             canonical = dict((int(raw['id']), raw) for raw in
@@ -4315,7 +4313,7 @@ class BotRuntime(object):
                 raw = canonical.get(state['id'], {})
                 plan = spg_positions.canonical_plan(
                     raw.get('spg_initial'), map_name, state.get('vehicle'), team=state.get('team'), tactics=self._bot_tactics)
-                if mode == 'regular' and plan is not None:
+                if plan is not None:
                     state['_spg_initial'] = plan
                     state.setdefault('_spg_selection_origin', _position(state))
                     state['_spg_initial_status'] = 'restored'
@@ -4325,11 +4323,11 @@ class BotRuntime(object):
             return
         try:
             plans, outcomes = spg_positions.assign_initial_positions(
-                map_name, self.baked_graph, states, mode,
+                map_name, self.baked_graph, states,
                 allocation_seed=getattr(self, '_initial_allocation_seed', None),
                 deleted_positions=bot_tactics.map_settings(self._bot_tactics, map_name).get('deleted_positions', ()))
             manual, manual_outcomes = bot_tactics_runtime.assign_manual_positions(
-                self._bot_tactics, map_name, self.baked_graph, states, mode,
+                self._bot_tactics, map_name, self.baked_graph, states,
                 allocation_seed=getattr(self, '_initial_allocation_seed', None),
                 paired_routes=(getattr(self.adapter.director, 'map_data', None) or {}).get('routes', {}))
             for actor in manual_outcomes:

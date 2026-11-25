@@ -5250,8 +5250,8 @@ class BattleState:
                     "profile": clean_profile,
                     "route": route,
                 }
-                if (self.battle_mode == "regular" and
-                        entry["profile"].get("class_tag") == "SPG"):
+                # Training rooms keep the same artillery plans as standard battles.
+                if entry["profile"].get("class_tag") == "SPG":
                     initial = spg_positions.canonical_plan(
                         raw.get("spg_initial"), self.map_name, entry["vehicle"], team=entry["team"], tactics=self.bot_tactics)
                     if initial is not None:

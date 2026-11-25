@@ -400,6 +400,20 @@ class RuntimeLotteryTests(unittest.TestCase):
             rt._prepare_user_routes(message,False)
             self.assertEqual(2,entropy.return_value.getrandbits.call_count)
 
+    def test_training_room_allocates_the_standard_routes_and_spg_plans(self):
+        published={}
+        for mode in ('regular','training'):
+            rt=self.runtime();message=dict(self.message(),battle_mode=mode)
+            with mock.patch.object(self.module.random,'SystemRandom') as entropy, \
+                    contextlib.redirect_stdout(io.StringIO()):
+                entropy.return_value.getrandbits.return_value=178
+                published[mode]=dict((bot['id'],bot) for bot in rt.battle_start(message)[0]['bots'])
+        for mode in ('regular','training'):
+            self.assertEqual('launcher_manual_v1',published[mode][11]['spg_initial']['source'])
+            self.assertEqual('user_west',published[mode][12]['route']['id'])
+        self.assertEqual(published['regular'][11]['spg_initial'],published['training'][11]['spg_initial'])
+        self.assertEqual(published['regular'][12]['route'],published['training'][12]['route'])
+
     def test_handoff_preserves_empty_route_and_exact_published_geometry(self):
         rt=self.runtime();message=self.message()
         with contextlib.redirect_stdout(io.StringIO()):

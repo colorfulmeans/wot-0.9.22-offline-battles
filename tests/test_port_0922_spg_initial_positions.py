@@ -161,12 +161,11 @@ class RealGraphInitialSelectionTests(unittest.TestCase):
                 self.assertTrue(grid.parking_clear(index,plan['clearance']))
                 self.assertEqual('runtime_required',plan['fire_validation'])
 
-    def test_missing_maps_and_training_keep_explicit_no_library_outcome(self):
+    def test_missing_maps_keep_explicit_no_library_outcome(self):
         states=self.cases['08_ruinberg'][1]
-        for name,mode,reason in [('01_karelia','regular','source_not_catalogued'),('08_ruinberg','training','unsupported_mode')]:
-            plans,outcomes=positions.assign_initial_positions(name,None,states,mode)
-            self.assertEqual({},plans)
-            self.assertEqual({s['id']:reason for s in states},outcomes)
+        plans,outcomes=positions.assign_initial_positions('01_karelia',None,states)
+        self.assertEqual({},plans)
+        self.assertEqual({s['id']:'source_not_catalogued' for s in states},outcomes)
 
     def test_blocked_sourced_areas_do_not_pick_an_unrelated_ordinary_route(self):
         graph=_graph();state=_states(graph,1)[0]
@@ -508,19 +507,35 @@ class InitialPositionIntegrationTests(unittest.TestCase):
             {'id':11,'team':1,'slot':0,'vehicle':'test:SPG','name':'SPG',
              'profile':{'class_tag':'SPG','dominant_role':'artillery','speed':12.,'desired_range':650.,'fire_range':1250.,'shells':[]}}]}
         with contextlib.redirect_stdout(io.StringIO()):out=runtime.battle_start(message)[0]
-        for change in ('wrong_cell','wrong_mode','wrong_side'):
+        for change in ('wrong_cell','wrong_side'):
             outgoing=copy.deepcopy(out)
             server=BattleState(map_name='08_ruinberg')
             server.phase='battle';server.bot_authority_id=1
             server.bot_roster=[{'id':11,'team':1,'slot':0,'name':'SPG'}]
             outgoing['round_id']=server.round_id
             if change=='wrong_cell':outgoing['bots'][0]['spg_initial']['point']['x']=999.
-            elif change=='wrong_mode':server.battle_mode='training'
             else:outgoing['bots'][0]['spg_initial']['side']='south'
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertTrue(server.update_bot_manifest(1,outgoing))
             self.assertNotIn('spg_initial',server.bot_manifest[0])
             self.assertEqual(1,len(server.bot_states))
+
+    def test_training_server_keeps_the_standard_spg_plan(self):
+        from lan_battle_server import BattleState
+        runtime=self._runtime()
+        runtime._ensure_native_simulation=mock.Mock()
+        message={'round_id':1,'map':'08_ruinberg','bot_authority_id':1,'battle_mode':'training','bots':[
+            {'id':11,'team':1,'slot':0,'vehicle':'test:SPG','name':'SPG',
+             'profile':{'class_tag':'SPG','dominant_role':'artillery','speed':12.,'desired_range':650.,'fire_range':1250.,'shells':[]}}]}
+        with contextlib.redirect_stdout(io.StringIO()):out=runtime.battle_start(message)[0]
+        self.assertIn('spg_initial',out['bots'][0])
+        server=BattleState(map_name='08_ruinberg')
+        server.phase='battle';server.bot_authority_id=1;server.battle_mode='training'
+        server.bot_roster=[{'id':11,'team':1,'slot':0,'name':'SPG'}]
+        out['round_id']=server.round_id
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(server.update_bot_manifest(1,out))
+        self.assertEqual(out['bots'][0]['spg_initial'],server.bot_manifest[0]['spg_initial'])
 
     def test_actual_driver_still_approaches_at_fourteen_metres_without_global_changes(self):
         from gui.mods.offline_lan_0922.ai.driver import LocalDriver

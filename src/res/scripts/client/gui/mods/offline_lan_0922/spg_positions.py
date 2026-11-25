@@ -427,7 +427,7 @@ def parking_point_available(point, clearance, team, excluded, occupied):
 
 
 @observed('parking.assign_catalog')
-def assign_initial_positions(map_name, graph, states, mode='regular', catalog=None,
+def assign_initial_positions(map_name, graph, states, catalog=None,
                              actor_ids=None, excluded=(), occupied=(), preferred_zone=None,
                              allocation_seed=None, deleted_positions=(), excluded_zones=()):
     """Return bot-id -> plan and typed per-SPG outcomes without mutating input.
@@ -445,9 +445,8 @@ def assign_initial_positions(map_name, graph, states, mode='regular', catalog=No
     if not artillery:
         return plans, outcomes
     entry = data['maps'].get(map_name)
-    if mode != 'regular' or entry is None:
-        reason = 'unsupported_mode' if mode != 'regular' else 'source_not_catalogued'
-        return plans, dict((state['id'], reason) for state in artillery)
+    if entry is None:
+        return plans, dict((state['id'], 'source_not_catalogued') for state in artillery)
     try:
         validate_catalog(data)
         if not isinstance(graph, dict) or graph.get('map') != map_name:
