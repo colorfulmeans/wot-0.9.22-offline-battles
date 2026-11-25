@@ -139,7 +139,8 @@ class ProfileEditorTests(unittest.TestCase):
             e.delete_profile()
         self.assertEqual('A',e.document['name'])
         with mock.patch.object(ui.messagebox,'askyesno',return_value=True) as ask:e.delete_profile()
-        self.assertIn('Default',ask.call_args.args[1]);self.assertTrue(e.builtin)
+        self.assertIn('「默认」' if e.zh else 'Default',ask.call_args.args[1])
+        self.assertTrue(e.builtin)
         self.assertEqual('Default',self.store.active()['name'])
 
     def test_new_collision_and_cancelled_import_keep_current_draft(self):

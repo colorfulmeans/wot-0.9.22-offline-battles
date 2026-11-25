@@ -9,7 +9,7 @@ import json
 import time
 
 from gui.mods.offline_lan_0922 import offline_services as policy
-from gui.mods.offline_lan_0922.ui_i18n import tr, as_text
+from gui.mods.offline_lan_0922.ui_i18n import as_text, failure_reason, tr
 from gui.mods.offline_lan_0922.waiting_room_ui import WaitingRoomUI
 
 _patches = []
@@ -105,10 +105,14 @@ def request(action, key, callback):
 
     def complete(unused_request, result, error, *unused):
         if BigWorld.player() is account:
-            message = tr(error) if error else ''
-            if error and error.startswith('the account has '):
-                message = tr('Insufficient currency for this purchase.')
             success = result >= 0
+            message = ''
+            if not success:
+                print('[Offline LAN 0.9.22] offline service %s refused: %r' % (action, error))
+                if error and error.startswith('the account has '):
+                    message = tr('Insufficient currency for this purchase.')
+                else:
+                    message = failure_reason(error, 'The transaction could not be completed.')
             try:
                 _notify(action, key, success, message)
             finally:

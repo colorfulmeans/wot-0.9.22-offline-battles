@@ -20,6 +20,7 @@ import time
 
 if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import activity_text
     import bot_lineup_profiles
     import bot_lineup_ui
     import bot_tactics_store
@@ -41,7 +42,7 @@ if __package__ in (None, ""):
 else:
     from . import customizations_ui, crew_ui, nation_choices, save_services, reserves_ui
     from . import (
-        bot_lineup_profiles, bot_lineup_ui, bot_tactics_store, core, error_reports, gold_shop,
+        activity_text, bot_lineup_profiles, bot_lineup_ui, bot_tactics_store, core, error_reports, gold_shop,
         i18n, save_ledger, save_slots, vehicle_editor_ui, vehicle_overlays,
         save_personal_missions, personal_missions_ui, replay_launch)
 
@@ -61,6 +62,11 @@ _SHOP_HELP = (
 
 LAUNCHER_VERSION = "1.1.2"
 WINDOW_TITLE = "wot-0.9.22-offline-battles v%s" % LAUNCHER_VERSION
+_DISTRIBUTION_NOTICE = (
+    "This open-source Mod is distributed free of charge. Derivative works are welcome. "
+    "The author is unaffiliated with any sale. For personal study and discussion.",
+    "本mod免费传播、开源、欢迎二创，使用无需付费，售卖与本人无关，仅供个人学习交流",
+)
 
 _MAINTENANCE_HELP = (
     "Repair mod installation: reinstall the mod supplied by this launcher; keep saves and custom profiles.",
@@ -71,6 +77,7 @@ _MAINTENANCE_HELP = (
 )
 
 _CHINESE = {
+    "Offline replay": "离线录像",
     'Premium account days': '高级账号天数',
     'Premium days must be a non-negative whole number.': '高级账号天数必须为非负整数。',
     'Premium days are outside the supported range.': '高级账号天数超出客户端支持范围。',
@@ -567,6 +574,7 @@ _CHINESE = {
         "检测到游戏闪退，错误报告已经准备好。选择“是”会在 Windows 资源管理器"
         "中选中 ZIP，方便发送；选择“否”会删除它。",
 }
+_ACTIVITY = activity_text.ActivityText(_CHINESE)
 
 
 COLLECT_CRASH_REPORTS_SETTING = "collect_crash_reports"
@@ -1191,14 +1199,12 @@ class LauncherWindow(object):
             self.log_panel, height=10, width=72, state="disabled",
                                 wrap="none")
         self.log_view.pack(fill="both", expand=True)
-        self.distribution_notice_text = tk.StringVar(value=(
-            "本mod免费传播、开源、欢迎二创，使用无需付费，售卖与本人无关，"
-            "仅供个人学习交流"))
-        self.distribution_notice_entry = tk.Entry(
+        self._activity_history = []
+        self.distribution_notice_text = tk.StringVar()
+        self.distribution_notice_label = tk.Label(
             frame, textvariable=self.distribution_notice_text,
-            state="readonly", relief="flat", borderwidth=0,
-            highlightthickness=0)
-        self.distribution_notice_entry.grid(
+            anchor="w", justify="left", wraplength=640)
+        self.distribution_notice_label.grid(
             row=5, column=0, sticky="we", pady=(8, 0))
         frame.grid_columnconfigure(0, weight=1)
         frame.grid_rowconfigure(4, weight=1)
@@ -1257,6 +1263,8 @@ class LauncherWindow(object):
         return text
 
     def _apply_language(self, refresh=True):
+        self.distribution_notice_text.set(_DISTRIBUTION_NOTICE[self.language == "zh"])
+        self._refresh_activity_language()
         self.language_label.config(text=self._t("Language"))
         self.game_title.config(text=self._t("Game client"))
         self.game_folder_label.config(text=self._t("Game folder"))
@@ -1429,7 +1437,7 @@ class LauncherWindow(object):
         path = self._filedialog.askopenfilename(
             title=self._t('Select replay...'), parent=self.root,
             initialdir=initial if os.path.isdir(initial) else None,
-            filetypes=[('Offline replay', '*.wotlanreplay')])
+            filetypes=[(self._t('Offline replay'), '*.wotlanreplay')])
         if path:
             self.select_replay(path)
 
@@ -1724,8 +1732,7 @@ class LauncherWindow(object):
             self._personal_editor = dialog_type(self)
         except (save_ledger.SaveLedgerError, save_slots.SaveSlotError,
                 vehicle_overlays.VehicleOverlayError, OSError, ValueError) as error:
-            self._log(str(error))
-            self.save_dialog_feedback.config(text=self._t(str(error)))
+            self._log("The save editor could not be opened: %s" % error)
             return False
         return True
 
@@ -1822,7 +1829,7 @@ class LauncherWindow(object):
         try:
             premium = int(self.premium_entry.get().strip())
         except ValueError:
-            self._log(self._t("Premium days must be a non-negative whole number."))
+            self._log("Premium days must be a non-negative whole number.")
             return False
         wanted = {}
         for name, entry in self.balance_entries.items():
@@ -1841,7 +1848,7 @@ class LauncherWindow(object):
             balances = save_ledger.write_balances(
                 self._save_slot_id, wanted, game_root or None, premium_days=premium)
         except save_ledger.SaveLedgerError as error:
-            self._log(self._t("The balances could not be saved: %s") % self._t(str(error)))
+            self._log("The balances could not be saved: %s" % error)
             self._refresh_balances()
             return False
         try:
@@ -1849,14 +1856,11 @@ class LauncherWindow(object):
                 self._save_slot_id, percent, game_root or None)
         except save_slots.SaveSlotError as error:
             self._refresh_save_slots()
-            self._log(self._t(
-                "Balances saved, but the earnings multiplier could not be saved: %s")
-                % error)
+            self._log("Balances saved, but the earnings multiplier could not be saved: %s" % error)
             return False
         self._refresh_save_slots()
-        self._log("Balances saved: %s" % ", ".join(
-            "%s %d" % (self._t(_BALANCE_LABELS[name]), balances[name])
-            for name in save_ledger.CURRENCIES))
+        self._log("Balances saved: Credits %d, Gold %d, Free experience %d, War bonds %d" %
+                  tuple(balances[name] for name in ("credits", "gold", "freeXP", "crystal")))
         self._log("Earnings multiplier saved: %sx"
                   % self._earnings_text(percent))
         return True
@@ -1981,11 +1985,11 @@ class LauncherWindow(object):
                 self._save_slot_id, name, game_root or None)
         except (gold_shop.GoldShopError, save_slots.SaveSlotError,
                 vehicle_overlays.VehicleOverlayError) as error:
-            self._log(self._t("The vehicle could not be added: %s") % error)
+            self._log("The vehicle could not be added: %s" % error)
             return False
         self._refresh_gold_shop()
         self._log(
-            self._t("Added %s to the queue. It arrives on the next game startup.")
+            "Added %s to the queue. It arrives on the next game startup."
             % bought["label"])
         return True
 
@@ -2111,10 +2115,9 @@ class LauncherWindow(object):
             directory = save_slots.open_slot_folder(
                 record["id"], game_root or None)
         except save_slots.SaveSlotError as error:
-            self._log(self._t("The save folder could not be opened: %s")
-                      % error)
+            self._log("The save folder could not be opened: %s" % error)
             return False
-        self._log(self._t("Opened the save folder: %s") % directory)
+        self._log("Opened the save folder: %s" % directory)
         return True
 
     def _backup_save_slot(self):
@@ -2136,9 +2139,9 @@ class LauncherWindow(object):
             result = save_slots.backup_slot(
                 record["id"], chosen, game_root or None)
         except save_slots.SaveSlotError as error:
-            self._log(self._t("The save could not be backed up: %s") % error)
+            self._log("The save could not be backed up: %s" % error)
             return False
-        self._log(self._t("Backed up save '%s' to %s (%d file(s)).") % (
+        self._log("Backed up save '%s' to %s (%d file(s))." % (
             record["name"], result["path"], len(result["files"])))
         return True
 
@@ -2160,7 +2163,7 @@ class LauncherWindow(object):
         try:
             backup = save_slots.read_backup(chosen)
         except save_slots.SaveSlotError as error:
-            self._log(self._t("The backup could not be read: %s") % error)
+            self._log("The backup could not be read: %s" % error)
             return False
         if not self._confirm_restore_save_slot(record, backup):
             self._log("Save restore was cancelled.")
@@ -2169,13 +2172,12 @@ class LauncherWindow(object):
             result = save_slots.restore_slot(
                 record["id"], chosen, game_root or None)
         except save_slots.SaveSlotError as error:
-            self._log(self._t("The save could not be restored: %s") % error)
+            self._log("The save could not be restored: %s" % error)
             return False
-        self._log(self._t("Restored %d file(s) into save '%s'.") % (
+        self._log("Restored %d file(s) into save '%s'." % (
             len(result["files"]), record["name"]))
         if result["replaced"]:
-            self._log(self._t("The files that were replaced were kept in %s.")
-                      % result["replaced"])
+            self._log("The files that were replaced were kept in %s." % result["replaced"])
         self._refresh_save_slots()
         return True
 
@@ -2205,7 +2207,7 @@ class LauncherWindow(object):
             self._log("Wait for the current launcher operation to finish.")
             return False
         if core.game_is_running():
-            self._log(self._t('Close World of Tanks before initializing a save.'))
+            self._log('Close World of Tanks before initializing a save.')
             return False
         record=self._selected_save_slot_record()
         if record is None:return False
@@ -2220,13 +2222,13 @@ class LauncherWindow(object):
         try:
             result=save_slots.initialize_slot(record['id'],self.game_root.get().strip() or None)
         except save_slots.SaveSlotError as error:
-            self._log(self._t('The save could not be initialized: %s') % error)
+            self._log('The save could not be initialized: %s' % error)
             return False
         self._refresh_save_slots()
         if result['recovery'] is None:
-            self._log(self._t('Initialized Default with current fully unlocked defaults; no backup was retained.'))
+            self._log('Initialized Default with current fully unlocked defaults; no backup was retained.')
         else:
-            self._log(self._t("Initialized save '%s'. Recovery folder: %s") % (record['name'],result['recovery']))
+            self._log("Initialized save '%s'. Recovery folder: %s" % (record['name'],result['recovery']))
         return True
 
     def _confirm_restore_save_slot(self, record, backup):
@@ -2328,7 +2330,7 @@ class LauncherWindow(object):
         try:
             host, port = core.endpoint_for_mode(mode, self.join_address.get())
         except core.LauncherError as error:
-            self._log(str(error))
+            self._log(error)
             return False
         self.test_button.config(state="disabled")
         self._log("Testing %s:%d..." % (host, port))
@@ -2346,15 +2348,34 @@ class LauncherWindow(object):
         thread.start()
         return True
 
+    def _activity_text(self, message, failed=False):
+        if failed:
+            return _ACTIVITY.failure(message, self.language)
+        return _ACTIVITY.chinese(message) if self.language == i18n.LANGUAGE_CHINESE else message
+
+    def _refresh_activity_language(self):
+        if not self._activity_history:
+            return
+        self.log_view.config(state="normal")
+        self.log_view.delete("1.0", "end")
+        self.log_view.insert("end", "\n".join(
+            self._activity_text(message, failed) for message, failed in self._activity_history) + "\n")
+        self.log_view.see("end")
+        self.log_view.config(state="disabled")
+
     def _log(self, message):
-        _append_launcher_log(message)
+        failed = isinstance(message, Exception)
+        raw = str(message).rstrip()
+        _append_launcher_log(raw)
 
         def append():
+            self._activity_history.append((raw, failed))
+            text = self._activity_text(raw, failed)
             self.log_view.config(state="normal")
-            self.log_view.insert("end", message.rstrip() + "\n")
+            self.log_view.insert("end", text + "\n")
             self.log_view.see("end")
             self.log_view.config(state="disabled")
-            self.save_dialog_feedback.config(text=self._t(message.rstrip()))
+            self.save_dialog_feedback.config(text=text)
 
         self.root.after(0, append)
 
@@ -2368,28 +2389,25 @@ class LauncherWindow(object):
             try:
                 result = error_reports.create_report()
             except core.LauncherError as error:
-                self._log(self._t(str(error)))
+                self._log(error)
             except Exception as error:
-                self._log(self._t(
-                    "Could not create the error report: %s") % error)
+                self._log("Could not create the error report: %s" % error)
             else:
                 display_path = os.path.realpath(result["path"])
-                self._log(self._t("Created error report: %s") % display_path)
-                self._log(self._t("Included files: %s") %
+                self._log("Created error report: %s" % display_path)
+                self._log("Included files: %s" %
                           ", ".join(result["included"]))
                 if result["missing"]:
-                    self._log(self._t(
-                        "Missing logs from this session: %s") %
+                    self._log("Missing logs from this session: %s" %
                         ", ".join(result["missing"]))
                 if result["notRun"]:
-                    self._log(self._t("Not run in this session: %s") %
+                    self._log("Not run in this session: %s" %
                               ", ".join(result["notRun"]))
                 try:
                     error_reports.select_in_explorer(result["path"])
                 except core.LauncherError as error:
-                    self._log(self._t(
-                        "Could not select the report in Windows Explorer: "
-                        "%s") % error)
+                    self._log("Could not select the report in Windows Explorer: "
+                        "%s" % error)
                 self.root.after(
                     0, lambda: self._show_report_send_reminder(display_path))
             finally:
@@ -2428,12 +2446,11 @@ class LauncherWindow(object):
         self._set_maintenance_busy(False)
         if error is not None:
             self.collect_crash_reports.set(False)
-            self._log(self._t("ProcDump could not be enabled: %s") % error)
+            self._log("ProcDump could not be enabled: %s" % error)
             self._save_settings()
             return False
         self.collect_crash_reports.set(True)
-        self._log(self._t(
-            "ProcDump was downloaded and crash dumps are enabled."))
+        self._log("ProcDump was downloaded and crash dumps are enabled.")
         self._save_settings()
         return bool(path)
 
@@ -2445,7 +2462,7 @@ class LauncherWindow(object):
             return True
         self.collect_crash_reports.set(False)
         self._save_settings()
-        self._log(self._t("Downloading ProcDump from Microsoft..."))
+        self._log("Downloading ProcDump from Microsoft...")
         self._set_maintenance_busy(True)
 
         def run():
@@ -2512,7 +2529,7 @@ class LauncherWindow(object):
             try:
                 core.download_procdump(procdump_path)
             except core.LauncherError as error:
-                self._log(self._t("ProcDump could not be enabled: %s") % error)
+                self._log("ProcDump could not be enabled: %s" % error)
                 self.root.after(0, self._disable_crash_collection)
                 return False
         self._crash_capture_enabled = True
@@ -2559,15 +2576,13 @@ class LauncherWindow(object):
             try:
                 error_reports.delete_report(report_path)
             except core.LauncherError as error:
-                self._log(self._t(
-                    "Could not delete the declined crash report: %s") %
+                self._log("Could not delete the declined crash report: %s" %
                           error)
             return False
         try:
             error_reports.select_in_explorer(report_path)
         except core.LauncherError as error:
-            self._log(self._t(
-                "Could not select the report in Windows Explorer: %s") %
+            self._log("Could not select the report in Windows Explorer: %s" %
                 error)
             return False
         return True
@@ -2576,14 +2591,13 @@ class LauncherWindow(object):
         try:
             result = error_reports.create_report()
         except core.LauncherError as error:
-            self._log(self._t(str(error)))
+            self._log(error)
             return None
         except Exception as error:
-            self._log(self._t(
-                "Could not create the error report: %s") % error)
+            self._log("Could not create the error report: %s" % error)
             return None
-        self._log(self._t("Created error report: %s") % result["path"])
-        self._log(self._t("Included files: %s") %
+        self._log("Created error report: %s" % result["path"])
+        self._log("Included files: %s" %
                   ", ".join(result["included"]))
         return result["path"]
 
@@ -2732,10 +2746,10 @@ class LauncherWindow(object):
             return False
         try:
             if core.other_launcher_is_running():
-                self._log(self._t('Close other offline launchers and LAN servers before maintenance.'))
+                self._log('Close other offline launchers and LAN servers before maintenance.')
                 return False
         except core.LauncherError as error:
-            self._log(str(error))
+            self._log(error)
             return False
         if self._refresh_client().get('client') != core.PORT_0_9_22:
             self._log('Select the supported 0.9.22 game folder first.')
@@ -2761,7 +2775,7 @@ class LauncherWindow(object):
                 succeeded = True
             except core.LauncherError as error:
                 failure = str(error)
-                self._log(str(error))
+                self._log(error)
             except Exception as error:
                 failure = str(error)
                 self._log("Launcher maintenance failed: %s" % error)
@@ -2770,7 +2784,11 @@ class LauncherWindow(object):
                     self._set_maintenance_busy(False)
                     if getattr(self, '_factory_reset_requested', False) and not succeeded:
                         from tkinter import messagebox
-                        messagebox.showerror(self._t('Repair'), self._t('Maintenance failed. Reopen the launcher before retrying.') + '\n\n' + failure, parent=self.root)
+                        messagebox.showerror(
+                            self._t('Repair'),
+                            self._t('Maintenance failed. Reopen the launcher before retrying.') +
+                            '\n\n' + self._activity_text(failure, failed=True),
+                            parent=self.root)
                         self.root.destroy()
                         return
                     self._refresh_client()
@@ -2907,7 +2925,8 @@ class LauncherWindow(object):
         except Exception as error:
             self._log("Bot tactics editor: %s" % error)
             from tkinter import messagebox
-            messagebox.showerror("Bot tactics", str(error), parent=self.root)
+            messagebox.showerror(self._t("Bot tactics"),
+                                 self._activity_text(str(error), failed=True), parent=self.root)
             return False
 
     def _open_bot_lineup_editor(self):
@@ -3150,7 +3169,7 @@ class LauncherWindow(object):
                     self._stop_lan_room()
             except core.LauncherError as error:
                 self._stop_lan_room()
-                self._log(str(error))
+                self._log(error)
             except Exception as error:
                 self._stop_lan_room()
                 self._log("The LAN server could not start: %s" % error)
@@ -3197,7 +3216,7 @@ class LauncherWindow(object):
                 self.full_crash_dumps.get())
         except (core.LauncherError,
                 bot_lineup_profiles.BotLineupProfileError) as error:
-            self._log(str(error))
+            self._log(error)
             return
         self._remember_folder()
         self._save_settings()
@@ -3374,7 +3393,7 @@ class LauncherWindow(object):
             if game_crashed:
                 crash_roles.add(error_reports.ROLE_VISIBLE_CLIENT)
         except core.LauncherError as error:
-            self._log(str(error))
+            self._log(error)
         except Exception as error:  # The window must survive any failure.
             self._log("The launcher failed: %s" % error)
         finally:
@@ -4014,8 +4033,10 @@ class LauncherWindow(object):
             from tkinter import messagebox
 
             messagebox.showinfo(
-                "免费声明",
-                "本离线mod免费提供，禁止转卖，如果你付费购买，请退款、举报卖给你的人。",
+                "免费声明 / Free Distribution Notice",
+                "本离线mod免费提供，禁止转卖，如果你付费购买，请退款、举报卖给你的人。\n\n"
+                "This offline Mod is distributed free of charge. Resale is prohibited. "
+                "If you paid for it, please request a refund and report the seller.",
                 parent=self.root)
             self._free_notice_seen = True
             self._save_settings()

@@ -3,6 +3,7 @@ import copy
 import sys
 import types
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src/res/scripts/client'))
@@ -65,6 +66,7 @@ def _fixture(damage='damage', speed=1415, kind='ARMOR_PIERCING_CR'):
     return module, GarageShellTooltipPatch(module, lambda value: '{:,}'.format(value))
 
 
+@mock.patch.dict('os.environ', {'WOT_OFFLINE_UI_LANGUAGE': 'zh'})
 class GarageShellTooltipTests(unittest.TestCase):
     def test_speed_comparison_uses_native_scheme_and_each_views_baseline(self):
         for kind in ('ARMOR_PIERCING', 'ARMOR_PIERCING_CR',

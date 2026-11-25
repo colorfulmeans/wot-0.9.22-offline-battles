@@ -8,7 +8,7 @@ import sys
 import time
 import traceback
 
-from gui.mods.offline_lan_0922.ui_i18n import as_text, tr
+from gui.mods.offline_lan_0922.ui_i18n import as_text, failure_reason, language, tr
 
 from gui.mods.offline_lan_0922 import config as port_config
 from gui.mods.offline_lan_0922 import queue_screen
@@ -1167,7 +1167,7 @@ class LANSession(object):
             return False
         if user_requested:
             self._status_notifier(
-                tr('Joining LAN room at %s...') % self._endpoint_value())
+                tr('Joining LAN room at %s...') % self._endpoint_value(display=True))
         return True
 
     def join(self, unused_map_id=None, unused_action_name=None):
@@ -1204,13 +1204,13 @@ class LANSession(object):
                         tr('The LAN room could not be joined.'))
             else:
                 self._status_notifier(
-                    tr('Joining LAN room at %s...') % self._endpoint_value())
+                    tr('Joining LAN room at %s...') % self._endpoint_value(display=True))
             return True
         if self.state in ('connecting', 'retrying'):
             self._status_notifier(
                 tr('Still connecting to LAN room at %s. '
                 'Opening server settings.') %
-                self._endpoint_value())
+                self._endpoint_value(display=True))
             self._open_connection_picker()
         elif self.state == 'waiting':
             # An explicit Battle click is the user's request to reopen a room
@@ -1250,10 +1250,11 @@ class LANSession(object):
             tr('You left the LAN room. Click Battle! to join again.'))
         return True
 
-    def _endpoint_value(self):
+    def _endpoint_value(self, display=False):
         return port_config.format_endpoint(
             self._config.get('host', '127.0.0.1'),
-            self._config.get('port', 28782))
+            self._config.get('port', 28782),
+            language=language() if display else 'en')
 
     @staticmethod
     def _player_label(player):
@@ -1287,7 +1288,7 @@ class LANSession(object):
         else:
             roster = tr(u'waiting for roster')
         lines = [
-            text_type(self._endpoint_value()),
+            text_type(self._endpoint_value(display=True)),
             tr(u'PLAYERS (%d): %s') % (len(players), roster),
         ]
         if self._is_local_host():
@@ -1361,7 +1362,8 @@ class LANSession(object):
             self._status_notifier(
                 tr('LAN server %s:%s is unavailable (%s). Retrying and opening '
                 'server settings.') %
-                (host, port, error))
+                (host, port, failure_reason(
+                    _message_value(message, 'code') or error)))
             sys.stdout.write(
                 '[Offline LAN 0.9.22] LAN connection failed: %s:%s (%s)\n' %
                 (host, port, error))
@@ -1894,7 +1896,7 @@ class LANSession(object):
         if len(labels) > len(shown):
             shown.append(tr(u'+%d more') % (len(labels) - len(shown)))
         lines = [
-            text_type(self._endpoint_value()),
+            text_type(self._endpoint_value(display=True)),
             tr(u'PLAYERS (%d): %s') % (len(players),
                                    u', '.join(shown) or tr(u'waiting for roster')),
         ]
@@ -2171,7 +2173,7 @@ class LANSession(object):
             host, port = port_config.parse_endpoint(
                 value, self._config.get('port', 28782))
         except ValueError as error:
-            self._status_notifier(str(error))
+            self._status_notifier(tr(str(error)))
             return False
         changed = (host != self._config.get('host') or
                    port != self._config.get('port'))
@@ -2223,7 +2225,7 @@ class LANSession(object):
             self._pending_map = map_name
             self._status_notifier(
                 tr('Connecting to %s. The selected map will start automatically.') %
-                self._endpoint_value())
+                self._endpoint_value(display=True))
             self._close_picker_after_event()
             return True
         accepted = self._send_start_request(map_name)
@@ -2571,6 +2573,7 @@ class LANSession(object):
             '(lobby_restored=%r)\n' %
             (round_id, reason,
              bool(_message_value(message, 'lobby_restored', False))))
+        detail = failure_reason(reason)
 
         if getattr(self.client, 'is_offline_replay', False):
             # BattleRuntime already retired the failing Avatar. There is no
@@ -2580,7 +2583,7 @@ class LANSession(object):
             self._postbattle_return = None
             self.state = 'error'
             self._status_notifier(
-                tr('Replay playback stopped (%s).') % as_text(reason))
+                tr('Replay playback stopped (%s).') % detail)
             from gui.mods.offline_lan_0922 import replay_exit
             replay_exit.request(self, 'runtime_error', reason)
             return False
@@ -2595,7 +2598,7 @@ class LANSession(object):
                 self.state = 'error'
                 self._status_notifier(
                     tr('Battle could not start (%s). LAN session stopped.') %
-                    reason)
+                    detail)
                 try:
                     # BattleRuntime already owns cleanup and Account restore.
                     # Close only the LAN/picker owners on this failure path.
@@ -2607,13 +2610,13 @@ class LANSession(object):
             self._enter_awaiting_round_end()
             self._status_notifier(
                 tr('Battle could not start (%s). Returning to the map picker.') %
-                reason)
+                detail)
             return True
 
         self.state = 'error'
         self._status_notifier(
             tr('Battle could not start and the lobby was not restored (%s).') %
-            reason)
+            detail)
         try:
             # Runtime recovery already failed.  Do not recurse through its
             # cleanup or Account reconstruction a second time.
@@ -2679,7 +2682,7 @@ class LANSession(object):
 
         self._status_notifier(
             tr('LAN room connection lost (%s). Click Battle! to rejoin.') %
-            reason)
+            failure_reason(reason))
         return True
 
     def _donation_runtime(self):
@@ -2845,6 +2848,9 @@ class LANSession(object):
                 return
             if kind in ('replay_finished', 'replay_error'):
                 from gui.mods.offline_lan_0922 import replay_exit
+                if kind == 'replay_error':
+                    self._status_notifier(tr('Replay playback stopped (%s).') %
+                                          failure_reason(message.get('error')))
                 replay_exit.request(self, kind, message.get('error'))
                 return
         if kind in ('welcome', 'roster'):
@@ -2887,7 +2893,7 @@ class LANSession(object):
             else:
                 self._status_notifier(
                     tr('The LAN server refused the battle start (%s).') %
-                    (_message_value(message, 'code') or 'unknown'))
+                    failure_reason(_message_value(message, 'code')))
             self._sync_waiting_surface()
         elif kind == 'team_denied':
             code = _message_value(message, 'code')
@@ -2904,7 +2910,7 @@ class LANSession(object):
             else:
                 self._status_notifier(
                     tr('The LAN server refused the team selection (%s).') %
-                    (code or 'unknown'))
+                    failure_reason(code))
             self._refresh_surface()
         elif kind == 'team_size_denied':
             code = _message_value(message, 'code')
@@ -2925,7 +2931,7 @@ class LANSession(object):
                           'size.') % team)
             else:
                 notice = (tr('The LAN server refused the team size (%s).') %
-                          (code or 'unknown'))
+                          failure_reason(code))
             self._status_notifier(notice)
             reject = getattr(self._queue, 'reject_team_size', None)
             if callable(reject):
@@ -2939,7 +2945,7 @@ class LANSession(object):
                           'preset.'))
             else:
                 notice = (tr('The LAN server refused the Bot tier preset (%s).') %
-                          (code or 'unknown'))
+                          failure_reason(code))
             self._status_notifier(notice)
             reject = getattr(self._queue, 'reject_bot_tier_mode', None)
             if callable(reject):
@@ -2954,7 +2960,7 @@ class LANSession(object):
                             'preset.')
             else:
                 notice = (tr('The LAN server refused the Bot skill preset '
-                             '(%s).') % (code or 'unknown'))
+                             '(%s).') % failure_reason(code))
             self._status_notifier(notice)
             reject = getattr(self._queue, 'reject_bot_skill_mode', None)
             if callable(reject):
@@ -3085,7 +3091,7 @@ class LANSession(object):
                         (kind, self._active_round_id, reason))
                     self._status_notifier(
                         tr('LAN battle connection lost (%s). Returning to the '
-                        'garage.') % reason)
+                           'garage.') % failure_reason(reason))
                 self.stop(show_login=True)
         if self._on_event_callback is not None:
             self._on_event_callback(kind, message)

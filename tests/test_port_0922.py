@@ -1163,6 +1163,9 @@ class PortConfigTests(unittest.TestCase):
         self.assertEqual(
             ('10.20.30.40', 28782),
             config_module.parse_endpoint(value))
+        localized = config_module.format_endpoint('10.20.30.40', 28782, language='zh')
+        self.assertEqual('局域网服务器： 10.20.30.40:28782', localized)
+        self.assertEqual(('10.20.30.40', 28782), config_module.parse_endpoint(localized))
         self.assertEqual(
             ('wot-host.local', 28782),
             config_module.parse_endpoint('wot-host.local'))

@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """Custom environmental ammunition deaths on the exact #1513 panel contract."""
 
+from gui.mods.offline_lan_0922.ui_i18n import tr
+
 
 def populate_templates(panel):
     messages = panel._BasePostmortemPanel__messages
@@ -11,10 +13,10 @@ def populate_templates(panel):
     for key in list(messages):
         if key == fire or key.startswith(fire + '_'):
             unused_text, colors = messages[key]
-            messages[key] = (u'弹药架因燃烧而爆炸', colors)
+            messages[key] = (tr('Ammunition rack exploded due to fire'), colors)
     template = messages.get(fire) or messages.get('DEATH_FROM_FIRE')
     if template is not None:
-        messages[collision] = (u'弹药架因坠落而损毁', template[1])
+        messages[collision] = (tr('Ammunition rack destroyed by a fall'), template[1])
 
 
 def wrap_populate(original):

@@ -50,7 +50,11 @@ class LocalizedCombobox(ttk.Combobox):
         self.set_language(language)
 
     def _from_model(self, *unused):
-        self.display.set(labels.enum_label(self.kind, self.canonical.get(), self.language))
+        self.display.set(self._label(self.canonical.get()))
+
+    def _label(self, key):
+        label = labels.enum_label(self.kind, key, self.language)
+        return key if self.kind == 'profile' and label in self.keys else label
 
     def _from_view(self, unused=None):
         index = self.current()
@@ -59,7 +63,7 @@ class LocalizedCombobox(ttk.Combobox):
 
     def set_language(self, language):
         self.language = language
-        self.configure(values=tuple(labels.enum_label(self.kind, key, language) for key in self.keys))
+        self.configure(values=tuple(self._label(key) for key in self.keys))
         self._from_model()
 
     def destroy(self):
@@ -198,9 +202,11 @@ class BotTacticsEditor(ConnectionEditorMixin):
         head = ttk.Frame(self.root, padding=10); head.pack(fill='x')
         ttk.Label(head, text=self.tr('方案名称', 'Profile')).pack(side='left')
         self.profile_name = tk.StringVar(value=self.document['name'])
-        self.profile_box = ttk.Combobox(head, textvariable=self.profile_name, width=28, state='readonly')
+        self.profile_box = LocalizedCombobox(
+            head, variable=self.profile_name, kind='profile', values=(),
+            language=self.language, width=28)
         self.profile_box.pack(side='left', padx=6)
-        self.profile_box.bind('<<ComboboxSelected>>', self.open_profile)
+        self.profile_box.bind('<<ComboboxSelected>>', self.open_profile, add='+')
         profile_actions = tk.Frame(head); profile_actions.pack(side='left', fill='x', expand=True)
         for key, zh, en, command in (
             ('new', '新建', 'New', self.new_profile),
@@ -229,7 +235,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
 
     def _build_behavior(self, parent):
         ttk.Label(parent, text=self.tr(
-            'Default 为只读。修改请新建方案。继承顺序：全局 → 队伍 → 车型 → 指定槽位；每项独立覆盖，下一局生效。',
+            '「默认」方案只读。修改请新建方案。继承顺序为全局 → 队伍 → 车型 → 指定槽位。每项独立覆盖，下一局生效。',
             'Default is read only. Create a profile to edit. Global → team → class → slot; independent overrides apply next battle.'),
             wraplength=1080).pack(anchor='w', pady=(0,8))
         main = ttk.Frame(parent); main.pack(fill='both', expand=True)
@@ -636,7 +642,8 @@ class BotTacticsEditor(ConnectionEditorMixin):
         self._restore_history(scope or self._history_scope(),True)
 
     def _refresh_profiles(self):
-        self.profile_box.configure(values=list(dict.fromkeys(self.store.names()+[self.document['name']])))
+        self.profile_box.keys = tuple(dict.fromkeys(self.store.names() + [self.document['name']]))
+        self.profile_box.set_language(self.language)
 
     def _refresh_rules(self):
         keep = {str(i) for i in range(len(self.document['behavior']))}
@@ -1841,7 +1848,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
         try:
             active=self.store.active()['name']==self.saved_name
             text=self.tr('删除当前方案并丢弃未保存修改？','Delete this profile and discard unsaved changes?')
-            if active:text+='\n'+self.tr('下一局将恢复 Default，当前战斗不变。','Next battle will use Default. The current battle is unchanged.')
+            if active:text+='\n'+self.tr('下一局将使用「默认」方案。','Next battle will use Default. The current battle is unchanged.')
             if not messagebox.askyesno(self.tr('删除方案','Delete profile'),text,parent=self.root):return
             if self.saved_name is not None:self.store.delete(self.saved_name)
             self.adopt(contract.default_profile())
