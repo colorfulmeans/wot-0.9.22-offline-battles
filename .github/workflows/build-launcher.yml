@@ -226,7 +226,7 @@ jobs:
 
           sys.path.insert(0, os.path.join(os.getcwd(), 'tools'))
           from verify_native_payload import verify_bytes
-          from verify_launch_entries import verify_archive
+          from verify_launch_entries import verify_current_archive
           sys.path.insert(0, os.path.join(os.getcwd(), 'launcher'))
           import core
 
@@ -240,8 +240,8 @@ jobs:
                       archive.write(path, name)
           entries.seek(0)
           with zipfile.ZipFile(entries) as archive:
-              verify_archive(archive)
-          print('Downloaded normal and diagnostic entries match reviewed source')
+              verify_current_archive(archive)
+          print('Downloaded launcher has only the normal launch entry')
           for port in core.SUPPORTED_PORTS:
               archive_path = os.path.join(payload, 'client', port + '.zip')
               with zipfile.ZipFile(archive_path) as archive:

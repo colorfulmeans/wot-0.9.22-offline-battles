@@ -82,6 +82,9 @@ BUILD_IDENTITY_RELATIVE_PATH_0922 = (
     "mods/configs/offline_lan_0922/" + BUILD_IDENTITY_FILENAME_0922)
 BUILD_SEMANTIC_VERSION_ENV = "WOT_OFFLINE_SEMANTIC_VERSION"
 BUILD_IDENTITY_ENV = "WOT_OFFLINE_BUILD_IDENTITY"
+# Detailed diagnostic logging for one launch; the server, hidden worker and
+# visible client of that launch all receive the same explicit value.
+DIAGNOSTICS_ENV = "WOT_OFFLINE_DIAGNOSTICS"
 PLAYER_ENGINE_CONFIG_0922 = "engine_config.offline-player.xml"
 WORKER_ENGINE_CONFIG_0922 = "engine_config.offline-worker.xml"
 PLAYER_ARGUMENT_0922 = "--player"
@@ -214,13 +217,15 @@ def visible_client_command(game_root, port_version, paired_worker=False):
 def visible_client_environment(port_version, host=LOCAL_HOST,
                                port=DEFAULT_SERVER_PORT,
                                paired_worker=False, environment=None,
-                               preferred_team=DEFAULT_PREFERRED_TEAM, language="en"):
+                               preferred_team=DEFAULT_PREFERRED_TEAM, language="en",
+                               diagnostics=False):
     """Keep worker-only state out of the visible game process."""
     environment = dict(os.environ if environment is None else environment)
     if port_version != PORT_0_9_22:
         return environment
     _apply_payload_identity_environment(
         environment, bundled_payload_identity(port_version))
+    _apply_diagnostics_environment(environment, diagnostics)
     for name in (HIDDEN_DESKTOP_ENV_0922, WORKER_READY_MARKER_ENV_0922,
                  "BW_RES_PATH", "WOT_OFFLINE_WORKER_RES_PATH"):
         environment.pop(name, None)
@@ -255,11 +260,12 @@ def starter_stop_command(game_root, process_id):
 def worker_environment(game_root, host=LOCAL_HOST,
                        port=DEFAULT_SERVER_PORT,
                        team_size=DEFAULT_TEAM_SIZE, environment=None,
-                       team1_size=None, team2_size=None):
+                       team1_size=None, team2_size=None, diagnostics=False):
     """Build the endpoint inherited by the hidden simulation client."""
     environment = server_environment(
         PORT_0_9_22, game_root, environment, team_size=team_size,
-        team1_size=team1_size, team2_size=team2_size)
+        team1_size=team1_size, team2_size=team2_size,
+        diagnostics=diagnostics)
     environment[CLIENT_SERVER_HOST_ENV_0922] = str(host)
     environment[CLIENT_SERVER_PORT_ENV_0922] = str(int(port))
     # Both clients use the installed paths.xml, including its mod roots.
@@ -922,6 +928,13 @@ def _apply_payload_identity_environment(environment, identity):
         return environment
     environment[BUILD_SEMANTIC_VERSION_ENV] = identity["semanticVersion"]
     environment[BUILD_IDENTITY_ENV] = identity["buildIdentity"]
+    return environment
+
+
+def _apply_diagnostics_environment(environment, diagnostics):
+    # State the mode explicitly so a child never inherits a stale value from
+    # the launcher process or an earlier launch.
+    environment[DIAGNOSTICS_ENV] = "1" if diagnostics else "0"
     return environment
 
 
@@ -1928,12 +1941,13 @@ def server_argv(port_version, base_dir=None):
 def server_environment(port_version, game_root, environment=None,
                        team_size=DEFAULT_TEAM_SIZE, loopback_only=False,
                        team1_size=None, team2_size=None, bot_lineup=None,
-                       bot_excluded_vehicles=None):
+                       bot_excluded_vehicles=None, diagnostics=False):
     """Build the endpoint and roster environment for one LAN server."""
     environment = dict(os.environ if environment is None else environment)
     if port_version == PORT_0_9_22:
         _apply_payload_identity_environment(
             environment, bundled_payload_identity(port_version))
+        _apply_diagnostics_environment(environment, diagnostics)
         team1_size = parse_team_size(
             team_size if team1_size is None else team1_size)
         team2_size = parse_team_size(

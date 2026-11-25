@@ -1,4 +1,5 @@
-"""Entry modes are explicit, process-local, and inherited by server children."""
+"""Entry modes are explicit and process-local; a server child keeps the mode
+its launch passed to it."""
 import os
 import sys
 import types

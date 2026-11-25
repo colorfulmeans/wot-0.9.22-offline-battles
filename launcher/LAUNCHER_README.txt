@@ -60,15 +60,28 @@ Replay preflight uses the same 8-GiB cumulative decompressed bound as recording
 and playback. Data is streamed; the 2-MiB record limit, footer/count and gzip
 integrity checks still apply. Compressed file size is not the replay size bound.
 
-Use the launcher's built-in vehicle editor and error-report controls. The player
-download includes START_DIAGNOSTIC_TEST.bat for detailed gameplay diagnostics,
-and the normal EXE for regular play. The normal EXE
-uses small key-event logs. Detailed geometry logs are limited to 2 MiB/minute
-and 32 MiB per client process, with explicit suppression notices. Exhausted
-budgets skip further JSON encoding; motion histories also skip construction
-until the budget reopens. Test captures split rotation catalog/native costs
-without changing collision queries. Errors and
-lifecycle messages remain enabled after the diagnostic budget is exhausted.
+Testing tab
+-----------
+The Testing tab sits between Bot tactics and Repair. Its checkboxes start
+unchecked.
+
+- Collect detailed diagnostic logs records more game and combat detail in the
+  server, hidden worker and game logs. The choice applies to the next game or
+  LAN room started from this launcher and cannot change while one is running.
+  Starting the EXE with --diagnostics forces it on for that launcher session.
+- Collect a report if the game crashes downloads Microsoft ProcDump only after
+  your consent and prepares a crash report when the game closes unexpectedly.
+- Collect full-memory crash dumps (very large files) is a sub-option of crash
+  reports and is available only while crash reports are on.
+
+Create error report... stays on the main screen, to the right of the game
+client status. Without detailed logs the game keeps small key-event logs.
+Detailed geometry logs are limited to 2 MiB/minute and 32 MiB per client
+process, with explicit suppression notices. Exhausted budgets skip further JSON
+encoding; motion histories also skip construction until the budget reopens.
+Test captures split rotation catalog/native costs without changing collision
+queries. Errors and lifecycle messages remain enabled after the diagnostic
+budget is exhausted.
 
 Customize save -> Appearance inventory has My style and Preset styles pages,
 with nation/type/vehicle filters, garage-only targets and vehicle-name search.

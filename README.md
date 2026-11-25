@@ -35,8 +35,9 @@ It is limited to the current local dead vehicle with an attached turret;
 the unsafe native filter synchronization remains suppressed. Failed display
 readback rolls back the candidate. Native Windows acceptance remains pending.
 
-Use `START_DIAGNOSTIC_TEST.bat` beside the unpacked launcher. Its existing
-`--diagnostics` entrance enables bounded `BATTLE REVIEW` records in the
+Check **Collect detailed diagnostic logs** on the launcher's Testing tab before
+starting the game or LAN room; starting the launcher with `--diagnostics`
+forces it on. Detailed logging enables bounded `BATTLE REVIEW` records in the
 visible client, hidden worker and bundled server logs. Ordinary startup does
 not construct these payloads. Records carry round, PID, process-local clock,
 stage and sample number; worker and server clock origins are independent.

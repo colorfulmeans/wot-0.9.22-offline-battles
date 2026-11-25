@@ -70,7 +70,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $AppRoot = Join-Path $DistRoot $AppName
-Copy-Item -LiteralPath (Join-Path $RepoRoot "tools/START_DIAGNOSTIC_TEST.bat") -Destination $AppRoot
+# Detailed logging is a Testing-tab choice; the launcher EXE is the only entry.
 $ClientPayloadRoot = Join-Path $AppRoot "_internal\client"
 $ServerPayloadRoot = Join-Path $AppRoot "_internal\servers"
 $ClientPayloads = @(

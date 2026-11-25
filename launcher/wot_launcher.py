@@ -75,6 +75,16 @@ _MAINTENANCE_HELP = (
     "Delete all data and restore factory defaults: clear offline saves, custom profiles, settings, caches, replays and diagnostic reports, reinstall the mod and rebuild defaults.",
     "Offline data is shared by different launcher versions. Clearing it affects other versions; files manually copied to other locations are not deleted.",
 )
+_TESTING_HELP = (
+    "Detailed diagnostic logs record more game and combat information for "
+    "problem reports. The choice applies to the next game or LAN room started "
+    "from this launcher and cannot change while one is running.",
+    "Crash reports use Microsoft ProcDump, downloaded only with your consent. "
+    "Full-memory dumps need crash reports and produce very large files.",
+)
+_DIAGNOSTIC_ENTRY_HELP = (
+    "This launcher was started with --diagnostics, so detailed logs stay on "
+    "until it closes.")
 
 _CHINESE = {
     "Offline replay": "离线录像",
@@ -511,6 +521,18 @@ _CHINESE = {
     "Create error report...": "一键汇报错误…",
     "Collect full-memory crash dumps (very large files)":
         "疑难闪退：收集完整内存（文件很大）",
+    "Testing": "测试",
+    "Collect detailed diagnostic logs": "收集详细诊断日志",
+    _TESTING_HELP[0]:
+        "详细诊断日志会记录更多游戏和交战信息，便于汇报问题。此设置用于之后由"
+        "本启动器开启的游戏或局域网房间，运行期间无法更改。",
+    _TESTING_HELP[1]:
+        "闪退报告使用微软 ProcDump，只在你同意后下载。完整内存转储需要先开启"
+        "闪退报告，生成的文件很大。",
+    _DIAGNOSTIC_ENTRY_HELP:
+        "本次启动器以 --diagnostics 启动，关闭启动器前详细诊断日志保持开启。",
+    "You can change this later in the Testing tab.":
+        "之后可以在「测试」标签中更改此设置。",
     "Activity log": "运行日志",
     "Close game": "关闭游戏",
     "Select the folder that contains %s.": "请选择包含 %s 的目录。",
@@ -579,6 +601,12 @@ _ACTIVITY = activity_text.ActivityText(_CHINESE)
 
 COLLECT_CRASH_REPORTS_SETTING = "collect_crash_reports"
 FULL_CRASH_DUMPS_SETTING = "full_crash_dumps"
+# Testing tab: {"logs": bool}. A --diagnostics entry forces logging on for
+# that launcher process without changing the saved choice.
+TESTING_SETTING = "testing"
+TESTING_LOGS_KEY = "logs"
+# Each launch snapshots its logging mode in the session it plans.
+SESSION_DIAGNOSTICS = "diagnostics"
 PROCDUMP_CONSENT_SETTING = "procdump_download_consent"
 PROCDUMP_PATH_ENV = "WOT_OFFLINE_PROCDUMP_PATH"
 CRASH_DUMP_PATH_ENV = "WOT_OFFLINE_CRASH_DUMP_PATH"
@@ -769,6 +797,9 @@ class LauncherWindow(object):
         self._procdump_path = None
         self._procdump_download_consent = False
         self._initial_crash_prompt_pending = False
+        # main() records a --diagnostics entry in the process environment.
+        self._diagnostic_entry = os.environ.get(core.DIAGNOSTICS_ENV) == "1"
+        self._saved_detailed_logs = False
         self._worker_exited_unexpectedly = False
         self._observed_crash_roles = set()
         self._forced_stop_roles = set()
@@ -786,6 +817,9 @@ class LauncherWindow(object):
         tk = self._tk
         settings = core.load_settings()
         self._free_notice_seen = settings.get("free_notice_seen") is True
+        testing = settings.get(TESTING_SETTING)
+        self._saved_detailed_logs = (
+            isinstance(testing, dict) and testing.get(TESTING_LOGS_KEY) is True)
         preference = settings.get("language", i18n.LANGUAGE_AUTO)
         if preference not in i18n.LANGUAGES:
             preference = i18n.LANGUAGE_ENGLISH
@@ -838,7 +872,13 @@ class LauncherWindow(object):
 
         self.client_label = tk.Label(self.game_panel, text="", anchor="w")
         self.client_label.grid(
-            row=1, column=0, columnspan=3, sticky="we", pady=(4, 0))
+            row=1, column=0, columnspan=2, sticky="we", pady=(4, 0))
+        self.report_button = tk.Button(
+            self.game_panel, text="", command=self._create_error_report,
+            font=("TkDefaultFont", 9, "bold"), relief="raised",
+            borderwidth=2, padx=10)
+        self.report_button.grid(
+            row=1, column=2, sticky="e", pady=(4, 0))
         saved_consent = settings.get(PROCDUMP_CONSENT_SETTING)
         self._initial_crash_prompt_pending = not isinstance(
             saved_consent, bool)
@@ -851,26 +891,10 @@ class LauncherWindow(object):
             saved_crash_capture = False
         self.collect_crash_reports = tk.BooleanVar(
             value=saved_crash_capture)
-        self.crash_report_check = tk.Checkbutton(
-            self.game_panel, text="", variable=self.collect_crash_reports,
-            command=self._crash_collection_toggled, anchor="w")
-        self.crash_report_check.grid(
-            row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
-        self.report_button = tk.Button(
-            self.game_panel, text="", command=self._create_error_report,
-            font=("TkDefaultFont", 9, "bold"), relief="raised",
-            borderwidth=2, padx=10)
-        self.report_button.grid(
-            row=2, column=2, sticky="e", pady=(6, 0))
         saved_full_dumps = settings.get(FULL_CRASH_DUMPS_SETTING, False)
         if not isinstance(saved_full_dumps, bool):
             saved_full_dumps = False
         self.full_crash_dumps = tk.BooleanVar(value=saved_full_dumps)
-        self.full_crash_dump_check = tk.Checkbutton(
-            self.game_panel, text="", variable=self.full_crash_dumps,
-            command=self._full_crash_dumps_toggled, anchor="w")
-        self.full_crash_dump_check.grid(
-            row=3, column=0, columnspan=3, sticky="w", pady=(2, 0))
         self.game_panel.grid_columnconfigure(1, weight=1)
 
         saved_mode = settings.get("mode", core.MODE_SINGLE)
@@ -995,11 +1019,13 @@ class LauncherWindow(object):
         self.bot_tactics_button.pack(fill="x", pady=6)
         self.bot_tactics_help = tk.Label(self.bot_tactics_panel, text="", justify="left", wraplength=620)
         self.bot_tactics_help.pack(fill="x", pady=8)
+        self.testing_panel = tk.Frame(self.tools_tabs, padx=10, pady=10)
         self.repair_panel = tk.Frame(self.tools_tabs, padx=10, pady=10)
         self.tools_tabs.add(self.save_panel, text="")
         self.tools_tabs.add(self.vehicle_panel, text="")
         self.tools_tabs.add(self.bot_lineup_panel, text="")
         self.tools_tabs.add(self.bot_tactics_panel, text="")
+        self.tools_tabs.add(self.testing_panel, text="")
         self.tools_tabs.add(self.repair_panel, text="")
 
         self._save_slot_records = []
@@ -1191,6 +1217,7 @@ class LauncherWindow(object):
             side="left", fill="x", expand=True, padx=(6, 0))
         self.vehicle_panel.grid_columnconfigure(1, weight=1)
 
+        self._build_testing_controls()
         self._build_maintenance_controls()
 
         self.log_section, self.log_panel, self.log_title = ui_layout.section(tk, frame)
@@ -1226,6 +1253,35 @@ class LauncherWindow(object):
             }
         self._log("Launcher session: %s role=launcher." %
                   core.payload_identity_text(identity))
+
+    def _build_testing_controls(self):
+        tk = self._tk
+        self.detailed_logs = tk.BooleanVar(
+            value=self._saved_detailed_logs or self._diagnostic_entry)
+        self.detailed_logs_check = tk.Checkbutton(
+            self.testing_panel, text="", variable=self.detailed_logs,
+            command=self._detailed_logs_toggled, anchor="w")
+        self.detailed_logs_check.grid(row=0, column=0, sticky="w")
+        self.crash_report_check = tk.Checkbutton(
+            self.testing_panel, text="", variable=self.collect_crash_reports,
+            command=self._crash_collection_toggled, anchor="w")
+        self.crash_report_check.grid(row=1, column=0, sticky="w", pady=(6, 0))
+        # Full-memory dumps only refine crash reports, so they sit beneath it.
+        self.full_crash_dump_check = tk.Checkbutton(
+            self.testing_panel, text="", variable=self.full_crash_dumps,
+            command=self._full_crash_dumps_toggled, anchor="w")
+        self.full_crash_dump_check.grid(
+            row=2, column=0, sticky="w", padx=(24, 0), pady=(2, 0))
+        self.testing_help = tk.Label(
+            self.testing_panel, text="", anchor="nw", justify="left",
+            wraplength=620)
+        self.testing_help.grid(row=3, column=0, sticky="new", pady=(8, 0))
+        self.testing_panel.grid_columnconfigure(0, weight=1)
+        self.testing_panel.bind('<Configure>', lambda event:
+            self.testing_help.config(wraplength=max(1, event.width - 26)))
+        # ProcDump consent, download and failure paths all write this value.
+        self.collect_crash_reports.trace_add(
+            "write", lambda *unused: self._update_crash_controls())
 
     def _build_maintenance_controls(self):
         tk = self._tk
@@ -1269,10 +1325,18 @@ class LauncherWindow(object):
         self.game_title.config(text=self._t("Game client"))
         self.game_folder_label.config(text=self._t("Game folder"))
         self.browse_button.config(text=self._t("Browse..."))
+        self.tools_tabs.tab(self.testing_panel, text=self._t("Testing"))
+        self.detailed_logs_check.config(
+            text=self._t("Collect detailed diagnostic logs"))
         self.crash_report_check.config(
             text=self._t("Collect a report if the game crashes"))
         self.full_crash_dump_check.config(text=self._t(
             "Collect full-memory crash dumps (very large files)"))
+        help_lines = list(_TESTING_HELP)
+        if self._diagnostic_entry:
+            help_lines.append(_DIAGNOSTIC_ENTRY_HELP)
+        self.testing_help.config(
+            text="\n".join(self._t(line) for line in help_lines))
         self.battle_tabs.tab(
             self.single_panel, text=self._t("Single player"))
         self.battle_tabs.tab(self.network_panel, text=self._t("Online"))
@@ -1503,6 +1567,27 @@ class LauncherWindow(object):
         self._refresh_mode()
         return status
 
+    def _update_crash_controls(self):
+        enabled = (self._selected_client == core.PORT_0_9_22 and
+                   not self._busy and not self._maintenance_busy)
+        self.crash_report_check.config(
+            state="normal" if enabled else "disabled")
+        self.full_crash_dump_check.config(state=(
+            "normal" if enabled and bool(self.collect_crash_reports.get())
+            else "disabled"))
+
+    def _detailed_logs_toggled(self):
+        if self._diagnostic_entry:
+            # The entry flag owns this launcher process; keep the saved choice.
+            self.detailed_logs.set(True)
+            return True
+        self._saved_detailed_logs = bool(self.detailed_logs.get())
+        self._save_settings()
+        return self._saved_detailed_logs
+
+    def _diagnostics_requested(self):
+        return bool(self._diagnostic_entry or self.detailed_logs.get())
+
     def _server_is_running(self):
         return self._server is not None and self._server.poll() is None
 
@@ -1568,16 +1653,12 @@ class LauncherWindow(object):
         self.factory_reset_button.config(state=maintenance_state)
         self.report_button.config(
             state="disabled" if self._report_busy or self._maintenance_busy else "normal")
-        self.crash_report_check.config(
-            state=("normal" if
-                   self._selected_client == core.PORT_0_9_22 and
-                   not self._busy and not self._maintenance_busy
-                   else "disabled"))
-        self.full_crash_dump_check.config(
-            state=("normal" if
-                   self._selected_client == core.PORT_0_9_22 and
-                   not self._busy and not self._maintenance_busy
-                   else "disabled"))
+        self._update_crash_controls()
+        # A launch keeps its logging mode until its game and room have closed.
+        self.detailed_logs_check.config(state=(
+            "disabled" if self._diagnostic_entry or self._busy or
+            self._maintenance_busy or server_running or
+            self._room_worker_is_running() else "normal"))
         profile_state = (
             "readonly" if maintenance_state == "normal" and
             self.mode.get() in (core.MODE_SINGLE, core.MODE_JOIN)
@@ -2429,18 +2510,20 @@ class LauncherWindow(object):
                 "problem:\n\n%s") % report_path,
             parent=self.root)
 
-    def _confirm_enable_crash_capture(self):
+    def _confirm_enable_crash_capture(self, initial=False):
         from tkinter import messagebox
 
+        message = self._t(
+            "To generate debugging information when the game crashes, "
+            "the launcher needs to download Microsoft Sysinternals "
+            "ProcDump from Microsoft's official site and accept its "
+            "license terms at %s. Download and enable it?") % (
+            core.PROCDUMP_LICENSE_URL,)
+        if initial:
+            message += "\n\n" + self._t(
+                "You can change this later in the Testing tab.")
         return messagebox.askyesno(
-            self._t("Enable crash diagnostics?"),
-            self._t(
-                "To generate debugging information when the game crashes, "
-                "the launcher needs to download Microsoft Sysinternals "
-                "ProcDump from Microsoft's official site and accept its "
-                "license terms at %s. Download and enable it?") %
-            core.PROCDUMP_LICENSE_URL,
-            icon="warning")
+            self._t("Enable crash diagnostics?"), message, icon="warning")
 
     def _finish_procdump_download(self, path=None, error=None):
         self._set_maintenance_busy(False)
@@ -2486,9 +2569,9 @@ class LauncherWindow(object):
         thread.start()
         return True
 
-    def _request_crash_collection(self):
+    def _request_crash_collection(self, initial=False):
         if not self._procdump_download_consent:
-            if not self._confirm_enable_crash_capture():
+            if not self._confirm_enable_crash_capture(initial=initial):
                 self.collect_crash_reports.set(False)
                 self._save_settings()
                 return False
@@ -2510,7 +2593,7 @@ class LauncherWindow(object):
         if not self._initial_crash_prompt_pending:
             return False
         self._initial_crash_prompt_pending = False
-        return self._request_crash_collection()
+        return self._request_crash_collection(initial=True)
 
     def _disable_crash_collection(self):
         self.collect_crash_reports.set(False)
@@ -2727,6 +2810,7 @@ class LauncherWindow(object):
             "save_slot": self._save_slot_id,
             "language": self.language_preference,
             "free_notice_seen": self._free_notice_seen,
+            TESTING_SETTING: {TESTING_LOGS_KEY: bool(self._saved_detailed_logs)},
             COLLECT_CRASH_REPORTS_SETTING:
                 bool(self.collect_crash_reports.get()),
             FULL_CRASH_DUMPS_SETTING:
@@ -3113,6 +3197,8 @@ class LauncherWindow(object):
         self._remember_folder()
         self._save_settings()
         self._stop_requested = False
+        # The room keeps the logging mode chosen when it starts.
+        diagnostics = self._diagnostics_requested()
         self._set_maintenance_busy(True)
         profile_name = (
             self.vehicle_profile.get().strip()
@@ -3149,6 +3235,7 @@ class LauncherWindow(object):
                 start_options = {
                     "persistent": True,
                     "require_owned": True,
+                    "diagnostics": diagnostics,
                 }
                 if prepared.get("botExcludedVehicles"):
                     start_options["bot_excluded_vehicles"] = prepared[
@@ -3159,7 +3246,8 @@ class LauncherWindow(object):
                     status["path"], status["client"], **start_options)
                 if started and self._start_worker(
                         status["path"], core.LOCAL_HOST,
-                        core.DEFAULT_SERVER_PORT, room_owned=True):
+                        core.DEFAULT_SERVER_PORT, room_owned=True,
+                        diagnostics=diagnostics):
                     self.root.after(0, self._use_local_server_address)
                 else:
                     if started:
@@ -3214,6 +3302,7 @@ class LauncherWindow(object):
                 self.collect_crash_reports.get())
             session[FULL_CRASH_DUMPS_SETTING] = bool(
                 self.full_crash_dumps.get())
+            session[SESSION_DIAGNOSTICS] = self._diagnostics_requested()
         except (core.LauncherError,
                 bot_lineup_profiles.BotLineupProfileError) as error:
             self._log(error)
@@ -3236,6 +3325,7 @@ class LauncherWindow(object):
         replay_path = session.get("replay_path")
         host = session["host"]
         port = session["tcp_port"]
+        diagnostics = bool(session.get(SESSION_DIAGNOSTICS, False))
         needs_worker = (
             not replay_path and session["client"] == core.PORT_0_9_22 and
             session["mode"] == core.MODE_SINGLE)
@@ -3327,6 +3417,7 @@ class LauncherWindow(object):
             if session["needs_server"]:
                 start_options = {
                     "loopback_only": server_loopback_only,
+                    "diagnostics": diagnostics,
                 }
                 if session.get("bot_lineup"):
                     start_options["bot_lineup"] = session["bot_lineup"]
@@ -3370,7 +3461,8 @@ class LauncherWindow(object):
             if self._stop_requested:
                 return
             if needs_worker:
-                worker_started = self._start_worker(game_root, host, port)
+                worker_started = self._start_worker(
+                    game_root, host, port, diagnostics=diagnostics)
                 if not worker_started:
                     return
             if self._stop_requested:
@@ -3380,16 +3472,17 @@ class LauncherWindow(object):
             if replay_path:
                 game_crashed = self._run_game(
                     game_root, session["client"], host, port,
-                    paired_worker=False, replay_path=replay_path)
+                    paired_worker=False, replay_path=replay_path,
+                    diagnostics=diagnostics)
             elif preferred_team == core.DEFAULT_PREFERRED_TEAM:
                 game_crashed = self._run_game(
                     game_root, session["client"], host, port,
-                    paired_worker=needs_worker)
+                    paired_worker=needs_worker, diagnostics=diagnostics)
             else:
                 game_crashed = self._run_game(
                     game_root, session["client"], host, port,
                     paired_worker=needs_worker,
-                    preferred_team=preferred_team)
+                    preferred_team=preferred_team, diagnostics=diagnostics)
             if game_crashed:
                 crash_roles.add(error_reports.ROLE_VISIBLE_CLIENT)
         except core.LauncherError as error:
@@ -3564,7 +3657,7 @@ class LauncherWindow(object):
     def _start_server(self, game_root, port_version,
                       loopback_only=False, persistent=False,
                       bot_lineup=None, require_owned=False,
-                      bot_excluded_vehicles=None):
+                      bot_excluded_vehicles=None, diagnostics=False):
         requested_context = {
             "game_root": os.path.normcase(os.path.realpath(
                 os.path.abspath(game_root))),
@@ -3628,7 +3721,8 @@ class LauncherWindow(object):
         environment = core.server_environment(
             port_version, game_root, loopback_only=loopback_only,
             bot_lineup=bot_lineup,
-            bot_excluded_vehicles=bot_excluded_vehicles)
+            bot_excluded_vehicles=bot_excluded_vehicles,
+            diagnostics=diagnostics)
         try:
             environment["WOT_0922_BOT_TACTICS_PATH"] = bot_tactics_store.Store().ensure_active()
         except Exception as error:
@@ -3695,7 +3789,8 @@ class LauncherWindow(object):
                           exit_code)
         self.root.after(0, self._update_action_controls)
 
-    def _start_worker(self, game_root, host, port, room_owned=False):
+    def _start_worker(self, game_root, host, port, room_owned=False,
+                      diagnostics=False):
         """Start once against the client's normal resource and mod paths."""
         self._worker_exited_unexpectedly = False
         starter = core.worker_starter_executable(game_root)
@@ -3713,7 +3808,8 @@ class LauncherWindow(object):
                 self._log(
                     "The worker starter log boundary could not be recorded: "
                     "%s" % error)
-        environment = core.worker_environment(game_root, host, port)
+        environment = core.worker_environment(
+            game_root, host, port, diagnostics=diagnostics)
         environment = self._crash_capture_environment(
             environment, error_reports.ROLE_HIDDEN_WORKER)
         self._log("Hidden worker resources: the client's own paths.xml.")
@@ -3862,13 +3958,15 @@ class LauncherWindow(object):
 
     def _run_game(self, game_root, port_version, host, port,
                   paired_worker=False,
-                  preferred_team=core.DEFAULT_PREFERRED_TEAM, replay_path=None):
+                  preferred_team=core.DEFAULT_PREFERRED_TEAM, replay_path=None,
+                  diagnostics=False):
         self._log("Starting %s..." % core.GAME_EXECUTABLE)
         command = core.visible_client_command(
             game_root, port_version, paired_worker=paired_worker)
         environment = core.visible_client_environment(
             port_version, host, port, paired_worker=paired_worker,
-            preferred_team=preferred_team, language=self.language)
+            preferred_team=preferred_team, language=self.language,
+            diagnostics=diagnostics)
         if port_version == core.PORT_0_9_22:
             environment = self._crash_capture_environment(
                 environment, error_reports.ROLE_VISIBLE_CLIENT)
@@ -4106,10 +4204,11 @@ def _serve(argv):
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    # Choose once per launcher process; child environments inherit this mode.
-    # A normal entry must not inherit a stale diagnostic setting from a shell.
+    # Record a --diagnostics entry for this launcher process; it forces the
+    # Testing tab's detailed logs on. Each launch passes its own explicit mode
+    # to its server, worker and game. A normal entry ignores a stale shell value.
     if core.SERVE_FLAG not in argv:
-        os.environ['WOT_OFFLINE_DIAGNOSTICS'] = ('1' if '--diagnostics' in argv else '0')
+        os.environ[core.DIAGNOSTICS_ENV] = ('1' if '--diagnostics' in argv else '0')
     if '--verify-style-editor' in argv:
         index = argv.index('--verify-style-editor')
         if index + 2 >= len(argv):
