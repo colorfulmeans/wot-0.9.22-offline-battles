@@ -71,8 +71,7 @@ class EgressTests(unittest.TestCase):
                    throttle_override=None)
         def apply(now,target=None):
             order=dict(route,target_id=target)
-            return planner._apply_retreat_order(order,bot,goal,goal,now,
-                                               'low_health_retreat','low_health_defend')
+            return planner._apply_retreat_order(order,bot,goal,goal,now)
         self.assertIsNone(apply(1.)['throttle_override'])
         self.assertEqual(0.,apply(12.)['throttle_override'])
         resumed=apply(28.)
@@ -80,7 +79,7 @@ class EgressTests(unittest.TestCase):
         self.assertIsNone(resumed['throttle_override'])
         self.assertEqual(route['move_position'],resumed['move_position'])
         self.assertEqual('route',apply(29.)['combat_mode'])
-        self.assertEqual('low_health_retreat',apply(30.,2)['combat_mode'])
+        self.assertEqual('magazine_reload_retreat',apply(30.,2)['combat_mode'])
 
     def test_defensive_hold_with_current_enemy_remains_intentional(self):
         planner=BotPlanner()
@@ -88,9 +87,9 @@ class EgressTests(unittest.TestCase):
         route=dict(combat_mode='route',target_id=2,move_position=dict(x=0.,y=0.,z=100.))
         for now in (1.,30.,60.):
             result=planner._apply_retreat_order(dict(route),bot,dict(x=0.,y=0.,z=0.),
-                         dict(x=100.,y=0.,z=0.),now,'low_health_retreat','low_health_defend')
+                         dict(x=100.,y=0.,z=0.),now)
             self.assertEqual(0.,result['throttle_override'])
-            self.assertEqual('low_health_defend',result['tactical_phase'])
+            self.assertEqual('magazine_reload_hold',result['tactical_phase'])
 
 
 if __name__=='__main__': unittest.main()

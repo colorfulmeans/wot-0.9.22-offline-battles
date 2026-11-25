@@ -4100,7 +4100,6 @@ class BattleRuntime(object):
                 visibility_async_probe=(self._bot_visibility_async
                                         if self._worker_mode else None),
                 firing_lane_probe=self._bot_firing_lane,
-                incoming_lane_probe=self._bot_incoming_lane,
                 friendly_lane_probe=self._bot_friendly_firing_lane,
                 direct_launch_origin_probe=self._bot_direct_launch_origin,
                 direct_aim_point_probe=self._bot_aim_point,
@@ -7649,23 +7648,6 @@ class BattleRuntime(object):
         return self._runtime.bigworld.wg_collideSegment(
             self._avatar.spaceID, self._vector(start),
             self._vector(end), 128) is None
-
-    def _bot_incoming_lane(self, source, target):
-        """Probe enemy gun -> own body, never infer it from the reverse ray."""
-        try:
-            own = dict(source, kind='bot', network_id=source['id'])
-            descriptor = self._observed_vehicle_descriptor(own)
-            origin = self._observed_gun_origin(target)
-            if descriptor is None or origin is None:
-                return None
-            samples = shot_geometry.vehicle_aim_samples(descriptor)[:2]
-            if not samples:
-                return None
-            return any(self._tactical_ray_clear(
-                origin, shot_geometry.vehicle_aim_point(sample, source))
-                for sample in samples)
-        except Exception:
-            return None
 
     def _cover_surface_pose(self, source, point, descriptor, ground=None):
         plane = self._sample_ground_plane(point, source.get('yaw', 0.0),

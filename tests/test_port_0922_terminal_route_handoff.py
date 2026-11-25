@@ -105,7 +105,7 @@ class TerminalRouteHandoffTests(unittest.TestCase):
     def test_only_empty_magazine_retains_withdrawal_ownership(self):
         scene=self.scene();scene[2][0].update(health=10)
         order=self.order(scene)
-        self.assertNotIn(order['combat_mode'],('low_health_retreat','low_health_defend'))
+        self.assertNotIn(order['combat_mode'],('magazine_reload_retreat','magazine_reload_hold'))
         scene=self.scene();scene[2][0].update(clip=0,clip_size=4,fire_seq=1,reload_time=25.)
         order=self.order(scene)
         self.assertEqual('engage',order['combat_mode'])

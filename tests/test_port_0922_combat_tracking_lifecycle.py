@@ -86,8 +86,7 @@ class CombatTrackingLifecycleTests(unittest.TestCase):
         order = self.order(1.2)
         self.assertEqual(2, order['target_id'])
         self.assertTrue(order['fire_allowed'])
-        self.assertNotIn(order['combat_mode'], ('under_fire_withdraw', 'crossfire_withdraw', 'withdraw'))
-        self.assertFalse(order['tactical_evidence']['withdraw_after_hit'])
+        self.assertNotIn(order['combat_mode'], ('magazine_reload_retreat', 'withdraw'))
 
     def test_magazine_finishes_then_withdraws_reload_and_reengages(self):
         self.fx.states[0] = _weapon_state(self.fx.states[0], clip=2, clip_size=4,
@@ -95,11 +94,11 @@ class CombatTrackingLifecycleTests(unittest.TestCase):
         self.fx.states[0]['health'] = 200
         loaded = self.order()
         self.assertTrue(loaded['fire_allowed'])
-        self.assertNotEqual('low_health_retreat', loaded['combat_mode'])
+        self.assertNotEqual('magazine_reload_retreat', loaded['combat_mode'])
         self.assertEqual('empty_magazine_only',loaded['tactical_evidence']['withdrawal']['reason'])
         self.fx.states[0].update(clip=1, reload_time=2., fire_seq=3)
         intershot = self.order(1.5)
-        self.assertNotIn(intershot['combat_mode'], ('low_health_retreat', 'magazine_reload_retreat'))
+        self.assertNotEqual('magazine_reload_retreat', intershot['combat_mode'])
         self.assertEqual(2, intershot['target_id'])
         self.fx.states[0].update(clip=0, reload_time=30., fire_seq=4)
         empty = self.order(2.)
@@ -112,7 +111,7 @@ class CombatTrackingLifecycleTests(unittest.TestCase):
         self.assertEqual(0., hold['throttle_override'])
         self.fx.states[0].update(clip=4, reload_time=0.)
         ready = self.order(4., self.contact)
-        self.assertNotIn(ready['combat_mode'], ('low_health_retreat', 'magazine_reload_retreat'))
+        self.assertNotEqual('magazine_reload_retreat', ready['combat_mode'])
         self.assertTrue(ready['fire_allowed'])
         self.assertNotIn(11, self.planner._retreat_states)
 

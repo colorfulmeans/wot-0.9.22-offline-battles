@@ -20,8 +20,7 @@ class RearLimitedAimTests(unittest.TestCase):
             rear_turn=rear_turn)
 
     def test_t110e4_rear_threat_brakes_withdrawal_and_lays_hull(self):
-        for mode in ('withdraw', 'low_health_retreat', 'under_fire_withdraw',
-                     'crossfire_withdraw', 'advance', 'flank', 'route'):
+        for mode in ('withdraw', 'magazine_reload_retreat', 'advance', 'flank', 'route'):
             with self.subTest(mode=mode):
                 self.assertEqual((1., 0., True), self.aim(2.9, mode))
                 self.assertEqual((-1., 0., True), self.aim(-2.9, mode))
@@ -281,7 +280,7 @@ class RearTraverseRuntimeTests(unittest.TestCase):
             firing_lane_probe=lambda *unused: True,
             baked_graph=harness._flat_open_graph())
         runtime.battle_start(self.fixture.start)
-        order = dict(id=11, team=2, combat_mode='under_fire_withdraw',
+        order = dict(id=11, team=2, combat_mode='magazine_reload_retreat',
                      target_kind='human', target_id=2, move_position=(0., 0., -20.),
                      aim_position=(.1, 0., -100.), face_position=(.1, 0., -100.),
                      fire_range=500., fire_allowed=True, throttle_override=None)

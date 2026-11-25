@@ -5688,12 +5688,6 @@ class LANClient(object):
                     contact.get('visible_by_player_ids')) and
                 (not bool(contact.get('fresh')) or
                  bool(contact.get('visible'))) and
-                ('threatened_bot_ids' not in contact or (
-                    isinstance(contact.get('threatened_bot_ids'), (list, tuple)) and
-                    all(_projectile_int_range(value, 1, MAX_PROJECTILE_ID) is not None
-                        for value in contact['threatened_bot_ids']) and
-                    len(set(contact['threatened_bot_ids'])) == len(contact['threatened_bot_ids']) and
-                    (bool(contact.get('fresh')) or not contact['threatened_bot_ids']))) and
                 # Direct spotting freshness and a separately proved shooting
                 # lane have different lifetimes. The worker/server may retain
                 # a current lane while this team contact uses spotting memory.

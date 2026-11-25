@@ -163,7 +163,7 @@ class GunAngleRecoveryTests(unittest.TestCase):
         self.assertEqual(self.order, self.order_at(0.))
         self.state['speed'] = 0.
         self.order['move_position'] = (0., 0., 0.)
-        for mode in ('route', 'advance', 'under_fire_withdraw', 'low_health_retreat'):
+        for mode in ('route', 'advance', 'magazine_reload_retreat'):
             self.order['combat_mode'] = mode
             self.assertEqual(self.order, self.order_at(0.))
 

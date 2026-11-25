@@ -240,7 +240,7 @@ class FiringHoldTests(unittest.TestCase):
         self.bot['state']['fire_seq'] += 1
         self.assertEqual('support_hold', self.order(38.)['combat_mode'])
         self.assertEqual('cover_hold', self.order(50., 'cover_hold')['combat_mode'])
-        self.assertEqual('low_health_defend', self.order(60., 'low_health_defend')['combat_mode'])
+        self.assertEqual('magazine_reload_hold', self.order(60., 'magazine_reload_hold')['combat_mode'])
 
     def test_real_commander_hold_resumes_its_authored_route_and_resets_on_target_loss(self):
         from test_port_0922_server_bot_ai import _bot, _route, _state

@@ -5887,38 +5887,12 @@ class BattleState:
                                 ("radio_recipients" not in contact or pending_id in radio_bots)):
                             pending_ids.add(pending_id)
                 contact["pending_lane_by_bot_ids"] = sorted(pending_ids)
-                # A threat is advisory native geometry: a malformed row must
-                # not make an otherwise valid observation batch fail or give
-                # a visible client a way to evict the worker.  It is useful
-                # only while the enemy contact is currently visible, and can
-                # name only live Bots on the observing team.
-                if "threatened_bot_ids" in contact:
-                    threatened_ids = []
-                    raw_threatened = contact.get("threatened_bot_ids")
-                    if isinstance(raw_threatened, (list, tuple)):
-                        for raw_bot_id in raw_threatened:
-                            try:
-                                bot_id = _exact_int(
-                                    raw_bot_id, 1, PROJECTILE_MAX_ID)
-                            except ValueError:
-                                continue
-                            bot = known_bots.get(bot_id)
-                            if (bot is None or not bot.get("alive") or
-                                    int(bot.get("team", 0)) != observing_team or
-                                    bot_id in threatened_ids):
-                                continue
-                            threatened_ids.append(bot_id)
-                    contact["threatened_bot_ids"] = sorted(
-                        threatened_ids if contact["visible"] else ())
                 fresh = bool(bot_observer_ids or observer_ids)
                 # Direct spotting freshness and the independently proved
                 # shooter lane have separate owners. Dead shooters and radio
                 # recipients were already pruned above. Losing the direct
                 # observer must not erase a live recipient's native lane.
                 contact["fresh"] = fresh
-                if not fresh:
-                    if "threatened_bot_ids" in contact:
-                        contact["threatened_bot_ids"] = []
                 contact["time_left"] = time_left
                 result_kind = ("player" if target_kind == "human"
                                else target_kind)
@@ -6206,10 +6180,7 @@ class BattleState:
             return False
         if (combat_mode in (
                 "magazine_reload_retreat", "magazine_reload_hold", "engage", "flank", "advance_contact", "take_cover", "cover_hold", "cover_peek", "cover_return", "support_hold",
-                "route_transfer", "recovery_return", "base_defense",
-                "low_health_retreat", "low_health_defend",
-                "under_fire_withdraw", "under_fire_hold",
-                "crossfire_withdraw", "crossfire_hold") or
+                "route_transfer", "recovery_return", "base_defense") or
                 (combat_mode == "base_defense" and
                  command != "BACKTOBASE")):
             return False

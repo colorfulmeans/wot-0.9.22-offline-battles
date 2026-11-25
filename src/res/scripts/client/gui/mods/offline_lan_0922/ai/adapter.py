@@ -536,9 +536,7 @@ class BotAdapter(object):
         after contact is lost the ordinary route driver may turn and travel.
         Native motion still independently proves every realised movement.
         """
-        if strategic.get('combat_mode') not in (
-                'withdraw', 'low_health_retreat', 'magazine_reload_retreat', 'under_fire_withdraw',
-                'crossfire_withdraw'):
+        if strategic.get('combat_mode') not in ('withdraw', 'magazine_reload_retreat'):
             return None
         if strategic.get('throttle_override') is not None:
             return None
@@ -756,9 +754,7 @@ class BotAdapter(object):
             WAYPOINT_ARRIVAL_RADIUS)
         if mechanical_hold:
             movement_intent = False
-        if strategic.get('combat_mode') not in (
-                'withdraw', 'low_health_retreat', 'magazine_reload_retreat', 'under_fire_withdraw',
-                'crossfire_withdraw'):
+        if strategic.get('combat_mode') not in ('withdraw', 'magazine_reload_retreat'):
             self._withdrawal_attempts.pop(bot_id, None)
         requested_dx = float(move_position[0]) - float(position[0])
         requested_dz = float(move_position[2]) - float(position[2])

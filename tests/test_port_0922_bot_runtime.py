@@ -1585,7 +1585,6 @@ class ServerBotObservationRelayTests(unittest.TestCase):
                         server.bot_states[11], id=12)
                     initial = self._message(server.round_id)
                     initial['contacts'][0]['shootable_by_bot_ids'] = [12]
-                    initial['contacts'][0]['threatened_bot_ids'] = [12]
                     initial['contacts'][0]['radio_recipients'] = [
                         {'kind': 'bot', 'id': 12, 'time_left': 4.0}]
                     renewed = copy.deepcopy(initial)
@@ -1608,7 +1607,6 @@ class ServerBotObservationRelayTests(unittest.TestCase):
                 self.assertEqual([], contact['visible_by_player_ids'])
                 self.assertEqual([12] if observer_kind == 'bot' else [],
                                  contact['shootable_by_bot_ids'])
-                self.assertEqual([], contact.get('threatened_bot_ids', []))
                 self.assertEqual({target}, set(server.team_lit_targets[team]))
                 self.assertIsInstance(server.update_bot_observation(
                     SIMULATION_WORKER_AUTHORITY_ID, renewed), dict)
@@ -9832,8 +9830,8 @@ class BotRuntimeTests(unittest.TestCase):
 
     def test_limited_gun_retreat_keeps_front_threat_but_faces_unreachable_rear(self):
         for yaw, mode, rear in ((-.7429965, 'withdraw', True),
-                                (-1.1123639, 'low_health_retreat', False),
-                                (-.3324339, 'low_health_retreat', True)):
+                                (-1.1123639, 'magazine_reload_retreat', False),
+                                (-.3324339, 'magazine_reload_retreat', True)):
             with self.subTest(yaw=yaw, mode=mode):
                 # The old withdrawal policy preserved turn=+1 even for a
                 # rear threat. The requested policy now faces unreachable
@@ -21101,30 +21099,6 @@ class BotRuntimeTests(unittest.TestCase):
         runtime._service_shot_lane_work(
             2.0, 2.0, visible, [], {}, set(), {(11, 'bot', 21): 0}, [16])
         self.assertEqual((11, 21, (25.0, 0.0, 0.0)), calls[16])
-
-    def test_lane_range_gate_preserves_enemy_incoming_probe(self):
-        incoming = []
-        outgoing = []
-        runtime = self.module.BotRuntime(
-            1, firing_lane_probe=lambda *args: outgoing.append(args) or True,
-            incoming_lane_probe=lambda source, target: incoming.append(
-                (source['x'], target['position'])) or True)
-        runtime.states = {
-            11: {'id': 11, 'team': 1, 'alive': True,
-                 'x': 0.0, 'y': 0.0, 'z': 0.0},
-            21: {'id': 21, 'team': 2, 'alive': True,
-                 'x': 1000.0, 'y': 0.0, 'z': 0.0}}
-        runtime._incoming_lane_budget = 1
-        runtime._shot_los_phase = lambda unused: 0.0
-        budget = [16]
-        pending = runtime._service_shot_lane_work(
-            1.0, 1.0, {(1, 'bot', 21): True}, [], {}, set(), {}, budget)
-        self.assertEqual(0, pending)
-        self.assertEqual([], outgoing)
-        self.assertEqual([(0.0, (1000.0, 0.0, 0.0))], incoming)
-        self.assertEqual(16, budget[0])
-        self.assertEqual((1.0, True), runtime._incoming_lanes[(11, 'bot', 21)])
-        self.assertEqual((1.0, False), runtime._shot_los_cache[(11, 'bot', 21)])
 
     def test_lane_range_gate_matches_human_bot_and_spg_distance_boundaries(self):
         for kind in ('bot', 'human'):

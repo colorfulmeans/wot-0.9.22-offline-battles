@@ -9,7 +9,7 @@ class WithdrawalHandoffTests(unittest.TestCase):
         self.state = dict(id=24, slot=0, team=2, position=(0.,0.,0.), yaw=0.,
                           speed=0., dt=.1, half_length=3.5, half_width=1.5,
                           neighbours=[], pose_clear=lambda yaw: True)
-        self.order = dict(combat_mode='under_fire_withdraw', target_id=5,
+        self.order = dict(combat_mode='magazine_reload_retreat', target_id=5,
                           aim_position=(0.,0.,100.), face_position=(0.,0.,100.),
                           move_position=(0.,0.,-20.), fire_range=500.,
                           throttle_override=None)

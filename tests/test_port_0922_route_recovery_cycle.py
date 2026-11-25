@@ -191,7 +191,7 @@ class RouteRecoveryCycleTests(unittest.TestCase):
         p, bots, contacts = fixture.RouteTransferTests().scene(.6, 3.)
         for bot in bots:
             p._route_recoveries[bot['id']] = dict(phase='return')
-            p._route_assignments[bot['id']] = dict(route=bot['route'], until=1., radio_scoped=True)
+            p._route_assignments[bot['id']] = dict(route=bot['route'])
         before = copy.deepcopy(p._route_assignments)
         p._rebalance_routes(1, bots, contacts, 100)
         self.assertEqual(before, p._route_assignments)

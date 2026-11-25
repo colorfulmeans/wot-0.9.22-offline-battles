@@ -221,12 +221,11 @@ class AuthoredRouteWaitTests(unittest.TestCase):
             value = dict(target_id=15, combat_mode='route',
                          move_position={'x':100,'y':0,'z':0}, throttle_override=None)
             return planner._apply_retreat_order(value, bot,
-                {'x':0,'y':0,'z':0}, {'x':enemy,'y':0,'z':0}, now,
-                'low_health_retreat', 'low_health_defend')
-        self.assertEqual('low_health_retreat', order(0)['combat_mode'])
+                {'x':0,'y':0,'z':0}, {'x':enemy,'y':0,'z':0}, now)
+        self.assertEqual('magazine_reload_retreat', order(0)['combat_mode'])
         self.assertEqual('route', order(15)['combat_mode'])
         self.assertEqual('route', order(16)['combat_mode'])
-        self.assertEqual('low_health_retreat', order(17, 100)['combat_mode'])
+        self.assertEqual('magazine_reload_retreat', order(17, 100)['combat_mode'])
 
     def test_unfinished_wait_does_not_count_time_spent_on_another_assignment(self):
         planner,manifest=self.setup_route('AT-SPG',30)

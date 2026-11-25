@@ -262,7 +262,7 @@ class ServerBotTacticsTests(unittest.TestCase):
             self.manifest, self.states, players, 1.1)['orders'][0]
 
         self.assertEqual(2, reaction['target_id'])
-        self.assertNotEqual('under_fire_withdraw', reaction['combat_mode'])
+        self.assertNotEqual('magazine_reload_retreat', reaction['combat_mode'])
         self.assertTrue(reaction['fire_allowed'])
 
     def test_proved_cover_completes_without_a_hit_retreat(self):
@@ -314,22 +314,11 @@ class ServerBotTacticsTests(unittest.TestCase):
             self.states[0]['health']=health
             players=self._report(planner,[_contact(2,0,150,[11])])
             order=planner.build_orders(self.manifest,self.states,players,1.)['orders'][0]
-            self.assertNotIn(order['combat_mode'],('low_health_retreat','low_health_defend'))
+            self.assertNotIn(order['combat_mode'],('magazine_reload_retreat','magazine_reload_hold'))
             self.assertTrue(order['fire_allowed'])
             orders.append({k:order[k]for k in ('combat_mode','move_position','target_id','face_position')})
         self.assertEqual(orders[0],orders[1])
         self.assertEqual(orders[0],orders[2])
-
-    def test_legacy_low_health_retreat_state_releases_to_combat(self):
-        planner=BotPlanner()
-        players=self._report(planner,[_contact(2,0,150,[11])])
-        self.states[0]['health']=200
-        planner._retreat_states[11]=dict(moving_mode='low_health_retreat',phase='withdraw',
-            target_point=dict(x=0.,y=0.,z=-100.),face=dict(x=0.,y=0.,z=150.))
-        order=planner.build_orders(self.manifest,self.states,players,1.)['orders'][0]
-        self.assertNotIn(order['combat_mode'],('low_health_retreat','low_health_defend'))
-        self.assertNotIn(11,planner._retreat_states)
-        self.assertTrue(order['fire_allowed'])
 
     def test_blocked_shooter_releases_stationary_hold_but_keeps_target(self):
         planner = BotPlanner()
@@ -677,7 +666,7 @@ class ServerBotTacticsTests(unittest.TestCase):
         self.assertEqual(2, order['target_id'])
         self.assertTrue(order['fire_allowed'])
         self.assertNotIn(order['combat_mode'], (
-            'under_fire_withdraw', 'under_fire_hold'))
+            'magazine_reload_retreat', 'magazine_reload_hold'))
 
     def test_minor_unanswerable_hit_does_not_order_a_retreat(self):
         contact = _contact(2, 0, 50, [12])
@@ -691,7 +680,7 @@ class ServerBotTacticsTests(unittest.TestCase):
             11, 'player', 2, 1, 1.1))
         solo = unsupported.build_orders(
             self.manifest, solo_states, players, 1.1)['orders'][0]
-        self.assertNotEqual('under_fire_withdraw', solo['combat_mode'])
+        self.assertNotEqual('magazine_reload_retreat', solo['combat_mode'])
 
         supported = BotPlanner()
         manifest = [
@@ -743,7 +732,7 @@ class ServerBotTacticsTests(unittest.TestCase):
                                    1.1)['orders'])
 
                 self.assertNotEqual(
-                    'under_fire_withdraw', blocked[11]['combat_mode'])
+                    'magazine_reload_retreat', blocked[11]['combat_mode'])
 
     def test_dead_recent_attacker_is_cleared_before_ordering(self):
         planner = BotPlanner()
@@ -1099,42 +1088,6 @@ class ServerBotTacticsTests(unittest.TestCase):
         self.assertEqual('route', order['combat_mode'])
         self.assertNotIn('capture_base_id', order)
 
-    def test_two_wide_enemy_lanes_do_not_trigger_crossfire_withdrawal(self):
-        planner = BotPlanner()
-        contacts = [
-            _contact(2, -130, 130, [11]),
-            _contact(3, 130, 130, [11]),
-        ]
-        for contact in contacts:
-            contact['threatened_bot_ids'] = [11]
-        players = self._report(planner, contacts)
-
-        order = planner.build_orders(
-            self.manifest, self.states, players, 1.0)['orders'][0]
-
-        live_bot = planner._alive_bots(self.manifest, self.states)[0]
-        self.assertGreaterEqual(planner._crossfire_risk(
-            live_bot, list(planner._contacts[1].values())), 0.35)
-        self.assertNotEqual('crossfire_withdraw', order['combat_mode'])
-        self.assertTrue(order['fire_allowed'])
-
-    def test_outgoing_firing_lanes_do_not_claim_incoming_crossfire(self):
-        planner = BotPlanner()
-        contacts = [
-            _contact(2, -130, 130, [11]),
-            _contact(3, 130, 130, [11]),
-        ]
-        players = self._report(planner, contacts)
-
-        order = planner.build_orders(
-            self.manifest, self.states, players, 1.0)['orders'][0]
-        live_bot = planner._alive_bots(self.manifest, self.states)[0]
-
-        self.assertIsNone(planner._crossfire_risk(
-            live_bot, list(planner._contacts[1].values())))
-        self.assertNotIn(order['combat_mode'], (
-            'crossfire_withdraw', 'crossfire_hold'))
-
     def test_support_requires_a_ready_weapon_and_current_firing_lane(self):
         contact = _contact(2, 0, 380, [12], 'heavyTank')
         player = {'id': 2, 'team': 2, 'alive': True}
@@ -1419,9 +1372,8 @@ class ServerBotTacticsTests(unittest.TestCase):
         modes = (
             'engage', 'advance_contact', 'support_hold', 'flank',
             'take_cover', 'cover_hold', 'cover_peek', 'cover_return',
-            'withdraw', 'base_defense', 'low_health_retreat',
-            'low_health_defend', 'under_fire_withdraw', 'under_fire_hold',
-            'crossfire_withdraw', 'crossfire_hold',
+            'withdraw', 'base_defense', 'magazine_reload_retreat',
+            'magazine_reload_hold',
         )
         route_point = {'x': 0.0, 'y': 0.0, 'z': 100.0}
         turnback_point = {'x': 0.0, 'y': 0.0, 'z': -100.0}
@@ -1472,9 +1424,7 @@ class ServerBotTacticsTests(unittest.TestCase):
 
     def test_radio_enemy_commands_keep_local_survival_priority(self):
         protected_modes = (
-            'base_defense', 'low_health_retreat', 'low_health_defend',
-            'under_fire_withdraw', 'under_fire_hold',
-            'crossfire_withdraw', 'crossfire_hold',
+            'base_defense', 'magazine_reload_retreat', 'magazine_reload_hold',
         )
         bot = {
             'id': 11, 'team': 1,

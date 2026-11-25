@@ -22,8 +22,7 @@ class RouteTasksMixin:
     @staticmethod
     def _task_combat(order):
         mode=order.get('combat_mode')
-        retreats=('low_health_retreat','low_health_defend','magazine_reload_retreat','magazine_reload_hold',
-            'under_fire_withdraw','under_fire_hold','crossfire_withdraw','crossfire_hold','withdraw')
+        retreats=('magazine_reload_retreat','magazine_reload_hold','withdraw')
         return bool(mode in retreats or order.get('target_id') is not None and mode in (
             'engage','flank','advance_contact','take_cover','cover_hold','cover_peek','cover_return','support_hold'))
 
@@ -180,7 +179,7 @@ class RouteTasksMixin:
         if task['index'] >= len(task['points']):
             if task['kind'] == 'pressure':
                 route = task['target_route']
-                self._route_assignments[bot['id']] = dict(route=route, until=0., ordered_task=True)
+                self._route_assignments[bot['id']] = dict(route=route, ordered_task=True)
                 self._route_states[bot['id']] = dict(route_id=route['id'], index=0)
                 self._route_history.setdefault(bot['id'], {}).pop(route['id'], None)
                 self._travel_tasks.pop(bot['id'], None)
@@ -202,7 +201,7 @@ class RouteTasksMixin:
         if (target is None or bot['id'] in self._travel_tasks or bot['id'] in self._route_recoveries or
                 order.get('team_command') or order.get('target_id') is not None or
                 bot['profile'].get('class_tag')=='SPG' or
-                order.get('combat_mode') not in ('route','advance','base_screen')):return
+                order.get('combat_mode') not in ('route','advance')):return
         route=self._task_route(bot)
         authored=bot_tactics.route_config(self.tactics,self.tactics_map,route.get('id'),bot['team'],route.get('waypoints'))
         state=self._route_states.get(bot['id']) or {}
@@ -261,7 +260,7 @@ class RouteTasksMixin:
                 if not player_order:
                     identity,index,move,anchor,join=self._route(bot,now)
                     order.update(route_id=identity,route_index=index,move_position=move,route_anchor=anchor,route_join=join)
-        if released and not task and not player_order and order.get('combat_mode') in ('route','advance','base_screen'):
+        if released and not task and not player_order and order.get('combat_mode') in ('route','advance'):
             identity,index,move,anchor,join=self._route(bot,now)
             order.update(route_id=identity,route_index=index,move_position=move,route_anchor=anchor,route_join=join)
         if task:

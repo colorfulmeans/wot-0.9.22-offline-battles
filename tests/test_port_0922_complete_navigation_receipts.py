@@ -164,7 +164,7 @@ class RuntimeReceiptTests(unittest.TestCase):
             tactical_evidence=dict(at=500.,selection=dict(outcome='no_local_lane')))
         def hold(state, order, targets, now, clear):
             return dict(order, move_position=(state['x'],state['y'],state['z']),
-                        throttle_override=0., combat_mode='under_fire_withdraw')
+                        throttle_override=0., combat_mode='magazine_reload_retreat')
         with mock.patch.object(self.runtime,'_rear_laying_order',side_effect=lambda s,o,t,n:o), \
                 mock.patch.object(self.runtime,'_artillery_position_order',side_effect=lambda s,o,t,n:o), \
                 mock.patch.object(self.runtime,'_gun_angle_order',side_effect=hold):
@@ -412,7 +412,6 @@ class LeaseAndEntryReceiptTests(unittest.TestCase):
         self.assertEqual(before,p._route_balance_receipts[1])
         self.assertEqual(181.,before['sampled_at'])
         self.assertEqual('target',p._route_assignments[f.donor['id']]['route']['id'])
-        self.assertEqual(0.,p._route_assignments[f.donor['id']]['until'])
 
     def test_recovery_switch_serializes_first_entry_only_after_return_to_start(self):
         f = route_fixture.WreckRouteSwitchTests(); f.setUp()

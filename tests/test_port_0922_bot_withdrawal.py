@@ -16,7 +16,7 @@ class WithdrawalTests(unittest.TestCase):
         self.state = dict(id=11, slot=0, position=(0., 0., 0.), yaw=0.,
                           speed=0., dt=.1, half_length=3.5, half_width=1.5,
                           neighbours=[], pose_clear=lambda yaw: True)
-        self.order = dict(combat_mode='low_health_retreat', target_id=2,
+        self.order = dict(combat_mode='magazine_reload_retreat', target_id=2,
                           aim_position=(0., 0., 100.), face_position=(0., 0., 100.),
                           move_position=(0., 0., -20.), fire_range=500.,
                           throttle_override=None, fire_allowed=True)
@@ -25,8 +25,7 @@ class WithdrawalTests(unittest.TestCase):
         return self.adapter.decide_with_order(self.state, self.order, clear)
 
     def test_every_withdrawal_mode_backs_without_exposing_rear(self):
-        for mode in ('withdraw', 'low_health_retreat', 'under_fire_withdraw',
-                     'crossfire_withdraw'):
+        for mode in ('withdraw', 'magazine_reload_retreat'):
             self.order['combat_mode'] = mode
             result = self.decide()
             self.assertEqual(-1.0, result['throttle'])
@@ -103,17 +102,16 @@ class WithdrawalTests(unittest.TestCase):
     def test_ordinary_route_and_forward_destination_keep_normal_driver(self):
         self.order['combat_mode'] = 'route'
         self.assertNotEqual('reverse_withdraw', self.decide()['recovery_mode'])
-        self.order.update(combat_mode='low_health_retreat', move_position=(0., 0., 20.))
+        self.order.update(combat_mode='magazine_reload_retreat', move_position=(0., 0., 20.))
         self.assertGreater(self.decide()['throttle'], 0.)
 
     def test_fixed_gun_aiming_cannot_steal_reverse_withdrawal_controls(self):
         self.assertEqual((-.2, -.72, False), combat_hull_aim(
             0., 1., -.1, .1, -.2, -.72, 'reverse_withdraw', True,
-            combat_mode='low_health_retreat', movement_intent=True))
+            combat_mode='magazine_reload_retreat', movement_intent=True))
 
     def test_denied_reverse_expires_and_local_recovery_keeps_ownership(self):
-        for mode in ('withdraw', 'low_health_retreat', 'under_fire_withdraw',
-                     'crossfire_withdraw'):
+        for mode in ('withdraw', 'magazine_reload_retreat'):
             with self.subTest(mode=mode):
                 self.setUp()
                 self.order['combat_mode'] = mode

@@ -169,20 +169,6 @@ class SPGDisplacementTests(unittest.TestCase):
         self.assertEqual('artillery_deploy', runtime._artillery_position_order(state, order, {}, 3.2)['combat_mode'])
 
 
-class RetreatEndpointTests(unittest.TestCase):
-    def test_legacy_low_health_endpoint_does_not_own_travel(self):
-        planner=BotPlanner()
-        state=_state(11,1,0,100);state['health']=200
-        bot=_bot(11,1,0,_route('road',[(0,0,False),(0,100,False),(0,200,False)]),'AT-SPG')
-        planner._route_states[11]=dict(route_id='road',index=1)
-        planner._apply_retreat_order({},dict(bot,state=state),dict(x=0,y=0,z=0),
-            dict(x=0,y=0,z=200),1,'low_health_retreat','low_health_defend')
-        for now in (8,9,25):
-            order=planner.build_orders([bot],[state],[],now)['orders'][0]
-            self.assertNotIn(order['combat_mode'],('low_health_retreat','low_health_defend'))
-            self.assertNotIn(11,planner._retreat_states)
-
-
 class OccupiedTravelPointTests(unittest.TestCase):
     def setUp(self):
         self.fixture = harness.BotRuntimeTests()
@@ -240,7 +226,7 @@ class ShortRetreatRuntimeTests(unittest.TestCase):
                 ('reverse_withdraw', True, 1.), ('blocked', True, .2)):
             self.assertEqual((-.2, -.72, False), aim(
                 0, yaw, -.1, .1, -.2, -.72, mode, True,
-                combat_mode='under_fire_withdraw', movement_intent=True,
+                combat_mode='magazine_reload_retreat', movement_intent=True,
                 withdrawal_aim=allow))
 
     def test_fixed_gun_lays_and_fires_while_short_reverse_escape_progresses(self):
@@ -248,7 +234,7 @@ class ShortRetreatRuntimeTests(unittest.TestCase):
         runtime.visibility_probe = lambda *args: True
         runtime.firing_lane_probe = lambda *args: True
         runtime._apply_orders(dict(bot_order_revision=2, bot_orders=[dict(
-            id=11, team=2, combat_mode='under_fire_withdraw', target_kind='human', target_id=2,
+            id=11, team=2, combat_mode='magazine_reload_retreat', target_kind='human', target_id=2,
             move_position=(0, 0, -20), aim_position=(20, 0, 100), face_position=(20, 0, 100),
             fire_range=500, fire_allowed=True, throttle_override=None)]))
         player = harness._admit_player(dict(id=2, team=1, alive=True, x=20, y=0, z=100))

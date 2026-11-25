@@ -73,7 +73,7 @@ class EmptyTravelTests(unittest.TestCase):
         p._travel_tasks[11] = dict(kind='guard', route=self.route)
         p._previous_combat.add(11)
         p._previous_player[11] = dict(id='old')
-        p._retreat_states[11] = dict(moving_mode='magazine_reload_retreat')
+        p._retreat_states[11] = dict(phase='withdraw')
         order = self.tick()
         self.assertTrue(order['empty_ammo'])
         self.assertNotIn(11,p._travel_tasks)

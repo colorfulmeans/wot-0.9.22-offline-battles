@@ -306,8 +306,8 @@ class AimProgressTests(unittest.TestCase):
         # Airfield 17:52:41/46/50: SU-122-44 wanted a right route pivot,
         # but the visible target made hull aiming replace it with a left turn.
         for yaw, mode in ((-.7429965, 'withdraw'),
-                          (-1.1123639, 'low_health_retreat'),
-                          (-.3324339, 'low_health_retreat')):
+                          (-1.1123639, 'magazine_reload_retreat'),
+                          (-.3324339, 'magazine_reload_retreat')):
             self.assertEqual((1.0, 0.0, False), driver.combat_hull_aim(
                 yaw, yaw - 1.0, -.1, .1, 1.0, 0.0, 'drive', True,
                 combat_mode=mode, movement_intent=True))

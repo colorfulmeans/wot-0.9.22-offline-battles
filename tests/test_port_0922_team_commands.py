@@ -131,7 +131,7 @@ class TeamCommandTests(unittest.TestCase):
             20: {'id': 20, 'team': 1, 'alive': True, 'x': 8.0, 'z': 0.0},
         })
         self.state.bot_orders = {'revision': 1, 'orders': [
-            {'id': 20, 'combat_mode': 'under_fire_hold'},
+            {'id': 20, 'combat_mode': 'magazine_reload_hold'},
         ]}
 
         ack = self.state.submit_team_command(1, self._message('BACKTOBASE'))
@@ -194,7 +194,7 @@ class TeamCommandTests(unittest.TestCase):
             17: {'id': 17, 'team': 1, 'alive': True, 'x': 360.0, 'z': 0.0},
         })
         self.state.bot_orders = {'revision': 1, 'orders': [
-            {'id': 14, 'combat_mode': 'under_fire_hold'},
+            {'id': 14, 'combat_mode': 'magazine_reload_hold'},
         ]}
         message = self._message('HELPME')
 
@@ -232,7 +232,7 @@ class TeamCommandTests(unittest.TestCase):
     def test_broadcast_preserves_emergency_orders_but_back_to_base_keeps_defenders(self):
         self.state.bot_orders = {'revision': 1, 'orders': [
             {'id': 11, 'combat_mode': 'base_defense'},
-            {'id': 12, 'combat_mode': 'under_fire_withdraw'},
+            {'id': 12, 'combat_mode': 'magazine_reload_retreat'},
         ]}
 
         attack = self.state.submit_team_command(1, self._message('ATTACK'))
@@ -586,26 +586,6 @@ class TeamCommandTests(unittest.TestCase):
         self.assertEqual('invalid_reload_time', invalid_reload['code'])
         self.assertEqual('invalid_quantity', invalid_quantity['code'])
         self.assertEqual('invalid_aim_point', invalid_aim['code'])
-
-    def test_threatened_bot_ids_are_cleaned_without_rejecting_contact(self):
-        relay = self.state.update_bot_observation(
-            SIMULATION_WORKER_AUTHORITY_ID, {
-                'type': 'bot_observation', 'round_id': self.state.round_id,
-                'contacts': [{
-                    'observing_team': 1, 'target_kind': 'human',
-                    'target_id': 2, 'target_team': 2,
-                    'visible': True, 'fresh': True, 'time_left': 10.0,
-                    'visible_by_bot_ids': [11],
-                    'visible_by_player_ids': [],
-                    'shootable_by_bot_ids': [11],
-                    'threatened_bot_ids': [11, 12, 21, 'bad', 11],
-                }], 'affordances': [],
-            })
-
-        self.assertIsInstance(relay, dict)
-        self.assertEqual(
-            [11, 12], self.state.bot_planner._contacts[1][
-                ('human', 2)]['threatened_bot_ids'])
 
 
 if __name__ == '__main__':

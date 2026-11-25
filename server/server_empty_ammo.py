@@ -15,7 +15,7 @@ class EmptyAmmoMixin:
                 task = self._travel_tasks.pop(actor, None)
                 route = (task or {}).get('route') or self._cycle_route(bot)
                 if route:
-                    self._route_assignments[actor] = dict(route=copy.deepcopy(route), until=0., ordered_task=True)
+                    self._route_assignments[actor] = dict(route=copy.deepcopy(route), ordered_task=True)
                 self._cycle_drop_parking(bot)
                 for mapping in (self._route_states, self._route_history, self._route_recoveries,
                                 self._wreck_route_progress, self._wreck_route_avoid,

@@ -114,7 +114,7 @@ class FriendlyManoeuvreTests(unittest.TestCase):
         self.assertEqual('target_changed', self.state['_friendly_reposition_event']['outcome'])
 
     def test_retreat_cannot_start_a_new_lane_override(self):
-        self.command['combat_mode'] = 'low_health_retreat'
+        self.command['combat_mode'] = 'magazine_reload_retreat'
         self.assertFalse(self.mark(10.))
         self.assertNotIn(8, self.runtime._friendly_repositions)
 
@@ -134,7 +134,7 @@ class FriendlyManoeuvreTests(unittest.TestCase):
 
     def test_target_death_and_priority_handoff_release_owner(self):
         for order, target, outcome in (({}, dict(self.target, alive=False), 'target_gone'),
-                (dict(combat_mode='low_health_retreat'), self.target, 'priority_handoff'),
+                (dict(combat_mode='magazine_reload_retreat'), self.target, 'priority_handoff'),
                 (dict(combat_mode='base_defense'), self.target, 'priority_handoff')):
             self.runtime._server_orders[8] = order
             self.mark(10.)

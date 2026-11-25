@@ -38,7 +38,7 @@ class RuntimeWithdrawalTests(unittest.TestCase):
             baked_graph=harness._flat_open_graph())
         runtime.battle_start(self.fixture.start)
         runtime._apply_orders(dict(bot_order_revision=1, bot_orders=[dict(
-            id=11, team=2, combat_mode='low_health_retreat', target_kind='human',
+            id=11, team=2, combat_mode='magazine_reload_retreat', target_kind='human',
             target_id=2, move_position=(0., 0., -20.),
             aim_position=(0., 0., 100.), face_position=(0., 0., 100.),
             fire_range=500., fire_allowed=True, throttle_override=None)]))

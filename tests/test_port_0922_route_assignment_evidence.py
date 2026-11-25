@@ -34,11 +34,11 @@ class RouteAssignmentEvidenceTests(unittest.TestCase):
 
     def test_expiry_and_reassignment_keep_both_events_and_old_cursor(self):
         case=self.scene();p=case.planner;bot=case.donor
-        p._record_route_assignment(bot,7.,'target','source','lease_expired')
+        p._record_route_assignment(bot,7.,'target','source','catalog_reset')
         first=copy.deepcopy(p._route_assignment_receipts[bot['id']])
         p._record_route_assignment(bot,7.,'source','target','pressure_rebalance')
         receipt=json.loads(json.dumps(p._route_assignment_receipts[bot['id']]))
-        self.assertEqual(['lease_expired','pressure_rebalance'],
+        self.assertEqual(['catalog_reset','pressure_rebalance'],
                          [r['reason'] for r in receipt['history'][-2:]])
         self.assertEqual([2,3],[r['sequence'] for r in receipt['history'][-2:]])
         self.assertEqual(first['previous_progress'],receipt['history'][-2]['previous_progress'])
@@ -50,7 +50,7 @@ class RouteAssignmentEvidenceTests(unittest.TestCase):
     def test_bounded_history_exposes_omission_and_does_not_retain_old_graphs(self):
         case=self.scene();p=case.planner
         for at in range(2,12):
-            p._record_route_assignment(case.donor,float(at),'target','source','lease_expired')
+            p._record_route_assignment(case.donor,float(at),'target','source','catalog_reset')
         receipt=p._route_assignment_receipts[case.donor['id']]
         self.assertEqual(8,len(receipt['history']))
         self.assertEqual(3,receipt['history_dropped'])
@@ -104,7 +104,7 @@ class RouteAssignmentEvidenceTests(unittest.TestCase):
 
     def test_server_logs_all_same_update_events_once_and_resets_each_round(self):
         case=self.scene();p=case.planner;bot=case.donor
-        p._record_route_assignment(bot,7.,'target','source','lease_expired')
+        p._record_route_assignment(bot,7.,'target','source','catalog_reset')
         p._record_route_assignment(bot,7.,'source','target','pressure_rebalance')
         state=types.SimpleNamespace(round_id=1,bot_orders={'orders':[
             dict(id=bot['id'],route_assignment=p._route_assignment_receipts[bot['id']])]})
@@ -127,7 +127,7 @@ class RouteAssignmentEvidenceTests(unittest.TestCase):
         self.assertEqual([0,1,2,0],[r['prior_logged_sequence'] for r in rows])
         self.assertEqual([1,1,1,2],[r['round'] for r in rows])
         self.assertEqual([0,0,0,2],[r['planner_round'] for r in rows])
-        self.assertEqual('lease_expired',rows[1]['reason'])
+        self.assertEqual('catalog_reset',rows[1]['reason'])
         self.assertEqual('pressure_rebalance',rows[2]['reason'])
         self.assertTrue(rows[0]['selection']['candidates'])
 

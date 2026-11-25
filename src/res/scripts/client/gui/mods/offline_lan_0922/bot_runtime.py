@@ -2081,7 +2081,7 @@ class BotRuntime(object):
                  water_depth_probe=None, ram_contact_probe=None,
                  bot_equipment_resolver=None,
                  destructible_body_scan=None, control_seconds=None,
-                 incoming_lane_probe=None, combat_diagnostics=None,
+                 combat_diagnostics=None,
                  turret_motion_probe=None, turret_hulls_provider=None,
                  artillery_status_probe=None, wreck_rotation_probe=None,
                  wreck_ground_probe=None, rotation_resolver=None, visibility_async_probe=None,
@@ -2123,9 +2123,6 @@ class BotRuntime(object):
         # Keeping an explicit seam also makes it impossible for a stale team
         # spot to stand in for a current clear barrel lane.
         self.firing_lane_probe = firing_lane_probe or self.visibility_probe
-        self.incoming_lane_probe = incoming_lane_probe
-        self._incoming_lanes = {}
-        self._incoming_lane_budget = 0
         # Dynamic allied hulls are deliberately outside the cached static-world
         # lane.  Production checks this seam again at every final fire attempt.
         self.friendly_lane_probe = self._adapt_friendly_lane_probe(
@@ -3810,8 +3807,6 @@ class BotRuntime(object):
             self._ballistic_solution_cache = {}
             self._friendly_repositions = {}
             self._shot_los_cache = {}
-            self._incoming_lanes = {}
-            self._incoming_lane_budget = 0
             self._shot_los_deadlines = {}
             self._reset_shot_lane_work()
             self._reset_shot_lane_diagnostics()
@@ -3930,8 +3925,6 @@ class BotRuntime(object):
             self._visibility_fire = {}
             self._visibility_still = {}
             self._shot_los_cache = {}
-            self._incoming_lanes = {}
-            self._incoming_lane_budget = 0
             self._shot_los_deadlines = {}
             self._reset_shot_lane_work()
             self._reset_shot_lane_diagnostics()
@@ -14162,14 +14155,9 @@ class BotRuntime(object):
                 return False
             target_distance = _distance(
                 _position(source), _position(raw_target))
-            incoming_due = bool(self._incoming_lane_budget and
-                                callable(self.incoming_lane_probe))
-            if (target_distance > self._shot_lane_query_distance(source) and
-                    not incoming_due):
+            if target_distance > self._shot_lane_query_distance(source):
                 # Resolve cheap range rejects at the current service pose,
                 # before copying a full job or spending a native-work slot.
-                # Keep the independent enemy -> own-body probe: the enemy's
-                # gun can reach farther than this source's outgoing lane.
                 self._shot_los_cache[key] = (now, False)
                 self._shot_los_deadlines[key] = cycle_time
                 self._shot_lane_completed_pairs += 1
@@ -14188,23 +14176,8 @@ class BotRuntime(object):
             if self._shot_los_key(source, target) != key:
                 retire(key, 'invalid')
                 return False
-            # Only this direct-spot-gated queue may inspect incoming geometry.
-            # One extra pair per control callback keeps advisory threat work
-            # bounded independently of the final-shot safety checks.
-            if incoming_due:
-                self._incoming_lane_budget -= 1
-                probe_started = self._probe_started()
-                self._probe_totals[1] += 1
-                try:
-                    incoming = self.incoming_lane_probe(source, target)
-                except Exception:
-                    incoming = None
-                finally:
-                    self._probe_finished(1, probe_started)
-                if incoming is not None:
-                    self._incoming_lanes[key] = (now, bool(incoming))
-            # Bound full current-pose jobs, including the independent incoming
-            # probe. Pure outgoing range rejects above need no such slot.
+            # Bound full current-pose jobs. Pure outgoing range rejects above
+            # need no such slot.
             materialized[0] += 1
             probes_before = self._probe_totals[1]
             distance_cache = [target_distance]
@@ -14475,7 +14448,6 @@ class BotRuntime(object):
         remain complete on every latency-sensitive observation.
         """
         packed = []
-        incoming_by_target = {}
         selected_by_target = {}
         for source_id, source in self.states.items():
             selected = self._selected_visibility_target(source)
@@ -14483,33 +14455,6 @@ class BotRuntime(object):
                 selected_by_target.setdefault(
                     (int(source.get('team', 0)),) + selected, set()).add(source_id)
         maximum_age = SHOT_LANE_REFRESH_SECONDS + self._control_seconds
-        for lane_key, receipt in tuple(self._incoming_lanes.items()):
-            source = self.states.get(lane_key[0])
-            if (source is None or not source.get('alive', True) or
-                    now - receipt[0] > maximum_age):
-                self._incoming_lanes.pop(lane_key, None)
-                continue
-            if receipt[1]:
-                target_key = (int(source.get('team', 0)),) + lane_key[1:]
-                incoming_by_target.setdefault(target_key, []).append(lane_key[0])
-        # A fresh enemy Bot's outgoing receipt already has the required
-        # enemy-muzzle -> own-body direction. Reuse that geometry only when
-        # this team currently observes the enemy below. This avoids another
-        # full-roster native scan and never reverses our own outgoing ray.
-        for lane_key, receipt in self._shot_los_cache.items():
-            enemy_id, target_kind, own_id = lane_key
-            if target_kind != 'bot' or not receipt[1] or now - receipt[0] > maximum_age:
-                continue
-            enemy = self.states.get(enemy_id)
-            own = self.states.get(own_id)
-            if (enemy is None or own is None or
-                    not enemy.get('alive', True) or not own.get('alive', True) or
-                    enemy.get('team') == own.get('team') or
-                    (enemy.get('profile') or {}).get('class_tag') == 'SPG'):
-                continue
-            key = (int(own.get('team', 0)), 'bot', enemy_id)
-            if key in aggregate:
-                incoming_by_target.setdefault(key, []).append(own_id)
         for key in sorted(aggregate):
             row = aggregate[key]
             target_visible, shootable, observed_target = row[:3]
@@ -14630,9 +14575,6 @@ class BotRuntime(object):
                 # rejects omission rather than guessing.
                 'shootable_by_bot_ids': published_shooters,
                 'pending_lane_by_bot_ids': pending_shooters,
-                # Positive evidence only: an absent id is unknown, not safe.
-                'threatened_bot_ids': sorted(set(
-                    incoming_by_target.get(key, ()))) if fresh else [],
                 'x': _number(observed_target.get('x')),
                 'y': _number(observed_target.get('y')),
                 'z': _number(observed_target.get('z')),
@@ -15010,7 +14952,7 @@ class BotRuntime(object):
             self, state, command, target, launch, verdict, now):
         """Move laterally through the existing safe driver after a blocked shot."""
         if command.get('combat_mode') in (
-                'base_defense', 'low_health_retreat', 'magazine_reload_retreat', 'withdraw'):
+                'base_defense', 'magazine_reload_retreat', 'withdraw'):
             return False
         try:
             bot_id = int(state['id'])
@@ -16145,7 +16087,7 @@ class BotRuntime(object):
             self._clear_friendly_reposition(bot_id)
             return None, False
         if order.get('combat_mode') in (
-                'base_defense', 'low_health_retreat', 'magazine_reload_retreat', 'withdraw'):
+                'base_defense', 'magazine_reload_retreat', 'withdraw'):
             state['_friendly_reposition_event'] = dict(at=now, outcome='priority_handoff',
                 next_owner=order.get('combat_mode'), marker=dict(marker))
             self._clear_friendly_reposition(bot_id)
@@ -16894,7 +16836,6 @@ class BotRuntime(object):
             self._combat_diagnostics.count('bot_physical_slices')
             self._combat_diagnostics.count(
                 'bot_elapsed_us', int(round(frame_step * 1000000.0)))
-        self._incoming_lane_budget = 1 if refresh_control else 0
         step_duration_us = max(
             1, int(round(float(frame_step) * 1000000.0)))
         step_start_time_us = self._sample_time_us
@@ -18788,11 +18729,9 @@ class BotRuntime(object):
                     target is not None and target.get('visible') and
                     callable(self.cover_probe) and
                     (mode in ('take_cover', 'cover_hold', 'cover_peek',
-                              'cover_return', 'under_fire_withdraw',
-                              'low_health_retreat', 'magazine_reload_retreat', 'crossfire_withdraw') or
+                              'cover_return', 'magazine_reload_retreat') or
                      (command.get('fire_allowed') and mode in (
-                         'engage', 'advance_contact', 'jiggle_forward',
-                         'jiggle_back')))):
+                         'engage', 'advance_contact')))):
                 cover_jobs.append((state['id'], _copy_runtime_state(state),
                                    dict(target),
                                    command.get('move_position', position)))

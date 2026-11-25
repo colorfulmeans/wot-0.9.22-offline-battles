@@ -26,7 +26,7 @@ class WithdrawalGoalTests(unittest.TestCase):
                                         reload_pending=True,clip=0,clip_size=4,fire_seq=4)]
         fixture.states[0]['health'] = 200
         planner = BotPlanner()
-        planner._route_assignments[11] = dict(route=fixture.route, until=0.)
+        planner._route_assignments[11] = dict(route=fixture.route)
         planner._route_states[11] = dict(route_id='lane', index=1, join_index=1,
             join_anchor=anchor or dict(x=x, y=0., z=128.))
         players = fixture._report(planner, [_contact(2, x, 148, [11])])
@@ -152,7 +152,7 @@ class RouteLeaseEvidenceTests(unittest.TestCase):
         for now in (61.,121.,181.):
             self.planner._rebalance_routes(1,self.bots,self.contacts,now,protected_ids=[self.donor['id']])
             assignment=self.planner._route_assignments[self.donor['id']]
-            self.assertEqual('target',assignment['route']['id']);self.assertEqual(0.,assignment['until'])
+            self.assertEqual('target',assignment['route']['id'])
             self.assertEqual(1,self.planner._route_states[self.donor['id']]['index'])
 
     def test_different_pressure_does_not_teleport_committed_donor(self):
@@ -165,13 +165,12 @@ class RouteLeaseEvidenceTests(unittest.TestCase):
     def test_no_pressure_does_not_restore_the_manifest_lane(self):
         self.planner._rebalance_routes(1,self.bots,[],181.)
         self.assertEqual('target',self.planner._route_assignments[self.donor['id']]['route']['id'])
-        self.assertEqual(0.,self.planner._route_assignments[self.donor['id']]['until'])
 
     def test_covered_target_preserves_committed_cursor_and_does_not_dispatch(self):
         self.planner._route_line_contributor=lambda *args:True
         target=self.planner._route_catalog(self.bots)['target']
         for bot in self.bots:
-            self.planner._route_assignments[bot['id']]=dict(route=target,until=0.,ordered_task=True)
+            self.planner._route_assignments[bot['id']]=dict(route=target,ordered_task=True)
             bot['profile']['class_tag']='mediumTank'
         self.planner._rebalance_routes(1,self.bots,self.contacts,181.)
         self.assertEqual('pressure_already_covered',self.planner._route_balance_receipts[1]['outcome'])

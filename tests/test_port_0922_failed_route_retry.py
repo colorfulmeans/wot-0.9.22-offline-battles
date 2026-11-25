@@ -32,7 +32,7 @@ class FailedRouteRetryTests(unittest.TestCase):
         planner,bot,manifest,order=self.scene()
         planner._reroute_wreck_stall(order,bot,manifest,0)
         for now in (5,10,50):
-            order['combat_mode']='under_fire_withdraw'
+            order['combat_mode']='magazine_reload_retreat'
             planner._reroute_wreck_stall(order,bot,manifest,now)
         self.assertEqual('center_line',order['route_id'])
         order['combat_mode']='route'

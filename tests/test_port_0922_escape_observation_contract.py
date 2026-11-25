@@ -137,7 +137,7 @@ class RememberedObservationTests(unittest.TestCase):
     def contact():
         return dict(observing_team=2, target_team=1, target_kind='human', target_id=2,
             visible=True, fresh=False, time_left=5., visible_by_bot_ids=[],
-            visible_by_player_ids=[], shootable_by_bot_ids=[11], threatened_bot_ids=[],
+            visible_by_player_ids=[], shootable_by_bot_ids=[11],
             radio_recipients=[dict(kind='bot', id=11, time_left=4.)])
 
     def deliver(self, contacts, round_id=2):
@@ -199,7 +199,7 @@ class RememberedObservationTests(unittest.TestCase):
         for change in (dict(time_left=0.), dict(time_left=float('nan')),
                        dict(target_team=2), dict(target_id=True),
                        dict(fresh=True), dict(shootable_by_bot_ids=[11,11]),
-                       dict(threatened_bot_ids=[11]), dict(visible=False, time_left=0.)):
+                       dict(visible=False, time_left=0.)):
             delivered, rejected = self.deliver([dict(self.contact(), **change)])
             self.assertFalse(delivered, change)
             self.assertEqual(['invalid_contacts'], rejected, change)

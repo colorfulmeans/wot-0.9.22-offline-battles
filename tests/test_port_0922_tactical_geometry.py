@@ -44,22 +44,6 @@ class TacticalGeometryTests(unittest.TestCase):
         self.assertEqual(small[1:], geometry.search_offsets(2, 4, 1)[:-1])
         self.assertEqual(tuple(v * 2 for v in small[1]), large[1])
 
-    def test_incoming_probe_uses_observed_enemy_origin_not_live_entity_pose(self):
-        runtime, battle, source, target, unused = self.scene()
-        rays = []
-        runtime.bigworld.wg_collideSegment = lambda space, start, end, mask: (
-            rays.append((tuple(start), tuple(end))) or None)
-        runtime.bigworld.entities[20].position = fixtures._Vector(900, 900, 900)
-        self.assertTrue(battle._bot_incoming_lane(source, target))
-        self.assertLessEqual(len(rays), 2)
-        self.assertAlmostEqual(100.0, rays[0][0][2])
-        self.assertAlmostEqual(0.0, rays[0][1][2])
-        target['position'] = (50.0, 0.0, 80.0)
-        self.assertTrue(battle._bot_incoming_lane(source, target))
-        self.assertAlmostEqual(50.0, rays[-1][0][0])
-        runtime.bigworld.entities[20].isStarted = False
-        self.assertIsNone(battle._bot_incoming_lane(source, target))
-
     def test_nominal_damage_selects_better_clear_part_with_existing_ray_bound(self):
         runtime, battle, source, target, unused = self.scene()
         rays = []
@@ -123,24 +107,6 @@ class TacticalGeometryTests(unittest.TestCase):
             return not (abs(start[0]) > 2.0 and abs(end[0]) < 1.0)
         self.assertFalse(battle._sample_bot_cover(source, target, (0, 0, 50), (), no_return))
         self.assertLessEqual(len(calls), 40)
-
-    def test_incoming_reuses_enemy_receipt_only_for_a_fresh_local_observation(self):
-        bots = bot_runtime.BotRuntime(1)
-        bots.states = {11: {'id': 11, 'team': 1, 'alive': True},
-                       21: {'id': 21, 'team': 2, 'alive': True}}
-        target = {'team': 2, 'x': 0, 'y': 0, 'z': 100}
-        key = (1, 'bot', 21)
-        bots._visible_target_poses[key] = dict(target)
-        bots._team_spot_time_left = lambda *unused: 5.0
-        aggregate = {key: [True, {11}, dict(target), set(), {11}]}
-        bots._shot_los_cache[(11, 'bot', 21)] = (1.0, True)
-        self.assertEqual([], bots._pack_observations(aggregate, 1.0)[0]['threatened_bot_ids'])
-        bots._shot_los_cache[(21, 'bot', 11)] = (1.0, True)
-        self.assertEqual([11], bots._pack_observations(aggregate, 1.0)[0]['threatened_bot_ids'])
-        aggregate[key][4] = set()
-        self.assertEqual([], bots._pack_observations(aggregate, 1.0)[0]['threatened_bot_ids'])
-        aggregate[key][4] = {11}
-        self.assertEqual([], bots._pack_observations(aggregate, 3.0)[0]['threatened_bot_ids'])
 
     def test_cover_identity_survives_server_order_admission(self):
         bots = bot_runtime.BotRuntime(1)

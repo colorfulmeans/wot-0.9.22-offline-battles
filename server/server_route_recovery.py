@@ -132,7 +132,7 @@ class RouteRecoveryMixin:
                 for row in candidates],
             selected_route=identity, selected_index=0,
             selected_point=_point(route['waypoints'][0]))
-        self._route_assignments[bot['id']] = dict(route=route, until=0.)
+        self._route_assignments[bot['id']] = dict(route=route)
         # Returning to the start completed the old traversal. A new traversal
         # owns fresh wait clocks and cannot restore an old failed route cursor.
         self._route_states[bot['id']] = dict(route_id=identity, index=0)
