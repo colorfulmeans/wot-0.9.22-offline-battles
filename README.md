@@ -7,7 +7,7 @@ You supply your own client. The client still provides the maps, vehicles,
 rendering, HUD and physics. This repository provides the client mod, the bot
 and battle logic, a small LAN server and a launcher.
 
-Current release: **v1.1.2** — [release notes](docs/releases/v1.1.2.md).
+Current release: **v1.1.3** — [release notes](docs/releases/v1.1.3.md).
 
 ### Historical battle review notes
 

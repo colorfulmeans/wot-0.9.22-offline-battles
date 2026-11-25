@@ -1,4 +1,4 @@
-wot-0.9.22-offline-battles v1.1.2
+wot-0.9.22-offline-battles v1.1.3
 
 Supported client: Chinese HD World of Tanks 0.9.22.0.1 #1513 (32-bit).
 The launcher and bundled server require 64-bit Windows.
@@ -8,6 +8,12 @@ beside wot-0.9.22-offline-battles.exe, run the launcher and select the game.
 Use the existing save and vehicle profile. An update does not require resetting
 saves, recordings or settings. Do not mix old and new launcher files or install
 another mod copy manually; the launcher installs its matching client payload.
+
+Choose English, Chinese or Auto with the launcher's language selector. Auto
+uses the Windows display language. The launcher updates its own display when
+you change the selection. The Mod's in-game text uses the selection at the
+next game launch. The first startup notice displays Chinese and English
+together. A Chinese guide is included as README.zh-CN.txt.
 
 The route toolbar groups creation, copy/delete and undo/redo on its first row;
 main/reserve, map checks, view and background-image import are on the second.
@@ -113,7 +119,7 @@ assignments. The vehicle modifier has aligned nation/type/tier and
 vehicle/modification-category/field rows, using localized garage-order nations.
 
 English release notes:
-https://github.com/colorfulmeans/wot-0.9.22-offline-battles/releases/tag/v1.1.2
+https://github.com/colorfulmeans/wot-0.9.22-offline-battles/releases/tag/v1.1.3
 
 This mod is free; resale is prohibited. World of Tanks game assets are not
 included. This unofficial project is not endorsed by Wargaming.

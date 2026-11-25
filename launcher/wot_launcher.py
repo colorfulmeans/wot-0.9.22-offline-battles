@@ -60,7 +60,7 @@ _SHOP_HELP = (
     "next game startup. Owned or queued vehicles cannot be added twice. "
     "Close the game before adding vehicles.")
 
-LAUNCHER_VERSION = "1.1.2"
+LAUNCHER_VERSION = "1.1.3"
 WINDOW_TITLE = "wot-0.9.22-offline-battles v%s" % LAUNCHER_VERSION
 _DISTRIBUTION_NOTICE = (
     "This open-source Mod is distributed free of charge. Derivative works are welcome. "
