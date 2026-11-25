@@ -13,6 +13,21 @@ permissions:
   actions: read
 
 jobs:
+  invisible-characters:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Refuse invisible characters in new commits, changed text and release notes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python tools/check_invisible_characters.py --base "$BASE_SHA" --head "$HEAD_SHA"
+
   navigation-resolution:
     runs-on: ubuntu-latest
     steps:
