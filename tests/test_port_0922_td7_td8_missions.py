@@ -133,7 +133,7 @@ class TD7ReceiptTests(unittest.TestCase):
             state._record_frag('player', 1, 2, 'player', 2)
             self.assertTrue(self.kill_events(state)[0][6])
             player.health = 1
-            state._finish_battle(1, 'elimination')
+            self.assertTrue(state._finish_battle(1, 'elimination'))
             receipt = _latest_receipt(state, player.account_key)
             self.assertTrue(client._valid_battle_receipt(receipt))
             restarted = server.BattleState(map_name='01_karelia', receipt_state_path=path)

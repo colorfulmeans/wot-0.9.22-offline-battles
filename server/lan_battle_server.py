@@ -1153,6 +1153,35 @@ def _default_result_receipt_state_path(port=28782):
         stem, int(port), extension))
 
 
+# A Windows real-time scanner or indexer can hold a file it has just seen
+# closed without delete sharing for a moment.  Renaming that file is then
+# refused with ERROR_ACCESS_DENIED (5) or ERROR_SHARING_VIOLATION (32) although
+# nothing in this process holds it.  Such a refusal clears by itself, so it is
+# waited out for about a second before the write is reported as failed.
+_TRANSIENT_REPLACE_WINERRORS = frozenset((5, 32))
+_REPLACE_RETRY_DELAYS = (0.01, 0.02, 0.05, 0.1, 0.2, 0.25, 0.3)
+
+
+def _replace_file(source, destination):
+    """Rename ``source`` over ``destination``, waiting out a brief refusal."""
+    refusals = 0
+    while True:
+        try:
+            os.replace(source, destination)
+        except PermissionError as error:
+            if (getattr(error, "winerror", None) not in
+                    _TRANSIENT_REPLACE_WINERRORS or
+                    refusals >= len(_REPLACE_RETRY_DELAYS)):
+                raise
+            time.sleep(_REPLACE_RETRY_DELAYS[refusals])
+            refusals += 1
+            continue
+        if refusals:
+            _server_log("FILE REPLACE %s succeeded after %d refusal(s)" % (
+                os.path.basename(destination), refusals))
+        return
+
+
 def _write_json_atomic(path, value):
     """Replace one JSON file only after its complete contents reach disk."""
     path = os.path.abspath(path)
@@ -1167,7 +1196,7 @@ def _write_json_atomic(path, value):
             stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, path)
+        _replace_file(temporary, path)
     finally:
         try:
             if os.path.isfile(temporary):

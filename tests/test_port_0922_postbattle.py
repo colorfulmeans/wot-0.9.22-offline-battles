@@ -1476,6 +1476,78 @@ class PostBattleContractTests(unittest.TestCase):
                 map_name='01_karelia', receipt_state_path=path)
             self.assertEqual([], list(fully_acked.result_receipts))
 
+    def _ledger_battle(self, path, account_key):
+        state = BattleState(map_name='01_karelia', receipt_state_path=path)
+        state.players = {1: Player(1, _Socket(), ('127.0.0.1', 1), name='Alice',
+                                   team=1, account_key=account_key)}
+        state.client_build = CLIENT_BUILD_0922
+        state.phase = 'battle'
+        return state
+
+    @staticmethod
+    def _refused_replace(calls, refusals, winerror=32):
+        # A Windows scanner holding the just-closed temporary file refuses
+        # its rename the way this records: errno EACCES with a winerror.
+        real_replace = os.replace
+
+        def replace(source, destination):
+            calls.append(os.path.basename(source))
+            if refusals is None or len(calls) <= refusals:
+                error = PermissionError(13, 'refused')
+                if winerror is not None:
+                    error.winerror = winerror
+                raise error
+            return real_replace(source, destination)
+        return replace
+
+    def test_result_ledger_waits_out_a_brief_windows_rename_refusal(self):
+        account_key = 'a' * 32
+        with tempfile.TemporaryDirectory() as folder:
+            path = str(Path(folder) / 'server_receipts.json')
+            state = self._ledger_battle(path, account_key)
+            calls = []
+            with mock.patch.object(
+                    lan_server_module.os, 'replace',
+                    side_effect=self._refused_replace(calls, 2)), \
+                    mock.patch.object(lan_server_module.time, 'sleep') as sleep:
+                self.assertTrue(state._finish_battle(1, 'elimination'))
+            self.assertEqual(3, len(calls))
+            self.assertEqual([mock.call(0.01), mock.call(0.02)],
+                             sleep.call_args_list)
+            receipt_id = _latest_receipt(state, account_key)['receipt_id']
+            restarted = BattleState(
+                map_name='01_karelia', receipt_state_path=path)
+            self.assertEqual([receipt_id], [
+                receipt['receipt_id']
+                for receipt in _account_receipts(restarted, account_key)])
+            self.assertEqual(['server_receipts.json'], os.listdir(folder))
+
+    def test_result_ledger_fails_a_refusal_that_does_not_clear(self):
+        # Past the bounded wait, and at once for a failure that is not a
+        # sharing refusal, the result is neither stored nor announced, so a
+        # later finish can still record it.
+        account_key = 'a' * 32
+        bounded = len(lan_server_module._REPLACE_RETRY_DELAYS) + 1
+        for winerror, attempts in ((32, bounded), (5, bounded), (None, 1),
+                                   (33, 1)):
+            with self.subTest(winerror=winerror), \
+                    tempfile.TemporaryDirectory() as folder:
+                path = str(Path(folder) / 'server_receipts.json')
+                state = self._ledger_battle(path, account_key)
+                calls = []
+                with mock.patch.object(
+                        lan_server_module.os, 'replace',
+                        side_effect=self._refused_replace(
+                            calls, None, winerror)), \
+                        mock.patch.object(lan_server_module.time, 'sleep'):
+                    self.assertFalse(state._finish_battle(1, 'elimination'))
+                self.assertEqual(attempts, len(calls))
+                self.assertIsNone(state.battle_result)
+                self.assertEqual([], _account_receipts(state, account_key))
+                self.assertEqual([], os.listdir(folder))
+                self.assertTrue(state._finish_battle(1, 'elimination'))
+                self.assertEqual(1, len(_account_receipts(state, account_key)))
+
     def test_same_account_multi_arena_backlog_survives_restart_in_order(self):
         with tempfile.TemporaryDirectory() as folder:
             path = str(Path(folder) / 'server_receipts.json')
