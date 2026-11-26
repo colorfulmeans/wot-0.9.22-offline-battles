@@ -28,6 +28,16 @@ target. Read this file before investigating or changing the repository.
 - Present meaningful tradeoffs instead of silently choosing one. If empirical
   behavior contradicts documentation or a prior conclusion, reproduce the
   behavior first and update the conclusion.
+- Delete what colorfulmeans explicitly asks to delete. Do not keep it, merge it,
+  or demote it to an option on grounds such as compatibility, hash consistency,
+  or keeping old profiles readable.
+- Do not repackage a matter on which colorfulmeans has already given direction
+  as a question for confirmation. Ask only when the instruction genuinely does
+  not cover the matter and the alternatives have different consequences that
+  cannot be undone; then explain why the instruction does not cover it.
+- If any item in a plan runs against the direction of colorfulmeans's
+  instruction, flag it separately at the start of the plan. Never list it
+  among the decisions left to colorfulmeans.
 - Treat colorfulmeans's gameplay observations as runtime evidence. When a
   screenshot is unclear, say exactly what cannot be made out and ask
   colorfulmeans to confirm before drawing conclusions from it.
