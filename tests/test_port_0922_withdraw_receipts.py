@@ -129,9 +129,9 @@ class RouteLeaseEvidenceTests(unittest.TestCase):
     def setUp(self):
         self.planner = BotPlanner()
         source = _route('source', [(-100, 0, False), (-100, 100, False),
-                                  (-100, 500, False)], capacity=4)
+                                  (-100, 500, False)])
         target = _route('target', [(100, 0, False), (100, 100, False),
-                                  (100, 500, False)], capacity=1)
+                                  (100, 500, False)])
         manifest = [_bot(41, 1, 0, source, 'mediumTank', {'support': 1.}),
                     _bot(42, 1, 1, source, 'mediumTank', {'support': .9}),
                     _bot(43, 1, 2, target, 'SPG', {'artillery': 1.})]

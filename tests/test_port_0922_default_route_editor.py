@@ -73,9 +73,8 @@ class DefaultRouteTests(unittest.TestCase):
         first=baseline_source('31_airfield');edit=profile['maps']['31_airfield']['default_routes'][0]
         self.assertEqual(first['id'],routes['1'][0]['id'])
         self.assertEqual(edit['points'],routes['1'][0]['waypoints'])
-        # Authored routes carry no lane capacity, risk or role affinity of their own.
-        self.assertEqual((planning.ROUTE_CAPACITY,planning.ROUTE_RISK,{}),
-                         (routes['1'][0]['capacity'],routes['1'][0]['risk'],routes['1'][0]['role_weights']))
+        # Routes carry no lane capacity, risk or role affinity.
+        self.assertFalse(set(('capacity','risk','role_weights'))&set(routes['1'][0]))
         self.assertFalse(routes['1'][0]['_allocation_symmetric'])
         # Every row the profile leaves out keeps the Default's row, class
         # variants included, exactly as the editor shows it.

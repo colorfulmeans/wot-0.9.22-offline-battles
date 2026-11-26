@@ -95,25 +95,6 @@ def cell_status(graph, cell, bounds):
     return 'available'
 
 
-def segment_cells(start, end):
-    """Match the baked straight-corridor walk, without snapping missing starts."""
-    x, z = start
-    tx, tz = end
-    dx, dz = abs(tx - x), abs(tz - z)
-    sx, sz = (1 if x < tx else -1), (1 if z < tz else -1)
-    error = dx - dz
-    yield x, z
-    while (x, z) != (tx, tz):
-        double = error * 2
-        if double > -dz:
-            error -= dz
-            x += sx
-        if double < dx:
-            error += dx
-            z += sz
-        yield x, z
-
-
 def point_status(graph, point, bounds):
     if not (bounds[0] <= point[0] <= bounds[2] and bounds[1] <= point[1] <= bounds[3]):
         return 'outside_bounds'
@@ -128,97 +109,6 @@ def point_status(graph, point, bounds):
             if status == 'available':
                 return status
     return base
-
-
-def route_issues(graph, points, bounds):
-    issues = []
-    for index, point in enumerate(points):
-        status = point_status(graph, point, bounds)
-        if status != 'available':
-            issues.append(dict(status='navigation_node_issue', reason=status,
-                nodes=[index + 1], points=[list(point[:2])]))
-    directions = [tuple(d) for d in graph['directions']]
-    for index in range(len(points) - 1):
-        if any(point_status(graph, p, bounds) == 'outside_bounds' for p in points[index:index + 2]):
-            continue
-        # The drawn line is a static reference, not the A* route travelled.
-        counts, samples, previous = {}, {}, None
-        for cell in segment_cells(cell_for(graph, points[index]),
-                                  cell_for(graph, points[index + 1])):
-            status = cell_status(graph, cell, bounds)
-            if status == 'available' and previous is not None:
-                delta = (cell[0] - previous[0], cell[1] - previous[1])
-                if cell_status(graph, previous, bounds) == 'available':
-                    bit = directions.index(delta)
-                    old = previous[1] * graph['width'] + previous[0]
-                    if not int(graph['links'][old]) & (1 << bit):
-                        status = 'navigation_link_missing'
-            if status != 'available':
-                counts[status] = counts.get(status, 0) + 1
-                examples = samples.setdefault(status, [])
-                if len(examples) < 6:
-                    examples.append([graph['origin'][0] + cell[0] * graph['cell_size'],
-                                     graph['origin'][1] + cell[1] * graph['cell_size']])
-            previous = cell
-        for reason, count in sorted(counts.items()):
-            issues.append(dict(status='navigation_segment_issue', reason=reason,
-                nodes=[index + 1, index + 2],
-                points=[list(p[:2]) for p in points[index:index + 2]],
-                cell_count=count, cells=samples[reason]))
-    return issues
-
-
-def check_map(profile, name, graph, contract, receipt=None):
-    """Check unedited defaults as well as every saved class/team override."""
-    entry = contract.map_settings(profile, name)
-    routes = [('%s:%s' % (r['team'], contract.default_route_id(r)), r['points'])
-              for r in contract.effective_default_routes(profile, name)
-              if not r.get('disabled')]
-    routes.extend((r['id'], r['points']) for r in entry.get('routes', ()))
-    from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
-    grid = TerrainGrid(lambda *args: None, baked_graph=graph)
-    results, receipts = [], []
-    for identity, points in routes:
-        issues = []
-        bounds = contract.MAPS[name]['bounds']
-        for index, point in enumerate(points):
-            status = point_status(graph, point, bounds)
-            if status != 'available':
-                issues.append(dict(status='navigation_node_issue', reason=status,
-                                   nodes=[index+1], points=[list(point[:2])]))
-        for index, (a, b) in enumerate(zip(points, points[1:])):
-            proof = connection(grid, graph, a, b)
-            receipts.append(dict(route=identity, nodes=[index+1,index+2], **proof))
-            if not proof['connected']:
-                issues.append(dict(status='waypoints_disconnected', nodes=[index+1,index+2],
-                                   points=[list(a[:2]),list(b[:2])]))
-        for index, point in enumerate(points):
-            for slot, place in enumerate(contract.waiting_positions(point)):
-                status = point_status(graph, place, bounds)
-                checks = [(point, place, 'wait_place_disconnected')]
-                if index+1 < len(points):
-                    checks.append((place, points[index+1], 'wait_place_exit_disconnected'))
-                if status != 'available':
-                    issues.append(dict(status='wait_place_unusable', nodes=[index+1],
-                                       points=[list(place[:2])],wait_slot=slot+1))
-                for a,b,reason in checks:
-                    proof = connection(grid, graph, a, b)
-                    receipts.append(dict(route=identity, nodes=[index+1],wait_slot=slot+1, **proof))
-                    if status == 'available' and not proof['connected']:
-                        issues.append(dict(status=reason,nodes=[index+1],
-                                           points=[list(a[:2]),list(b[:2])],wait_slot=slot+1))
-        results.append((identity, 'navigation_cells_issues' if issues else 'baked_route_connected', issues))
-    # Parking has a radius/vehicle-envelope contract beyond route connectivity.
-    # Retain its existing check rather than silently replacing it by one point.
-    from gui.mods.offline_lan_0922 import bot_tactics_runtime
-    parking_profile={'maps':{name:{'positions':entry.get('positions',())}}}
-    results.extend(bot_tactics_runtime.authoring_check(parking_profile,name,graph,details=True))
-    evidence=dict(
-        map=name,base_cell_size=graph['cell_size'],local_meshes=[dict(
-            origin=p['origin'],cell_size=p['cell_size'],width=p['width'],height=p['height'])
-            for p in graph.get('local_meshes',())],connections=receipts,results=results)
-    if receipt is not None:receipt(evidence)
-    return results
 
 
 def persist_receipt(evidence, path=None):

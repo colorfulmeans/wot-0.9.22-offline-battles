@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """Terrain-aware hierarchical navigation for offline/LAN bots.
 
-Strategic map annotations decide where a vehicle should fight. This module
-connects those sparse anchors with a low-resolution A* path, while the battle
+The server planner chooses each Bot's goal from its Default route. This module
+connects those sparse points with a low-resolution A* path, while the battle
 driver remains responsible for short-range steering around moving vehicles.
 The implementation is engine-free; the caller supplies terrain and collision
-probes so it can be tested outside the legacy client.
+probes so it can be tested outside the client.
 """
 
 from gui.mods.offline_lan_0922.worker_diagnostics import (

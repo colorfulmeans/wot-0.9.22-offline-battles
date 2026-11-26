@@ -98,7 +98,7 @@ def verify(client, output):
                 rejected[mask] += 1
     assert all(rejected.values())
     result = dict(graph_sha256=hashlib.sha256(raw).hexdigest(), baseline=BASELINE,
-                  south_mesh_unchanged=True, routes_unchanged=True, native_gameplay_tested=False,
+                  south_mesh_unchanged=True, native_gameplay_tested=False,
                   sample_spacing_metres=.25, half_widths=[1.2, 1.8, 2.15], chassis_length=6.4,
                   vehicle_shapes=SHAPES,
                   cases=records, rejected_water_and_shore_cells=rejected)

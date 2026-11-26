@@ -36,8 +36,7 @@ def _catalog(runtime, team):
         overridden = set(r.get('_editor_class') for r in rows
                          if r.get('_editor_source') == row['id'])
         weights = row.get('class_weights') or {}
-        if not any(tag not in overridden and tag not in row.get('_editor_disabled_classes', ())
-                   and weights.get(tag, 1.) > 0 for tag in ordinary):
+        if not any(tag not in overridden and weights.get(tag, 1.) > 0 for tag in ordinary):
             continue
         if len(row.get('waypoints', ())) >= 2:
             result.append(row)

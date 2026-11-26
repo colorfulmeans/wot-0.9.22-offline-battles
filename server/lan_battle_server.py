@@ -77,9 +77,6 @@ from gui.mods.offline_lan_0922 import stun_mechanics
 from gui.mods.offline_lan_0922 import vehicle_physics
 from gui.mods.offline_lan_0922 import bot_lineup as lineup_rules
 from gui.mods.offline_lan_0922.ai.maps import get_tactical_map
-from gui.mods.offline_lan_0922.ai.maps_0922_extra import (
-    TACTICAL_MAPS_0922_EXTRA as _MAPS_0922_DATA,
-)
 from gui.mods.offline_lan_0922.navigation_graph_schema import (
     SUPPORTED_MAPS as _SUPPORTED_MAPS_0922,
 )
@@ -5487,23 +5484,15 @@ class BattleState:
         raw = raw if isinstance(raw, dict) else {}
         route = {"id": _safe_name(raw.get("id"), "server_route"),
                  "waypoints": []}
-        if "capacity" in raw:
-            route["capacity"] = int(_clamp(
-                _finite_float(raw.get("capacity"), 1.0), 1.0, 15.0))
-        if "risk" in raw:
-            route["risk"] = round(_clamp(
-                _finite_float(raw.get("risk")), 0.0, 1.0), 3)
-        for field in ("role_weights", "class_weights"):
-            if field not in raw:
-                continue
-            weights = raw.get(field)
+        if "class_weights" in raw:
+            weights = raw.get("class_weights")
             sanitized = {}
             if isinstance(weights, dict):
                 for key, value in list(weights.items())[:8]:
                     name = _safe_name(key, "unknown")
                     sanitized[name] = round(_clamp(
                         _finite_float(value), 0.0, 1.0), 3)
-            route[field] = sanitized
+            route["class_weights"] = sanitized
         waypoints = raw.get("waypoints") or []
         if not isinstance(waypoints, (list, tuple)):
             waypoints = []
@@ -15470,8 +15459,7 @@ class BattleState:
                 self.tick >= int(round(PREBATTLE_SECONDS * TICK_HZ)))
 
     def _map_rule_data(self):
-        return (get_tactical_map(self.map_name) or
-                _MAPS_0922_DATA.get(self.map_name) or {})
+        return get_tactical_map(self.map_name) or {}
 
     @staticmethod
     def _capture_vehicle_key(kind, vehicle_id):

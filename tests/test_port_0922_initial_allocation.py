@@ -19,8 +19,8 @@ def actors(count=3, tag='lightTank'):
             for team in (1, 2) for slot in range(count)]
 
 
-def lanes(capacity=3, priorities=(5,5,5), symmetric=True):
-    return dict((team, [dict(id='lane_%d'%i, capacity=capacity,
+def lanes(priorities=(5,5,5), symmetric=True):
+    return dict((team, [dict(id='lane_%d'%i,
                             waypoints=[(team*10+i,team*20+i,0)],
                             class_priorities={'lightTank':p},
                             class_weights={'lightTank':1}, _allocation_symmetric=symmetric)
@@ -63,7 +63,7 @@ class InitialRouteLotteryTests(unittest.TestCase):
         self.assertGreater(len(set(p[100]['id'] for p in results)),1)
 
     def test_priority_breaks_equal_load_and_overflow_keeps_authored_lanes(self):
-        plans,outcomes,usage=self.assign(lanes(1,(9,5,5)),actors(10))
+        plans,outcomes,usage=self.assign(lanes((9,5,5)),actors(10))
         self.assertEqual('lane_0',plans[100]['id'])
         for team in (1,2):
          self.assertEqual(3,len(set(plans[team*100+i]['id'] for i in range(3))))
@@ -164,7 +164,7 @@ class InitialRouteLotteryTests(unittest.TestCase):
             self.assertEqual({},usage)
 
     def test_class_variants_have_independent_capacity(self):
-        catalog=lanes(1)
+        catalog=lanes()
         for team in (1,2):
             catalog[team]=catalog[team][:1]
             catalog[team][0]['class_weights']['heavyTank']=1
@@ -202,8 +202,8 @@ class InitialRouteLotteryTests(unittest.TestCase):
                     self.assertIsNotNone(plans[team*100+index*10+3])
                     self.assertTrue(all(plans[team*100+index*10+j] is not None for j in range(3)))
 
-    def test_disabled_classes_and_spg_do_not_consume_front_lane_capacity(self):
-        catalog=lanes(1)
+    def test_spg_does_not_consume_front_lane_capacity(self):
+        catalog=lanes()
         for team in (1,2):
             catalog[team]=catalog[team][:1]
             catalog[team][0]['class_weights']['SPG']=1
@@ -212,9 +212,6 @@ class InitialRouteLotteryTests(unittest.TestCase):
         plans,unused,usage=self.assign(catalog,states)
         self.assertTrue(all(plans[s['id']] is None if s['profile']['class_tag']=='SPG'
                             else plans[s['id']] is not None for s in states))
-        catalog[1][0]['_editor_disabled_classes']=['lightTank']
-        plans,outcomes,unused=self.assign(catalog,actors(1))
-        self.assertEqual('lane_0',plans[100]['id']);self.assertEqual('class_fallback',outcomes[100])
 
     def test_random_global_state_and_input_are_not_mutated(self):
         catalog=lanes();saved=copy.deepcopy(catalog);before=random.getstate()
@@ -226,36 +223,6 @@ class InitialRouteLotteryTests(unittest.TestCase):
         for state in states:state['profile']={}
         plans,unused,unused_usage=self.assign(states=states)
         self.assertTrue(all(p is None for p in plans.values()))
-
-    def test_sparse_deletion_mask_does_not_disable_other_vehicle_classes(self):
-        catalog=lanes(5)
-        for team in (1,2):
-            catalog[team]=catalog[team][:1]
-            catalog[team][0]['class_weights']={'heavyTank':0.0}
-            catalog[team][0]['_editor_disabled_classes']=['heavyTank']
-        plans,unused,usage=self.assign(catalog,actors(2,'mediumTank'))
-        self.assertTrue(all(route is not None for route in plans.values()))
-        self.assertEqual({(t,'lane_0','mediumTank'):2 for t in (1,2)},usage)
-        plans,outcomes,unused=self.assign(catalog,actors(1,'heavyTank'))
-        self.assertTrue(all(route['id']=='lane_0' for route in plans.values()))
-        self.assertEqual({'class_fallback'},set(outcomes.values()))
-
-    def test_class_without_a_route_shares_the_teams_least_used_route(self):
-        catalog=lanes(5)
-        for team in (1,2):
-            for route in catalog[team]:
-                route['class_weights']={'lightTank':1.,'heavyTank':0.}
-                route['_editor_disabled_classes']=['heavyTank']
-        states=actors(2,'lightTank')+actors(3,'heavyTank')
-        for state in states:
-            if state['profile']['class_tag']=='heavyTank':state['id']+=10
-        plans,outcomes,unused=self.assign(catalog,states)
-        for team in (1,2):
-            heavy=[s['id'] for s in states if s['team']==team and s['profile']['class_tag']=='heavyTank']
-            self.assertEqual({'class_fallback'},set(outcomes[i] for i in heavy))
-            loads=[[plans[s['id']]['id'] for s in states if s['team']==team].count(r['id'])
-                   for r in catalog[team]]
-            self.assertEqual([1,2,2],sorted(loads))
 
     def test_team_without_any_route_leaves_its_tanks_without_one(self):
         catalog=lanes();catalog[1]=[]

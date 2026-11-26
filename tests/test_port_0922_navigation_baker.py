@@ -36,7 +36,7 @@ space = load_module('space_bin_0922')
 baker = load_module('bake_navigation_0922')
 packed = load_module('packed_xml')
 # The reviewed navigation grid source; an edit to it updates this pin.
-NAVIGATION_GRID_SHA256 = 'ff6100af45c3588ec1b856595902cedb92649873cecfaf97e7c57234f68126a9'
+NAVIGATION_GRID_SHA256 = '5be2c52e16c061a304cdeda0521e251127d2a63040a0efaa999d8642ec4d76cc'
 
 
 def section(name, version, offset, size, rows=0):
@@ -126,8 +126,7 @@ class CompiledSpace0922Test(unittest.TestCase):
         objectives = tuple(tuple(point) for point in graph['objective_bases'])
         config = baker._bake_config(graph['bounds'], objectives)
         self.assertEqual(objectives, config['bases'])
-        self.assertEqual(objectives, config['anchors'])
-        self.assertNotIn('routes', config)
+        self.assertEqual({'bounds', 'bases'}, set(config))
         self.assertEqual(tuple(graph['bounds']), config['bounds'])
 
     def test_navigation_grid_is_pinned_by_its_own_hash(self):
@@ -822,11 +821,10 @@ class CompiledSpace0922Test(unittest.TestCase):
         arena = (-500.0, -500.0, 500.0, 500.0)
         config = {
             'bounds': arena,
-            # An anchor at Prokhorovka's east edge. A 16 m anchor margin used
-            # to push the sampled rectangle out to x=512, and Bot A* reached
+            # An objective at the arena's east edge. A 16 m margin used to
+            # push the sampled rectangle out to x=512, and Bot A* reached
             # every cell baked out there.
-            'anchors': ((496.0, -316.0),),
-            'bases': ((-126.0, 446.0), (54.0, -446.0)),
+            'bases': ((496.0, -316.0), (54.0, -446.0)),
         }
 
         self.assertEqual(
@@ -844,9 +842,9 @@ class CompiledSpace0922Test(unittest.TestCase):
         self.assertLess(sampled[2] - arena[2], 4.0)
         self.assertLess(sampled[3] - arena[3], 4.0)
 
-    def test_sampling_grid_refuses_an_anchor_outside_the_play_area(self):
+    def test_sampling_grid_refuses_an_objective_outside_the_play_area(self):
         config = {'bounds': (-500.0, -500.0, 500.0, 500.0),
-                  'anchors': ((504.0, 0.0),)}
+                  'bases': ((504.0, 0.0), (0.0, 0.0))}
 
         with self.assertRaises(space.UnsafeBakeInputError):
             baker._target_sampling_bounds('05_prohorovka', config, 4.0)

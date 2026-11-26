@@ -426,19 +426,17 @@ def _target_sampling_bounds(map_name, map_config, cell_size):
     ``bounds`` is the stock ``boundingBox`` itself. Sample it aligned outward
     to the cell grid, without a margin that would push sampled cells -- and
     the gameplay rectangle published beside them -- past the official red
-    border, and refuse an anchor that sits outside the play area.
+    border, and refuse an objective that sits outside the play area.
     """
     arena = tuple(float(value) for value in map_config.get('bounds', ()))
     if len(arena) != 4 or arena[0] >= arena[2] or arena[1] >= arena[3]:
         raise UnsafeBakeInputError(
             'stock arena rectangle is unavailable: %r' % (arena,))
-    anchors = (tuple(map_config.get('anchors', ())) +
-               tuple(map_config.get('bases', ())))
-    for point in anchors:
+    for point in map_config.get('bases', ()):
         x, z = float(point[0]), float(point[1])
         if not (arena[0] <= x <= arena[2] and arena[1] <= z <= arena[3]):
             raise UnsafeBakeInputError(
-                'anchor %r is outside the stock arena rectangle %r' %
+                'objective %r is outside the stock arena rectangle %r' %
                 ((x, z), arena))
     size = float(cell_size)
     sampled = (
@@ -595,11 +593,10 @@ def _record_target_grid_phase(graph, map_name, cell_size):
 def _bake_config(bounds, bases):
     """The grid's input: the stock rectangle and the decoded objectives.
 
-    The objectives are the bake's only anchors. Bot routes come from the
-    built-in Default tactics, so the graph carries none.
+    Bot routes come from the built-in Default tactics, so the graph carries
+    none.
     """
-    return dict(bounds=tuple(bounds), bases=tuple(tuple(base) for base in bases),
-                anchors=tuple(tuple(base) for base in bases))
+    return dict(bounds=tuple(bounds), bases=tuple(tuple(base) for base in bases))
 
 
 class PackageVFS(object):
@@ -2665,7 +2662,7 @@ def bake_map_graph(client_root, map_name, output=None, cell_size=4.0, existing_g
                     anchors.append(navgrid._node_point(graph, node))
             adjusted = dict(config)
             adjusted['bases'] = tuple(anchors)
-            adjusted['anchors'] = tuple(anchors) + tuple(config.get('anchors', ()))
+            adjusted['anchors'] = tuple(anchors) + tuple(config['bases'])
             return adjusted
         graph = navgrid.bake_graph(
             map_name, _target_sampling_bounds(map_name, config, cell_size),

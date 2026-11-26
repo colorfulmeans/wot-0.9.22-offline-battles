@@ -43,7 +43,6 @@ def show(editor):
         caption=labels.tactic_name(row['label'],e.language)
         if row['selection'] and row['selection'][0]=='builtin' and row['label']==row['identity']:
             caption=labels.route_label(row['identity'],e.language)
-        if row['link']:caption+=' → '+row['link']
         tree.insert('disabled' if row['disabled'] else row['category'],'end',iid=key,text=caption,
             values=(row['team'],labels.enum_label('class_tag',row['scope'],e.language),e.tr(*kinds[row['kind']]),result))
         for j,issue in enumerate(row['issues']):
@@ -68,10 +67,10 @@ def show(editor):
         if not row or not row['selection'] or row['disabled']:return
         e.team_var.set(str(row['team']));e.team=row['team'];e._load_map()
         e.route_class_var.set('spg_attack' if row['kind']=='sortie' else 'total' if row['scope']!='SPG' else 'SPG')
-        e.network_mode='';e.network_link='';e.selection=tuple(row['selection'])
+        e.network_mode='';e.selection=tuple(row['selection'])
         if row['scope']=='SPG' and e.selection[0]=='routes':e.selection=('routes',row['identity'])
         if row['mode'] and row['points']:
-            e.network_mode=row['mode'];e.network_link=row['link']
+            e.network_mode=row['mode']
         e._refresh_items()
         e.wait_edit=False;e.selected_wait=None
         e.selected_point=(row.get('issue',{}).get('nodes') or [1])[0]-1

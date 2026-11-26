@@ -282,15 +282,13 @@ class RouteRecoveryCycleTests(unittest.TestCase):
         self.assertNotIn(17,s.planner._wreck_route_progress)
 
     def test_class_exclusion_cannot_be_bypassed_when_returning_to_start(self):
-        for key,value in (('class_weights',{'heavyTank':0}),
-                          ('_editor_disabled_classes',['heavyTank'])):
-            s=RecoveryScene();s.other[key]=value
-            for now in (0,20,40):s.step(now)
-            s.step(41,(0,100))
-            order=s.step(42,(0,0))
-            self.assertEqual('main',order['route_id'])
-            self.assertEqual('retry_no_alternative',order['route_attempt']['action'])
-            self.assertIsNotNone(s.recovery)
+        s=RecoveryScene();s.other['class_weights']={'heavyTank':0}
+        for now in (0,20,40):s.step(now)
+        s.step(41,(0,100))
+        order=s.step(42,(0,0))
+        self.assertEqual('main',order['route_id'])
+        self.assertEqual('retry_no_alternative',order['route_attempt']['action'])
+        self.assertIsNotNone(s.recovery)
 
     def test_combat_resume_and_completed_gate_wait_keep_actual_connector(self):
         s=RecoveryScene()

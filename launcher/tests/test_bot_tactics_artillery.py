@@ -104,34 +104,10 @@ class ArtilleryEditorTests(unittest.TestCase):
         self.assertEqual('normal',str(e.route_delete_button.cget('state')))
         self.assertEqual('disabled',str(e.tier_buttons['main'].cget('state')))
 
-    def test_parking_uses_no_authored_connections_and_stays_editable(self):
+    def test_parking_stays_editable(self):
         e=self.review();e=self.parking()
-        self.assertFalse(hasattr(e,'connect_all_button'));self.assertFalse(hasattr(e,'network_box'))
-        self.assertFalse(e.tree_connections)
-        e.new_position();row=e._selected_parent()
-        self.assertNotIn('travel',row);self.assertNotIn('links',row)
-        e.duplicate_item();self.assertNotIn('travel',e._selected_parent())
+        e.new_position();e.duplicate_item()
         e.save(True);self.assertFalse(self.errors.called)
-        self.assertTrue(all(not r.get('travel') and not r.get('links') for r in self.store.active()['maps'][e.map_name]['positions']))
-
-    def test_old_parking_connections_are_discarded_without_touching_attack_or_other_geometry(self):
-        p=storage.contract.default_profile('Old profile');name='08_ruinberg'
-        original=copy.deepcopy(p)
-        for zone in p['maps'][name]['positions']:
-            zone['travel']=[[999999,999999,0]];zone['links']={'old':'retired invalid input'}
-        self.assertEqual(original,storage.contract.canonical(p))
-        self.store.save(p,True)
-        self.assertEqual(original,self.store.active())
-
-    def test_reading_an_owned_legacy_file_removes_retired_fields_on_disk(self):
-        import json
-        p=storage.contract.default_profile('Legacy on disk');original=copy.deepcopy(p)
-        for zone in p['maps']['08_ruinberg']['positions']:
-            zone['travel']=[[0,0,0],zone['point']+[0]];zone['links']={}
-        path=self.store.profile_path(p['name']);path.parent.mkdir(parents=True,exist_ok=True)
-        path.write_text(json.dumps(p),encoding='utf8')
-        self.assertEqual(original,self.store.read(p['name']))
-        self.assertEqual(original,json.loads(path.read_text(encoding='utf8')))
 
     def test_artillery_attack_cannot_retain_a_legacy_defense_branch(self):
         p=storage.contract.default_profile('Legacy SPG branch');original=copy.deepcopy(p)

@@ -7,9 +7,7 @@ import tkinter as tk
 from tkinter import ttk
 from types import SimpleNamespace
 import unittest
-import json
 import math
-from pathlib import Path
 from unittest import mock
 
 import bot_tactics_navigation as nav
@@ -87,45 +85,6 @@ class NavigationDataTests(unittest.TestCase):
             point_for=lambda c,y:(c[0]*4.,y,c[1]*4.))
         self.assertFalse(nav.connection(grid,{},(0,0),(12,4))['connected'])
 
-    def test_complete_receipts_reach_the_collected_launcher_log(self):
-        data=storage.graph_data('04_himmelsdorf');profile=storage.contract.empty()
-        profile['maps'][data['map']]=dict(routes=[dict(id='local',points=[[-38,158,0],[10,152,0]])],positions=[])
-        before=copy.deepcopy(profile)
-        with tempfile.TemporaryDirectory() as directory:
-            target=Path(directory)/'launcher.log'
-            result=nav.check_map(profile,data['map'],data,storage.contract,
-                receipt=lambda value:nav.persist_receipt(value,target))
-            evidence=json.loads(target.read_text().split('EDITOR NAVIGATION CHECK ',1)[1])
-            self.assertEqual(9,len(evidence['local_meshes']))
-            row=next(r for r in evidence['connections'] if r['route']=='local')
-            self.assertTrue(row['connected']);self.assertGreater(row['path_nodes'],1)
-            self.assertEqual([-38,158],row['start']);self.assertEqual([10,152],row['end'])
-            self.assertEqual('baked_route_connected',next(r[1] for r in result if r[0]=='local'))
-        self.assertEqual(before,profile)
-
-    def test_missing_real_start_is_not_hidden_by_nearby_valid_cell(self):
-        data=storage.graph_data('31_airfield')
-        issues=nav.route_issues(data,[[-333.01,-195.16,0],[-325.287,-53.595,0]],
-                                storage.contract.MAPS['31_airfield']['bounds'])
-        node=next(i for i in issues if i['status']=='navigation_node_issue' and i['nodes']==[1])
-        self.assertEqual('missing_ground',node['reason'])
-        self.assertEqual([[-333.01,-195.16]],node['points'])
-
-    def test_segment_reports_interior_holes_and_exact_node_pair(self):
-        data=graph();data['heights_mm'][12]=None
-        issues=nav.route_issues(data,[[0.,8.,0],[16.,8.,0]],(0,0,16,16))
-        self.assertEqual(1,len(issues))
-        self.assertEqual([1,2],issues[0]['nodes'])
-        self.assertEqual('missing_ground',issues[0]['reason'])
-        self.assertEqual(1,issues[0]['cell_count'])
-        self.assertEqual([[8.,8.]],issues[0]['cells'])
-
-    def test_directed_link_is_checked_in_travel_direction(self):
-        data=graph();data['links'][10]=255 & ~1
-        self.assertEqual('navigation_link_missing',nav.route_issues(
-            data,[[0.,8.,0],[16.,8.,0]],(0,0,16,16))[0]['reason'])
-        self.assertEqual([],nav.route_issues(data,[[16.,8.,0],[0.,8.,0]],(0,0,16,16)))
-
     @unittest.skipUnless(HAS_PIL, 'requires Pillow')
     def test_display_distinguishes_height_links_and_hazard_with_north_up(self):
         data=graph();data['heights_mm'][20]=None;data['hazards'][0]=4;data['links'][24]=0
@@ -133,25 +92,6 @@ class NavigationDataTests(unittest.TestCase):
         for pixel,key in (((1,1),'missing_ground'),((1,13),'navigation_hazard'),
                           ((13,1),'no_navigation_links'),((7,7),'available')):
             self.assertEqual(nav.COLORS[key][1],image.getpixel(pixel))
-
-    def test_default_routes_and_class_overrides_checked_without_mutation(self):
-        data=storage.graph_data('31_airfield');profile=storage.contract.empty()
-        first=storage.contract.baseline_routes('31_airfield')['1'][0]
-        profile['maps']['31_airfield']=dict(default_routes=[dict(id=first['id'],team=1,
-            class_tag='heavyTank',points=[list(p) for p in first['waypoints']])],routes=[],positions=[])
-        before=copy.deepcopy((profile,data))
-        result=nav.check_map(profile,'31_airfield',data,storage.contract)
-        identities=[r[0] for r in result]
-        self.assertIn('1:'+first['id'],identities)
-        self.assertIn('1:class_ht_'+first['id'],identities)
-        self.assertEqual(before,(profile,data))
-
-    def test_outside_node_does_not_walk_an_unbounded_segment(self):
-        with mock.patch.object(nav,'segment_cells',side_effect=AssertionError('unbounded walk')):
-            issues=nav.route_issues(graph(),[[0.,0.,0],[100000.,0.,0]],(0,0,16,16))
-        self.assertEqual([2],issues[0]['nodes'])
-        self.assertEqual('outside_bounds',issues[0]['reason'])
-
 
 @unittest.skipUnless(HAS_PIL and (os.name == 'nt' or os.environ.get('DISPLAY')),
                      'requires Pillow and Tk display')

@@ -14,7 +14,6 @@ class ConnectionEditorMixin(ArtilleryEditorMixin):
         self.defense_panel=panel
         self.defense_section.grid(row=23, column=0, sticky='ew', pady=5)
         self.network_mode = ''
-        self.network_link = ''
         self.defense_add = tk.Button(panel, text=self.tr('添加回防路线', 'Add defense connection'), command=self.add_defense)
         self.defense_add.pack(fill='x')
         self.defense_delete = tk.Button(panel, text=self.tr('删除回防路线', 'Delete defense connection'), command=self.delete_defense)
@@ -38,8 +37,6 @@ class ConnectionEditorMixin(ArtilleryEditorMixin):
 
     def _connection_points(self, item):
         if self.network_mode == 'defense':return (item.get('defense') or {}).get('points')
-        if self.network_mode == 'travel':return item.get('travel')
-        if self.network_mode == 'link':return item.get('links', {}).get(self.network_link)
 
     def _editable_item(self):
         return self._editable_parent()
@@ -157,7 +154,7 @@ class ConnectionEditorMixin(ArtilleryEditorMixin):
         except ValueError as error:
             self.document=before;self.histories=history;self.selection=selection
             self._refresh_items();self.error(error);return
-        self.network_mode = 'defense';self.network_link = '';self.selected_point = 0
+        self.network_mode = 'defense';self.selected_point = 0
         self._refresh_items();self.mark()
 
     def delete_defense(self):
@@ -190,12 +187,12 @@ class ConnectionEditorMixin(ArtilleryEditorMixin):
     def _draw_connection_set(self,item,color,selected=False):
         if item['team']!=self.team:return
         paths=[]
-        if item.get('defense'):paths.append(('defense','',item['defense']['points'],color,(5,4),self.tr('回防','Defense')))
-        for mode,identity,points,color,dash,caption in paths:
+        if item.get('defense'):paths.append(('defense',item['defense']['points'],color,(5,4),self.tr('回防','Defense')))
+        for mode,points,color,dash,caption in paths:
             coords=[v for p in points for v in self.view.screen(p)]
             if len(coords)>=4:self.canvas.create_line(*coords,fill=color,width=3 if selected else 2,dash=dash,arrow='last',tags=('authored_connection','connection_team_'+str(item['team'])))
             x,y=self.view.screen(points[len(points)//2]);self.canvas.create_text(x,y-10,text=caption,fill=color)
-            if selected and self.network_mode==mode and self.network_link==identity:
+            if selected and self.network_mode==mode:
                 for index,p in enumerate(points):self._draw_route_node(p,index,color,True,5,True)
 
     def _draw_connections(self):

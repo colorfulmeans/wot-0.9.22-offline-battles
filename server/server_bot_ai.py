@@ -2553,7 +2553,6 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
                 bot, self._contacts_for_bot(bot, contacts, now)),
             position=_point(bot['state'])) for bot in bots
             if str(bot.get('profile', {}).get('class_tag') or '') != 'SPG']
-        target_record = catalog[target_route]
         if target_score <= 0.0:
             balance['outcome'] = 'pressure_already_covered'
             return
@@ -2629,12 +2628,6 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
                     if class_affinity < MIN_ROUTE_CLASS_AFFINITY:
                         check['outcome'] = 'class_affinity_too_low'
                         continue
-            route_roles = target_record.get("role_weights")
-            role_affinity = 0.0
-            if isinstance(route_roles, dict):
-                role_affinity = sum(
-                    _number(value) * _number(route_roles.get(name))
-                    for name, value in roles.items())
             mobility = max(_number(roles.get("support")),
                            _number(roles.get("flanker")),
                            _number(roles.get("scout")))
@@ -2642,12 +2635,12 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
             score = (mobility * 2.0 + personality["adaptability"] -
                      _number(roles.get("brawler")) * 0.65 -
                      pressure.get(current_id, 0.0) * 0.7 +
-                     class_affinity * 1.8 + role_affinity * 1.2)
+                     class_affinity * 1.8)
             candidates.append((score, -bot["id"], bot))
             check.update(score=score, tie_break=-bot['id'],
                 mobility=mobility, adaptability=personality['adaptability'],
                 brawler=_number(roles.get('brawler')), current_pressure=pressure.get(current_id, 0.0),
-                class_affinity=class_affinity, role_affinity=role_affinity)
+                class_affinity=class_affinity)
         if not candidates:
             return
         donor = max(candidates)[2]
@@ -2926,7 +2919,7 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
             # hold at the current position; no lane is invented.
             position = _point(bot.get("state"))
             return None, 0, position, dict(position), False
-        route_id = str(route.get("id") or "uploaded_route")
+        route_id = str(route.get("id") or "")
         authored = bot_tactics.route_config(
             self.tactics, self.tactics_map, route_id, bot['team'], waypoints)
         scripted = not bot.get('empty_ammo') and authored is not None and (not authored.get('default') or
@@ -2958,9 +2951,9 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
                          position=_point(bot['state']), nearest=nearest,
                          speed=_number(bot['state'].get('speed')),
                          yaw=_number(bot['state'].get('yaw')), skipped=[])
-            # Route point zero is the team's own flag. The actual line-up starts
-            # in front of it, so do not order every deployed tank to turn around
-            # and visit its own base before it may advance toward the enemy flag.
+            # Route point zero is the team's fixed start endpoint. The line-up
+            # stands around it, so do not order every deployed tank to turn
+            # back to it before it may advance along the route.
             if nearest == 0 and len(waypoints) > 1:
                 index = 1
                 entry['skipped'].append(dict(index=0, reason='spawn_flag'))
@@ -2970,18 +2963,16 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
                               _number(waypoints[index].get("z")) - bz) <= ROUTE_ARRIVAL_RADIUS):
                 entry['skipped'].append(dict(index=index, reason='inside_arrival_disk'))
                 index += 1
-            # Bot snapshots carry hull yaw in the same shared frame as uploaded
-            # routes. Skip only a truly rear-facing connector; a side road remains a
+            # Bot snapshots carry hull yaw in the same shared frame as route
+            # waypoints. Skip only a truly rear-facing connector; a side road remains a
             # valid lane opening and must not be flattened into the next macro point.
             #
             # A parked hull's yaw is a parking orientation, not a travel
             # direction, so there is nothing for a connector to be "behind" yet.
-            # Applying the filter at the spawn discarded the authored first
-            # connector on 246 of the 1230 shipped spawn slots across 33 of the
-            # 41 baked maps - a median of 58 m away - and sent those tanks
-            # straight at a farther macro point instead of down the reviewed
-            # lane. Turning in place is cheap; leaving the authored egress is
-            # not.
+            # Applying the filter at the spawn would discard a route's first
+            # connector and send the tank straight at a farther point instead of
+            # down the lane. Turning in place is cheap; leaving the authored
+            # egress is not.
             # Positive longitudinal speed proves that hull yaw is the current
             # route direction. Negative speed is a temporary reverse recovery,
             # not a request to abandon the nearest connector behind that yaw.
@@ -2998,7 +2989,8 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
                     entry['skipped'].append(dict(index=index,
                         reason='behind_moving_hull', bearing=bearing, delta=delta))
                     index += 1
-            # User point zero is an instruction, not a baked base connector.
+            # A scripted route's point zero is an instruction, not a start
+            # endpoint to skip.
             if not history and scripted:
                 index = 0
                 entry['source'] = 'first_scripted_instruction'

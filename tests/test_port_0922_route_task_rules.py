@@ -130,7 +130,7 @@ class RouteTaskTests(unittest.TestCase):
                 ('112_eiffel_tower_ctf',30,2,14), ('92_stalingrad',14,1,13)):
             with self.subTest(map=map_name):
                 planner=BotPlanner();planner.tactics_map=map_name
-                manifest=[_bot(actor,team,slot,dict(id='map_route',waypoints=[]),'SPG')]
+                manifest=[_bot(actor,team,slot,dict(id='server_route',waypoints=[]),'SPG')]
                 states=[_state(actor,team,100.,100.)]
                 base=dict(base_id='own',point=dict(x=0.,y=0.,z=0.),radius=30.)
                 with mock.patch.object(planner,'_update_base_defense',return_value={team:{actor:base}}):
@@ -142,7 +142,7 @@ class RouteTaskTests(unittest.TestCase):
 
     def test_missing_empty_and_single_point_sources_keep_base_task_lifecycle(self):
         for tag in ('SPG','heavyTank'):
-            for route in ({},dict(id='map_route'),dict(id='map_route',waypoints=[]),
+            for route in ({},dict(id='server_route'),dict(id='server_route',waypoints=[]),
                           _route('one',[(50,50,False)])):
                 for kind in ('defense','guard'):
                     with self.subTest(tag=tag,route=route,kind=kind):
@@ -332,8 +332,8 @@ class AuthoredArtilleryTravelTests(unittest.TestCase):
         from types import SimpleNamespace
         from gui.mods.offline_lan_0922 import spg_route_travel
         self.travel=spg_route_travel
-        self.zone=dict(id='a',team=1,point=[0,100],radius=16,travel=[[0,0,0],[30,50,0],[0,100,0]])
-        self.peer=dict(id='b',team=1,point=[100,100],radius=16,travel=[[0,0,0],[100,0,0],[100,100,0]])
+        self.zone=dict(id='a',team=1,point=[0,100],radius=16)
+        self.peer=dict(id='b',team=1,point=[100,100],radius=16)
         self.settings=dict(positions=[self.zone,self.peer],routes=[])
         self.state=dict(id=11,team=1,x=0.,y=0.,z=0.,profile={'class_tag':'SPG'},_spg_initial={'zone':'a'},alive=True)
         self.regular=dict(id=12,team=1,profile={'class_tag':'heavyTank'},alive=True)
@@ -358,7 +358,7 @@ class AuthoredArtilleryTravelTests(unittest.TestCase):
         self.clock+=1.
         return self.travel.apply(self.runtime,self.state,order,self.clock)
 
-    def test_deploy_keeps_automatic_goal_and_fire_fields_even_with_legacy_travel(self):
+    def test_deploy_keeps_automatic_goal_and_fire_fields(self):
         result=self.apply(target_id=9,fire_allowed=True)
         self.assertEqual((0,0,100),result['move_position'])
         self.assertEqual(9,result['target_id']);self.assertTrue(result['fire_allowed'])
@@ -387,13 +387,6 @@ class AuthoredArtilleryTravelTests(unittest.TestCase):
         self.assertEqual('artillery_hold',result['combat_mode'])
         self.assertEqual(0.,result['throttle_override'])
 
-    def test_moving_to_another_position_ignores_legacy_parking_links(self):
-        self.zone['links']={'b':[[0,100,0],[50,150,0],[100,100,0]]}
-        self.state.update(x=0,z=100);self.state['_spg_initial']['zone']='b'
-        result=self.apply('artillery_deploy',move_position=(100,0,100))
-        self.assertEqual((100,0,100),result['move_position'])
-        self.assertNotIn('authored_spg_connection',result)
-
     def test_missing_link_uses_automatic_goal_not_invented_trip_via_base(self):
         self.state.update(x=0,z=100)
         self.state['_authored_spg_zone']=copy.deepcopy(self.zone)
@@ -404,14 +397,8 @@ class AuthoredArtilleryTravelTests(unittest.TestCase):
         self.state.update(x=100,z=100);self.apply('artillery_hold')
         self.assertEqual('b',self.state['_authored_spg_zone']['id'])
 
-    def test_stale_deployment_task_is_discarded_even_when_legacy_paths_still_exist(self):
-        self.state['_authored_spg_travel']=dict(kind='deploy',identity=('deploy','a'),points=self.zone['travel'],index=1)
-        result=self.apply(move_position=(12,0,98))
-        self.assertEqual((12,0,98),result['move_position']);self.assertNotIn('_authored_spg_travel',self.state)
-
     def test_missing_deployment_keeps_native_goal_and_drops_stale_connection(self):
         self.apply()
-        self.zone.pop('travel')
         result=self.apply(move_position=(5,0,105))
         self.assertEqual((5,0,105),result['move_position'])
         self.assertNotIn('authored_spg_connection',result)
@@ -425,7 +412,6 @@ class AuthoredArtilleryTravelTests(unittest.TestCase):
         self.assertNotIn('_authored_spg_travel',self.state)
 
     def test_missing_defense_connection_keeps_automatic_base_destination(self):
-        self.zone.pop('travel')
         result=self.apply('base_defense',move_position=(0,0,0))
         self.assertEqual((0,0,0),result['move_position'])
         self.assertNotIn('authored_spg_connection',result)

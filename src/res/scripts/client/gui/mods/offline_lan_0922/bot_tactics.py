@@ -104,8 +104,6 @@ def default_profile(name='Default'):
     from gui.mods.offline_lan_0922.bot_tactics_default_data import PROFILE_JSON
     document = json.loads(PROFILE_JSON)
     document['name'] = name
-    for settings in document['maps'].values():
-        route_network.migrate_default_rows(settings.get('default_routes', ()))
     return document
 
 
@@ -312,7 +310,7 @@ def canonical(raw):
             for item in settings[kind]:
                 common = ('id', 'label', 'team')
                 allowed = common + (('classes', 'slots', 'policy', 'capacity', 'weight', 'points', 'mirror_id', 'symmetric', 'class_priorities', 'tier', 'node_ids', 'defense', 'purpose', 'family')
-                                    if kind == 'routes' else ('point', 'radius', 'heading', 'priority', 'travel', 'links'))
+                                    if kind == 'routes' else ('point', 'radius', 'heading', 'priority'))
                 _keys(item, allowed, common)
                 identity = _id(item['id'])
                 if identity in seen:
@@ -358,7 +356,6 @@ def canonical(raw):
                                   heading=number(item.get('heading', 0.0), -180.0, 180.0),
                                   priority=integer(item.get('priority', 5), 0, 9))
                 if kind == 'routes':route_network.copy_fields(item, result, sys_contract(), meta['bounds'])
-                else:route_network.position_fields(item, result, sys_contract(), meta['bounds'])
                 entry[kind].append(result)
                 total += 1
             entry[kind].sort(key=lambda a: a['id'])

@@ -77,7 +77,7 @@ class ServerCaptureTests(unittest.TestCase):
     def test_modern_capture_requires_exact_ready_bases(self):
         state = self._state()
         state.capture_bases = {}
-        # This is the old Erlenberg tactical-route endpoint, not a retail base.
+        # No base is ready, so a tank standing anywhere captures nothing.
         state.players[2] = _player(2, 2, -146.2, -0.1)
 
         self.assertFalse(self._capture_tick(state))

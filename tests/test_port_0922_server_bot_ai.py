@@ -45,8 +45,7 @@ def _profile(class_tag='SPG', roles=None):
     }
 
 
-def _route(route_id, points, capacity=None, class_weights=None,
-           role_weights=None):
+def _route(route_id, points, class_weights=None):
     result = {
         'id': route_id,
         'waypoints': [
@@ -54,12 +53,8 @@ def _route(route_id, points, capacity=None, class_weights=None,
             for x, z, hold in points
         ],
     }
-    if capacity is not None:
-        result['capacity'] = int(capacity)
     if class_weights is not None:
         result['class_weights'] = dict(class_weights)
-    if role_weights is not None:
-        result['role_weights'] = dict(role_weights)
     return result
 
 
@@ -2692,14 +2687,10 @@ class ServerBotArtilleryTests(unittest.TestCase):
         planner = BotPlanner()
         middle = _route('middle', [
             (0, 0, False), (0, 100, False), (0, 500, False),
-        ], capacity=4,
-            class_weights={'lightTank': 1.0, 'heavyTank': 0.02},
-            role_weights={'scout': 1.0})
+        ], class_weights={'lightTank': 1.0, 'heavyTank': 0.02})
         heavy = _route('heavy', [
             (100, 0, False), (100, 100, False), (100, 500, False),
-        ], capacity=6,
-            class_weights={'lightTank': 0.12, 'heavyTank': 1.0},
-            role_weights={'brawler': 1.0})
+        ], class_weights={'lightTank': 0.12, 'heavyTank': 1.0})
         manifest = [
             _bot(20 + value, 1, value, middle, 'lightTank', {'scout': 1.0})
             for value in range(4)
@@ -2730,8 +2721,8 @@ class ServerBotArtilleryTests(unittest.TestCase):
     def test_rebalance_reserves_target_lane_without_class_hard_cap(self):
         for target_tag, expected_move in (('heavyTank', True), ('mediumTank', True)):
             planner=BotPlanner()
-            source=_route('source',[(-100,0,False),(-100,100,False),(-100,500,False)],capacity=3)
-            target=_route('target',[(100,0,False),(100,100,False),(100,500,False)],capacity=3)
+            source=_route('source',[(-100,0,False),(-100,100,False),(-100,500,False)])
+            target=_route('target',[(100,0,False),(100,100,False),(100,500,False)])
             manifest=[_bot(41,1,0,source,'mediumTank',{'support':1.0}),
                       _bot(42,1,1,source,'mediumTank',{'support':0.9})]
             manifest.extend(_bot(i,1,i-41,target,target_tag,{'support':1.0}) for i in (43,44,45))
@@ -2746,10 +2737,10 @@ class ServerBotArtilleryTests(unittest.TestCase):
         planner = BotPlanner()
         source = _route('source', [
             (-100, 0, False), (-100, 100, False), (-100, 500, False),
-        ], capacity=4)
+        ])
         target = _route('target', [
             (100, 0, False), (100, 100, False), (100, 500, False),
-        ], capacity=1)
+        ])
         manifest = [
             _bot(41, 1, 0, source, 'mediumTank', {'support': 1.0}),
             _bot(42, 1, 1, source, 'mediumTank', {'support': 0.9}),

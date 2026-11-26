@@ -89,7 +89,7 @@ def verify(client, output, search_report=None):
                 rejected[flag] += 1
     assert all(rejected.values())
     result = dict(cases=results, rejected=rejected, previous_meshes_unchanged=True,
-                  routes_unchanged=True, native_gameplay_tested=False)
+                  native_gameplay_tested=False)
     Path(output).write_text(json.dumps(result, indent=2), encoding='utf8')
     print(json.dumps(dict(cases=len(results), samples=sum(r['samples'] for r in results),
         maximum_plan_ms=max(r['plan_ms'] for r in results), rejected=rejected)))

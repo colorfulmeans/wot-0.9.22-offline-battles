@@ -59,7 +59,7 @@ class RouteTasksMixin:
             rows=[row for row in rows if graph is not None and bot_tactics_runtime.validate_route(graph,row) is None]
         if rows:
             row=min(rows,key=lambda r:r.get('class_tag','all')!=tag)
-            return dict(id=bot_tactics.default_route_id(row),capacity=15,
+            return dict(id=bot_tactics.default_route_id(row),
                 class_weights={tag:1.},waypoints=[point(p) for p in row['points']])
         return None
 

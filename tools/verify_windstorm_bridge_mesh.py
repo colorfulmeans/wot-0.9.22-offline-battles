@@ -77,7 +77,7 @@ def verify(client, output, baseline):
                 rejected[flag] += 1
     assert all(rejected.values())
     result = dict(map='84_winter', graph_sha256=hashlib.sha256(raw).hexdigest(),
-                  baseline=baseline, coarse_heights_hazards_unchanged=True, routes_unchanged=True,
+                  baseline=baseline, coarse_heights_hazards_unchanged=True,
                   refined_coarse_links=len(source['bake']['local_meshes']['refined_coarse_links']),
                   native_gameplay_tested=False, exact_client_geometry=True,
                   sample_spacing_metres=.25, half_widths=[1.2, 1.8, 2.15],

@@ -308,7 +308,6 @@ def run(destination):
             ui.route_class_var.set('SPG');ui.change_route_class();ui.new_route();ui.save(True)
             active=ui.store.active()
             assert any(r.get('purpose')=='spg_attack' for r in active['maps']['08_ruinberg']['routes'])
-            assert all(not p.get('travel') and not p.get('links') for p in active['maps']['08_ruinberg']['positions'])
             report['authored_connections_and_route_tiers']=True
             assert ui.route_class_var.get()=='spg_attack'
             assert ui.canvas.find_withtag('artillery_attack')
@@ -318,8 +317,6 @@ def run(destination):
             ui.route_class_var.set('all');ui.change_route_class()
             assert not ui.canvas.find_withtag('artillery_attack')
             ui.route_class_var.set('SPG');ui.change_route_class()
-            assert not hasattr(ui,'connect_all_button') and not hasattr(ui,'network_box')
-            assert not ui.tree_connections
             ui.save(True);assert not ui.dirty()
             assert ui.defense_panel!=ui.artillery_panel
             report['automatic_parking_navigation']=True

@@ -192,8 +192,6 @@ class ConnectionTests(unittest.TestCase):
 
     def test_spg_parking_is_automatic_and_attack_remains_separate(self):
         e=self.editor;e.route_class_var.set('SPG');e.change_route_class();e.new_position()
-        self.assertNotIn('travel',e._selected_parent());self.assertNotIn('links',e._selected_parent())
-        self.assertFalse(hasattr(e,'network_box'))
         e.new_route();self.assertEqual('spg_attack',e._selected_parent()['purpose'])
         self.assertEqual('disabled',str(e.defense_add.cget('state')))
 

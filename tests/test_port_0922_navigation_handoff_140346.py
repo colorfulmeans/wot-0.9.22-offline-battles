@@ -117,8 +117,8 @@ class HeightOwnershipTests(unittest.TestCase):
 class RouteTransferTests(unittest.TestCase):
     def scene(self, first=1.4, second=1.5):
         p=BotPlanner()
-        left=_route('left',[(-100.,0.,False),(-100.,500.,False)],capacity=8)
-        right=_route('right',[(100.,0.,False),(100.,500.,False)],capacity=8)
+        left=_route('left',[(-100.,0.,False),(-100.,500.,False)])
+        right=_route('right',[(100.,0.,False),(100.,500.,False)])
         manifest=[_bot(i,1,i-41,left if i<43 else right,'mediumTank',
                        {'support':1. if i==41 else .1}) for i in range(41,45)]
         bots=p._alive_bots(manifest,[_state(i,1,-100. if i<43 else 100.,0.)

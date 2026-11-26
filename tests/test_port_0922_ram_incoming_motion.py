@@ -1,24 +1,78 @@
 """Incoming contact evidence, including Bot -> stationary player admission."""
 import contextlib
 import copy
-import importlib.util
 import io
 import json
 import math
 import types
-from pathlib import Path
 import unittest
 from unittest import mock
 
 import test_port_0922_bot_runtime as bots
 import test_port_0922_battle_runtime as visible
 from gui.mods.offline_lan_0922 import bot_state_codec, ram_history, ram_motion
+from gui.mods.offline_lan_0922.bot_runtime import BotRuntime
+from test_port_0922_battle_runtime import BattleRuntime, _runtime
+from test_port_0922_server_projectiles import (
+    _state, _update_player_input, _player_ram_contact, SIMULATION_WORKER_AUTHORITY_ID)
 
-ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location('ram_transaction_fixtures',
-    ROOT / 'tests/release097/test_096_ram_evidence6.py')
-chain = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(chain)
+# Server and worker of one admitted human ram transaction.
+TRANSACTION_PAIR = [100, 1000000, 102, 1200000]
+TRANSACTION_STAMP = 1050000
+TRANSACTION_SHAPE = (1.6, 2.981, .002, 1.552)
+TRANSACTION_PLAYER_SHAPE = (2.047, 4.085, .001, 1.96)
+TRANSACTION_PROFILE = dict(spall_coefficient=1., ramming_bonus=0.)
+
+
+def transaction_body(bid=30, **kw):
+    value = dict(id=bid, alive=True, team=2, vehicle='china:Ch14_T34_3', x=0., y=0., z=6.8,
+        yaw=math.pi, pitch=0., roll=0., aim_yaw=math.pi, gun_pitch=0., speed=0.,
+        mass=35500., collision_shape=TRANSACTION_SHAPE, ram_profile=dict(TRANSACTION_PROFILE),
+        health=50000, max_health=50000, display_health=50000, critical={},
+        combat_revision=0, combat_base_revision=0, combat_ack_seq=0,
+        combat_fire_elapsed=0., combat_fire_timer=0.)
+    value.update(kw)
+    return value
+
+
+def transaction_receipt(seq=1, bid=30, **kw):
+    value = _player_ram_contact(seq=seq, bot_id=bid, bot_state_revision=102,
+        presentation_time_us=TRANSACTION_STAMP, native_contact_time_us=1300000,
+        contact_x=0., contact_y=1., contact_z=3.95, contact_armor_player=120.,
+        contact_armor_bot=80., vz=8., bot_history_bracket=list(TRANSACTION_PAIR))
+    value.update(kw)
+    return value
+
+
+def transaction_server(bids=(30, 20)):
+    s = _state(players=1)
+    s.bot_manifest_authority_id = SIMULATION_WORKER_AUTHORITY_ID
+    s.players[1].health = s.players[1].max_health = 50000
+    s.bot_states = dict((i, transaction_body(i)) for i in bids)
+    s.human_collision_profiles[1] = dict(mass=130260., shape=TRANSACTION_PLAYER_SHAPE,
+                                         ram_profile=dict(TRANSACTION_PROFILE))
+    for revision, t in ((100, 1000000), (101, 1100000), (102, 1200000)):
+        s.bot_state_revision = revision
+        s.bot_state_time_us = t
+        s.ram_pose_archive.remember(revision, t, s.bot_states)
+    return s
+
+
+def transaction_worker(bids=(30, 20)):
+    w = BotRuntime.__new__(BotRuntime)
+    w._human_ram_receipt_seq = {}
+    w._human_ram_report_cache = {}
+    w._ram_seq = 0
+    w._ram_wait_log_key = None
+    w._ram_wait_log_next = 0.
+    w._player_collision_profile = lambda raw: dict(
+        mass=130260., shape=TRANSACTION_PLAYER_SHAPE, ram_profile=dict(TRANSACTION_PROFILE))
+    w.states = dict((i, transaction_body(i)) for i in bids)
+    b = BattleRuntime(_runtime())
+    b._bots = w
+    return b, w
+
+
 SHAPE = (1.56252, 3.325788, .006011, 1.602434)
 PLAYER_SHAPE = (1.7, 3.5, 0., 2.)
 
@@ -112,10 +166,10 @@ class TransportTests(unittest.TestCase):
 
     def test_server_binds_incoming_speed_to_canonical_peer_and_sequence(self):
         for change in ({}, dict(bot_vz=-50.), dict(bot_ram_motion_seq=8), dict(x=0.01)):
-            s = chain.server()
+            s = transaction_server()
             for sample in s.ram_pose_archive.samples.values():
                 sample[1][30]['ram_motion'] = [motion(vz=-8.)]
-            receipt = chain.receipt(vz=0., bot_vz=-8., bot_ram_motion_seq=7)
+            receipt = transaction_receipt(vz=0., bot_vz=-8., bot_ram_motion_seq=7)
             receipt.update(change)
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
@@ -132,23 +186,23 @@ class TransportTests(unittest.TestCase):
                                   else 'canonical_ram_motion_mismatch'), reason)
 
     def test_bot_into_stationary_player_settles_once_through_real_server(self):
-        s = chain.server()
+        s = transaction_server()
         for sample in s.ram_pose_archive.samples.values():
             sample[1][30]['ram_motion'] = [motion(vz=-8.)]
-        b, worker = chain.worker()
+        b, worker = transaction_worker()
         with contextlib.redirect_stdout(io.StringIO()):
-            self.assertTrue(chain._update_player_input(s, 1, ram_contacts=[
-                chain.receipt(vz=0., bot_vz=-8., bot_ram_motion_seq=7)]))
+            self.assertTrue(_update_player_input(s, 1, ram_contacts=[
+                transaction_receipt(vz=0., bot_vz=-8., bot_ram_motion_seq=7)]))
             player = s.players[1]
             decorated = b._decorate_ram_contacts(dict(id=1, alive=True, team=1,
                 ram_contacts=list(player.ram_contacts.values())))
             report = worker._resolve_human_ram_receipts([decorated], 1.)[0]
             message = dict(report, type='bot_ram_report', round_id=s.round_id,
                            authority_epoch=s.authority_epoch)
-            self.assertTrue(s.report_bot_ram(chain.SIMULATION_WORKER_AUTHORITY_ID, message))
+            self.assertTrue(s.report_bot_ram(SIMULATION_WORKER_AUTHORITY_ID, message))
             hp = player.health
             self.assertLess(hp, 50000)
-            self.assertTrue(s.report_bot_ram(chain.SIMULATION_WORKER_AUTHORITY_ID, message))
+            self.assertTrue(s.report_bot_ram(SIMULATION_WORKER_AUTHORITY_ID, message))
             self.assertEqual(hp, player.health)
             bot_hp = s.bot_states[message['bot_id']]['health']
             events = len(s.pending_events)
@@ -156,11 +210,11 @@ class TransportTests(unittest.TestCase):
             # player contact. The contact identity still owns exactly one HP
             # and module commit, even after its FIFO entry was consumed.
             replay = dict(message, ram_seq=message['ram_seq']+100)
-            self.assertTrue(s.report_bot_ram(chain.SIMULATION_WORKER_AUTHORITY_ID, replay))
+            self.assertTrue(s.report_bot_ram(SIMULATION_WORKER_AUTHORITY_ID, replay))
             self.assertEqual((hp,bot_hp,events),
                 (player.health,s.bot_states[message['bot_id']]['health'],len(s.pending_events)))
             conflict = dict(replay, damage_to_bot=message['damage_to_bot']+1)
-            self.assertFalse(s.report_bot_ram(chain.SIMULATION_WORKER_AUTHORITY_ID, conflict))
+            self.assertFalse(s.report_bot_ram(SIMULATION_WORKER_AUTHORITY_ID, conflict))
             self.assertEqual((hp,bot_hp,events),
                 (player.health,s.bot_states[message['bot_id']]['health'],len(s.pending_events)))
 

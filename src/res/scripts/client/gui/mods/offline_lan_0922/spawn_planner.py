@@ -19,10 +19,7 @@ class SpawnPlanner(object):
 
     SLOT_COUNT = 15
 
-    def __init__(self, arena_type=None, fallback=None,
-                 navigation_graph=None):
-        unused_arena_type = arena_type
-        unused_fallback = fallback
+    def __init__(self, navigation_graph=None):
         if not isinstance(navigation_graph, dict):
             raise ValueError(
                 'validated navigation graph is required for spawn planning')

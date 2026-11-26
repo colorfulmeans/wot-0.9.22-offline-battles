@@ -114,7 +114,7 @@ class RouteRecoveryMixin:
                 continue
             weights = route.get('class_weights') or {}
             affinity = _number(weights.get(tag, .5))
-            if affinity < MIN_ROUTE_AFFINITY or tag in route.get('_editor_disabled_classes', ()):
+            if affinity < MIN_ROUTE_AFFINITY:
                 continue
             candidates.append((visits.get(identity, 0), -affinity, identity, route))
         if not candidates:

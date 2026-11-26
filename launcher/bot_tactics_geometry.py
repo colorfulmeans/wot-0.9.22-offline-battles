@@ -1,6 +1,5 @@
 """Editor endpoint ownership; never changes a submitted route on save."""
 import math
-import copy
 
 
 def symmetry_allowed(graph):
@@ -21,31 +20,6 @@ def anchors(graph, team):
 def in_enemy_base(point, graph, team):
     base=graph['objective_bases'][2-team]
     return math.hypot(point[0]-base[0],point[1]-base[1]) <= graph['objective_base_radii'][2-team]
-
-
-def display_points(points, graph, team):
-    if (not symmetry_allowed(graph) and not in_enemy_base(points[-1],graph,team)
-            and same_point(points[-1],graph['spawn_anchors'][2-team])):
-        points=copy.deepcopy(points);points[-1]=anchors(graph,team)[-1]
-    return points
-
-
-def migrate_legacy_ends(document):
-    """Retire only the old enemy-spawn endpoint outside its capture circle."""
-    changed=False
-    from gui.mods.offline_lan_0922.bot_editor_maps import MAPS
-    for name,entry in document['maps'].items():
-        # Use the generated objective metadata; opening a profile must not
-        # repeatedly deserialize every full navigation graph.
-        graph=MAPS[name]
-        for route in entry.get('default_routes',[])+entry.get('routes',[]):
-            if route.get('purpose')=='spg_attack':continue
-            last=route['points'][-1];team=route['team']
-            if (not symmetry_allowed(graph) and not in_enemy_base(last,graph,team)
-                    and same_point(last,graph['spawn_anchors'][2-team])):
-                route['points'][-1]=anchors(graph,team)[-1]
-                changed=True
-    return changed
 
 
 def insertion_index(points, selected):

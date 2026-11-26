@@ -204,14 +204,9 @@ def validate_route(grid, route):
     return None
 
 
-# Authored routes carry no lane capacity, risk or role affinity of their own.
-ROUTE_CAPACITY = 15
-ROUTE_RISK = 0.5
-
-
 def route_value(route):
-    return {'id': 'user_' + route['id'], 'capacity': ROUTE_CAPACITY, 'risk': ROUTE_RISK,
-            'role_weights': {}, 'class_weights': dict((c, 1.0 if c in route['classes'] else 0.0) for c in config.CLASSES),
+    return {'id': 'user_' + route['id'],
+            'class_weights': dict((c, 1.0 if c in route['classes'] else 0.0) for c in config.CLASSES),
             # Wait conditions stay in the canonical tactics document on the
             # server. The manifest keeps its existing three-field geometry.
             'waypoints': tuple(tuple(p[:3]) for p in route['points']),
@@ -254,8 +249,7 @@ def default_routes(profile, name, graph):
             if error is not None:
                 continue
             if shared:
-                routes.append(dict(id=edit['id'], capacity=ROUTE_CAPACITY, risk=ROUTE_RISK,
-                                   role_weights={},
+                routes.append(dict(id=edit['id'],
                                    waypoints=[list(p[:3]) for p in edit['points']],
                                    _route_tier=edit.get('tier', 'main'),
                                    _allocation_symmetric=bool(edit.get('symmetric', False))))
@@ -275,27 +269,20 @@ def default_routes(profile, name, graph):
     if any(edit.get('disabled') and edit.get('class_tag','all')=='all' for edit in edits):
         result['_editor_allow_empty']=True
     for edit in edits:
-        if not edit.get('disabled'):continue
+        # A deleted route leaves with its class variants. A canonical document
+        # disables a class row only together with its whole route.
+        if not edit.get('disabled') or edit.get('class_tag','all')!='all':continue
         team_routes=result.get(str(edit['team']),[])
-        scope=edit.get('class_tag','all')
-        if scope=='all':
-            result[str(edit['team'])]=[r for r in team_routes
-                if r['id']!=edit['id'] and r.get('_editor_source')!=edit['id']]
-        else:
-            result[str(edit['team'])]=[r for r in team_routes
-                if not (r.get('_editor_source')==edit['id'] and r.get('_editor_class')==scope)]
-            for route in result[str(edit['team'])]:
-                if route['id']==edit['id']:
-                    route.setdefault('_editor_disabled_classes',[]).append(scope)
-                    route.setdefault('class_weights',{})[scope]=0.0
+        result[str(edit['team'])]=[r for r in team_routes
+            if r['id']!=edit['id'] and r.get('_editor_source')!=edit['id']]
     return result, outcomes
 
 
 def route_catalog(profile, name, graph):
     """Return each team's routes from this round's Default rows.
 
-    Waypoints become (x, z, hold) tuples and a class deletion writes a zero
-    class weight. A route without a usable waypoint is left out.
+    Waypoints become (x, z, hold) tuples. A route without a usable waypoint
+    is left out.
     """
     routes, outcomes = default_routes(profile, name, graph)
     catalog = {}
@@ -314,11 +301,8 @@ def route_catalog(profile, name, graph):
             if not waypoints:
                 continue
             route = dict(raw)
-            route['role_weights'] = dict(route.get('role_weights', {}) or {})
             if 'class_weights' in route:
                 route['class_weights'] = dict(route.get('class_weights', {}) or {})
-            for tag in route.get('_editor_disabled_classes', ()):
-                route.setdefault('class_weights', {})[tag] = 0.0
             route['waypoints'] = tuple(waypoints)
             rows.append(route)
         catalog[team] = tuple(rows)
@@ -330,8 +314,8 @@ def assign_initial_routes(profile, name, graph, states, catalog, seed):
 
     Class geometry variants share one lane occupancy.
     Priorities are local to the vehicle class. A class without a usable route
-    shares the team's least-used route, ignoring class disabling; only a team
-    without any usable route leaves a tank without one.
+    shares the team's least-used route; only a team without any usable route
+    leaves a tank without one.
     Restored manifests bypass this fresh-round allocator entirely.
     """
     settings = config.map_settings(profile, name)
@@ -357,13 +341,6 @@ def assign_initial_routes(profile, name, graph, states, catalog, seed):
             if base.get('_editor_source') or fixed:
                 continue
             route = variants.get(base['id'], base)
-            weights = route.get('class_weights') or {}
-            if tag in base.get('_editor_disabled_classes', ()):
-                continue
-            # A class deletion writes a sparse zero mask. Missing entries mean
-            # unchanged eligibility, not a prohibition on every other class.
-            if tag in weights and weights[tag] <= 0:
-                continue
             key = (state['team'], ('spg:' if tag == 'SPG' else '') + base['id'], tag)
             # Capacity is a soft whole-team lane threshold, not a class veto.
             priority = (route.get('class_priorities') or {}).get(tag, config.DEFAULT_ROUTE_PRIORITY)
@@ -388,8 +365,8 @@ def assign_initial_routes(profile, name, graph, states, catalog, seed):
                             (route_value(route), key, 'random_' + route['policy'])))
         if choices:
             return choices
-        # No route admits this class: share the team's least-used route and
-        # ignore class disabling. Slot limits and route validity still apply.
+        # No route admits this class: share the team's least-used route,
+        # whatever classes it names. Slot limits and route validity still apply.
         for base in rows:
             if base.get('_editor_source'):
                 continue

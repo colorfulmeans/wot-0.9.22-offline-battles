@@ -2912,10 +2912,7 @@ class BattleRuntime(object):
                 except Exception as error:
                     self._disable_destructibles_for_round(error)
             self._observe_destructibles_disabled(self._start_message)
-            self._spawn_planner = SpawnPlanner(
-                arena_type,
-                tactical_maps.get_tactical_map(self._config['map']),
-                self._navigation_graph)
+            self._spawn_planner = SpawnPlanner(self._navigation_graph)
             constants = self._runtime.constants
             local_identity = self._local_state()
             self._runtime.compatibility.set_battle_network_client(self.client)
@@ -5824,10 +5821,7 @@ class BattleRuntime(object):
         if cached is not None:
             return cached
         if self._spawn_planner is None:
-            self._spawn_planner = SpawnPlanner(
-                self._arena_type,
-                tactical_maps.get_tactical_map(self._config['map']),
-                self._navigation_graph)
+            self._spawn_planner = SpawnPlanner(self._navigation_graph)
         physical_slot = getattr(self, '_spawn_slot_assignments', {}).get(
             key, key[1])
         result = self._spawn_planner.pose(key[0], physical_slot)

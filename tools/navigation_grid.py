@@ -478,7 +478,6 @@ def validate_graph(graph, map_config):
         "base_offsets": [round(start_offset, 3), round(goal_offset, 3)],
         "base_path_nodes": len(path),
         "base_path_metres": round(distance, 3),
-        "maximum_anchor_offset": round(maximum_anchor_offset, 3),
     }
 
 

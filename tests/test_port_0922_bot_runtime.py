@@ -21597,12 +21597,11 @@ class BotRuntimeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '16-waypoint'):
             self.runtime._manifest_entry(state)
 
-    def test_route_strategy_metadata_survives_the_server_manifest_boundary(self):
+    def test_route_class_weights_survive_the_server_manifest_boundary(self):
         self.runtime.battle_start(self.start)
         state = dict(self.runtime.states[11])
         state['route'] = {
-            'id': 'middle_road', 'capacity': 4, 'risk': 0.56,
-            'role_weights': {'scout': 1.0, 'brawler': 0.02},
+            'id': 'middle_road',
             'class_weights': {'lightTank': 1.0, 'heavyTank': 0.02},
             'waypoints': ((0.0, 0.0, False), (8.0, 0.0, True)),
         }
@@ -21610,8 +21609,7 @@ class BotRuntimeTests(unittest.TestCase):
         manifest = self.runtime._manifest_entry(state)
 
         self.assertEqual({
-            'id': 'middle_road', 'capacity': 4, 'risk': 0.56,
-            'role_weights': {'scout': 1.0, 'brawler': 0.02},
+            'id': 'middle_road',
             'class_weights': {'lightTank': 1.0, 'heavyTank': 0.02},
             'waypoints': [
                 {'x': 0.0, 'y': 0.0, 'z': 0.0, 'hold': False},
@@ -21634,11 +21632,11 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual(manifest['route'],
                          server.bot_manifest[0]['route'])
 
-    def test_server_route_metadata_is_bounded_and_legacy_compatible(self):
-        legacy = BattleState._sanitize_bot_route({
-            'id': 'legacy', 'waypoints': [],
+    def test_server_route_keeps_only_bounded_class_weights(self):
+        plain = BattleState._sanitize_bot_route({
+            'id': 'plain', 'waypoints': [],
         })
-        self.assertEqual({'id': 'legacy', 'waypoints': []}, legacy)
+        self.assertEqual({'id': 'plain', 'waypoints': []}, plain)
 
         sanitized = BattleState._sanitize_bot_route({
             'id': 'strategy', 'capacity': 99, 'risk': -2.0,
@@ -21646,13 +21644,8 @@ class BotRuntimeTests(unittest.TestCase):
             'class_weights': {'lightTank': float('nan')},
             'waypoints': [],
         })
-        self.assertEqual(15, sanitized['capacity'])
-        self.assertEqual(0.0, sanitized['risk'])
-        self.assertEqual(
-            {'scout': 1.0, 'brawler': 0.0},
-            sanitized['role_weights'])
-        self.assertEqual({'lightTank': 0.0},
-                         sanitized['class_weights'])
+        self.assertEqual({'id': 'strategy', 'class_weights': {'lightTank': 0.0},
+                          'waypoints': []}, sanitized)
 
     def test_probe_rejects_water_collision_and_steep_slope(self):
         for probe in ({'clear': True, 'water': True}, {'clear': True, 'collision': True}, {'clear': True, 'slope': .7}):

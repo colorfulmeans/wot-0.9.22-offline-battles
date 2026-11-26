@@ -159,13 +159,7 @@ class Store:
                 current=contract.default_profile()
                 if raw!=current:_atomic(path,current)
                 return contract.canonical(current)
-        document=contract.load(str(path))
-        import bot_tactics_geometry
-        migrated=bot_tactics_geometry.migrate_legacy_ends(document)
-        if migrated or any('travel' in zone or 'links' in zone for entry in (raw or {}).get('maps',{}).values()
-               for zone in entry.get('positions',())):
-            _atomic(path,document)
-        return document
+        return contract.load(str(path))
 
     def ensure_active(self):
         if not self.active_path.exists():
@@ -283,7 +277,6 @@ class Store:
     def import_file(filename):
         document=contract.load(str(filename))
         import bot_tactics_geometry
-        bot_tactics_geometry.migrate_legacy_ends(document)
         bot_tactics_geometry.validate(document, contract, graph_data)
         from gui.mods.offline_lan_0922.bot_fittings import validate_profile
         validate_profile(document)

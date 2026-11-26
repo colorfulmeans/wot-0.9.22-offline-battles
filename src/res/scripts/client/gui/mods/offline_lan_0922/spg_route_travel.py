@@ -75,8 +75,6 @@ def apply(runtime,state,order,now):
     empty=state.get('_spg_mode') == 'empty'
     if empty:order=dict(order,empty_ammo=True,movement_priority='empty_ammo_capture')
     order=dict(order,spg_mode=state['_spg_mode'])
-    if active and active.get('kind') in ('deploy','relocate','link','travel'):
-        state.pop('_authored_spg_travel',None);active=None
     defense=not empty and (bool(order.get('defense_base_id')) or mode in ('base_defense','team_back_to_base','team_guard'))
     if defense:
         if not state.get('_authored_spg_defending'):

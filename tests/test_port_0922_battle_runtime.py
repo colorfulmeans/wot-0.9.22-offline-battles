@@ -2583,16 +2583,6 @@ def _runtime():
                         80.0 - (slot // 5) * 12.0, math.pi)
                        for slot in range(15)),
         },
-        'routes': {
-            '1': ({'id': 'test', 'capacity': 15, 'risk': 0.0,
-                   'role_weights': {},
-                   'waypoints': ((0.0, -40.0, False),
-                                 (0.0, 40.0, False))},),
-            '2': ({'id': 'test', 'capacity': 15, 'risk': 0.0,
-                   'role_weights': {},
-                   'waypoints': ((0.0, 40.0, False),
-                                 (0.0, -40.0, False))},),
-        },
     }
 
     def navigation_graph_loader(map_name):

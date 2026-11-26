@@ -101,21 +101,8 @@ class RouteCatalogTests(unittest.TestCase):
                 for source, row in zip(baked[str(team)], catalog[team]):
                     self.assertEqual(tuple((float(p[0]), float(p[1]), bool(p[2]))
                                            for p in source['waypoints']), row['waypoints'])
-                    # No legacy tactical map metadata is copied in.
                     self.assertEqual(source.get('class_weights'), row.get('class_weights'))
-                    self.assertEqual(source.get('role_weights'), row['role_weights'])
-
-    def test_class_deletion_writes_a_zero_class_weight(self):
-        graph = json.loads((ROOT / 'navgraphs' / '01_karelia.json').read_text(encoding='utf-8'))
-        document = bot_tactics.for_round(bot_tactics.empty(), '01_karelia')
-        rows = document['maps']['01_karelia']['default_routes']
-        source = next(r for r in rows if r['team'] == 1 and r.get('class_tag', 'all') == 'all')
-        rows.append(dict(source, class_tag='heavyTank', disabled=True))
-        catalog, unused = bot_tactics_runtime.route_catalog(document, '01_karelia', graph)
-        row = next(r for r in catalog[1] if r['id'] == source['id'])
-        self.assertEqual(0.0, row['class_weights']['heavyTank'])
-        self.assertFalse(any(r.get('_editor_source') == source['id'] and
-                             r.get('_editor_class') == 'heavyTank' for r in catalog[1]))
+                    self.assertNotIn('role_weights', row)
 
 
 if __name__ == '__main__':

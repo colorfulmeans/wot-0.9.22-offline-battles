@@ -24,8 +24,6 @@ def unconfigured():
     profile=review()
     for entry in profile['maps'].values():
         entry['routes']=[r for r in entry['routes'] if r.get('purpose')!='spg_attack']
-        for p in entry['positions']:
-            p.pop('travel',None);p.pop('links',None)
     return profile
 
 
@@ -53,14 +51,6 @@ class InventoryTests(unittest.TestCase):
             self.assertFalse(any(x['kind']=='deployment' for x in rows))
             self.assertFalse(any(x['kind']=='relocation' for x in rows))
             self.assertEqual(2,sum(x['kind']=='sortie' and not x['points'] for x in rows))
-
-    def test_retired_parking_connections_are_not_missing_or_drawn_as_authored(self):
-        name='04_himmelsdorf';p=review();g=storage.graph_data(name)
-        peers=[x for x in p['maps'][name]['positions'] if x['team']==1];a,b=peers[:2]
-        a['links']={b['id']:[a['point']+[0],b['point']+[0]]}
-        a['travel']=[[0,0,0],a['point']+[0]]
-        rows=inv.inventory(p,name,g,storage.contract)
-        self.assertFalse(any(x['kind'] in ('deployment','relocation') for x in rows))
 
     def test_directional_failure_cannot_be_reported_as_pass_and_check_is_read_only(self):
         name='04_himmelsdorf';p=unconfigured();g=storage.graph_data(name)

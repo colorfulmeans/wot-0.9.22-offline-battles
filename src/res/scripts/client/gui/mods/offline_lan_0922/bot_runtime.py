@@ -4309,7 +4309,7 @@ class BotRuntime(object):
                     map_name, actor, outcomes[actor],
                     plan['side'] if plan else '-', plan['zone'] if plan else '-',
                     plan['cell'] if plan else '-', plan['point'] if plan else '-',
-                    plan['source'] if plan else 'legacy_fallback'))
+                    plan['source'] if plan else '-'))
 
     def pending_manifest(self):
         """Return one isolated copy of the current unsent manifest."""
@@ -5175,19 +5175,14 @@ class BotRuntime(object):
             raise ValueError(
                 'bot route exceeds the 16-waypoint LAN protocol limit')
         result['route'] = {
-            'id': route.get('id', 'map_route'),
+            'id': route.get('id') or '',
             'waypoints': [
                 {'x': point[0], 'y': 0.0, 'z': point[1],
                  'hold': bool(point[2]) if len(point) > 2 else False}
                 for point in waypoints],
         }
-        for key in ('capacity', 'risk'):
-            if key in route:
-                result['route'][key] = route[key]
-        for key in ('role_weights', 'class_weights'):
-            values = route.get(key)
-            if isinstance(values, dict):
-                result['route'][key] = dict(values)
+        if isinstance(route.get('class_weights'), dict):
+            result['route']['class_weights'] = dict(route['class_weights'])
         if route.get('id') and not route.get('_editor_source'):
             catalog = self._route_catalog
             scoped = [r['_editor_class'] for r in catalog.get(state['team'], ())

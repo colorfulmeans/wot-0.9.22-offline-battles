@@ -9,10 +9,10 @@ def inventory(profile, name, graph, contract):
     entry = contract.map_settings(profile, name)
     rows = []
 
-    def add(kind, item, points, scope='all', mode='', link='', selection=None):
+    def add(kind, item, points, scope='all', mode='', selection=None):
         rows.append(dict(kind=kind, team=item['team'], scope=scope,
             label=item.get('label', item['id']), identity=item['id'],
-            points=copy.deepcopy(points), mode=mode, link=link,
+            points=copy.deepcopy(points), mode=mode,
             selection=selection, disabled=bool(item.get('disabled')),
             parking=copy.deepcopy(item) if kind=='parking' else None))
 

@@ -167,25 +167,6 @@ class SharedRouteDataTests(unittest.TestCase):
         row['points'].insert(1,row['points'][-1][:])
         self.assertEqual('waypoint_unusable',storage.runtime.validate_route(grid,row))
 
-    def test_legacy_enemy_spawn_endpoint_migrates_once_without_changing_interior(self):
-        import bot_tactics_geometry as geometry
-        with tempfile.TemporaryDirectory() as temp:
-            store=storage.Store(temp);profile=storage.contract.default_profile('Legacy ends')
-            graph=storage.graph_data('63_tundra')
-            row=next(r for r in profile['maps']['63_tundra']['default_routes'] if r['team']==1 and r.get('class_tag','all')=='all')
-            row['points'][-1]=graph['spawn_anchors'][1]+[0]
-            old=copy.deepcopy(row['points']);store.profile_path(profile['name']).parent.mkdir(parents=True)
-            store.profile_path(profile['name']).write_text(storage.contract.dumps(profile))
-            result=store.read(profile['name'])
-            updated=next(r for r in result['maps']['63_tundra']['default_routes'] if r['team']==1 and r['id']==row['id'] and r.get('class_tag','all')=='all')
-            self.assertEqual(old[:-1],updated['points'][:-1])
-            self.assertTrue(geometry.same_point(graph['objective_bases'][1],updated['points'][-1]))
-            self.assertEqual(result,store.read(profile['name']))
-            geometry.validate(result,storage.contract,storage.graph_data)
-            invalid=copy.deepcopy(result)
-            bad=next(r for r in invalid['maps']['63_tundra']['default_routes'] if r['team']==1 and r['id']==row['id'] and r.get('class_tag','all')=='all')
-            bad['points'][-1]=old[-1]
-            with self.assertRaises(storage.contract.TacticsError):store.save(invalid)
     def test_old_default_with_retired_identity_refreshes_before_validation(self):
         with tempfile.TemporaryDirectory() as temp:
             store=storage.Store(temp)

@@ -99,15 +99,6 @@ def travel_points(raw, contract, bounds):
     return result
 
 
-def position_fields(raw, result, contract, bounds):
-    """Retired parking travel/links are discarded when old profiles are read.
-
-    Parking stays editable; deployment and relocation belong to automatic
-    navigation. Do not resurrect legacy connections on import, reset or save.
-    """
-    return
-
-
 def migrate_default_rows(rows):
     """Retired class deletions become reserve; whole-route exclusions survive."""
     disabled=set((row['team'],row['id']) for row in rows if row.get('disabled') and row.get('class_tag','all')=='all')
