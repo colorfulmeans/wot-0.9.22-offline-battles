@@ -100,60 +100,7 @@ class CompiledSpace0922Test(unittest.TestCase):
             with self.assertRaises(baker.UnsafeBakeInputError):
                 baker.ctf_base_radii(invalid, graph['objective_bases'])
 
-    def test_ordinary_routes_use_one_canonical_reversible_polyline(self):
-        graph = {'bake': {'soft_route_fallbacks': []}}
-        routes = {
-            '1': [
-                {'id': 'through', 'capacity': 5, 'risk': 0.6,
-                 'role_weights': {'scout': 1.0},
-                 'waypoints': [[0.0, 0.0, False],
-                               [4.0, 4.0, True],
-                               [8.0, 8.0, False]]},
-                {'id': 'rear_guard', 'capacity': 1, 'risk': 0.1,
-                 'role_weights': {'artillery': 1.0},
-                 'waypoints': [[0.0, 0.0, False],
-                               [-4.0, 0.0, True]]},
-            ],
-            '2': [
-                {'id': 'through', 'capacity': 5, 'risk': 0.6,
-                 'role_weights': {'scout': 1.0},
-                 'waypoints': [[8.0, 8.0, False],
-                               [8.0, 4.0, True],
-                               [0.0, 0.0, False]]},
-                {'id': 'rear_guard', 'capacity': 1, 'risk': 0.1,
-                 'role_weights': {'artillery': 1.0},
-                 'waypoints': [[8.0, 8.0, False],
-                               [12.0, 8.0, True]]},
-            ],
-        }
-
-        result = baker.canonicalize_reversible_routes(graph, routes)
-
-        self.assertEqual(
-            [[8.0, 8.0, False], [4.0, 4.0, True],
-             [0.0, 0.0, False]],
-            result['2'][0]['waypoints'])
-        self.assertEqual(
-            [[8.0, 8.0, False], [12.0, 8.0, True]],
-            result['2'][1]['waypoints'])
-        self.assertEqual(
-            ['through'], graph['bake']['canonical_reversible_routes'])
-
-    def test_directional_fallback_mismatch_is_rejected(self):
-        graph = {'bake': {'soft_route_fallbacks': ['1:through']}}
-        route = {'id': 'through', 'capacity': 1, 'risk': 0.5,
-                 'role_weights': {},
-                 'waypoints': [[0.0, 0.0, False],
-                               [4.0, 4.0, False]]}
-        reverse = dict(route)
-        reverse['waypoints'] = list(reversed(route['waypoints']))
-        with self.assertRaisesRegex(
-                baker.UnsafeBakeInputError,
-                'reversible tactical fallback differs'):
-            baker.canonicalize_reversible_routes(
-                graph, {'1': [route], '2': [reverse]})
-
-    def test_final_validation_rejects_a_canonical_reverse_on_one_way_links(self):
+    def test_terrain_validation_reports_no_route_statistics(self):
         legacy = baker._legacy_baker()
         graph = {
             'cell_size': 4.0,
@@ -162,33 +109,26 @@ class CompiledSpace0922Test(unittest.TestCase):
             'width': 3,
             'height': 1,
             'heights_mm': [0, 0, 0],
-            # East-only links let team one cross the fixture but deliberately
-            # make the same sampled corridor invalid in reverse.
-            'links': [1 << 4, 1 << 4, 0],
+            'links': [1 << 4, (1 << 3) | (1 << 4), 1 << 3],
             'hazards': [0, 0, 0],
             'directions': [list(direction)
                            for direction in legacy.DIRECTIONS],
-            'bake': {'soft_route_fallbacks': []},
         }
-        first = {
-            'id': 'through', 'capacity': 1, 'risk': 0.5,
-            'role_weights': {},
-            'waypoints': [[0.0, 0.0, False],
-                          [4.0, 0.0, True],
-                          [8.0, 0.0, False]],
-        }
-        second = dict(first)
-        second['waypoints'] = list(reversed(first['waypoints']))
-        routes = {'1': [first], '2': [second]}
+        result = baker._terrain_validation(
+            legacy.validate_graph, graph, {'bases': ((0.0, 0.0), (8.0, 0.0))})
+        self.assertEqual(1, result['components'])
+        self.assertEqual(3, result['base_path_nodes'])
+        self.assertFalse(set(baker._ROUTE_STATISTICS) & set(result))
 
-        graph['routes'] = baker.canonicalize_reversible_routes(
-            graph, routes)
-
-        with self.assertRaisesRegex(
-                ValueError, 'route segment is disconnected'):
-            legacy.validate_graph(
-                graph, {'bases': ((0.0, 0.0), (8.0, 0.0)),
-                        'routes': (), 'anchors': ()})
+    def test_bake_config_carries_the_objectives_and_no_routes(self):
+        graph = json.loads((ROOT / 'navgraphs' / '06_ensk.json').read_text())
+        objectives = tuple(tuple(point) for point in graph['objective_bases'])
+        config = baker._target_bake_config(
+            baker._legacy_baker(), graph['bounds'], objectives)
+        self.assertEqual(objectives, config['bases'])
+        self.assertEqual(objectives, config['anchors'])
+        self.assertEqual((), config['routes'])
+        self.assertEqual(tuple(graph['bounds']), config['bounds'])
 
     def test_navigation_baker_uses_neutral_pinned_baseline(self):
         path = Path(baker.NAVIGATION_BAKER)
@@ -213,45 +153,6 @@ class CompiledSpace0922Test(unittest.TestCase):
             baseline_path = baseline_root / Path(relative_path)
             self.assertEqual(
                 digest, hashlib.sha256(baseline_path.read_bytes()).hexdigest())
-
-    def test_reviewed_gate_uses_decoded_team_starts_not_tactical_bases(self):
-        graph = json.loads((ROOT / 'navgraphs' / '84_winter.json').read_text())
-        objectives = tuple(tuple(point) for point in graph['objective_bases'])
-        route_starts = tuple(tuple(point) for point in graph['spawn_anchors'])
-        legacy = baker._legacy_baker()
-
-        exact = baker._target_tactical_config(
-            legacy, '84_winter', objectives, route_starts)
-        regression_fixture = baker._target_tactical_config(
-            legacy, '84_winter', objectives,
-            ((-410.0, -350.0), (410.0, 350.0)))
-
-        def ice_road_gate(config):
-            route = next(record for record in config['routes']
-                         if record['team'] == 1 and
-                         record['id'] == 'ice_road')
-            held = [point[:2] for point in route['points'] if point[2]]
-            self.assertEqual(1, len(held))
-            return held[0]
-
-        self.assertEqual(objectives, exact['bases'])
-        self.assertEqual((150.0, 318.0), ice_road_gate(exact))
-        self.assertEqual(
-            (-250.0, -22.0), ice_road_gate(regression_fixture))
-
-    def test_baker_applies_reviewed_route_removal_once_from_raw_authoring(self):
-        graph = json.loads((ROOT / 'navgraphs' / '06_ensk.json').read_text())
-        objectives = tuple(tuple(point) for point in graph['objective_bases'])
-        route_starts = tuple(tuple(point) for point in graph['spawn_anchors'])
-        config = baker._target_tactical_config(
-            baker._legacy_baker(), '06_ensk', objectives, route_starts)
-        for team in (1, 2):
-            routes = [route for route in config['routes']
-                      if route['team'] == team]
-            self.assertEqual(
-                {'west_city', 'east_field'},
-                {route['id'] for route in routes})
-            self.assertEqual([7, 7], [route['capacity'] for route in routes])
 
     @staticmethod
     def _vehicle_chassis_visual(minimum, maximum):
@@ -411,8 +312,7 @@ class CompiledSpace0922Test(unittest.TestCase):
         self.assertEqual(
             'offline-lan-0922-navgraph',
             loaded_without_manifest_identity['format'])
-        self.assertGreater(len(loaded['routes']['1']), 0)
-        self.assertGreater(loaded['validation']['route_segments'], 0)
+        self.assertNotIn('routes', loaded)
 
     def test_real_lakeville_graph_marks_compiled_water_cells_fatal(self):
         graph = ROOT / 'navgraphs' / '07_lakeville.json'
@@ -427,27 +327,8 @@ class CompiledSpace0922Test(unittest.TestCase):
         self.assertEqual(len(water_indexes), data['bake']['rejected_water_nodes'])
         self.assertTrue(all(data['heights_mm'][index] is None
                             for index in water_indexes))
-        self.assertGreater(data['validation']['route_segments'], 0)
 
-    def test_real_himmelsdorf_rear_guard_has_connected_locomotion(self):
-        graph = ROOT / 'navgraphs' / '04_himmelsdorf.json'
-        self.assertTrue(graph.is_file(), 'baked Himmelsdorf graph is missing')
-        data = json.loads(graph.read_text())
-
-        for team in ('1', '2'):
-            route = next(value for value in data['routes'][team]
-                         if value['id'] == 'rear_guard')
-            self.assertGreaterEqual(len(route['waypoints']), 2)
-            self.assertLessEqual(len(route['waypoints']), 16)
-            self.assertTrue(route['waypoints'][-1][2])
-            start = route['waypoints'][0]
-            anchor = data['spawn_anchors'][int(team) - 1]
-            self.assertLessEqual(
-                ((start[0] - anchor[0]) ** 2 +
-                 (start[1] - anchor[1]) ** 2) ** 0.5,
-                data['cell_size'] * 1.5)
-
-    def test_real_dday_graph_uses_packed_ctf_bases_and_valid_routes(self):
+    def test_real_dday_graph_uses_packed_ctf_bases(self):
         graph = ROOT / 'navgraphs' / '101_dday.json'
         self.assertTrue(graph.is_file(), 'baked D-Day graph is missing')
         data = json.loads(graph.read_text())
@@ -464,43 +345,21 @@ class CompiledSpace0922Test(unittest.TestCase):
         self.assertEqual([[], []], data['ctf_spawn_points'])
         self.assertEqual('ctf objectives projected onto validated graph',
                          data['spawn_anchor_source'])
-        self.assertLess(data['bake']['maximum_route_projection'], 8.0)
-        self.assertEqual([], data['bake']['soft_route_fallbacks'])
         self.assertGreater(data['bake']['rejected_obstacle_nodes'], 0)
         self.assertEqual(sum(bool(v&1) for v in data['hazards']),data['bake']['rejected_water_nodes'])
         self.assertEqual(1.2,data['bake']['water_depth_limit'])
-        self.assertEqual(90, data['validation']['route_segments'])
-        for team, start, finish in (
-                ('1', data['spawn_anchors'][0], data['spawn_anchors'][1]),
-                ('2', data['spawn_anchors'][1], data['spawn_anchors'][0])):
-            self.assertEqual({'beach', 'village', 'cliff'},
-                             {route['id'] for route in data['routes'][team]})
-            for route in data['routes'][team]:
-                self.assertEqual(16, len(route['waypoints']))
-                self.assertEqual(start, route['waypoints'][0][:2])
-                self.assertEqual(finish, route['waypoints'][-1][:2])
 
-    def test_real_thepit_routes_start_after_verified_one_way_ingress(self):
+    def test_real_thepit_spawns_use_verified_one_way_ingress(self):
         graph = ROOT / 'navgraphs' / '100_thepit.json'
         self.assertTrue(graph.is_file(), 'baked The Pit graph is missing')
         data = json.loads(graph.read_text())
 
         self.assertTrue(data['bake']['directed_spawn_ingress'])
-        self.assertEqual([], data['bake']['soft_route_fallbacks'])
         for team in ('1', '2'):
             ingress = data['validation']['spawn_ingress'][team]
             self.assertTrue(ingress['forward_connected'])
             self.assertTrue(ingress['reverse_links_absent'])
             self.assertGreater(ingress['one_way_links'], 0)
-            start = data['spawn_anchors'][int(team) - 1]
-            finish = data['spawn_anchors'][2 - int(team)]
-            self.assertEqual(
-                {'rim_west', 'pit', 'rim_east'},
-                {route['id'] for route in data['routes'][team]})
-            for route in data['routes'][team]:
-                self.assertEqual(16, len(route['waypoints']))
-                self.assertEqual(start, route['waypoints'][0][:2])
-                self.assertEqual(finish, route['waypoints'][-1][:2])
 
     def test_real_eiffel_graph_uses_ctf_objectives_and_mature_obstacle_rules(self):
         graph = (ROOT / 'navgraphs' /
@@ -539,18 +398,8 @@ class CompiledSpace0922Test(unittest.TestCase):
         self.assertAlmostEqual(0.81698,
                                data['bake']['retained_fraction'], places=5)
         self.assertEqual(1, data['validation']['components'])
-        self.assertEqual(90, data['validation']['route_segments'])
         self.assertLessEqual(max(data['validation']['spawn_start_reach_metres']),
                              data['cell_size'])
-        for team, start, finish in (
-                ('1', data['spawn_anchors'][0], data['spawn_anchors'][1]),
-                ('2', data['spawn_anchors'][1], data['spawn_anchors'][0])):
-            self.assertEqual({'tower_west', 'center', 'tower_east'},
-                             {route['id'] for route in data['routes'][team]})
-            for route in data['routes'][team]:
-                self.assertEqual(16, len(route['waypoints']))
-                self.assertEqual(start, route['waypoints'][0][:2])
-                self.assertEqual(finish, route['waypoints'][-1][:2])
 
     def test_every_shipped_map_has_a_complete_validated_spawn_formation(self):
         graph_root = ROOT / 'navgraphs'
@@ -685,22 +534,54 @@ class CompiledSpace0922Test(unittest.TestCase):
                     record['sha256'],
                     hashlib.sha256(graph_path.read_bytes()).hexdigest())
 
-    def test_every_shipped_map_has_exact_tactical_route_contracts(self):
+    def test_every_shipped_map_keeps_its_topology_and_carries_no_routes(self):
         graph_root = ROOT / 'navgraphs'
         paths = sorted(path for path in graph_root.glob('*.json')
                        if path.name != 'manifest.json')
         self.assertEqual(41, len(paths))
-        roles = {
-            'brawler', 'support', 'flanker',
-            'sniper', 'scout', 'artillery',
-        }
+        legacy = load_module('bake_navigation_0922')._legacy_baker()
+
+        def route_fields(node, path=''):
+            # Identity history is not route data; every other field is.
+            found = []
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    child = path + '.' + key if path else key
+                    if 'route' in key and key != 'route_previous_sha256':
+                        found.append(child)
+                    found.extend(route_fields(value, child))
+            elif isinstance(node, list):
+                for item in node:
+                    found.extend(route_fields(item, path))
+            return found
+
+        def without_routes(graph, identity):
+            # Exactly what removing the residual old routes deleted.
+            result = copy.deepcopy(graph)
+            del result['routes']
+            route_statistics = ('route_segments', 'maximum_route_detour',
+                                'maximum_opening_regression', 'maximum_anchor_offset')
+            for key in route_statistics + ('water_rebake_layered_routes',):
+                result['validation'].pop(key, None)
+            for key in ('canonical_reversible_routes', 'maximum_route_projection',
+                        'soft_route_fallbacks', 'soft_route_fallback_causes'):
+                del result['bake'][key]
+            railway = result['bake'].get('railway_obstacles')
+            for record in (result['bake'].get('continuous_terrain_validation'),
+                           (railway or {}).get('validation')):
+                for key in route_statistics:
+                    (record or {}).pop(key, None)
+            if railway:
+                del railway['routes_preserved']
+            result['navigation_previous_sha256s'].append(identity)
+            return result
+
         for path in paths:
             with self.subTest(map=path.stem):
                 data = json.loads(path.read_text())
                 # Railway pruning already left some disconnected static
                 # pockets in the retained input. Compare actual topology,
                 # not its stale pre-pruning "one component" summary.
-                legacy=load_module('bake_navigation_0922')._legacy_baker()
                 prior=json.loads(subprocess.check_output(['git','show',
                     '100bac61:navgraphs/'+path.name],cwd=ROOT))
                 before=legacy._connected_components(prior)
@@ -709,92 +590,12 @@ class CompiledSpace0922Test(unittest.TestCase):
                 self.assertEqual(len(after),data['validation']['components'])
                 self.assertGreaterEqual(data['validation']['largest_fraction'],
                     round(before[0]/float(sum(before)),5))
-                self.assertEqual(
-                    sum(len(route['waypoints']) - 1
-                        for team in ('1', '2')
-                        for route in data['routes'][team]),
-                    data['validation']['route_segments'])
-
-                soft_routes = set(data['bake']['soft_route_fallbacks'])
-                self.assertEqual(
-                    soft_routes,
-                    set(data['bake']['soft_route_fallback_causes']))
-                self.assertTrue(all(
-                    isinstance(cause, str) and cause
-                    for cause in
-                    data['bake']['soft_route_fallback_causes'].values()))
-                team_metadata = []
-                route_keys = set()
-                for team in ('1', '2'):
-                    routes = data['routes'][team]
-                    route_ids = [route['id'] for route in routes]
-                    if path.stem == '04_himmelsdorf':
-                        self.assertEqual(
-                            {'banana', 'hill', 'rail', 'rear_guard'},
-                            set(route_ids))
-                    elif path.stem == '06_ensk':
-                        self.assertEqual(
-                            {'west_city', 'east_field'}, set(route_ids))
-                        self.assertEqual(
-                            [7, 7],
-                            [route['capacity'] for route in routes])
-                    else:
-                        self.assertEqual(3, len(routes))
-                    self.assertEqual(len(route_ids), len(set(route_ids)))
-                    own = data['spawn_anchors'][int(team) - 1]
-                    enemy = data['spawn_anchors'][2 - int(team)]
-                    metadata = []
-                    for route in routes:
-                        route_key = '%s:%s' % (team, route['id'])
-                        route_keys.add(route_key)
-                        self.assertEqual(own, route['waypoints'][0][:2])
-                        self.assertGreaterEqual(route['capacity'], 1)
-                        self.assertGreaterEqual(route['risk'], 0.0)
-                        self.assertLessEqual(route['risk'], 1.0)
-                        self.assertEqual(roles, set(route['role_weights']))
-                        self.assertTrue(all(
-                            0.0 <= value <= 1.0
-                            for value in route['role_weights'].values()))
-                        self.assertGreaterEqual(len(route['waypoints']), 2)
-                        self.assertLessEqual(len(route['waypoints']), 16)
-                        for x, z, unused_hold in route['waypoints']:
-                            column = int(round(
-                                (x - data['origin'][0]) / data['cell_size']))
-                            row = int(round(
-                                (z - data['origin'][1]) / data['cell_size']))
-                            self.assertGreaterEqual(column, 0)
-                            self.assertLess(column, data['width'])
-                            self.assertGreaterEqual(row, 0)
-                            self.assertLess(row, data['height'])
-                            index = row * data['width'] + column
-                            if data['heights_mm'][index] is None:
-                                # A former waypoint cell may now be occupied by
-                                # solid railway stock. Existing projection must
-                                # still find support within the arrival radius.
-                                removed=data['bake']['railway_obstacles']['layers'][0]['removed_node_indices']
-                                self.assertIn(index,removed)
-                                from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
-                                grid=TerrainGrid(lambda *a:None,baked_graph=data)
-                                safe=grid._nearest_baked_cell((column,row),3)
-                                self.assertIsNotNone(safe)
-                                self.assertLessEqual(math.hypot(safe[0]-column,safe[1]-row)*data['cell_size'],12.)
-                            self.assertEqual(0, data['hazards'][index] & 3)
-                        if (route.get('terminal_hold', False) or
-                                route['id'] == 'rear_guard'):
-                            self.assertTrue(route['waypoints'][-1][2])
-                        else:
-                            self.assertEqual(enemy, route['waypoints'][-1][:2])
-                        metadata.append((
-                            route['id'], route['capacity'], route['risk'],
-                            route['role_weights'],
-                            bool(route.get('terminal_hold', False))))
-                    for role in roles - {'artillery'}:
-                        self.assertGreater(
-                            max(route['role_weights'][role]
-                                for route in routes), 0.0)
-                    team_metadata.append(metadata)
-                self.assertEqual(team_metadata[0], team_metadata[1])
-                self.assertTrue(soft_routes.issubset(route_keys))
+                # Bot routes come from the built-in Default tactics.
+                self.assertEqual([], route_fields(data))
+                shipped=subprocess.check_output(['git','show',
+                    '54c995f9:navgraphs/'+path.name],cwd=ROOT)
+                self.assertEqual(without_routes(
+                    json.loads(shipped), hashlib.sha256(shipped).hexdigest()), data)
 
     def test_reads_0920_bwt2_chunk_vector(self):
         settings = struct.pack('<f4i3I', 100.0, -4, 3, -4, 3, 0, 0, 0)

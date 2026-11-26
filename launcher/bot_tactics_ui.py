@@ -733,14 +733,14 @@ class BotTacticsEditor(ConnectionEditorMixin):
         if self.route_class_var.get() in ('SPG','spg_attack'):return
         graph = self.graph_cache.get(self.map_name) or {}
         tags = contract.CLASSES[:-1] if self.route_class_var.get() == 'total' else (self.route_class_var.get(),)
-        for route in graph.get('routes', {}).get(str(self.team), ()):
+        for route in getattr(self, 'baseline_sources', {}).get(str(self.team), ()):
             route=dict(route,waypoints=route_geometry.display_points(route['waypoints'],graph,self.team))
             for tag in tags:
                 if tag == 'SPG':continue
                 weights = route.get('class_weights') or {}
                 edit=self._default_edit(route,tag) or {}
                 # All existing class geometry remains visible; reserve lanes are not deletions.
-                if edit.get('disabled') or any(v.get('disabled') and v.get('class_tag','all')=='all' and v['team']==self.team and v['id']==route['id'] for v in self.entry().get('default_routes',())):continue
+                if edit.get('disabled') or any(v.get('disabled') and v.get('class_tag','all')=='all' for v in self._default_rows(route['id'])):continue
                 identity = route['id'] + '@' + tag if self.route_class_var.get() == 'total' else route['id']
                 yield route, tag, identity
 
@@ -751,7 +751,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
                 return next((p for p in self.entry()['positions'] if p['id']==identity),
                             copy.deepcopy(next((p for p in self.spg_defaults if p['id']==identity),None)))
             if kind=='builtin':
-                source=next((r for r in (self.graph_cache.get(self.map_name) or {}).get('routes',{}).get(str(self.team),())
+                source=next((r for r in getattr(self,'baseline_sources',{}).get(str(self.team),())
                              if r['id']==identity.partition('@')[0]),None)
                 if source is None:return None
                 edit=self._default_edit(source,self._route_scope())
@@ -769,9 +769,30 @@ class BotTacticsEditor(ConnectionEditorMixin):
         return None
 
 
+    def _default_rows(self, identity, team=None):
+        # A battle keeps the Default's row for every class the profile does not define.
+        team=self.team if team is None else team
+        own=[r for r in self.entry().get('default_routes',()) if r['id']==identity and r['team']==team]
+        defined={r.get('class_tag','all') for r in own}
+        return own+[r for r in getattr(self,'baseline_entry',{}).get('default_routes',())
+                    if r['id']==identity and r['team']==team and r.get('class_tag','all') not in defined]
+
+    def _adopt_default_rows(self, identity, teams, scopes=None):
+        # The profile stores only what differs from the Default. Before an edit
+        # writes rows of this route, it starts from the Default's own row for
+        # each team and class the profile does not define yet.
+        edits=self._ensure_entry().setdefault('default_routes',[])
+        defined={(r['team'],r.get('class_tag','all')) for r in edits if r['id']==identity}
+        for row in getattr(self,'baseline_entry',{}).get('default_routes',()):
+            key=(row['team'],row.get('class_tag','all'))
+            if (row['id']==identity and row['team'] in teams and key not in defined
+                    and (scopes is None or key[1] in scopes)):
+                edits.append(copy.deepcopy(row));defined.add(key)
+        return edits
+
     def _default_edit(self, source, scope=None):
         scope=self._route_scope() if scope is None else scope
-        edits=[r for r in self.entry().get('default_routes',()) if r['id']==source['id'] and r['team']==self.team]
+        edits=self._default_rows(source['id'])
         return next((r for r in edits if r.get('class_tag','all')==scope),
                     next((r for r in edits if r.get('class_tag','all')=='all'),None))
 
@@ -798,7 +819,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
                     other['mirror_id']=new['id'];new['mirror_id']=other['id'];entries.append(other)
                 entries.append(new);self.selection=('routes',new['id']+('@'+scope if self.route_class_var.get()=='total' else ''));item=new
             return item
-        edits=self._ensure_entry().setdefault('default_routes',[])
+        edits=self._adopt_default_rows(item['id'],(self.team,),(item['class_tag'],))
         edit=next((r for r in edits if r['id']==item['id'] and r['team']==self.team and
                    r.get('class_tag','all')==item['class_tag']),None)
         if edit is None:
@@ -827,7 +848,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
         if not item.get('symmetric') or not self._symmetry_allowed():return
         other=3-self.team
         if self.selection[0]=='builtin':
-            entries=self._ensure_entry().setdefault('default_routes',[])
+            entries=self._adopt_default_rows(item['id'],(other,),(item.get('class_tag','all'),))
             peer=next((r for r in entries if r['team']==other and r['id']==item['id'] and
                        r.get('class_tag','all')==item.get('class_tag','all')),None)
             if peer is None:peer=dict(id=item['id']);entries.append(peer)
@@ -875,7 +896,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
         item['symmetric']=enabled
         if enabled:self._sync_symmetry()
         elif self.selection[0]=='builtin':
-            for r in self.entry().get('default_routes',()):
+            for r in self._adopt_default_rows(item['id'],(3-self.team,),(item.get('class_tag','all'),)):
                 if r['id']==item['id'] and r.get('class_tag','all')==item.get('class_tag','all'):r['symmetric']=False
         else:
             for r in self.entry()['routes']:
@@ -895,6 +916,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
         self.network_mode='';self.network_link='';self.wait_edit=False;self.selected_wait=None;self.drag=None
         meta=contract.MAPS[self.map_name]
         self.baseline_entry=contract.default_map(self.map_name)
+        self.baseline_sources=contract.baseline_routes(self.map_name,self.baseline_entry)
         self.view=storage.ViewTransform(meta['bounds'],700,600)
         if self.map_name not in self.graph_cache:
             try:self.graph_cache[self.map_name]=storage.graph_data(self.map_name)
@@ -940,20 +962,20 @@ class BotTacticsEditor(ConnectionEditorMixin):
         return self.tr(' [优先级 %d]',' [Priority %d]')%value
 
     def _default_name(self, identity, scope, language=None):
-        edits=[r for r in self.entry().get('default_routes',()) if r['id']==identity and r['team']==self.team and 'label' in r]
+        edits=[r for r in self._default_rows(identity) if 'label' in r]
         edit=next((r for r in edits if r.get('class_tag','all')==scope),
                   next((r for r in edits if r.get('class_tag','all')=='all'),None))
         return labels.tactic_name(edit['label'],language or self.language) if edit else labels.route_label(identity,language or self.language)
 
     def _sync_default_name(self, item):
         # Naming never copies geometry, priorities or deletion state.
-        edits=self._ensure_entry().setdefault('default_routes',[])
         scope=item.get('class_tag','all')
         teams=(self.team,3-self.team) if item.get('symmetric') else (self.team,)
+        edits=self._adopt_default_rows(item['id'],teams,None if scope=='all' else (scope,))
         for team in teams:
             peer=next((r for r in edits if r['id']==item['id'] and r['team']==team and r.get('class_tag','all')==scope),None)
             if peer is None:
-                source=next((r for r in (self.graph_cache.get(self.map_name) or {}).get('routes',{}).get(str(team),()) if r['id']==item['id']),None)
+                source=next((r for r in getattr(self,'baseline_sources',{}).get(str(team),()) if r['id']==item['id']),None)
                 if source is None:continue
                 inherited=next((r for r in edits if r['id']==item['id'] and r['team']==team and r.get('class_tag','all')=='all'),None)
                 pts=(inherited or {}).get('points',source['waypoints'])
@@ -1123,7 +1145,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
         if self.builtin or self.network_mode:return
         item=self._selected_parent()
         if self.selection and self.selection[0]=='builtin':
-            source=next((v for v in self.graph_cache[self.map_name].get('routes',{}).get(str(self.team),()) if v['id']==self._route_identity()),None)
+            source=next((v for v in getattr(self,'baseline_sources',{}).get(str(self.team),()) if v['id']==self._route_identity()),None)
             if source:
                 points=copy.deepcopy(item['points'])
                 anchors=route_geometry.anchors(self.graph_cache[self.map_name],self.team)
@@ -1165,7 +1187,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
                     self._builtin_caption(self.selection[1])+'?',parent=self.root):return
             self.checkpoint();scope=self._route_scope();identity=item['id']
             teams=(self.team,3-self.team) if item.get('symmetric') else (self.team,)
-            edits=self._ensure_entry().setdefault('default_routes',[])
+            edits=self._adopt_default_rows(identity,teams,None if scope=='all' else (scope,))
             for team in teams:
                 target=next((r for r in edits if r['id']==identity and r['team']==team and r.get('class_tag','all')==scope),None)
                 if target is None:
@@ -1237,11 +1259,10 @@ class BotTacticsEditor(ConnectionEditorMixin):
         remaining=copy.deepcopy([r for r in edits if not (r['id']==self._route_identity() and r.get('class_tag','all')==scope and
                    (r['team']==self.team or item.get('symmetric')))])
         if scope=='all':
-            graph=self.graph_cache.get(self.map_name) or {}
             for edit in remaining:
                 if (edit['id']!=item['id'] or edit.get('class_tag','all') not in contract.CLASSES[:-1] or
                         (edit['team']!=self.team and not item.get('symmetric'))):continue
-                source=next((r for r in graph.get('routes',{}).get(str(edit['team']),()) if r['id']==item['id']),None)
+                source=next((r for r in getattr(self,'baseline_sources',{}).get(str(edit['team']),()) if r['id']==item['id']),None)
                 if source:edit['points']=[list(p[:2])+[0] for p in source['waypoints']]
         if remaining==edits:return
         self.checkpoint()
@@ -1391,7 +1412,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
         if checkpoint:self.checkpoint()
         item=self._editable_item();item['symmetric']=False
         if self.selection[0]=='builtin':
-            for peer in self.entry().get('default_routes',()):
+            for peer in self._adopt_default_rows(item['id'],(3-self.team,),(item.get('class_tag','all'),)):
                 if peer['id']==item['id'] and peer.get('class_tag','all')==item.get('class_tag','all'):
                     peer['symmetric']=False
         else:

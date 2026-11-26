@@ -196,11 +196,9 @@ class SharedRouteDataTests(unittest.TestCase):
             self.assertEqual(storage.contract.default_profile(),store.active())
 
     def test_restored_rear_guard_keeps_fixed_endpoints_and_disabled_rows_have_no_waits(self):
-        from gui.mods.offline_lan_0922.ai.maps import TACTICAL_MAPS
         profile=storage.contract.default_profile()
         for team in (1,2):
-            self.assertIn('rear_guard',[r['id'] for r in TACTICAL_MAPS['04_himmelsdorf']['routes'][team]])
-            self.assertIn('rear_guard',[r['id'] for r in storage.graph_data('04_himmelsdorf')['routes'][str(team)]])
+            self.assertIn('rear_guard',[r['id'] for r in storage.contract.baseline_routes('04_himmelsdorf')[str(team)]])
         graph=storage.graph_data('04_himmelsdorf')
         restored=[r for r in profile['maps']['04_himmelsdorf']['default_routes'] if r['id']=='rear_guard' and r.get('class_tag','all')=='all']
         self.assertEqual(2,len(restored))

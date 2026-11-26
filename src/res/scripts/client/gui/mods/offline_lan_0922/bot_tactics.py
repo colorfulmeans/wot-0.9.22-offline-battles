@@ -5,7 +5,8 @@ from __future__ import division
 
 No native game imports, environment reads or global mutable settings.  Hosts
 load a bounded document only at an accepted round boundary. An empty document
-supplies no authored geometry or behavior-parameter overrides.
+supplies no authored geometry or behavior-parameter overrides; each round takes
+its map's routes from the built-in Default.
 """
 import copy
 import hashlib
@@ -104,8 +105,30 @@ def default_profile(name='Default'):
     return document
 
 
+# The shipped Default never changes at run time; parse it once.
+_DEFAULT_MAPS = {}
+
+
 def default_map(name):
-    return default_profile()['maps'].get(name, {})
+    if not _DEFAULT_MAPS:
+        _DEFAULT_MAPS.update(default_profile()['maps'])
+    return copy.deepcopy(_DEFAULT_MAPS.get(name, {}))
+
+
+def baseline_routes(name, entry=None):
+    """Return each team's built-in Default shared routes in route-ID order.
+
+    Editor views list these as the map's built-in routes. ``entry`` is the
+    Default map entry when the caller already holds it.
+    """
+    rows = (default_map(name) if entry is None else entry).get('default_routes', ())
+    result = {}
+    for team, identities in MAPS[name]['route_ids'].items():
+        shared = dict((r['id'], r) for r in rows
+                      if str(r['team']) == str(team) and r.get('class_tag', 'all') == 'all')
+        result[str(team)] = [dict(id=identity, waypoints=copy.deepcopy(shared[identity]['points']))
+                             for identity in identities if identity in shared]
+    return result
 
 
 def normalize_values(raw):
@@ -517,12 +540,42 @@ def canonical_manual_plan(raw, config, map_name=None, vehicle=None, team=None):
         return None
 
 
+def default_row_key(row):
+    return (row['team'], row['id'], row.get('class_tag', 'all'))
+
+
+def effective_default_routes(raw, name):
+    """Return the Default-route rows a battle on this map uses.
+
+    The built-in Default is the baseline: every row the profile does not
+    define, by team, route and vehicle class, keeps the Default's row.
+    """
+    rows = map_settings(raw, name).get('default_routes') or ()
+    own = set(default_row_key(r) for r in rows)
+    result = copy.deepcopy(list(rows)) + [
+        r for r in default_map(name).get('default_routes', ())
+        if default_row_key(r) not in own]
+    result.sort(key=default_row_key)
+    return result
+
+
 def for_round(profile, map_name):
-    """Transmit this map only; never inflate the 256 KiB battle-start frame."""
+    """Transmit this map only; never inflate the 256 KiB battle-start frame.
+
+    The map's Default routes are completed from the built-in Default, so the
+    host planner and the worker read the same baseline.
+    """
     selected = empty(profile['name'])
     selected['behavior'] = copy.deepcopy(profile['behavior'])
-    if map_name in profile['maps']:
-        selected['maps'][map_name] = copy.deepcopy(profile['maps'][map_name])
+    entry = copy.deepcopy(profile['maps'].get(map_name))
+    rows = effective_default_routes(profile, map_name)
+    if rows:
+        if entry is None:
+            entry = dict(mode='regular', resource_sha256=MAPS[map_name]['resource_sha256'],
+                         routes=[], positions=[])
+        entry['default_routes'] = rows
+    if entry is not None:
+        selected['maps'][map_name] = entry
     if len(dumps(selected).encode('ascii')) > 64 * 1024:
         raise TacticsError('This round tactics payload exceeds 64 KiB')
     return selected

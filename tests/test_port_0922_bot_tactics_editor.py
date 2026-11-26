@@ -22,7 +22,7 @@ def profile():
     raw=cfg.empty('Editor regression')
     raw['behavior']=[dict(team=0,class_tag='all',slot=-1,values={'reaction_seconds':2.5,'lead_error':0.0})]
     graph=_graph()
-    points=[list(p) for p in graph['routes']['1'][0]['waypoints'][:4]]
+    points=[list(p) for p in cfg.baseline_routes('08_ruinberg')['1'][0]['waypoints'][:4]]
     points[0]=graph['spawn_anchors'][0]+[0]
     points.append(graph['spawn_anchors'][1]+[0])
     raw['maps']['08_ruinberg']={
@@ -420,7 +420,8 @@ class PragueRouteResourceIdentityTests(unittest.TestCase):
                          normalized['maps']['114_czech']['resource_sha256'])
         self.assertEqual(raw['maps']['114_czech'].get('default_routes', []),
                          normalized['maps']['114_czech'].get('default_routes', []))
-        self.assertTrue(graph_data('114_czech')['routes'])
+        # The orders live in the profile; the graph carries no routes.
+        self.assertNotIn('routes', graph_data('114_czech'))
 
     def test_unrelated_resource_fingerprint_is_still_rejected(self):
         raw = cfg.empty('Invalid Prague profile')

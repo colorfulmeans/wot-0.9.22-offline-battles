@@ -2521,7 +2521,6 @@ class BotRuntime(object):
         # keeps the authority's own rectangle correct for any graph reaching
         # the Bot runtime by another path.
         prebaked_navigation.clip_graph_to_arena(graph, self._arena_bounds)
-        self._validated_baked_routes(graph)
         graph = prebaked_navigation.with_shore_hazards(graph)
         if not callable(self._ground_probe):
             raise ValueError(
@@ -2553,52 +2552,14 @@ class BotRuntime(object):
         if callable(close):
             close()
 
-    @staticmethod
-    def _validated_baked_routes(graph):
-        routes = graph.get('routes') if isinstance(graph, dict) else None
-        if not isinstance(routes, dict):
-            raise ValueError('navigation graph routes are missing')
-        for team in (1, 2):
-            values = routes.get(str(team), routes.get(team))
-            if not isinstance(values, (list, tuple)) or not values:
-                raise ValueError(
-                    'navigation graph routes are missing for team %d' % team)
-            for route in values:
-                if not isinstance(route, dict):
-                    raise ValueError('navigation graph route is invalid')
-                waypoints = route.get('waypoints')
-                if (not isinstance(waypoints, (list, tuple)) or
-                        not waypoints or len(waypoints) > 16):
-                    raise ValueError(
-                        'navigation graph route waypoint count is invalid')
-                for point in waypoints:
-                    if not isinstance(point, (list, tuple)) or len(point) < 2:
-                        raise ValueError(
-                            'navigation graph route waypoint is invalid')
-                    try:
-                        x = float(point[0])
-                        z = float(point[1])
-                    except (TypeError, ValueError, IndexError):
-                        raise ValueError(
-                            'navigation graph route waypoint is invalid')
-                    if (x != x or z != z or abs(x) == float('inf') or
-                            abs(z) == float('inf')):
-                        raise ValueError(
-                            'navigation graph route waypoint is invalid')
-        return routes
-
     def _new_adapter(self, map_name, round_id):
         """Build this round's driver adapter and its Bot route catalog."""
-        self._route_catalog = {}
-        baked_routes = (self.baked_graph or {}).get('routes')
-        if (isinstance(baked_routes, dict) and any(
-                baked_routes.get(key) for key in (1, 2, '1', '2'))):
-            self._route_catalog, outcomes = bot_tactics_runtime.route_catalog(
-                self._bot_tactics, tactical_maps.normalize_map_name(map_name),
-                self.baked_graph)
-            for route_id, status in sorted(outcomes.items()):
-                sys.stdout.write('[Offline LAN 0.9.22] BOT TACTICS default route=%s status=%s\n' %
-                                 (route_id, status))
+        self._route_catalog, outcomes = bot_tactics_runtime.route_catalog(
+            self._bot_tactics, tactical_maps.normalize_map_name(map_name),
+            self.baked_graph)
+        for route_id, status in sorted(outcomes.items()):
+            sys.stdout.write('[Offline LAN 0.9.22] BOT TACTICS default route=%s status=%s\n' %
+                             (route_id, status))
         return self.adapter_factory(map_name, round_id)
 
     def _clear(self, position, yaw, speed=0.0, descriptor=None,

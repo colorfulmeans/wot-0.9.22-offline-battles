@@ -62,12 +62,6 @@ class EditorUITests(unittest.TestCase):
 
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
-        # Exercise the historical source-graph routes independently of the adopted
-        # baseline. Parking keeps the Default positions that every shipped map has.
-        default_map=storage.contract.default_map
-        patcher=mock.patch.object(storage.contract,'default_map',
-            side_effect=lambda name:{k:v for k,v in default_map(name).items() if k=='positions'})
-        patcher.start();self.addCleanup(patcher.stop)
         storage.Store(self.temp.name).save(storage.contract.empty('Editable fixture'),apply=True)
         self.root=tk.Tk();self.root.withdraw()
         self.addCleanup(self.root.destroy)
@@ -133,17 +127,16 @@ class EditorUITests(unittest.TestCase):
 
     def test_legacy_asymmetric_terminal_survives_save_without_snap_action(self):
         baseline=storage.contract.default_profile('Editable fixture')
-        with mock.patch.object(storage.contract,'default_map',side_effect=lambda name:baseline['maps'].get(name,{})):
-            self.ui.adopt(baseline)
-            self.ui.map_var.set(storage.MAP_LABELS['95_lost_city']);self.ui.change_map()
-            self.ui.route_class_var.set('lightTank');self.ui.change_route_class()
-            key=next(k for k in self.ui.items.get_children() if k.startswith('builtin:'))
-            self.ui.items.selection_set(key);self.ui.select_item()
-            before=copy.deepcopy(self.ui.document);points=copy.deepcopy(self.ui._selected()['points'])
-            self.assertNotEqual(self.ui.graph_cache['95_lost_city']['spawn_anchors'][1],points[-1][:2])
-            self.ui.save(False)
-            self.assertEqual(before,self.ui.document);self.assertEqual(points,self.ui._selected()['points'])
-            self.error_mock.assert_not_called()
+        self.ui.adopt(baseline)
+        self.ui.map_var.set(storage.MAP_LABELS['95_lost_city']);self.ui.change_map()
+        self.ui.route_class_var.set('lightTank');self.ui.change_route_class()
+        key=next(k for k in self.ui.items.get_children() if k.startswith('builtin:'))
+        self.ui.items.selection_set(key);self.ui.select_item()
+        before=copy.deepcopy(self.ui.document);points=copy.deepcopy(self.ui._selected()['points'])
+        self.assertNotEqual(self.ui.graph_cache['95_lost_city']['spawn_anchors'][1],points[-1][:2])
+        self.ui.save(False)
+        self.assertEqual(before,self.ui.document);self.assertEqual(points,self.ui._selected()['points'])
+        self.error_mock.assert_not_called()
 
     def test_all_map_new_routes_use_map_specific_fixed_endpoints(self):
         for name in storage.contract.MAPS:
@@ -181,7 +174,7 @@ class EditorUITests(unittest.TestCase):
     def test_builtin_symmetry_default_and_saved_off_survive_roundtrip(self):
         for name in ('08_ruinberg','95_lost_city'):
             self.ui.map_var.set(storage.MAP_LABELS[name]);self.ui.change_map()
-            source=self.ui.graph_cache[name]['routes']['1'][0]
+            source=self.ui.baseline_sources['1'][0]
             self.ui.items.selection_set('builtin:'+source['id']);self.root.update()
             self.assertEqual(name=='08_ruinberg',self.ui.symmetry_var.get())
             self.assertEqual(name=='95_lost_city',self.ui.symmetry_check.instate(['disabled']))
@@ -246,7 +239,7 @@ class EditorUITests(unittest.TestCase):
         self.ui.new_route();self.assertEqual('routes',self.ui.selection[0]);self.assertEqual('spg_attack',self.ui._selected()['purpose'])
 
     def test_wait_editor_detaches_symmetry_but_retains_both_route_geometries(self):
-        source=self.ui.graph_cache['08_ruinberg']['routes']['1'][0]
+        source=self.ui.baseline_sources['1'][0]
         self.ui.items.selection_set('builtin:'+source['id']);self.root.update()
         self.ui.symmetry_var.set(True);self.ui.change_symmetry()
         geometry=copy.deepcopy(self.ui._selected()['points'])
@@ -273,13 +266,17 @@ class EditorUITests(unittest.TestCase):
         self.assertFalse(self.error_mock.called)
 
     def test_class_default_edit_does_not_replace_other_class_geometry(self):
-        source=self.ui.graph_cache['08_ruinberg']['routes']['1'][0]
+        source=self.ui.baseline_sources['1'][0]
+        self.ui.route_class_var.set('mediumTank');self.ui.change_route_class()
+        self.ui.items.selection_set('builtin:'+source['id']);self.root.update()
+        medium=copy.deepcopy(self.ui._selected()['points'])
+        self.ui.route_class_var.set('heavyTank');self.ui.change_route_class()
         self.ui.items.selection_set('builtin:'+source['id']);self.root.update()
         self.ui.selected_point=1;self.ui.delete_point()
         changed=copy.deepcopy(self.ui._selected()['points'])
         self.ui.route_class_var.set('mediumTank');self.ui.change_route_class()
         self.ui.items.selection_set('builtin:'+source['id']);self.root.update()
-        self.assertEqual(source['waypoints'],self.ui._selected()['points'])
+        self.assertEqual(medium,self.ui._selected()['points'])
         self.ui.route_class_var.set('heavyTank');self.ui.change_route_class()
         self.ui.items.selection_set('builtin:'+source['id']);self.root.update()
         self.assertEqual(changed,self.ui._selected()['points'])
@@ -307,7 +304,7 @@ class EditorUITests(unittest.TestCase):
 
     def test_builtin_drag_insert_delete_undo_save_reopen_and_reset(self):
         graph=copy.deepcopy(self.ui.graph_cache['08_ruinberg'])
-        source=graph['routes']['1'][0]
+        source=self.ui.baseline_sources['1'][0]
         self.ui.items.selection_set('builtin:'+source['id']);self.root.update()
         self.assertEqual(('builtin',source['id']),self.ui.selection)
         self.assertFalse(self.ui.dirty());self.assertEqual({},self.ui.document['maps'])
@@ -415,11 +412,12 @@ class EditorUITests(unittest.TestCase):
         self.assertEqual([],self.ui.store.active()['behavior'])
 
     def test_copy_builtin_route_does_not_change_baked_source(self):
-        graph=copy.deepcopy(self.ui.graph_cache['08_ruinberg'])
-        self.ui.items.selection_set('builtin:'+graph['routes']['1'][0]['id']);self.root.update()
+        graph=copy.deepcopy(self.ui.graph_cache['08_ruinberg']);sources=copy.deepcopy(self.ui.baseline_sources)
+        self.ui.items.selection_set('builtin:'+sources['1'][0]['id']);self.root.update()
         self.ui.duplicate_item();self.root.update()
         self.assertEqual('routes',self.ui.selection[0]);self.assertTrue(self.ui._selected()['points'])
-        self.assertEqual(graph,self.ui.graph_cache['08_ruinberg']);self.ui.save(False)
+        self.assertEqual(graph,self.ui.graph_cache['08_ruinberg']);self.assertEqual(sources,self.ui.baseline_sources)
+        self.ui.save(False)
         self.assertFalse(self.error_mock.called,self.error_mock.call_args)
 
     def test_map_switch_keeps_world_points_and_shows_different_base(self):

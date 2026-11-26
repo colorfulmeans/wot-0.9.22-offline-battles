@@ -954,16 +954,24 @@ class ServerBotTacticsTests(unittest.TestCase):
         self.assertEqual(4, staged[404]['route_index'])
         self.assertIsNone(staged[404]['throttle_override'])
 
+    # Lanes recorded from the former baked Malinovka routes.
+    MALINOVKA_CENTRAL_FIELD_TEAM_2 = (
+        (-374.0, 110.0, False), (-374.0, 106.0, False), (-362.0, 106.0, False),
+        (-282.0, 174.0, False), (-186.0, 226.0, False), (-50.0, 218.0, False),
+        (46.0, 218.0, False), (114.0, 158.0, False), (150.0, 138.0, True),
+        (186.0, 34.0, False), (190.0, -18.0, False), (218.0, -122.0, False),
+        (230.0, -146.0, False), (230.0, -214.0, False), (138.0, -314.0, False),
+        (74.0, -390.0, False))
+    MALINOVKA_EAST_HILL_LOOP_TEAM_1 = (
+        (74.0, -390.0, False), (234.0, -282.0, False), (290.0, -266.0, False),
+        (430.0, -98.0, False), (470.0, 46.0, False), (462.0, 114.0, False),
+        (470.0, 134.0, False), (470.0, 294.0, False), (470.0, 458.0, True),
+        (278.0, 478.0, False), (162.0, 478.0, False), (10.0, 430.0, False),
+        (-194.0, 302.0, False), (-362.0, 126.0, False), (-378.0, 122.0, False),
+        (-374.0, 110.0, False))
+
     def test_malinovka_shared_connector_advances_through_forward_corridor(self):
-        graph = json.loads(
-            (PORT_ROOT / 'navgraphs' / '02_malinovka.json').read_text())
-        baked = next(
-            route for route in graph['routes']['2']
-            if route['id'] == 'central_field')
-        route = _route(
-            baked['id'],
-            [(point[0], point[1], point[2])
-             for point in baked['waypoints']])
+        route = _route('central_field', list(self.MALINOVKA_CENTRAL_FIELD_TEAM_2))
         bot = _bot(24, 2, 0, route, 'AT-SPG')
         bot['state'] = _state(24, 2, -360.68, 104.85)
         planner = BotPlanner()
@@ -983,22 +991,14 @@ class ServerBotTacticsTests(unittest.TestCase):
         self.assertFalse(route_join)
 
     def _malinovka_east_hill_bot(self, speed):
-        """The shipped 02_malinovka team-1 slot 2 line-up and its lane.
+        """The recorded 02_malinovka team-1 slot 2 line-up and its lane.
 
         That slot parks at (70, -366) facing -0.73 rad while its authored first
-        connector lies 184 m away at 1.83 rad off the hull - one of 246 shipped
+        connector lies 184 m away at 1.83 rad off the hull - one of 246
         spawn slots, across 33 of the 41 baked maps, where the rear-facing
         filter discarded the reviewed egress.
         """
-        graph = json.loads(
-            (PORT_ROOT / 'navgraphs' / '02_malinovka.json').read_text())
-        baked = next(
-            route for route in graph['routes']['1']
-            if route['id'] == 'east_hill_loop')
-        route = _route(
-            baked['id'],
-            [(point[0], point[1], point[2])
-             for point in baked['waypoints']])
+        route = _route('east_hill_loop', list(self.MALINOVKA_EAST_HILL_LOOP_TEAM_1))
         bot = _bot(24, 1, 2, route, 'mediumTank')
         bot['state'] = _state(24, 1, 70.0, -366.0)
         bot['state']['yaw'] = -0.7306

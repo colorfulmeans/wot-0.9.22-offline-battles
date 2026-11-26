@@ -9,10 +9,26 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src/res/scripts/client'))
 from gui.mods.offline_lan_0922.ai.maps import TACTICAL_MAPS
+from gui.mods.offline_lan_0922.bot_editor_maps import MAPS as CURRENT_MAPS
+from gui.mods.offline_lan_0922.bot_tactics_default_data import PROFILE_JSON
+
+
+def _route_ids(name, defaults):
+    """Keep each team's listed route order; the Default owns the identities."""
+    rows = defaults[name]['default_routes']
+    result = {}
+    for team, listed in CURRENT_MAPS[name]['route_ids'].items():
+        shared = set(r['id'] for r in rows
+                     if str(r['team']) == team and r.get('class_tag', 'all') == 'all')
+        if set(listed) != shared or len(listed) != len(shared):
+            raise RuntimeError('%s team %s route identities differ from the Default' % (name, team))
+        result[team] = list(listed)
+    return result
 
 
 def build():
     entries = {}
+    defaults = json.loads(PROFILE_JSON)['maps']
     for path in sorted((ROOT / 'navgraphs').glob('*.json')):
         if path.name == 'manifest.json':
             continue
@@ -26,8 +42,7 @@ def build():
                              spawn_anchors=graph['spawn_anchors'],
                              objective_bases=graph['objective_bases'],
                              objective_base_radii=graph['objective_base_radii'],
-                             route_ids=dict((team, [r['id'] for r in routes])
-                                            for team, routes in graph['routes'].items()),
+                             route_ids=_route_ids(name, defaults),
                              resource_sha256=hashlib.sha256(raw).hexdigest())
         if graph.get('capture_coordinate_previous_sha256'):
             entries[name]['capture_coordinate_previous_sha256'] = graph['capture_coordinate_previous_sha256']

@@ -1,4 +1,4 @@
-"""Compare selected grids using preserved routes and the shipping C++ search."""
+"""Compare selected grids using the Default routes and the shipping C++ search."""
 import argparse
 import copy
 import json
@@ -17,11 +17,6 @@ NARROWS = (((182.606, 43.685), (175.887, 87.135)),
 
 def route_cases(graph):
     pairs = set()
-    for routes in graph['routes'].values():
-        for route in routes:
-            points = route['waypoints']
-            pairs.update((tuple(a[:2]), tuple(b[:2]))
-                         for a, b in zip(points, points[1:]))
     for a, b in NARROWS:
         pairs.update(((a, b), (b, a)))
     from build_local_navigation_meshes import CIRCLED_PASSAGES
@@ -135,7 +130,7 @@ def main():
                 if graph.get('local_meshes'):
                     assert item['native']['partial_or_empty'] == 0, (name,item['native']['incomplete_cases'])
             report['maps'][name][tag] = item
-        print(name, 'all', len(cases), 'preserved route cases connected in both grids')
+        print(name, 'all', len(cases), 'route cases connected in both grids')
     (args.output/'report.json').write_text(json.dumps(report, indent=2)+'\n')
 
 

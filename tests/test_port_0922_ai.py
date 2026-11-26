@@ -13,9 +13,7 @@ CLIENT_SCRIPTS = PORT_ROOT / 'src' / 'res' / 'scripts' / 'client'
 sys.path.insert(0, str(PORT_ROOT / 'server'))
 sys.path.insert(0, str(CLIENT_SCRIPTS))
 
-from gui.mods.offline_lan_0922.ai import (
-    cover, maps, navigation, reviewed_routes_20260811,
-)
+from gui.mods.offline_lan_0922.ai import cover, maps, navigation
 from gui.mods.offline_lan_0922.ai.adapter import BotAdapter
 from gui.mods.offline_lan_0922.ai.driver import (
     LocalDriver, RECOVERY_YAW_OFFSET, TRAFFIC_WAIT_LEASE_SECONDS,
@@ -101,30 +99,23 @@ class BotAiPortTests(unittest.TestCase):
             os.path.normpath('./mods/configs/offline_lan_0922'),
             os.path.normpath(prebaked_navigation.mod_dir()))
 
-    def test_preserves_annotated_standard_maps(self):
-        # The server pool is the exact #1513 standard-mode candidate set.
-        # TACTICAL_MAPS may also retain lane sketches for maps outside that
-        # pool, so the authoring registry can be a strict superset.
+    def test_registry_holds_only_the_standard_map_rectangles(self):
+        # The server pool is the exact #1513 standard-mode candidate set; the
+        # registry may also keep rectangles for maps outside that pool. Bot
+        # routes come from the built-in Default, never from this registry.
         self.assertTrue(set(MAP_POOL).issubset(set(maps.TACTICAL_MAPS)))
         karelia = maps.get_tactical_map('spaces/01_karelia')
         self.assertEqual('01_karelia', karelia['name'])
-        self.assertTrue(karelia['routes'][1])
-        self.assertTrue(karelia['routes'][2])
-
-    def test_tactical_authoring_registry_has_no_static_base_coordinates(self):
-        self.assertGreaterEqual(len(maps.TACTICAL_MAPS), len(MAP_POOL))
-        for registry_name, registry in (
-                ('authoring', maps._TACTICAL_MAPS_AUTHORING),
-                ('runtime', maps.TACTICAL_MAPS)):
-            for map_name, tactical in sorted(registry.items()):
-                with self.subTest(registry=registry_name, map=map_name):
-                    self.assertNotIn('bases', tactical)
+        for map_name, tactical in sorted(maps.TACTICAL_MAPS.items()):
+            with self.subTest(map=map_name):
+                self.assertEqual({'name', 'bounds'}, set(tactical))
+                self.assertEqual(map_name, tactical['name'])
 
     def test_tactical_rectangle_matches_the_baked_gameplay_rectangle(self):
         # The LAN server resolves a minimap attention-cell order through this
         # rectangle, so it must be the stock arena rectangle: never wider than
-        # the baked world, and never so narrow that a baked objective, spawn
-        # anchor or route waypoint falls outside the cell grid.
+        # the baked world, and never so narrow that a baked objective or spawn
+        # anchor falls outside the cell grid.
         graphs = PORT_ROOT / 'navgraphs'
         checked = 0
         for map_name in sorted(MAP_POOL):
@@ -135,10 +126,6 @@ class BotAiPortTests(unittest.TestCase):
             bounds = maps.TACTICAL_MAPS[map_name]['bounds']
             points = [tuple(point) for point in graph['objective_bases']]
             points.extend(tuple(point) for point in graph['spawn_anchors'])
-            for routes in graph['routes'].values():
-                for route in routes:
-                    points.extend((point[0], point[1])
-                                  for point in route['waypoints'])
             with self.subTest(map=map_name):
                 self.assertGreaterEqual(bounds[0], graph['bounds'][0])
                 self.assertGreaterEqual(bounds[1], graph['bounds'][1])
@@ -151,99 +138,6 @@ class BotAiPortTests(unittest.TestCase):
                         '%s: %r is outside %r' % (map_name, (x, z), bounds))
             checked += 1
         self.assertGreaterEqual(checked, 40)
-
-    def test_review_overlay_rejects_an_unknown_removed_route(self):
-        tactical = copy.deepcopy(
-            maps._TACTICAL_MAPS_AUTHORING['06_ensk'])
-        for team in (1, 2):
-            tactical['routes'][team] = tuple(
-                route for route in tactical['routes'][team]
-                if route['id'] != 'rail_yard')
-        with self.assertRaisesRegex(
-                ValueError, 'removed tactical route is unavailable'):
-            reviewed_routes_20260811.apply_reviewed_map(
-                '06_ensk', tactical, ((0.0, 1.0), (0.0, -1.0)))
-
-    def test_installs_all_user_reviewed_route_batches(self):
-        reviewed = set(reviewed_routes_20260811.REVIEWED_ROUTE_POINTS)
-        accepted = set(reviewed_routes_20260811.ACCEPTED_UNCHANGED_MAPS)
-        self.assertEqual(38, len(reviewed))
-        self.assertEqual(113, sum(
-            len(routes) for routes in
-            reviewed_routes_20260811.REVIEWED_ROUTE_POINTS.values()))
-        self.assertEqual(
-            {'34_redshire', '95_lost_city', '100_thepit'}, accepted)
-        self.assertFalse(reviewed & accepted)
-
-        original_maps = {'04_himmelsdorf': maps.HIMMELSDORF}
-        for collection in (
-                maps.bot_ai_maps_group_a.TACTICAL_MAPS_GROUP_A,
-                maps.bot_ai_maps_group_b.TACTICAL_MAPS_GROUP_B,
-                maps.bot_ai_maps_group_c.TACTICAL_MAPS_GROUP_C,
-                maps.bot_ai_maps_extra.TACTICAL_MAPS_EXTRA,
-                maps.bot_ai_maps_0922_extra.TACTICAL_MAPS_0922_EXTRA):
-            original_maps.update(collection)
-        for map_name in reviewed:
-            self.assertIsNot(
-                original_maps[map_name], maps.TACTICAL_MAPS[map_name],
-                map_name)
-        graph_maps = set(
-            path.stem for path in (PORT_ROOT / 'navgraphs').glob('*.json')
-            if path.name != 'manifest.json')
-        self.assertEqual(graph_maps, reviewed | accepted)
-        for map_name in accepted:
-            self.assertIs(
-                original_maps[map_name], maps.TACTICAL_MAPS[map_name],
-                map_name)
-
-        ensk = maps.TACTICAL_MAPS['06_ensk']
-        for team in (1, 2):
-            self.assertEqual(
-                ['west_city', 'east_field'],
-                [route['id'] for route in ensk['routes'][team]])
-            self.assertEqual(
-                [7, 7],
-                [route['capacity'] for route in ensk['routes'][team]])
-
-        malinovka = maps.TACTICAL_MAPS['02_malinovka']
-        for team in (1, 2):
-            self.assertEqual(
-                ['west_lake_road', 'central_field', 'east_hill_loop'],
-                [route['id'] for route in malinovka['routes'][team]])
-            self.assertEqual(
-                [3, 5, 6],
-                [route['capacity'] for route in malinovka['routes'][team]])
-
-    def test_reviewed_route_geometry_is_bidirectional_and_single_gated(self):
-        for map_name, reviewed_routes in sorted(
-                reviewed_routes_20260811.REVIEWED_ROUTE_POINTS.items()):
-            tactical = maps.TACTICAL_MAPS[map_name]
-            team_routes = {}
-            for team in (1, 2):
-                team_routes[team] = dict(
-                    (route['id'], route)
-                    for route in tactical['routes'][team])
-            with self.subTest(map=map_name):
-                self.assertTrue(set(reviewed_routes).issubset(team_routes[1]))
-                self.assertEqual(set(team_routes[1]), set(team_routes[2]))
-                for route_id in reviewed_routes:
-                    team_one = team_routes[1][route_id]['waypoints']
-                    team_two = team_routes[2][route_id]['waypoints']
-                    self.assertEqual(1, sum(
-                        int(bool(point[2])) for point in team_one))
-                    self.assertEqual(tuple(reversed(team_one)), team_two)
-                    for key in ('capacity', 'risk', 'role_weights'):
-                        self.assertEqual(
-                            team_routes[1][route_id][key],
-                            team_routes[2][route_id][key])
-
-        himmelsdorf = maps.TACTICAL_MAPS['04_himmelsdorf']
-        rear_one = next(route for route in himmelsdorf['routes'][1]
-                        if route['id'] == 'rear_guard')
-        rear_two = next(route for route in himmelsdorf['routes'][2]
-                        if route['id'] == 'rear_guard')
-        self.assertEqual(((-80.0, -270.0, 1),), rear_one['waypoints'])
-        self.assertEqual(((45.0, 270.0, 1),), rear_two['waypoints'])
 
     def test_cover_contract_is_plain_data_and_deterministic(self):
         result = cover.score_candidates([{
@@ -1674,12 +1568,6 @@ class BotAiPortTests(unittest.TestCase):
             'spawn_anchors': ((0.0, 0.0), (8.0, 0.0)),
             'objective_bases': ((8.0, 0.0), (0.0, 0.0)),
             'spawn_formations': self._formations(),
-            'routes': {
-                '1': ({'id': 'lane', 'waypoints': (
-                    (0.0, 0.0, False), (8.0, 0.0, False))},),
-                '2': ({'id': 'lane', 'waypoints': (
-                    (8.0, 0.0, False), (0.0, 0.0, False))},),
-            },
         }
 
         cases = {
@@ -1687,9 +1575,6 @@ class BotAiPortTests(unittest.TestCase):
             'version': lambda value: value.update(version=1),
             'map': lambda value: value.update(map='02_malinovka'),
             'grid_array': lambda value: value.update(hazards=(0,)),
-            'team_routes': lambda value: value['routes'].update({'2': ()}),
-            'route_length': lambda value: value['routes']['1'][0].update(
-                waypoints=((0.0, 0.0, False),)),
             'spawn_anchors': lambda value: value.update(spawn_anchors=()),
             'objective_bases': lambda value: value.update(objective_bases=()),
             'spawn_formations': lambda value: value.update(
@@ -2062,16 +1947,8 @@ class BotAiPortTests(unittest.TestCase):
 
     def test_prohorovka_west_ridge_corner_keeps_forward_progress(self):
         driver = LocalDriver()
-        graph = json.loads(
-            (PORT_ROOT / 'navgraphs' / '05_prohorovka.json').read_text())
-        route = next(
-            route for route in graph['routes']['1']
-            if route['id'] == 'west_ridge')
-        corner_index = next(
-            index for index, point in enumerate(route['waypoints'])
-            if tuple(point[:2]) == (54.0, -442.0))
-        first, corner, target = route['waypoints'][corner_index - 1:
-                                                   corner_index + 2]
+        # Corner geometry recorded from the former baked Prohorovka west_ridge.
+        first, corner, target = (-6.0, -438.0), (54.0, -442.0), (54.0, -446.0)
         incoming_yaw = math.atan2(
             float(corner[0]) - float(first[0]),
             float(corner[1]) - float(first[1]))

@@ -85,22 +85,6 @@ class AirfieldDefaultRoadTests(unittest.TestCase):
         cls.graph=json.loads((ROOT/'navgraphs/31_airfield.json').read_text())
         cls.legacy=legacy_baker()
 
-    def test_original_routes_restored_exactly_for_both_teams(self):
-        original=json.loads((ROOT/'tests/fixtures/airfield-original-routes.json').read_text())
-        self.assertEqual(original,self.graph['routes'])
-        self.assertNotIn('bake_airfield_road_routes', (ROOT/'tools/bake_navigation_0922.py').read_text())
-
-    def test_all_six_routes_are_connected_and_fit_the_existing_wire(self):
-        grid=planning.graph_view('31_airfield',self.graph)
-        with mock.patch.object(grid,'distances',side_effect=AssertionError('full flood')):
-            for team,routes in self.graph['routes'].items():
-                for route in routes:
-                    self.assertLessEqual(len(route['waypoints']),16)
-                    self.assertIsNone(planning.validate_route(grid,dict(points=route['waypoints'])))
-                    self.assertIsNone(self.legacy._route_geometry_issue(route['waypoints']))
-        for one,two in zip(self.graph['routes']['1'],self.graph['routes']['2']):
-            self.assertEqual(list(reversed(one['waypoints'])),two['waypoints'])
-
     def test_corner_links_leave_the_three_closed_side_cells_unchanged(self):
         self.assertEqual(4,self.graph['bake']['local_adapter_directed_links_added'])
         for p in ((-314,-190),(-306,-194),(-302,-190)):

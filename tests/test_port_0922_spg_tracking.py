@@ -70,8 +70,6 @@ class SPGTrackingTests(unittest.TestCase):
         # ArtilleryController queues. Only engine geometry and descriptors are
         # simulated; no injected fire_allowed=True or fabricated launch receipt.
         graph = harness._flat_open_graph()
-        graph['routes']['1'] = ({'id': 'rear', 'waypoints': (
-            (0., -30., False), (0., 0., False), (0., 40., False), (0., 200., False))},)
         descriptor = harness._combat_descriptor(
             reload_time=15, clip=(1, 0), turret_yaw_limits=(-.15, .15),
             turret_speed=.3, gun_speed=.3, dispersion=.03, max_ammo=30)

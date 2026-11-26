@@ -171,15 +171,9 @@ def route_issues(graph, points, bounds):
 def check_map(profile, name, graph, contract, receipt=None):
     """Check unedited defaults as well as every saved class/team override."""
     entry = contract.map_settings(profile, name)
-    edits = entry.get('default_routes', ())
-    routes = []
-    for team, defaults in graph.get('routes', {}).items():
-        for source in defaults:
-            matching = [r for r in edits if str(r['team']) == str(team) and r['id'] == source['id']]
-            if not any(r.get('class_tag', 'all') == 'all' for r in matching):
-                routes.append(('%s:%s' % (team, source['id']), source['waypoints']))
-    routes.extend(('%s:%s' % (r['team'], contract.default_route_id(r)), r['points'])
-                  for r in edits if not r.get('disabled'))
+    routes = [('%s:%s' % (r['team'], contract.default_route_id(r)), r['points'])
+              for r in contract.effective_default_routes(profile, name)
+              if not r.get('disabled')]
     routes.extend((r['id'], r['points']) for r in entry.get('routes', ()))
     from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
     grid = TerrainGrid(lambda *args: None, baked_graph=graph)

@@ -136,7 +136,7 @@ class NavigationDataTests(unittest.TestCase):
 
     def test_default_routes_and_class_overrides_checked_without_mutation(self):
         data=storage.graph_data('31_airfield');profile=storage.contract.empty()
-        first=data['routes']['1'][0]
+        first=storage.contract.baseline_routes('31_airfield')['1'][0]
         profile['maps']['31_airfield']=dict(default_routes=[dict(id=first['id'],team=1,
             class_tag='heavyTank',points=[list(p) for p in first['waypoints']])],routes=[],positions=[])
         before=copy.deepcopy((profile,data))
@@ -200,8 +200,10 @@ class NavigationUITests(unittest.TestCase):
         self.assertTrue(all(len(p)==3 and p[2]==0 for r in saved if r.get('class_tag','all')=='all' for p in r['points']))
         e.route_class_var.set('all');e.change_route_class();e.items.selection_set('builtin:'+identity);e.select_item()
         e.reset_builtin()
+        # The common reset restores the Default's own AT-SPG row of this route.
         scoped=next(r for r in e.entry()['default_routes'] if r.get('class_tag')=='AT-SPG' and r['team']==1)
-        self.assertEqual([p[:2] for p in e._selected()['points']],[p[:2] for p in scoped['points']])
+        self.assertEqual(next(r for r in e.baseline_entry['default_routes'] if r['id']==identity and
+                              r.get('class_tag')=='AT-SPG' and r['team']==1),scoped)
         self.assertFalse(any(place[2]==45 for p in scoped['points'] for place in ui.contract.waiting_positions(p)))
     def test_wait_clearance_ring_heading_save_and_auto_reset(self):
         e=self.editor;e.route_class_var.set('AT-SPG');e.change_route_class()
@@ -242,12 +244,6 @@ class NavigationUITests(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         patcher=mock.patch.object(ui.messagebox,'showerror',side_effect=lambda *a,**kw: (_ for _ in ()).throw(AssertionError(str(a))))
         patcher.start();self.addCleanup(patcher.stop)
-        # Exercise the historical source-graph routes independently of the adopted
-        # baseline. Parking keeps the Default positions that every shipped map has.
-        default_map=storage.contract.default_map
-        patcher=mock.patch.object(storage.contract,'default_map',
-            side_effect=lambda name:{k:v for k,v in default_map(name).items() if k=='positions'})
-        patcher.start();self.addCleanup(patcher.stop)
         storage.Store(self.temp.name).save(storage.contract.empty('Editable fixture'),apply=True)
         self.root=tk.Tk();self.root.withdraw();self.addCleanup(self.root.destroy)
         self.editor=ui.BotTacticsEditor(self.root,store=storage.Store(self.temp.name),language='zh')
@@ -258,10 +254,10 @@ class NavigationUITests(unittest.TestCase):
         e=self.editor;e.route_class_var.set('SPG');e.change_route_class()
         key=next(k for k in e.items.get_children() if k.startswith('builtin_positions:'))
         e.items.selection_set(key);e.select_item();identity=e._selected()['id']
-        routes=copy.deepcopy(e.graph_cache[e.map_name]['routes'])
+        routes=storage.contract.effective_default_routes(e.document,e.map_name)
         with mock.patch.object(ui.messagebox,'askyesno',return_value=True):e.delete_item()
         self.assertFalse(e.items.exists(key));self.assertIn(identity,e.entry()['deleted_positions'])
-        self.assertEqual(routes,e.graph_cache[e.map_name]['routes'])
+        self.assertEqual(routes,storage.contract.effective_default_routes(e.document,e.map_name))
         e.save(True);saved=e.store.active();self.assertIn(identity,saved['maps'][e.map_name]['deleted_positions'])
         e._load_map();e.route_class_var.set('total');e.change_route_class()
         self.assertFalse(e.items.exists(key))
@@ -458,12 +454,45 @@ class NavigationUITests(unittest.TestCase):
         self.assertEqual(7,own['priority']);self.assertTrue(len(own['points'][1])==3 or own['points'][1][3]!=-1.)
         e.redo();e.reset_builtin()
         own=next(r for r in e.entry()['default_routes'] if r['team']==1 and r.get('class_tag')=='heavyTank')
-        original=next(r for r in e.graph_cache[e.map_name]['routes']['1'] if r['id']==identity)['waypoints']
+        original=next(r for r in e.baseline_sources['1'] if r['id']==identity)['waypoints']
         self.assertEqual([list(p[:2])+[0] for p in original],own['points']);self.assertEqual(7,own['priority'])
         self.assertEqual(other_before,next(r for r in e.entry()['default_routes'] if r['team']==2))
 
+    def test_first_class_edit_starts_from_the_default_class_row(self):
+        e=self.editor;e.map_name='07_lakeville';e._load_map()
+        e.route_class_var.set('lightTank');e.change_route_class()
+        e.selection=('builtin','west_valley');e._refresh_properties()
+        original=next(r for r in e.baseline_entry['default_routes'] if r['team']==1 and
+                      r['id']=='west_valley' and r.get('class_tag')=='lightTank')
+        priority=(original['priority']+1)%10
+        e.item_vars['route_priority'].set(str(priority));self.assertTrue(e.update_properties())
+        stored=next(r for r in e.entry()['default_routes'] if r['team']==1 and
+                    r['id']=='west_valley' and r.get('class_tag')=='lightTank')
+        # The Default row keeps its own name, tier and geometry.
+        self.assertEqual(dict(original,priority=priority),stored)
+
+    def test_common_edit_reaches_every_default_class_row_of_the_route(self):
+        # Every Fjord class has its own Default row of each route.
+        e=self.editor;e.map_name='33_fjord';e._load_map()
+        e.route_class_var.set('all');e.change_route_class()
+        e.items.selection_set('builtin:north_ridge');e.select_item()
+        point=e._selected()['points'][1];x,y=e.view.screen(point)
+        e.press(SimpleNamespace(x=x,y=y,state=0));e.motion(SimpleNamespace(x=x+12,y=y));e.release(None)
+        shared=[p[:2] for p in e._selected()['points']];self.assertNotEqual(point[:2],shared[1])
+        for tag in ('lightTank','mediumTank','heavyTank','AT-SPG'):
+            e.route_class_var.set(tag);e.change_route_class();e.selection=('builtin','north_ridge');e._refresh_properties()
+            self.assertEqual(shared,[p[:2] for p in e._selected()['points']],tag)
+        battle=storage.contract.for_round(storage.contract.canonical(e.document),'33_fjord')
+        rows=[r for r in battle['maps']['33_fjord']['default_routes'] if r['team']==1 and r['id']=='north_ridge']
+        self.assertEqual(5,len(rows))
+        canonical=[[round(v,4) for v in p] for p in shared]
+        for row in rows:self.assertEqual(canonical,[p[:2] for p in row['points']],row.get('class_tag','all'))
+
     def test_wait_nodes_grow_while_editing_and_remain_visible_unselected(self):
-        e=self.editor;e.route_class_var.set('all');e.change_route_class()
+        # Airfield's medium and heavy tanks follow the common north route, so
+        # the Total view draws its wait nodes.
+        e=self.editor;e.map_name='31_airfield';e._load_map()
+        e.route_class_var.set('all');e.change_route_class()
         key=next(k for k in e.items.get_children() if k.startswith('builtin:'))
         e.items.selection_set(key);e.select_item();points=e._editable_points()
         points[0][3:]=[0.,[list(points[0][:2])+[60.]]];points[1][3:]=[0.,[list(points[1][:2])+[-1.]]];points[2][3:]=[0.]

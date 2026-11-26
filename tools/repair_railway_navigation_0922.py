@@ -62,7 +62,6 @@ def mask_layer(layer,directions,field,legacy):
 def repair(graph,field,legacy):
     result=copy.deepcopy(graph);directions=[tuple(v) for v in graph['directions']]
     report=[mask_layer(layer,directions,field,legacy) for layer in [result]+result.get('local_meshes',[])]
-    assert result['routes']==graph['routes']
     previous=(graph.get('bake',{}).get('railway_obstacles') or {}).get('layers',[])
     if previous and len(previous)!=len(report):raise ValueError('railway layer layout changed')
     if previous:
@@ -73,8 +72,8 @@ def repair(graph,field,legacy):
             row['removed_nodes']=len(row['removed_node_indices'])
             row['removed_directed_links']+=old['removed_directed_links']
     result['bake']['navigation_collision_policy']=baker.NAVIGATION_COLLISION_POLICY
-    result['bake']['railway_obstacles']=dict(policy=baker.NAVIGATION_COLLISION_POLICY,layers=report,routes_preserved=True,unrelated_geometry_preserved=True)
-    result['bake']['railway_obstacles']['validation']=legacy.validate_graph(result,dict(bases=result['bases']))
+    result['bake']['railway_obstacles']=dict(policy=baker.NAVIGATION_COLLISION_POLICY,layers=report,unrelated_geometry_preserved=True)
+    result['bake']['railway_obstacles']['validation']=baker._terrain_validation(legacy.validate_graph,result,dict(bases=result['bases']))
     return result
 
 

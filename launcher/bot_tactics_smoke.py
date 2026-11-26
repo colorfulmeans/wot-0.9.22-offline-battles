@@ -265,7 +265,7 @@ def run(destination):
             # Actual canvas callbacks, not directly constructing the profile.
             ui.new_route(); root.update()
             assert ui._selected()['class_priorities'] == {'heavyTank': 5}
-            for point in graph['routes']['1'][0]['waypoints'][:4]:
+            for point in storage.contract.baseline_routes('08_ruinberg')['1'][0]['waypoints'][:4]:
                 x, y = ui.view.screen(point)
                 ui.canvas.event_generate('<ButtonPress-1>', x=int(x), y=int(y))
                 ui.canvas.event_generate('<ButtonRelease-1>', x=int(x), y=int(y))

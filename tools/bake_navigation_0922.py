@@ -655,84 +655,30 @@ def _record_target_grid_phase(graph, map_name, cell_size):
     return True
 
 
-def _target_tactical_config(legacy, map_name, bases, route_starts):
-    """Load tactical lanes and bind exact #1513 route-start authority."""
-    package_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'src',
-                               'res', 'scripts', 'client', 'gui', 'mods',
-                               'offline_lan_0922')
-    package_names = ('gui', 'gui.mods', 'gui.mods.offline_lan_0922',
-                     'gui.mods.offline_lan_0922.ai')
-    saved = dict((name, sys.modules.get(name)) for name in package_names)
-    loaded = []
-    try:
-        paths = {
-            'gui.mods.offline_lan_0922': package_dir,
-            'gui.mods.offline_lan_0922.ai': os.path.join(package_dir, 'ai'),
-        }
-        for name in package_names:
-            module = type(sys)(name)
-            module.__path__ = [paths[name]] if name in paths else []
-            sys.modules[name] = module
-        name = 'gui.mods.offline_lan_0922.ai.maps'
-        spec = importlib.util.spec_from_file_location(name,
-            os.path.join(package_dir, 'ai', 'maps.py'))
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[name] = module
-        loaded.append(name)
-        spec.loader.exec_module(module)
-        tactical = module._TACTICAL_MAPS_AUTHORING.get(map_name)
-        if tactical is None:
-            raise ValueError('no #1513 tactical routes for %s' % map_name)
-        reviewed = module.reviewed_routes_20260811
-        if map_name in reviewed.REVIEWED_ROUTE_POINTS:
-            tactical = reviewed.apply_reviewed_map(
-                map_name, tactical, route_starts)
-        # The pinned baker predates the explicit objective/start contracts and
-        # expects a ``bases`` member on its private input shape. Supply only
-        # arena-decoded objectives to that adapter; the tactical authoring
-        # registry contains no base coordinates. Route orientation and hard
-        # gate choice above use the independently decoded team starts.
-        adapted = dict(tactical)
-        adapted['bases'] = {1: tuple(bases[0]), 2: tuple(bases[1])}
-        config = legacy._bake_map_config(adapted)
-        if map_name == '100_thepit':
-            # The original coarse sketch put rim_west behind the western city
-            # collision and projected to a 164-degree hairpin.  Keep the lane
-            # distinct, but move its three soft holds onto the validated west
-            # road.  This affects only the baked artifact; runtime code stays
-            # unchanged and the mature route validator remains authoritative.
-            corrected = []
-            # Do not retain the coarse sketch's objective endpoints here.
-            # The Pit's verified one-way ramp ingress selects safer main-graph
-            # anchors after this config is built; the mature route orienter
-            # adds those exact anchors.  Keeping both endpoint pairs made the
-            # projected corridor visit the same ramp node twice and generated
-            # a false 166-degree reversal.
-            west_points = ((-70.0, -90.0, True),
-                           (-70.0, 0.0, True),
-                           (-70.0, 90.0, True))
-            for route in config['routes']:
-                route = dict(route)
-                if route['id'] == 'rim_west':
-                    route['points'] = (west_points if route['team'] == 1
-                                       else tuple(reversed(west_points)))
-                corrected.append(route)
-            config['routes'] = tuple(corrected)
-            config['anchors'] = tuple(
-                (point[0], point[1])
-                for route in config['routes']
-                for point in route['points']) + tuple(bases)
-        config['bases'] = tuple(bases)
-        return config
-    finally:
-        for name in list(sys.modules):
-            if name.startswith('gui.mods.offline_lan_0922.ai.maps'):
-                sys.modules.pop(name, None)
-        for name, previous in saved.items():
-            if previous is None:
-                sys.modules.pop(name, None)
-            else:
-                sys.modules[name] = previous
+def _target_bake_config(legacy, bounds, bases):
+    """Give the pinned baker the stock rectangle and the decoded objectives.
+
+    The pinned baker predates the explicit objective/start contracts and
+    expects a ``bases`` member on its private input shape. Its anchors are
+    these arena-decoded objectives alone: Bot routes come from the built-in
+    Default tactics, so the graph carries none.
+    """
+    config = legacy._bake_map_config(dict(
+        bounds=tuple(bounds), bases={1: tuple(bases[0]), 2: tuple(bases[1])}))
+    config['bases'] = tuple(bases)
+    return config
+
+
+# The pinned validator also scores routes; a graph without routes has none.
+_ROUTE_STATISTICS = ('route_segments', 'maximum_route_detour',
+                     'maximum_opening_regression')
+
+
+def _terrain_validation(validate, graph, config):
+    result = validate(graph, config)
+    for key in _ROUTE_STATISTICS:
+        result.pop(key, None)
+    return result
 
 
 class PackageVFS(object):
@@ -1048,10 +994,10 @@ def collision_triangle_blocks_disk(triangle,x,z,minimum,maximum,radius):
 
 
 def compiled_navigation_obstacles(compiled, vfs, legacy, precise_regions=()):
-    """Build the static route raster directly from placed compiled colliders.
+    """Build the static navigation raster directly from placed compiled colliders.
 
     All original destructible surfaces (71..85) are removed BEFORE node,
-    clearance, link, component and route construction. Hard surfaces in mixed
+    clearance, link and component construction. Hard surfaces in mixed
     structures, replacement materials and vehicle-only bridge decks remain.
     Render sets, shaders and a model-wide structure label are not collision
     evidence. This function runs only in the offline baker, never in battle.
@@ -2012,114 +1958,6 @@ def validate_downhill_spawn_ingress(graph, record, legacy):
     }
 
 
-def expand_stationary_routes(graph, routes, bases, legacy):
-    """Turn a tactical hold anchor into a graph-connected locomotion route.
-
-    Himmelsdorf's mature ``rear_guard`` annotation is intentionally one point:
-    it describes an artillery hold, not the drive from spawn.  A baked route is
-    a different contract and must contain that drive.  Join the team's safe
-    spawn anchor to the projected hold over validated graph links instead of
-    shipping a one-point route or weakening the release gate.
-    """
-    for team in (1, 2):
-        team_routes = routes.get(str(team), ())
-        for route in team_routes:
-            waypoints = route.get('waypoints') or ()
-            if len(waypoints) != 1:
-                continue
-            start, unused_start_offset = legacy._nearest_node(
-                graph, bases[team - 1])
-            goal, unused_goal_offset = legacy._nearest_node(
-                graph, waypoints[0])
-            if start is None or goal is None:
-                raise ValueError(
-                    'stationary route has no retained navigation node')
-            if start == goal:
-                mask = int(graph['links'][start])
-                x_index = start % graph['width']
-                z_index = start // graph['width']
-                goal = None
-                for direction_index, (dx, dz) in enumerate(legacy.DIRECTIONS):
-                    if not mask & (1 << direction_index):
-                        continue
-                    nx, nz = x_index + dx, z_index + dz
-                    if (0 <= nx < graph['width'] and
-                            0 <= nz < graph['height']):
-                        goal = nz * graph['width'] + nx
-                        break
-                if goal is None:
-                    raise ValueError(
-                        'stationary route spawn anchor has no connected edge')
-            path, unused_distance = legacy._graph_path(graph, start, goal)
-            if len(path) < 2:
-                raise ValueError(
-                    'stationary route cannot connect its spawn and hold nodes')
-            hold_nodes = set([goal]) if bool(waypoints[0][2]) else set()
-            route['waypoints'] = legacy._sample_route_path(
-                graph, path, hold_nodes, 16, set((start, goal)))
-            if len(route['waypoints']) < 2:
-                raise ValueError('stationary route expansion is incomplete')
-    return routes
-
-
-def canonicalize_reversible_routes(graph, routes):
-    """Emit one canonical polyline for each ordinary two-way corridor.
-
-    The tactical source already describes the same macro lane in opposite
-    directions.  Independent shortest-path tie breaking can nevertheless
-    sample two slightly different polylines, which makes a reversible road
-    look like two designs in the review render.  Keep the team-one result and
-    reverse it for team two after both searches have independently succeeded.
-    Local routes such as Himmelsdorf's rear guard have different endpoints and
-    deliberately remain team-specific.
-    """
-    team_one = routes.get('1', ()) or ()
-    team_two = routes.get('2', ()) or ()
-    team_two_by_id = dict((route.get('id'), route) for route in team_two)
-    if len(team_two_by_id) != len(team_two):
-        raise UnsafeBakeInputError(
-            'team two tactical route ids are not unique')
-    fallback_keys = set((graph.get('bake') or {}).get(
-        'soft_route_fallbacks') or ())
-    canonical = []
-    for first in team_one:
-        route_id = first.get('id')
-        second = team_two_by_id.get(route_id)
-        if second is None:
-            raise UnsafeBakeInputError(
-                'reversible tactical route is missing team two: %s' %
-                route_id)
-        first_points = first.get('waypoints') or ()
-        second_points = second.get('waypoints') or ()
-        if len(first_points) < 2 or len(second_points) < 2:
-            continue
-        inverse_endpoints = (
-            tuple(first_points[0][:2]) == tuple(second_points[-1][:2]) and
-            tuple(first_points[-1][:2]) == tuple(second_points[0][:2]))
-        if not inverse_endpoints:
-            # A local hold route starts at each team's own spawn and terminates
-            # at a different nearby defensive position.  It is not a through
-            # corridor and must not be mirrored across the map.
-            continue
-        for key in ('capacity', 'risk', 'role_weights'):
-            if first.get(key) != second.get(key):
-                raise UnsafeBakeInputError(
-                    'reversible tactical metadata differs for %s' % route_id)
-        first_fallback = '1:%s' % route_id in fallback_keys
-        second_fallback = '2:%s' % route_id in fallback_keys
-        if first_fallback != second_fallback:
-            raise UnsafeBakeInputError(
-                'reversible tactical fallback differs for %s' % route_id)
-        second['waypoints'] = [list(point)
-                               for point in reversed(first_points)]
-        canonical.append(str(route_id))
-    bake = graph.get('bake')
-    if not isinstance(bake, dict):
-        raise UnsafeBakeInputError('navigation graph has no bake metadata')
-    bake['canonical_reversible_routes'] = sorted(canonical)
-    return routes
-
-
 SPAWN_SLOTS_PER_TEAM = 15
 # This is the pinned retail-like formation law: a wide, shallow line
 # deployed toward the map interior.  The former five-column, three-row block
@@ -2713,9 +2551,9 @@ def refine_terrain_edges(graph, terrain, obstacles, legacy):
     result['bake']['edge_continuity_sample_metres'] = 1.0
     result['bake']['edge_continuity_tolerance_metres'] = legacy.VEHICLE_GROUND_CLEARANCE
     result['bake']['continuous_terrain_nodes_added'] = len(connected)
-    if result.get('bases') and result.get('routes'):
-        result['bake']['continuous_terrain_validation'] = legacy.validate_graph(
-            result, dict(bases=result['bases']))
+    if result.get('bases'):
+        result['bake']['continuous_terrain_validation'] = _terrain_validation(
+            legacy.validate_graph, result, dict(bases=result['bases']))
     return result
 
 
@@ -2837,12 +2675,6 @@ def bake_map_graph(client_root, map_name, output=None, cell_size=4.0, existing_g
         stock_spawns = tuple(tuple(team) for team in inspection['ctf_spawn_points'])
         navigation_starts = tuple((team[0] if team else bases[index])
                                   for index, team in enumerate(stock_spawns))
-        # The flags select the fully reversible main component. Stock spawn
-        # ramps are validated and attached separately below; using their raw
-        # coordinates here would force the mature component selector to treat
-        # a deliberate one-way descent as an ordinary two-way route.
-        config = _target_tactical_config(
-            legacy, map_name, bases, navigation_starts)
         # BWT2 describes all packaged terrain, including non-playable scenery.
         # Component selection must use the stock arena rectangle or a large
         # peripheral terrain island can defeat the objective-serving graph.
@@ -2862,7 +2694,11 @@ def bake_map_graph(client_root, map_name, output=None, cell_size=4.0, existing_g
                 arena_world_bounds[3] > terrain_world_bounds[3]):
             raise UnsafeBakeInputError(
                 'stock arena boundingBox is outside compiled terrain bounds')
-        config['bounds'] = arena_world_bounds
+        # The flags select the fully reversible main component. Stock spawn
+        # ramps are validated and attached separately below; using their raw
+        # coordinates here would force the mature component selector to treat
+        # a deliberate one-way descent as an ordinary two-way route.
+        config = _target_bake_config(legacy, arena_world_bounds, bases)
         original_maps, original_game_version = legacy.MAPS, legacy.GAME_VERSION
         original_format_name, original_format_version = legacy.FORMAT_NAME, legacy.FORMAT_VERSION
         original_expanded_bounds = legacy._expanded_bounds
@@ -2931,19 +2767,14 @@ def bake_map_graph(client_root, map_name, output=None, cell_size=4.0, existing_g
                 adjusted['bases'] = tuple(anchors)
                 adjusted['anchors'] = tuple(anchors) + tuple(config.get('anchors', ()))
                 return adjusted
-            def bake_routes(graph, unused_config):
-                adjusted = safe_config(graph)
-                routes = original_bake_routes(graph, adjusted)
-                routes = expand_stationary_routes(
-                    graph, routes, adjusted['bases'], legacy)
-                return canonicalize_reversible_routes(graph, routes)
-            legacy.bake_tactical_routes = bake_routes
+            # Bot routes come from the built-in Default tactics; bake none.
+            legacy.bake_tactical_routes = lambda unused_graph, unused_config: {}
             legacy.validate_graph = lambda graph, unused_config: original_validate(graph, safe_config(graph))
             # Lakeville's decoded water volumes intentionally split off the
             # inaccessible lake-side scenery.  The base-serving component is
             # 59.3% (not a tiny shortcut); keep a conservative majority guard
             # while preserving the old validator's post-prune single-component
-            # and route-connectivity checks.
+            # check.
             def retain_component(graph, unused_config):
                 lakeville_links = (
                     install_lakeville_narrow_corner_link(
@@ -2964,6 +2795,7 @@ def bake_map_graph(client_root, map_name, output=None, cell_size=4.0, existing_g
                     graph, config, minimum_fraction=0.55)
             legacy.retain_base_component = retain_component
             graph = legacy.bake_graph(None, map_name, cell_size)
+            graph.pop('routes', None)
             spawn_anchors = []
             spawn_offsets = []
             adjusted = safe_config(graph)
@@ -2984,7 +2816,8 @@ def bake_map_graph(client_root, map_name, output=None, cell_size=4.0, existing_g
                 'ctf teamSpawnPoints projected onto validated graph'
                 if all(stock_spawns) else
                 'ctf objectives projected onto validated graph')
-            graph['validation'] = original_validate(graph, spawn_config)
+            graph['validation'] = _terrain_validation(
+                original_validate, graph, spawn_config)
             graph['validation']['spawn_start_reach_metres'] = [round(value, 3)
                                                                for value in spawn_offsets]
             if ingress_records:

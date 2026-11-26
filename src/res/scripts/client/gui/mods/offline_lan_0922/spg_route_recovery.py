@@ -20,8 +20,6 @@ def distance(a, b):
 def _catalog(runtime, team):
     catalog = getattr(runtime, '_route_catalog', None)
     if not catalog:
-        if not runtime.baked_graph.get('routes'):
-            return []
         catalog, unused = bot_tactics_runtime.route_catalog(
             runtime._bot_tactics, runtime._navigation_map_name, runtime.baked_graph)
     rows = list(catalog.get(team, catalog.get(str(team), ())))

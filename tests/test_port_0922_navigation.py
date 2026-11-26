@@ -163,10 +163,9 @@ class ClimbApproachNavigationTests(unittest.TestCase):
         graph = json.loads((PORT_ROOT / 'navgraphs' / '33_fjord.json').read_text())
         navigator = TerrainNavigator(lambda *unused: None, baked_graph=graph)
         grid = navigator.grid
-        route = next(route for route in graph['routes']['1']
-                     if route['id'] == 'north_ridge')
+        # First leg recorded from the former baked Fjord north_ridge.
         endpoints = []
-        for raw in route['waypoints'][:2]:
+        for raw in ((398.0, -42.0), (366.0, 70.0)):
             cell = grid.cell_for((raw[0], 0.0, raw[1]))
             endpoints.append(grid.point_for(cell, grid._baked_cell_height(cell)))
         start, goal = endpoints

@@ -105,11 +105,11 @@ def main():
             field=baker.compiled_navigation_obstacles(compiled,vfs,legacy)
             result=repair_spawns(graph,field,envelope,legacy)
             result['navigation_previous_sha256s'][-1] = hashlib.sha256(path.read_bytes()).hexdigest()
-            for key in ('routes','heights_mm','links','hazards','local_meshes'):
+            for key in ('heights_mm','links','hazards','local_meshes'):
                 assert result.get(key)==graph.get(key),key
-            validation=legacy.validate_graph(result,dict(bases=result['bases']))
+            validation=baker._terrain_validation(legacy.validate_graph,result,dict(bases=result['bases']))
             (args.output/path.name).write_text(json.dumps(result,sort_keys=True,separators=(',',':'))+'\n')
-            row=dict(map=path.stem,spawn=result['validation']['spawn_railway_revalidation'],routes=validation)
+            row=dict(map=path.stem,spawn=result['validation']['spawn_railway_revalidation'],graph=validation)
             report.append(row);print(path.stem+' changed '+str(len(row['spawn']['changes'])),flush=True)
     finally:
         vfs.close()

@@ -273,8 +273,10 @@ class PragueAuthoredDoorwayTests(unittest.TestCase):
             doors.append(next(box for box in boxes if box[2] == 74))
         self.assertEqual(2, len(doors))
         routes = []
+        from gui.mods.offline_lan_0922 import bot_tactics
+        shipped = bot_tactics.baseline_routes('114_czech')
         for team in ('1', '2'):
-            route = next(r for r in graph['routes'][team] if r['id'] == 'valley')
+            route = next(r for r in shipped[team] if r['id'] == 'valley')
             self.assertLessEqual(len(route['waypoints']), 16)
             planned = []
             for a, b in zip(route['waypoints'], route['waypoints'][1:]):

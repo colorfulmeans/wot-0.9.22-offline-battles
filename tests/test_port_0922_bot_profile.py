@@ -89,7 +89,7 @@ class VehicleProfileTests(unittest.TestCase):
 
 
 class RouteCatalogTests(unittest.TestCase):
-    def test_catalog_is_the_baked_routes_with_default_edits(self):
+    def test_catalog_is_the_default_routes_of_the_round(self):
         graph = json.loads((ROOT / 'navgraphs' / '01_karelia.json').read_text(encoding='utf-8'))
         profile = bot_tactics.default_profile()
         baked, unused = bot_tactics_runtime.default_routes(profile, '01_karelia', graph)
@@ -106,12 +106,16 @@ class RouteCatalogTests(unittest.TestCase):
                     self.assertEqual(source.get('role_weights'), row['role_weights'])
 
     def test_class_deletion_writes_a_zero_class_weight(self):
-        graph = {'map': 'test', 'routes': {'1': [dict(id='lane', waypoints=[[0, 0, 0], [0, 50, 0]],
-                                                      _editor_disabled_classes=['heavyTank'])],
-                                           '2': []}}
-        catalog, unused = bot_tactics_runtime.route_catalog(bot_tactics.empty(), 'test', graph)
-        self.assertEqual({'heavyTank': 0.0}, catalog[1][0]['class_weights'])
-        self.assertEqual((), catalog[2])
+        graph = json.loads((ROOT / 'navgraphs' / '01_karelia.json').read_text(encoding='utf-8'))
+        document = bot_tactics.for_round(bot_tactics.empty(), '01_karelia')
+        rows = document['maps']['01_karelia']['default_routes']
+        source = next(r for r in rows if r['team'] == 1 and r.get('class_tag', 'all') == 'all')
+        rows.append(dict(source, class_tag='heavyTank', disabled=True))
+        catalog, unused = bot_tactics_runtime.route_catalog(document, '01_karelia', graph)
+        row = next(r for r in catalog[1] if r['id'] == source['id'])
+        self.assertEqual(0.0, row['class_weights']['heavyTank'])
+        self.assertFalse(any(r.get('_editor_source') == source['id'] and
+                             r.get('_editor_class') == 'heavyTank' for r in catalog[1]))
 
 
 if __name__ == '__main__':

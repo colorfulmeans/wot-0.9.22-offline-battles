@@ -21,7 +21,7 @@ def main():
         new=json.loads(path.read_bytes())
         if 'heights_mm' not in new:continue
         old=json.loads(subprocess.check_output(['git','show',args.baseline_ref+':'+path.as_posix()]))
-        for key in ('routes','spawn_formations','spawn_anchors','bases','objective_bases','bounds',
+        for key in ('spawn_formations','spawn_anchors','bases','objective_bases','bounds',
                     'cell_size','origin','width','height'):
             assert old.get(key)==new.get(key),(path.stem,key)
         assert new['bake']['water_depth_limit']==new['bake']['shallow_water_threshold']==1.2
@@ -50,11 +50,7 @@ def main():
                 before[k][i]!=after[k][i] for k in ('heights_mm','links','hazards'))]
             assert changed==receipt['changed_indices'],(path.stem,'incomplete change receipt')
         cases=set()
-        for routes in new['routes'].values():
-            for route in routes:
-                cases.update((tuple(a[:2]),tuple(b[:2])) for a,b in zip(route['waypoints'],route['waypoints'][1:]))
-        # Include the actual adopted, class-specific defaults, independently
-        # of the original coarse route sketches retained in the graph.
+        # Check every segment of the built-in Default rows, class rows included.
         from gui.mods.offline_lan_0922 import bot_tactics
         for route in bot_tactics.default_map(path.stem).get('default_routes',()):
             if not route.get('disabled'):
@@ -70,7 +66,7 @@ def main():
                     raise AssertionError((path.stem,name,proof['incomplete_cases']))
                 result[name]=proof
         results.append(result)
-        print(path.stem,len(cases),'retained route/default segments verified',flush=True)
+        print(path.stem,len(cases),'Default route segments verified',flush=True)
     assert len(results)==41
     (args.output/'report.json').write_text(json.dumps(results,indent=2)+'\n')
     return 0

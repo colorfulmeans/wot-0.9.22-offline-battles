@@ -74,33 +74,6 @@ def _spawn_formations(graph):
 				        (team, slot, label))
 
 
-def _routes(graph):
-	routes = graph.get('routes')
-	if not isinstance(routes, dict):
-		raise ValueError('navigation graph routes are missing')
-	for team in (1, 2):
-		values = routes.get(str(team), routes.get(team))
-		if not isinstance(values, (list, tuple)) or not values:
-			raise ValueError(
-				'navigation graph routes are missing for team %d' % team)
-		seen = set()
-		for route in values:
-			if not isinstance(route, dict):
-				raise ValueError('navigation graph route is invalid')
-			route_id = str(route.get('id') or '')
-			if not route_id or route_id in seen:
-				raise ValueError('navigation graph route id is invalid')
-			seen.add(route_id)
-			waypoints = route.get('waypoints')
-			if (not isinstance(waypoints, (list, tuple)) or
-					len(waypoints) < 2 or len(waypoints) > 16):
-				raise ValueError(
-					'navigation graph route must contain 2..16 waypoints')
-			for index, point in enumerate(waypoints):
-				_point(point, 'route %s waypoint %d' %
-				       (route_id, index))
-
-
 def validate_graph(graph, map_name):
 	"""Validate the complete navigation contract consumed during battle."""
 	map_name = short_map_name(map_name)
@@ -150,7 +123,6 @@ def validate_graph(graph, map_name):
 			if _finite(radius, 'objective base radius') <= 0.0:
 				raise ValueError('objective base radius must be positive')
 	_spawn_formations(graph)
-	_routes(graph)
 	for patch in graph.get('local_meshes', ()):
 		if not isinstance(patch, dict):
 			raise ValueError('local navigation mesh is not an object')

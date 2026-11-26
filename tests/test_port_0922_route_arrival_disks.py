@@ -82,16 +82,16 @@ class RouteArrivalDiskTests(unittest.TestCase):
             self.assertNotIn('terminal_crossing', planner._route_states[23])
 
     def test_every_shipped_route_uses_closed_six_metre_disk(self):
-        root = Path(__file__).resolve().parents[1]
         checked = 0
-        for source in (root / 'navgraphs').glob('*.json'):
-            graph = json.loads(source.read_bytes())
-            for routes in graph.get('routes', {}).values():
-                for route in routes:
-                    points = [dict(x=p[0], z=p[1]) for p in route.get('waypoints', ())]
+        # The shipped routes are the built-in Default rows of every map.
+        for settings in bot_tactics.default_profile()['maps'].values():
+            for route in settings.get('default_routes', ()):
+                    points = [dict(x=p[0], z=p[1]) for p in route['points']]
                     for i, point in enumerate(points):
-                        # Terminal mode isolates the circle from forward-pass semantics.
-                        self.assertTrue(_route_point_reached(point['x']+6., point['z'], points, i, i))
+                        # Terminal mode isolates the circle from forward-pass
+                        # semantics. Authored points are arbitrary decimals, so
+                        # the exact closed edge is checked above instead.
+                        self.assertTrue(_route_point_reached(point['x']+5.999, point['z'], points, i, i))
                         self.assertFalse(_route_point_reached(point['x']+6.01, point['z'], points, i, i))
                         checked += 1
         self.assertGreater(checked, 1000)

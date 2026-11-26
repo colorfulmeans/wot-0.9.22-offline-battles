@@ -16,8 +16,8 @@ def inventory(profile, name, graph, contract):
             selection=selection, disabled=bool(item.get('disabled')),
             parking=copy.deepcopy(item) if kind=='parking' else None))
 
-    edits = entry.get('default_routes', ())
-    for team, sources in graph.get('routes', {}).items():
+    edits = contract.effective_default_routes(profile, name)
+    for team, sources in contract.baseline_routes(name).items():
         for source in sources:
             for scope in contract.CLASSES[:-1]:
                 candidates = [r for r in edits if r['team'] == int(team) and

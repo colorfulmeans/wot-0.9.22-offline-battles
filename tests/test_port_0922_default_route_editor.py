@@ -1,7 +1,6 @@
 """Editable defaults retain their identities through allocation and manifests."""
 import copy
 import json
-from pathlib import Path
 import unittest
 from unittest import mock
 
@@ -12,8 +11,13 @@ from server_bot_ai import BotPlanner
 import test_port_0922_bot_runtime as native
 
 
+def baseline_source(name, team=1):
+    """The built-in Default's first shared route for one team."""
+    return config.baseline_routes(name)[str(team)][0]
+
+
 def edited_profile(graph, team=1):
-    source=graph['routes'][str(team)][0]
+    source=baseline_source(graph['map'],team)
     profile=config.empty('Edited defaults')
     points=[[p[0],p[1],int(bool(p[2]))] for p in source['waypoints']]
     # Node removal is intentionally supported; no allocation metadata changes.
@@ -36,8 +40,17 @@ class DefaultRouteTests(unittest.TestCase):
             store=Store(directory);store.save(profile,True)
             self.assertEqual(profile,store.active())
             self.assertEqual(profile,store.read(profile['name']))
-        self.assertEqual(profile,config.for_round(profile,'31_airfield'))
-        self.assertEqual({},config.for_round(profile,'08_ruinberg')['maps'])
+        # The round completes every route the profile leaves out from the Default.
+        round_entry=config.for_round(profile,'31_airfield')['maps']['31_airfield']
+        edit=profile['maps']['31_airfield']['default_routes'][0]
+        self.assertIn(edit,round_entry['default_routes'])
+        self.assertEqual(config.effective_default_routes(profile,'31_airfield'),round_entry['default_routes'])
+        self.assertEqual(len(config.MAPS['31_airfield']['route_ids']['1'])+
+                         len(config.MAPS['31_airfield']['route_ids']['2']),
+                         sum(1 for r in round_entry['default_routes'] if r.get('class_tag','all')=='all'))
+        absent=config.for_round(profile,'08_ruinberg')['maps']['08_ruinberg']
+        self.assertEqual(config.default_map('08_ruinberg')['default_routes'],absent['default_routes'])
+        self.assertEqual(([],[]),(absent['routes'],absent['positions']))
         self.assertEqual([],profile['maps']['31_airfield']['routes'])
 
     def test_unknown_duplicates_nonfinite_overflow_and_metadata_changes_rejected(self):
@@ -54,34 +67,53 @@ class DefaultRouteTests(unittest.TestCase):
                 if kind=='wait':edit['points'][0].append(-0.5)
                 with self.assertRaises(config.TacticsError):config.canonical(profile)
 
-    def test_independent_team_edits_retain_allocation_metadata_and_source(self):
+    def test_independent_team_edits_keep_the_default_for_every_other_route(self):
         source=copy.deepcopy(self.graph);profile=edited_profile(self.graph)
-        routes,status=planning.default_routes(profile,'31_airfield',self.graph)
-        first=source['routes']['1'][0];edit=profile['maps']['31_airfield']['default_routes'][0]
+        routes,status=planning.default_routes(config.for_round(profile,'31_airfield'),'31_airfield',self.graph)
+        first=baseline_source('31_airfield');edit=profile['maps']['31_airfield']['default_routes'][0]
+        self.assertEqual(first['id'],routes['1'][0]['id'])
         self.assertEqual(edit['points'],routes['1'][0]['waypoints'])
-        self.assertEqual({k:v for k,v in first.items() if k!='waypoints'},
-                         {k:v for k,v in routes['1'][0].items() if k not in ('waypoints','_allocation_symmetric','_route_tier')})
+        # Authored routes carry no lane capacity, risk or role affinity of their own.
+        self.assertEqual((planning.ROUTE_CAPACITY,planning.ROUTE_RISK,{}),
+                         (routes['1'][0]['capacity'],routes['1'][0]['risk'],routes['1'][0]['role_weights']))
         self.assertFalse(routes['1'][0]['_allocation_symmetric'])
-        unedited,unused=planning.default_routes(config.empty(),'31_airfield',self.graph)
+        # Every row the profile leaves out keeps the Default's row, class
+        # variants included, exactly as the editor shows it.
+        unedited,unused=planning.default_routes(config.for_round(config.empty(),'31_airfield'),'31_airfield',self.graph)
         self.assertEqual(unedited['2'],routes['2'])
+        self.assertEqual([r for r in unedited['1'] if r['id']!=first['id']],
+                         [r for r in routes['1'] if r['id']!=first['id']])
         self.assertEqual(source,self.graph)
-        self.assertEqual({'1:'+first['id']:'baked_route_connected'},status)
+        self.assertEqual('baked_route_connected',status['1:'+first['id']])
 
-    def test_disconnected_edit_falls_back_without_overriding_other_routes(self):
-        graph=copy.deepcopy(self.graph);graph['links']=[0]*len(graph['links'])
-        profile=edited_profile(self.graph)
-        routes,status=planning.default_routes(profile,'31_airfield',graph)
-        self.assertEqual(planning.default_routes(config.empty(),'31_airfield',graph)[0],routes)
-        self.assertEqual(['waypoints_disconnected'],list(status.values()))
+    def test_unusable_route_is_left_out_without_other_geometry(self):
+        profile=config.for_round(edited_profile(self.graph),'31_airfield')
+        edit=next(r for r in profile['maps']['31_airfield']['default_routes']
+                  if r['team']==1 and r['id']==baseline_source('31_airfield')['id'] and
+                  r.get('class_tag','all')=='all')
+        def check(unused_grid,route):
+            return 'waypoints_disconnected' if route is edit else None
+        with mock.patch.object(planning,'validate_route',side_effect=check):
+            routes,status=planning.default_routes(profile,'31_airfield',self.graph)
+        # The shared route and the class variants that vary it are not used.
+        self.assertFalse([r for r in routes['1'] if edit['id'] in (r['id'],r.get('_editor_source'))])
+        self.assertEqual('waypoints_disconnected',status['1:'+edit['id']])
+        others=planning.default_routes(profile,'31_airfield',self.graph)[0]
+        self.assertEqual([r for r in others['1'] if edit['id'] not in (r['id'],r.get('_editor_source'))],
+                         routes['1'])
+        self.assertEqual(others['2'],routes['2'])
 
     def test_worker_installs_edits_before_assignment_and_host_catalog_receives_geometry(self):
         module=native._load();runtime=module.BotRuntime(1)
-        runtime.baked_graph=self.graph;runtime._bot_tactics=edited_profile(self.graph)
+        runtime.baked_graph=self.graph
+        runtime._bot_tactics=config.for_round(edited_profile(self.graph),'31_airfield')
         factory=mock.Mock(return_value=object());runtime.adapter_factory=factory
         runtime._new_adapter('31_airfield',5)
         factory.assert_called_once_with('31_airfield',5)
         route=runtime._route_catalog[1][0]
-        expected=runtime._bot_tactics['maps']['31_airfield']['default_routes'][0]['points']
+        self.assertEqual(baseline_source('31_airfield')['id'],route['id'])
+        expected=next(r for r in runtime._bot_tactics['maps']['31_airfield']['default_routes']
+                      if r['team']==1 and r['id']==route['id'] and r.get('class_tag','all')=='all')['points']
         self.assertEqual([(float(p[0]),float(p[1]),bool(p[2])) for p in expected],list(route['waypoints']))
         states=[dict(id=i,team=1,slot=i-11,profile=dict(class_tag='mediumTank')) for i in range(11,25)]
         plans,unused,unused_usage=planning.assign_initial_routes(
@@ -106,24 +138,21 @@ class DefaultRouteTests(unittest.TestCase):
         self.assertEqual([(p[0],p[1]) for p in expected],
                          [(p['x'],p['z']) for p in catalog[route['id']]['waypoints']])
         self.assertFalse(route['id'].startswith('user_'))
-        # The next round with no override must use the unmodified graph again.
-        runtime._bot_tactics=config.empty();runtime._new_adapter('31_airfield',6)
-        self.assertEqual(planning.route_catalog(config.empty(),'31_airfield',self.graph)[0],
+        # The next round with no override uses the unmodified Default again.
+        runtime._bot_tactics=config.for_round(config.empty(),'31_airfield');runtime._new_adapter('31_airfield',6)
+        self.assertEqual(planning.route_catalog(config.for_round(config.empty(),'31_airfield'),
+                                                '31_airfield',self.graph)[0],
                          runtime._route_catalog)
 
     def test_editor_registry_matches_every_shipped_default_id(self):
-        root=Path(__file__).resolve().parents[1]
         for name,meta in config.MAPS.items():
-            graph=json.loads((root/'navgraphs'/ (name+'.json')).read_bytes())
-            self.assertEqual(meta['route_ids'],{team:[r['id'] for r in routes]
-                                               for team,routes in graph['routes'].items()})
-            profile=config.empty()
-            edits=[dict(id=r['id'],team=int(team),points=[[p[0],p[1],int(bool(p[2]))] for p in r['waypoints']])
-                   for team,routes in graph['routes'].items() for r in routes]
-            profile['maps'][name]=dict(mode='regular',resource_sha256=meta['resource_sha256'],
-                                       routes=[],positions=[],default_routes=edits)
+            rows=config.default_map(name)['default_routes']
             with self.subTest(map=name):
-                self.assertEqual(len(edits),len(config.canonical(profile)['maps'][name]['default_routes']))
+                self.assertEqual({team:set(ids) for team,ids in meta['route_ids'].items()},
+                                 {team:{r['id'] for r in rows if str(r['team'])==team and
+                                        r.get('class_tag','all')=='all'} for team in ('1','2')})
+                self.assertEqual({team:[r['id'] for r in routes] for team,routes in
+                                  config.baseline_routes(name).items()},meta['route_ids'])
 
     def test_scoped_defaults_reach_matching_priority_selected_bots_and_restore_wire_geometry(self):
         module=native._load();runtime=module.BotRuntime(1)
@@ -132,16 +161,18 @@ class DefaultRouteTests(unittest.TestCase):
         edit=profile['maps']['31_airfield']['default_routes'][0]
         edit['class_tag']='heavyTank';edit['priority']=9
         edit['points'][0][2:]=[1,0,[[edit['points'][0][0],edit['points'][0][1],12.5]]]
-        runtime._bot_tactics=config.canonical(profile)
+        runtime._bot_tactics=config.for_round(config.canonical(profile),'31_airfield')
         runtime.adapter=runtime._new_adapter('31_airfield',5)
         for actor,tag in ((11,'heavyTank'),(12,'mediumTank')):
             source=next(r for r in runtime._route_catalog[1] if r['id']==edit['id'])
             runtime.states[actor]=dict(id=actor,team=1,slot=actor-11,profile={'class_tag':tag},route=source)
         runtime._prepare_user_routes(dict(map='31_airfield'),False)
         self.assertEqual(config.default_route_id(edit),runtime.states[11]['route']['id'])
+        # The medium tank keeps the row this round uses for it, from the Default.
         medium=runtime.states[12]['route']
-        source=next(r for r in self.graph['routes']['1'] if r['id']==medium['id'])
-        self.assertEqual([tuple(p[:3]) for p in source['waypoints']],list(medium['waypoints']))
+        source=next(r for r in runtime._bot_tactics['maps']['31_airfield']['default_routes']
+                    if r['team']==1 and config.default_route_id(r)==medium['id'])
+        self.assertEqual([tuple(p[:3]) for p in source['points']],list(medium['waypoints']))
         self.assertTrue(all(len(p)==3 for p in runtime.states[11]['route']['waypoints']))
         cfg=config.route_config(runtime._bot_tactics,'31_airfield',runtime.states[11]['route']['id'],1)
         self.assertEqual(12.5,cfg['points'][0][4][0][2])
@@ -165,10 +196,10 @@ class DefaultRouteTests(unittest.TestCase):
             self.assertEqual(expected['points'],route['points'])
         self.assertEqual(canonical,config.canonical(json.loads(config.dumps(canonical))))
 
-    def test_rejected_default_waits_cannot_attach_to_original_fallback_geometry(self):
+    def test_rejected_default_waits_cannot_attach_to_the_default_geometry(self):
         profile=edited_profile(self.graph)
         edit=profile['maps']['31_airfield']['default_routes'][0]
         edit['points'][0].append(30)
         self.assertIsNone(config.route_config(profile,'31_airfield',edit['id'],1,
-            self.graph['routes']['1'][0]['waypoints']))
+            baseline_source('31_airfield')['waypoints']))
         self.assertIsNotNone(config.route_config(profile,'31_airfield',edit['id'],1,edit['points']))

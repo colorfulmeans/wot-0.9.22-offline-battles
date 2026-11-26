@@ -82,6 +82,8 @@ class ConnectionEditorMixin(ArtilleryEditorMixin):
         item=self._editable_parent()
         if item.get('purpose')=='spg_attack':return
         shared=self._route_scope()=='all'
+        # A common edit also reaches the Default's own class rows of the route.
+        if self.selection[0]=='builtin' and shared:self._adopt_default_rows(item['id'],(self.team,))
         rows=self._ensure_entry().setdefault('default_routes' if self.selection[0]=='builtin' else 'routes',[])
         family=item.get('family',item['id'])
         peers=[r for r in rows if r['team']==self.team and r.get('family',r['id'])==family
@@ -95,13 +97,14 @@ class ConnectionEditorMixin(ArtilleryEditorMixin):
         other=3-self.team
         if self.selection[0]=='builtin':
             scope=item.get('class_tag','all')
+            self._adopt_default_rows(item['id'],(other,),None if shared else (scope,))
             counterpart=next((r for r in rows if r['team']==other and r['id']==item['id']
                               and r.get('class_tag','all')==scope),None)
             if counterpart is None:
                 inherited=next((r for r in rows if r['team']==other and r['id']==item['id']
                                 and r.get('class_tag','all')=='all'),None)
                 if inherited is None:
-                    source=next((r for r in self.graph_cache[self.map_name].get('routes',{}).get(str(other),()) if r['id']==item['id']),None)
+                    source=next((r for r in getattr(self,'baseline_sources',{}).get(str(other),()) if r['id']==item['id']),None)
                     if source is None:raise ValueError(self.tr('另一队缺少对应路线。','The other team has no matching route.'))
                     counterpart=dict(id=item['id'],team=other,class_tag=scope,points=copy.deepcopy(source['waypoints']),symmetric=True)
                 else:

@@ -44,15 +44,14 @@ def _motion_rows(text):
     return [row['data'] for row in parsed['records'] if row['label'] == 'BOT MOTION']
 
 
-def _graph(map_name='01_karelia', waypoint_count=2):
-    waypoints = tuple((float(index * 4), 0.0, False)
-                      for index in range(waypoint_count))
-    reverse = tuple(reversed(waypoints))
+def _graph(map_name='01_karelia'):
     return {
         'format': 'offline-lan-0922-navgraph', 'version': 2,
         'game_version': '0.9.22.0.1-cn-1513', 'map': map_name,
         'cell_size': 4.0, 'origin': (0.0, 0.0), 'bounds': (0, 0, 8, 0),
         'width': 3, 'height': 1, 'heights_mm': (0, 0, 0),
+        'directions': ((-1, -1), (0, -1), (1, -1), (-1, 0),
+                       (1, 0), (-1, 1), (0, 1), (1, 1)),
         'links': (1 << 4, (1 << 3) | (1 << 4), 1 << 3),
         'hazards': (0, 0, 0),
         'spawn_anchors': ((0.0, 0.0), (8.0, 0.0)),
@@ -65,12 +64,24 @@ def _graph(map_name='01_karelia', waypoint_count=2):
                         100.0 - float(slot // 5) * 12.0, 3.14159)
                        for slot in range(15)),
         },
-        'routes': {
-            '1': ({'id': 'safe-1', 'waypoints': waypoints},),
-            '2': ({'id': 'safe-2', 'waypoints': reverse},),
-        },
         'bake': {'max_grade': 0.30},
     }
+
+
+# The fixture's short lane, carried as this round's Karelia Default rows.
+LANE = 'west_ridge'
+
+
+def _lane_tactics(module):
+    lane = [[0.0, 0.0, 0], [4.0, 0.0, 0]]
+    document = module.bot_tactics.empty()
+    document['maps']['01_karelia'] = {
+        'mode': 'regular', 'routes': [], 'positions': [],
+        'resource_sha256': module.bot_tactics.MAPS['01_karelia']['resource_sha256'],
+        'default_routes': [
+            {'id': LANE, 'team': 1, 'points': lane},
+            {'id': LANE, 'team': 2, 'points': list(reversed(lane))}]}
+    return document
 
 
 def _flat_open_graph():
@@ -7005,8 +7016,11 @@ class BotRuntimeTests(unittest.TestCase):
                 ValueError, 'collision manifest descriptor is unavailable'):
             self.runtime.battle_start(start)
 
-    def test_injected_baked_graph_replaces_runtime_grid_and_builds_route_catalog(self):
-        graph = _graph()
+    def test_injected_baked_graph_replaces_runtime_grid_and_never_supplies_routes(self):
+        # A stale graph may still carry a routes member; only this round's
+        # Default rows become Bot routes.
+        graph = dict(_graph(), routes={'1': ({'id': 'stale', 'waypoints': (
+            (0.0, 0.0, False), (8.0, 0.0, False))},), '2': ()})
         seen = []
         def factory(*args, **kwargs):
             seen.append((args, kwargs))
@@ -7018,34 +7032,13 @@ class BotRuntimeTests(unittest.TestCase):
             physics_ground_probe=lambda *unused: 0.0,
             spawn_resolver=_spawn_resolver,
             direction_probe=lambda *unused: {'clear': True, 'slope': 0.0})
-        runtime.battle_start(self.start)
+        runtime.battle_start(dict(self.start, bot_tactics=_lane_tactics(self.module)))
         self.assertTrue(runtime.navigator.grid.prebaked)
         self.assertEqual({}, seen[0][1])
-        for team in (1, 2):
-            expected = [(r['id'], tuple((float(p[0]), float(p[1]), bool(p[2]) if len(p) > 2 else False)
-                                        for p in r['waypoints']))
-                        for r in graph['routes'][str(team)]]
-            self.assertEqual(expected, [(r['id'], r['waypoints'])
-                                        for r in runtime._route_catalog[team]])
-
-    def test_supported_map_with_empty_baked_routes_fails_closed(self):
-        graph = _graph()
-        graph['routes'] = {'1': (), '2': ()}
-        seen = []
-
-        def factory(*args, **kwargs):
-            seen.append((args, kwargs))
-            return _Adapter(*args)
-
-        runtime = self.module.BotRuntime(
-            1, adapter_factory=factory, baked_graph=graph,
-            ground_probe=lambda *unused: 0.0)
-        with self.assertRaisesRegex(
-                ValueError, 'navigation graph routes are missing'):
-            runtime.battle_start(self.start)
-
-        self.assertEqual([], seen)
-        self.assertIsNone(runtime.baked_graph)
+        for team, lane in ((1, ((0.0, 0.0, False), (4.0, 0.0, False))),
+                           (2, ((4.0, 0.0, False), (0.0, 0.0, False)))):
+            self.assertEqual([(LANE, lane)], [(r['id'], r['waypoints'])
+                                              for r in runtime._route_catalog[team]])
 
     def test_unknown_developer_map_is_rejected_without_runtime_navigation(self):
         seen = []
@@ -18420,9 +18413,10 @@ class BotRuntimeTests(unittest.TestCase):
                     ground_probe=lambda *unused: 0.0,
                     physics_ground_probe=lambda *unused: 0.0,
                     spawn_resolver=_spawn_resolver, baked_graph=_flat_open_graph())
-                manifest = bot_state_rows.bots(runtime.battle_start(dict(self.start, bots=[{
-                    'id': 11, 'team': 1, 'slot': 0, 'name': 'Recipient',
-                }]))[0])
+                manifest = bot_state_rows.bots(runtime.battle_start(dict(
+                    self.start, bot_tactics=_lane_tactics(self.module), bots=[{
+                        'id': 11, 'team': 1, 'slot': 0, 'name': 'Recipient',
+                    }]))[0])
                 state = runtime.states[11]
                 state.update(
                     x=start[0], y=0.0, z=start[1], yaw=0.0, speed=0.0)
@@ -18437,7 +18431,7 @@ class BotRuntimeTests(unittest.TestCase):
                 planner = BotPlanner()
                 if extra == 'turnback':
                     planner._route_states[11] = {
-                        'index': 1, 'route_id': 'safe-1', 'join_index': 0,
+                        'index': 1, 'route_id': LANE, 'join_index': 0,
                         'join_anchor': {'x': 0.0, 'y': 0.0, 'z': 0.0},
                     }
                 payload = planner.build_orders(
@@ -19203,7 +19197,12 @@ class BotRuntimeTests(unittest.TestCase):
         runtime.navigator = self.module.TerrainNavigator(
             lambda *unused: None, baked_graph=graph)
         runtime.baked_graph = graph
-        routes = graph['routes']['1']
+        catalog, unused = self.module.bot_tactics_runtime.route_catalog(
+            self.module.bot_tactics.for_round(
+                self.module.bot_tactics.default_profile(), '86_himmelsdorf_winter'),
+            '86_himmelsdorf_winter', graph)
+        routes = [route for route in catalog[1] if not route.get('_editor_source')]
+        self.assertEqual(3, len(routes))
         spawns = graph['spawn_formations']['1']
         runtime.states = {}
         # The report has no per-Bot route/profile rows. Partitioning the 15
@@ -20321,7 +20320,7 @@ class BotRuntimeTests(unittest.TestCase):
             {'id': 12, 'team': 1, 'slot': 1, 'name': 'Blocked'},
         ]
         manifest = bot_state_rows.bots(runtime.battle_start(
-            dict(self.start, bots=roster))[0])
+            dict(self.start, bot_tactics=_lane_tactics(self.module), bots=roster))[0])
         runtime.states[11].update(x=0.0, y=0.0, z=0.0, yaw=0.0)
         runtime.states[12].update(x=10.0, y=0.0, z=0.0, yaw=0.0)
         enemy = {
@@ -20353,7 +20352,7 @@ class BotRuntimeTests(unittest.TestCase):
                           manifest, bot_states, [enemy], 1.0)['orders'])
         self.assertIsNone(orders[11]['target_id'])
         # Bot 11 keeps its own lane; it already holds that short lane's end.
-        self.assertEqual(('hold', 'safe-1'),
+        self.assertEqual(('hold', LANE),
                          (orders[11]['combat_mode'], orders[11]['route_id']))
         self.assertFalse(orders[11]['fire_allowed'])
         self.assertEqual(2, orders[12]['target_id'])
@@ -20526,7 +20525,7 @@ class BotRuntimeTests(unittest.TestCase):
             {'id': 12, 'team': 1, 'slot': 1, 'name': 'Blocked-B'},
         ]
         manifest = bot_state_rows.bots(runtime.battle_start(
-            dict(self.start, bots=roster))[0])
+            dict(self.start, bot_tactics=_lane_tactics(self.module), bots=roster))[0])
         runtime.states[11].update(x=0.0, y=0.0, z=0.0)
         runtime.states[12].update(x=5.0, y=0.0, z=0.0)
         runtime.set_camera_position((1000.0, 0.0, 1000.0))
@@ -20554,7 +20553,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertTrue(all(order['target_id'] is None for order in orders))
         # Both keep their own lane: route travel, or a hold at its end.
         self.assertTrue(all(order['combat_mode'] in ('route', 'hold') and
-                            order['route_id'] == 'safe-1' for order in orders))
+                            order['route_id'] == LANE for order in orders))
         self.assertTrue(all(not order['fire_allowed'] for order in orders))
 
     def test_full_roster_firing_lane_refresh_is_staggered_and_complete(self):

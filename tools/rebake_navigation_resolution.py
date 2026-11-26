@@ -9,7 +9,7 @@ from pathlib import Path
 import bake_navigation_0922 as baker
 
 GAMEPLAY_FIELDS = (
-    'routes', 'bases', 'bounds', 'objective_bases', 'objective_base_radii',
+    'bases', 'bounds', 'objective_bases', 'objective_base_radii',
     'ctf_spawn_points', 'spawn_anchors', 'spawn_anchor_source',
     'spawn_formations', 'spawn_formation_source',
 )
@@ -19,11 +19,12 @@ NARROWS = (((182.606,43.685),(175.887,87.135)),
 
 
 def verify_geometry(graph, terrain, obstacles, legacy):
-    """Prove full routed segments against decoded collision in both directions."""
+    """Prove Default route segments against decoded collision in both directions."""
+    from gui.mods.offline_lan_0922 import bot_tactics
     pairs = set(NARROWS)
-    for routes in graph['routes'].values():
-        for route in routes:
-            points = route['waypoints']
+    for route in bot_tactics.default_map(graph['map']).get('default_routes', ()):
+        if not route.get('disabled'):
+            points = route['points']
             pairs.update((tuple(a[:2]),tuple(b[:2]))
                          for a,b in zip(points,points[1:]))
     records = []
@@ -63,8 +64,8 @@ def retain_gameplay(graph, previous, previous_bytes):
     graph['navigation_previous_sha256'] = hashlib.sha256(previous_bytes).hexdigest()
     # Fresh spawn packing is not evidence for the retained old layout.
     fresh = graph['validation']
-    graph['validation'] = baker._legacy_baker().validate_graph(
-        graph, dict(bases=graph['bases']))
+    graph['validation'] = baker._terrain_validation(
+        baker._legacy_baker().validate_graph, graph, dict(bases=graph['bases']))
     graph['validation'].update({key:copy.deepcopy(value)
         for key,value in previous['validation'].items() if key.startswith('spawn_')})
     graph['bake']['resolution_rebake'] = dict(

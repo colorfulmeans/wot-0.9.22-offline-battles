@@ -1,11 +1,11 @@
 """Two friendly hulls meeting inside Great Wall's gatehouse must both leave.
 
 The map's only east crossing is a gatehouse whose baked corridor is one cell
-wide at its north mouth and two cells inside, and both teams' ``wall_pass``
-and ``valley`` routes cross it in opposite directions. Every head-on swing
-offset is blocked in there, so an unbounded crossing hold stopped both hulls
-and each driver then timed out into a steered reverse that parked its hull
-across the passage.
+wide at its north mouth and two cells inside, and both teams' Default
+``valley`` routes cross it in opposite directions. Every head-on swing offset
+is blocked in there, so an unbounded crossing hold stopped both hulls and each
+driver then timed out into a steered reverse that parked its hull across the
+passage.
 """
 import copy
 import json

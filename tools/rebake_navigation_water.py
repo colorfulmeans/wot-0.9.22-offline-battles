@@ -1,7 +1,7 @@
 """Rebake water eligibility on every retained grid without resetting gameplay.
 
 Decode the pinned terrain/water/collision again. Preserve grid placement,
-authored layers, routes, spawns and existing proved links. Recompute every
+authored layers, spawns and existing proved links. Recompute every
 cell's water evidence; newly eligible water/shore cells need the same terrain,
 collision, shoulder and link proofs as the ordinary baker. This is not a
 runtime override and does not infer water from missing navigation heights.
@@ -34,20 +34,22 @@ def validate_routes(graph, legacy):
     """Validate additive passages with the shipping layered search.
 
     The baseline validator knows only the coarse layer. Using it alone on
-    Windstorm reports the same pre-existing 4.15x detour before and after this
-    bake, even though the shipping local bridge mesh provides the passage.
-    Check every authored segment through that mesh instead of suppressing it.
+    Windstorm reported a 4.15x detour before and after this bake, even though
+    the shipping local bridge mesh provides the passage. Check every Default
+    route segment through that mesh instead of suppressing it.
     """
     if not graph.get('local_meshes'):
-        return legacy.validate_graph(graph, dict(bases=graph['bases']))
+        return baker._terrain_validation(
+            legacy.validate_graph, graph, dict(bases=graph['bases']))
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'launcher'))
+    from gui.mods.offline_lan_0922 import bot_tactics
     from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
     from bot_tactics_navigation import connection
     grid = TerrainGrid(lambda *a: None, baked_graph=graph)
     cases = set()
-    for routes in graph['routes'].values():
-        for route in routes:
-            cases.update((tuple(a[:2]), tuple(b[:2])) for a, b in zip(route['waypoints'], route['waypoints'][1:]))
+    for route in bot_tactics.default_map(graph['map']).get('default_routes', ()):
+        if not route.get('disabled'):
+            cases.update((tuple(a[:2]), tuple(b[:2])) for a, b in zip(route['points'], route['points'][1:]))
     proofs = []
     for start, end in sorted(cases):
         receipt = connection(grid, graph, start, end)
@@ -227,7 +229,7 @@ def build(client, previous, output):
     if original.get('navigation_previous_sha256'):
         identities.add(original['navigation_previous_sha256'])
     graph['navigation_previous_sha256s'] = sorted(identities)
-    for key in ('routes','spawn_formations','spawn_anchors','bases','objective_bases','bounds',
+    for key in ('spawn_formations','spawn_anchors','bases','objective_bases','bounds',
                 'origin','width','height','cell_size'):
         assert graph.get(key) == original.get(key), key
     graph['validation'].update(validate_routes(graph, legacy))
@@ -245,8 +247,7 @@ def build(client, previous, output):
     Path(output).parent.mkdir(parents=True, exist_ok=True)
     Path(output).write_bytes((json.dumps(graph, separators=(',', ':'))+'\n').encode())
     print(json.dumps(dict(map=graph['map'], cells_measured=receipt['cells_measured'],
-        revived_cells=receipt['revived_cells'], local_layers=len(layers),
-        route_segments=graph['validation']['route_segments'])), flush=True)
+        revived_cells=receipt['revived_cells'], local_layers=len(layers))), flush=True)
 
 
 def main():

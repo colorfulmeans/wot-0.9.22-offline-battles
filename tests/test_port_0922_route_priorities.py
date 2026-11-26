@@ -12,6 +12,15 @@ def profile():
     return graph,doc
 
 
+def sources():
+    """Team one's shared Default routes, the baseline every edit varies."""
+    return config.baseline_routes('31_airfield')['1']
+
+
+def round_document(doc):
+    return config.for_round(config.canonical(doc),'31_airfield')
+
+
 def edit(route,tag,priority):
     return dict(id=route['id'],team=1,class_tag=tag,priority=priority,
                 points=[[p[0],p[1],int(bool(p[2]))] for p in route['waypoints']])
@@ -19,7 +28,7 @@ def edit(route,tag,priority):
 
 class RoutePriorityTests(unittest.TestCase):
     def test_priorities_are_class_scoped_and_bad_values_are_rejected(self):
-        graph,doc=profile();e=edit(graph['routes']['1'][0],'lightTank',8)
+        graph,doc=profile();e=edit(sources()[0],'lightTank',8)
         doc['maps']['31_airfield']['default_routes']=[e]
         self.assertEqual(8,config.canonical(doc)['maps']['31_airfield']['default_routes'][0]['priority'])
         for tag,value in (('all',8),('SPG',8),('lightTank',10),('lightTank',-1),('lightTank',1.5)):
@@ -28,19 +37,19 @@ class RoutePriorityTests(unittest.TestCase):
 
     def test_class_priority_edits_install_variants_without_changing_the_graph(self):
         graph,doc=profile();original=copy.deepcopy(graph)
-        north,central,south=graph['routes']['1']
+        north,central,south=sources()
         doc['maps']['31_airfield']['default_routes']=[edit(north,'lightTank',9),edit(central,'heavyTank',9)]
-        routes,status=planning.default_routes(config.canonical(doc),'31_airfield',graph)
+        routes,status=planning.default_routes(round_document(doc),'31_airfield',graph)
         self.assertTrue(all(v=='baked_route_connected' for v in status.values()))
         self.assertEqual(original,graph)
         self.assertEqual(1,len([r for r in routes['1'] if r['id']==north['id']]))
 
     def test_implicit_default_five_outranks_four_but_explicit_six_wins(self):
-        graph,doc=profile();central=graph['routes']['1'][1]
+        graph,doc=profile();central=sources()[1]
         state=dict(id=1,team=1,slot=0,x=0.,y=0.,z=0.,profile=dict(class_tag='lightTank'))
         for priority,expected in ((4,False),(6,True)):
             doc['maps']['31_airfield']['default_routes']=[edit(central,'lightTank',priority)]
-            canonical=config.canonical(doc)
+            canonical=round_document(doc)
             catalog,unused=planning.route_catalog(canonical,'31_airfield',graph)
             plans,unused,unused_usage=planning.assign_initial_routes(
                 canonical,'31_airfield',graph,[state],catalog,7)
@@ -59,11 +68,21 @@ class RoutePriorityTests(unittest.TestCase):
             self.assertEqual({},planning.assign_routes(config.canonical(doc),'31_airfield',graph,states,1)[0])
 
     def test_invalid_geometry_does_not_install_priority(self):
-        graph,doc=profile();doc['maps']['31_airfield']['default_routes']=[edit(graph['routes']['1'][0],'lightTank',9)]
-        graph=copy.deepcopy(graph);graph['links']=[0]*len(graph['links'])
-        routes,status=planning.default_routes(config.canonical(doc),'31_airfield',graph)
-        self.assertEqual(planning.default_routes(config.empty(),'31_airfield',graph)[0],routes)
-        self.assertTrue(all(v=='waypoints_disconnected' for v in status.values()))
+        graph,doc=profile();north=sources()[0]
+        doc['maps']['31_airfield']['default_routes']=[edit(north,'lightTank',9)]
+        document=round_document(doc)
+        scoped=next(r for r in document['maps']['31_airfield']['default_routes']
+                    if r['team']==1 and r['id']==north['id'] and r.get('class_tag')=='lightTank')
+        def check(unused_grid,route):
+            return 'waypoints_disconnected' if route is scoped else None
+        with mock.patch.object(planning,'validate_route',side_effect=check):
+            routes,status=planning.default_routes(document,'31_airfield',graph)
+        shared=next(r for r in routes['1'] if r['id']==north['id'])
+        self.assertNotIn('lightTank',shared.get('class_priorities',{}))
+        self.assertFalse(any(r.get('_editor_source')==north['id'] and r.get('_editor_class')=='lightTank'
+                             for r in routes['1']))
+        self.assertEqual('waypoints_disconnected',status['1:class_lt_'+north['id']])
+        self.assertEqual('baked_route_connected',status['1:'+north['id']])
 
     def test_custom_priorities_rank_before_weight_and_preserve_class_and_capacity(self):
         graph,doc=profile();entry=doc['maps']['31_airfield']
@@ -85,19 +104,22 @@ class RoutePriorityTests(unittest.TestCase):
             self.assertEqual({},planning.assign_routes(doc,'31_airfield',graph,states[:1],1)[0])
 
     def test_deleted_defaults_are_excluded_by_class_and_allow_empty_sides(self):
-        graph,doc=profile();original=copy.deepcopy(graph);north=graph['routes']['1'][0]
+        graph,doc=profile();original=copy.deepcopy(graph);north=sources()[0]
         deletion=edit(north,'lightTank',0);deletion['disabled']=True
         doc['maps']['31_airfield']['default_routes']=[deletion]
-        routes,status=planning.default_routes(config.canonical(doc),'31_airfield',graph)
-        variant=next(r for r in routes['1'] if r.get('_editor_source')==north['id'])
+        routes,status=planning.default_routes(round_document(doc),'31_airfield',graph)
+        variant=next(r for r in routes['1'] if r.get('_editor_source')==north['id'] and
+                     r.get('_editor_class')=='lightTank')
         self.assertEqual('reserve',variant['_route_tier'])
         self.assertEqual('lightTank',variant['_editor_class'])
         self.assertIn('baked_route_connected',status.values())
         entry=doc['maps']['31_airfield'];entry['default_routes']=[]
-        for route in graph['routes']['1']:
+        for route in sources():
             item=edit(route,'all',0);item.pop('priority');item['disabled']=True;entry['default_routes'].append(item)
-        clean=config.canonical(doc);catalog,_=planning.route_catalog(clean,'31_airfield',graph)
+        clean=round_document(doc);catalog,_=planning.route_catalog(clean,'31_airfield',graph)
         self.assertEqual((),catalog[1])
+        self.assertEqual([r['id'] for r in config.baseline_routes('31_airfield')['2']],
+                         [r['id'] for r in catalog[2] if not r.get('_editor_source')])
         plans,unused,unused_usage=planning.assign_initial_routes(
             clean,'31_airfield',graph,[dict(id=1,team=1,slot=0,profile=dict(class_tag='heavyTank'))],catalog,7)
         self.assertIsNone(plans[1])

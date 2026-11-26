@@ -204,8 +204,13 @@ def validate_route(grid, route):
     return None
 
 
+# Authored routes carry no lane capacity, risk or role affinity of their own.
+ROUTE_CAPACITY = 15
+ROUTE_RISK = 0.5
+
+
 def route_value(route):
-    return {'id': 'user_' + route['id'], 'capacity': 15, 'risk': 0.5,
+    return {'id': 'user_' + route['id'], 'capacity': ROUTE_CAPACITY, 'risk': ROUTE_RISK,
             'role_weights': {}, 'class_weights': dict((c, 1.0 if c in route['classes'] else 0.0) for c in config.CLASSES),
             # Wait conditions stay in the canonical tactics document on the
             # server. The manifest keeps its existing three-field geometry.
@@ -215,53 +220,58 @@ def route_value(route):
 
 
 def default_routes(profile, name, graph):
-    """Apply editor geometry before the director assigns or restores routes.
+    """Build each team's Default routes from this round's tactics document.
 
-    Keep source graphs immutable and retain identities and allocation metadata.
-    Unusable edits fall back independently, just like authored custom routes.
+    The round document already carries the built-in Default as its route
+    baseline. A row that fails the baked navigation check is not used this
+    round; no other geometry stands in for it.
     """
     edits = config.map_settings(profile, name).get('default_routes', ())
-    result = copy.deepcopy(graph.get('routes'))
-    spawns, bases, radii = (graph.get(key) or () for key in
-                            ('spawn_anchors', 'objective_bases', 'objective_base_radii'))
-    symmetric = (len(spawns) == len(bases) == len(radii) == 2 and all(
-        math.hypot(a[0]-b[0], a[1]-b[1]) <= radius
-        for a, b, radius in zip(spawns, bases, radii)))
-    for team in (1, 2):
-        for route in result.get(str(team), ()):
-            route['_allocation_symmetric'] = symmetric
+    result = {'1': [], '2': []}
     if not edits:
         return result, {}
     grid = graph_view(name, graph)
     outcomes = {}
-    for edit in edits:
-        if edit.get('class_tag') == 'SPG':continue
-        key = '%s:%s' % (edit['team'], config.default_route_id(edit))
-        source = next((r for r in result.get(str(edit['team']), ())
-                       if r['id'] == edit['id']), None)
-        if edit.get('disabled'):
-            outcomes[key]='route_deleted'
-            continue
-        error = validate_route(grid, edit) if source is not None else 'unknown_default_route'
-        outcomes[key] = error or 'baked_route_connected'
-        if error is None:
-            if edit.get('class_tag', 'all') == 'all':
-                source['waypoints'] = [list(p[:3]) for p in edit['points']]
-                source['_route_tier'] = edit.get('tier', 'main')
-                source['_allocation_symmetric'] = bool(edit.get('symmetric', False))
-            else:
-                if 'priority' in edit:
-                    source.setdefault('class_priorities', {})[edit['class_tag']]=edit['priority']
-                variant = copy.deepcopy(source)
-                variant.update(id=config.default_route_id(edit),
-                               _editor_source=source['id'],
-                               _editor_class=edit['class_tag'],
-                               _route_tier=edit.get('tier', 'main'), _route_family=source['id'],
-                               _allocation_symmetric=bool(edit.get('symmetric', False)),
-                               waypoints=[list(p[:3]) for p in edit['points']],
-                               class_weights=dict((tag, 1.0 if tag == edit['class_tag'] else 0.0)
-                                                  for tag in config.CLASSES))
-                result[str(edit['team'])].append(variant)
+    listed = (config.MAPS.get(name) or {}).get('route_ids', {})
+    # Shared rows first: each one is a route, and class rows vary one of them.
+    for shared in (True, False):
+        if not shared:
+            # Keep each team's listed route order ahead of the class variants.
+            for team, routes in result.items():
+                order = listed.get(team, ())
+                routes.sort(key=lambda r: order.index(r['id']) if r['id'] in order else len(order))
+        for edit in edits:
+            if edit.get('class_tag') == 'SPG' or (edit.get('class_tag', 'all') == 'all') != shared:
+                continue
+            key = '%s:%s' % (edit['team'], config.default_route_id(edit))
+            if edit.get('disabled'):
+                outcomes[key]='route_deleted'
+                continue
+            routes = result[str(edit['team'])]
+            source = None if shared else next((r for r in routes if r['id'] == edit['id']), None)
+            error = validate_route(grid, edit) if shared or source is not None else 'shared_route_unavailable'
+            outcomes[key] = error or 'baked_route_connected'
+            if error is not None:
+                continue
+            if shared:
+                routes.append(dict(id=edit['id'], capacity=ROUTE_CAPACITY, risk=ROUTE_RISK,
+                                   role_weights={},
+                                   waypoints=[list(p[:3]) for p in edit['points']],
+                                   _route_tier=edit.get('tier', 'main'),
+                                   _allocation_symmetric=bool(edit.get('symmetric', False))))
+                continue
+            if 'priority' in edit:
+                source.setdefault('class_priorities', {})[edit['class_tag']]=edit['priority']
+            variant = copy.deepcopy(source)
+            variant.update(id=config.default_route_id(edit),
+                           _editor_source=source['id'],
+                           _editor_class=edit['class_tag'],
+                           _route_tier=edit.get('tier', 'main'), _route_family=source['id'],
+                           _allocation_symmetric=bool(edit.get('symmetric', False)),
+                           waypoints=[list(p[:3]) for p in edit['points']],
+                           class_weights=dict((tag, 1.0 if tag == edit['class_tag'] else 0.0)
+                                              for tag in config.CLASSES))
+            routes.append(variant)
     if any(edit.get('disabled') and edit.get('class_tag','all')=='all' for edit in edits):
         result['_editor_allow_empty']=True
     for edit in edits:
@@ -282,7 +292,7 @@ def default_routes(profile, name, graph):
 
 
 def route_catalog(profile, name, graph):
-    """Return each team's routes from the baked graph with Default edits.
+    """Return each team's routes from this round's Default rows.
 
     Waypoints become (x, z, hold) tuples and a class deletion writes a zero
     class weight. A route without a usable waypoint is left out.

@@ -3,8 +3,6 @@ import sys
 from pathlib import Path
 import unittest
 from unittest import mock
-import contextlib
-import route_scene_fixture
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,11 +40,11 @@ class HimmelsdorfDepartureTests(unittest.TestCase):
     def test_flat_report_roster_departs_at_15_and_24_fps(self):
         """Exercise crowded departure with track grip, without native claims.
 
-        This is a pure-data regression over the production Himmelsdorf route
-        topology, formations, planner, driver, traffic law and copied vehicle
-        physics. It cannot prove #1513 BigWorld collision or presentation on
-        Windows, but it does reproduce the reported team-2 human slot zero and
-        all 29 non-SPG Bot spawn/route-join decisions at two render cadences.
+        This is a pure-data regression over the Default Himmelsdorf routes,
+        formations, planner, driver, traffic law and copied vehicle physics. It
+        cannot prove #1513 BigWorld collision or presentation on Windows, but it
+        does reproduce the reported team-2 human slot zero and all 29 non-SPG
+        Bot spawn/route-join decisions at two render cadences.
         """
         module = runtime_fixtures._load()
         original_factors = module.loadout.attribute_factors
@@ -85,7 +83,7 @@ class HimmelsdorfDepartureTests(unittest.TestCase):
         def flat_ground(unused_x, unused_z, unused_hint=0.0):
             return 0.0
 
-        for fps in getattr(self,"frame_rates",(15,24)):
+        for fps in (15, 24):
             with self.subTest(fps=fps):
                 runtime_box = {}
 
@@ -137,14 +135,12 @@ class HimmelsdorfDepartureTests(unittest.TestCase):
                     firing_lane_probe=lambda *unused: False)
                 runtime_box['runtime'] = runtime
                 # Production chooses fresh entropy; keep the CI traffic scene
-                # replayable and use the same lane draw at both frame rates.
-                allocation=(contextlib.nullcontext() if getattr(self,'authoritative',False) else mock.patch.object(module.bot_tactics_runtime,'assign_initial_routes',route_scene_fixture.allocate))
-                with allocation,mock.patch.object(module.random.SystemRandom,'getrandbits',return_value=0x0922):
+                # replayable and use the same Default lane draw at both rates.
+                with mock.patch.object(module.random.SystemRandom,'getrandbits',return_value=0x0922):
                     published=runtime.battle_start({
                         'map': '86_himmelsdorf_winter',
-                        'bot_tactics': (module.bot_tactics.default_profile()
-                            if getattr(self, 'authoritative', False)
-                            else module.bot_tactics.empty()),
+                        'bot_tactics': module.bot_tactics.for_round(
+                            module.bot_tactics.default_profile(), '86_himmelsdorf_winter'),
                         'round_id': fps,
                         'bot_authority_id': 1,
                         'bots': bots,
@@ -216,7 +212,7 @@ class HimmelsdorfDepartureTests(unittest.TestCase):
                 # retaining the per-episode parking/recovery limits below.
                 for frame in range(1, fps * 60 + 1):
                     now[0] = frame / float(fps)
-                    # Bots only move on server orders; the variants differ in allocation.
+                    # Bots only move on server orders, as in the worker.
                     orders=planner.build_orders(published['bots'],list(runtime.states.values()),[],now[0])
                     runtime._apply_orders(dict(bot_order_revision=orders['revision'],bot_orders=orders['orders']))
                     runtime.update(1.0 / float(fps), now[0])
@@ -287,10 +283,6 @@ class HimmelsdorfDepartureTests(unittest.TestCase):
                     0.5)
                 # Recovery is allowed to chain; every hull must still leave
                 # its spawn OBB within the one-minute run above.
-
-    def test_new_allocation_with_server_route_recovery_departs(self):
-        self.authoritative=True;self.frame_rates=(15,)
-        self.test_flat_report_roster_departs_at_15_and_24_fps()
 
 
 if __name__ == '__main__':

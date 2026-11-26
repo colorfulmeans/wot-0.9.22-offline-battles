@@ -121,7 +121,7 @@ class ResolutionTests(unittest.TestCase):
         for name in ('04_himmelsdorf', '86_himmelsdorf_winter'):
             graph=json.loads((ROOT/'navgraphs'/(name+'.json')).read_bytes())
             baseline=json.loads(subprocess.check_output(['git','show','ca22f909:navgraphs/'+name+'.json'],cwd=ROOT))
-            for key in ('cell_size','width','height','origin','hazards','routes'):
+            for key in ('cell_size','width','height','origin','hazards'):
                 self.assertEqual(baseline[key],graph[key],key)
             expected=copy.deepcopy(baseline['spawn_formations'])
             for change in graph['validation']['spawn_railway_revalidation']['changes']:
