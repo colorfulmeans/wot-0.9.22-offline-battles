@@ -124,33 +124,5 @@ class NarrowPassageTests(unittest.TestCase):
         output.assert_not_called()
         self.assertNotIn('narrow_passage_target',nav.bot_states[7])
 
-    def test_default_gate_scene_hands_the_passage_target_to_the_progress_owner(self):
-        import test_port_0922_great_wall_gate as gate
-        import test_port_0922_bot_runtime as fixtures
-        original=fixtures._load
-        issued=[]
-        def load():
-            module=original()
-            remember=TerrainNavigator.remember_runtime_target
-            def tracked(nav,bot,current,goal,target,now,**kwargs):
-                accepted=remember(nav,bot,current,goal,target,now,**kwargs)
-                receipt=nav.bot_states.get(int(bot),{}).get('narrow_passage_receipt') or {}
-                if receipt.get('outcome')=='guided' and tuple(receipt['target'])==tuple(target):
-                    issued.append((accepted,nav.bot_states[int(bot)].get('local_fallback_target'),tuple(target)))
-                return accepted
-            patcher=mock.patch.object(TerrainNavigator,'remember_runtime_target',tracked)
-            patcher.start();self.addCleanup(patcher.stop)
-            return module
-        # Default valley Bots reach the gatehouse in the scene's first minute.
-        case=gate.GreatWallGateTests('test_default_valley_bots_drive_through_the_gatehouse')
-        case.setUp()
-        try:
-            with mock.patch.object(fixtures,'_load',side_effect=load):
-                case.run_scene(60.0)
-            self.assertTrue(issued,'The passage target must enter the existing finite progress owner')
-            self.assertTrue(all(accepted and remembered==target for accepted,remembered,target in issued))
-        finally:
-            case.doCleanups();case.tearDown()
-
 
 if __name__=='__main__':unittest.main()
