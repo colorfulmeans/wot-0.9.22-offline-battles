@@ -117,24 +117,9 @@ def _human():
     }
 
 
-class _Director(object):
-    def __init__(self):
-        self.agents = {}
-
-    def register_profile(self, bot_id, team, profile, name):
-        self.agents[bot_id] = {
-            'team': team, 'profile': profile, 'name': name,
-            'route': {'id': 'test', 'waypoints': []},
-        }
-
-
 class _FixedAdapter(object):
     def __init__(self, command):
         self.command = dict(command)
-        self.director = _Director()
-
-    def register(self, bot_id, team, descriptor, name):
-        self.director.register_profile(bot_id, team, {}, name)
 
     def decide(self, state, clear):
         clear(state['yaw'])

@@ -69,7 +69,7 @@ def _bots():
                 'team': team,
                 'slot': slot,
                 'name': '%s%d' % (class_tag, bot_id),
-                'vehicle': 'fake',
+                'vehicle': 'fake:' + class_tag,
                 'profile': {
                     'class_tag': class_tag,
                     'dominant_role': dominant_role,
@@ -176,8 +176,7 @@ class SpawnDepartureTests(unittest.TestCase):
 
                 runtime = module.BotRuntime(
                     1,
-                    descriptor_resolver=(
-                        lambda unused: runtime_fixtures._combat_descriptor()),
+                    descriptor_resolver=runtime_fixtures._class_descriptor,
                     direction_probe=baked_direction,
                     world_receipt_probe=baked_receipt,
                     # Native world is flat and empty in this isolation scene.

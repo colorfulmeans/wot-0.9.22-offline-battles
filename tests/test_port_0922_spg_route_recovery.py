@@ -207,8 +207,7 @@ class ArtilleryCatalogTests(unittest.TestCase):
             directions=[[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]])
         good = dict(id='good', waypoints=[[0, 0, 0], [4, 0, 0]])
         disconnected = dict(id='disconnected', waypoints=[[8, 0, 0], [12, 0, 0]])
-        runtime = SimpleNamespace(adapter=SimpleNamespace(director=SimpleNamespace(
-            map_data=dict(routes={1:[good, disconnected]}))), _bot_tactics={},
+        runtime = SimpleNamespace(_route_catalog={1:[good, disconnected]}, _bot_tactics={},
             baked_graph=graph, _navigation_map_name='08_ruinberg', _ordered_states=lambda:[])
         state = dict(id=11, team=1, x=0., y=0., z=0.)
         failed = dict(id='old', points=[[0, 0, 0], [0, 4, 0]])
@@ -221,8 +220,7 @@ class ArtilleryCatalogTests(unittest.TestCase):
             rows.append(dict(route, id=tag, _editor_source='road', _editor_class=tag,
                              class_weights={c:float(c==tag) for c in recovery.bot_tactics.CLASSES}))
         rows.append(dict(route, id='disabled', disabled=True))
-        runtime = SimpleNamespace(adapter=SimpleNamespace(director=SimpleNamespace(
-            map_data=dict(routes={1:rows, 2:[dict(route, id='enemy')]}))),
+        runtime = SimpleNamespace(_route_catalog={1:rows, 2:[dict(route, id='enemy')]},
             _bot_tactics={}, _navigation_map_name='08_ruinberg')
         result = recovery._catalog(runtime, 1)
         self.assertEqual({'lightTank', 'mediumTank', 'heavyTank', 'AT-SPG'}, {r['id'] for r in result})

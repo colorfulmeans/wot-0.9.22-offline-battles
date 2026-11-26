@@ -18,7 +18,6 @@ from gui.mods.offline_lan_0922.ai.adapter import BotAdapter
 from gui.mods.offline_lan_0922.ai.traffic import TrafficCoordinator
 from gui.mods.offline_lan_0922.ai import maps as tactical_maps
 from gui.mods.offline_lan_0922.ai import driver as ai_driver
-from gui.mods.offline_lan_0922.ai import planner as ai_planner
 from gui.mods.offline_lan_0922.ai.navigation import (
     BAKED_FATAL_HAZARDS, BAKED_SHALLOW_WATER, TerrainNavigator, STATIC_PLANNING_POLICY,
     NAVIGABLE_WATER_DEPTH)
@@ -26,6 +25,7 @@ from gui.mods.offline_lan_0922 import critical_statistics
 from gui.mods.offline_lan_0922 import critical_damage
 from gui.mods.offline_lan_0922 import ballistics
 from gui.mods.offline_lan_0922 import bot_gunnery
+from gui.mods.offline_lan_0922 import bot_profile
 from gui.mods.offline_lan_0922 import bot_state_codec
 from gui.mods.offline_lan_0922 import burst_mechanics
 from gui.mods.offline_lan_0922 import device_damage
@@ -1657,7 +1657,7 @@ class _BotAmmoState(object):
         # caller). Read the installed descriptor rather than inventing rounds.
         if not profile.get('shells'):
             supplied = profile
-            profile = ai_planner.build_vehicle_profile(descriptor)
+            profile = bot_profile.vehicle_profile(descriptor)
             profile.update(dict((key, val) for key, val in supplied.items() if key != 'shells'))
         self.categories = _bot_ammo_categories(profile, self.shell_count)
         self.remaining = _bot_ammo_distribution(
@@ -1867,6 +1867,18 @@ def _dispersed_barrel_angles(bot_id, round_id, fire_seq, yaw, pitch,
                            direction[2] * direction[2])
     return (math.atan2(direction[0], direction[2]),
             math.atan2(direction[1], max(1e-9, horizontal)))
+
+
+def _hold_order(state, position):
+    """Stop in place without fire permission until a server order arrives."""
+    return {
+        'id': state['id'], 'team': state.get('team', 0),
+        'combat_mode': 'hold', 'target_id': None, 'target_kind': None,
+        'aim_position': None, 'face_position': None,
+        'move_position': tuple(position), 'route_anchor': tuple(position),
+        'route_id': None, 'route_index': 0, 'route_join': False,
+        'fire_allowed': False, 'throttle_override': 0.0,
+    }
 
 
 def _overlay_live_target_pose(command, target, source_position=None):
@@ -2229,6 +2241,7 @@ class BotRuntime(object):
             self._probe_timing_state = (
                 'unbounded' if probe_clock is not None else 'off')
         self.adapter = None
+        self._route_catalog = {}
         self.authority_id = None
         self.round_id = None
         self.states = {}
@@ -2285,6 +2298,7 @@ class BotRuntime(object):
         self._vision_ranges = {}
         self._source_still = {}
         self._player_vehicle_profiles = {}
+        self._player_vehicle_builds = {}
         self._player_collision_profiles = {}
         self._spotting_profiles = {}
         self._visibility_fire = {}
@@ -2574,25 +2588,18 @@ class BotRuntime(object):
         return routes
 
     def _new_adapter(self, map_name, round_id):
-        """Keep custom two-argument factories compatible with the graph seam."""
+        """Build this round's driver adapter and its Bot route catalog."""
+        self._route_catalog = {}
         baked_routes = (self.baked_graph or {}).get('routes')
-        if (not isinstance(baked_routes, dict) or not any(
+        if (isinstance(baked_routes, dict) and any(
                 baked_routes.get(key) for key in (1, 2, '1', '2'))):
-            return self.adapter_factory(map_name, round_id)
-        baked_routes, outcomes = bot_tactics_runtime.default_routes(
-            self._bot_tactics, tactical_maps.normalize_map_name(map_name),
-            self.baked_graph)
-        for route_id, status in sorted(outcomes.items()):
-            sys.stdout.write('[Offline LAN 0.9.22] BOT TACTICS default route=%s status=%s\n' %
-                             (route_id, status))
-        if self.adapter_factory is BotAdapter:
-            return self.adapter_factory(map_name, round_id,
-                                        baked_routes=baked_routes)
-        try:
-            return self.adapter_factory(map_name, round_id,
-                                        baked_routes=baked_routes)
-        except TypeError:
-            return self.adapter_factory(map_name, round_id)
+            self._route_catalog, outcomes = bot_tactics_runtime.route_catalog(
+                self._bot_tactics, tactical_maps.normalize_map_name(map_name),
+                self.baked_graph)
+            for route_id, status in sorted(outcomes.items()):
+                sys.stdout.write('[Offline LAN 0.9.22] BOT TACTICS default route=%s status=%s\n' %
+                                 (route_id, status))
+        return self.adapter_factory(map_name, round_id)
 
     def _clear(self, position, yaw, speed=0.0, descriptor=None,
                maximum_distance=None, corridor_half_width=None):
@@ -3821,6 +3828,7 @@ class BotRuntime(object):
             self._vision_ranges = {}
             self._source_still = {}
             self._player_vehicle_profiles = {}
+            self._player_vehicle_builds = {}
             self._player_collision_profiles = {}
             self._spotting_profiles = {}
             self._visibility_fire = {}
@@ -3841,6 +3849,7 @@ class BotRuntime(object):
             self._human_ram_report_cache = {}
             self._contact_lease_elapsed = {}
             self.adapter = None
+            self._route_catalog = {}
             self.finished = False
             self._visibility_cache = {}
             self._visibility_inflight = set()
@@ -4072,22 +4081,15 @@ class BotRuntime(object):
             self._physics_params[bot_id] = _bot_physics_params(
                 descriptor, crew_level)
             self._turn_speeds[bot_id] = 0.0
-            if (self.bot_descriptor_resolver is None and
-                    isinstance(raw.get('profile'), dict)):
-                self.adapter.director.register_profile(bot_id, raw.get('team', 1),
-                                                       raw['profile'], raw.get('name', 'Bot'))
-            else:
-                self.adapter.register(bot_id, raw.get('team', 1), descriptor,
-                                      raw.get('name', 'Bot'))
             spawn, spawn_yaw = self._spawn(
                 int(raw.get('team', 1)), int(raw.get('slot', 0)))
-            agents = getattr(self.adapter.director, 'agents', {})
-            agent = agents.get(bot_id, {})
-            profile = agent.get('profile', {})
+            # The installed descriptor owns the tactical profile; initial
+            # routes are allocated below by _prepare_user_routes.
+            profile = bot_profile.vehicle_profile(descriptor)
             if 'ammo_ratios' in values:
                 profile['ammo_ratios'] = list(values['ammo_ratios'])
             if 'ammo_limit' in values:profile['ammo_limit'] = values['ammo_limit']
-            route = agent.get('route') or {}
+            route = {}
             max_health = max(1, int(getattr(descriptor, 'maxHealth',
                                             raw.get('max_health', 1000))))
             health = max(0, min(
@@ -4276,21 +4278,12 @@ class BotRuntime(object):
         else:
             # Training rooms allocate Bot routes exactly like standard battles.
             self._initial_allocation_seed = random.SystemRandom().getrandbits(64)
-            catalog = (getattr(self.adapter.director, 'map_data', None) or {}).get('routes', {})
-            plans, outcomes, usage = bot_tactics_runtime.assign_initial_routes(
-                self._bot_tactics, name, self.baked_graph, states, catalog,
+            plans, outcomes, unused_usage = bot_tactics_runtime.assign_initial_routes(
+                self._bot_tactics, name, self.baked_graph, states, self._route_catalog,
                 self._initial_allocation_seed)
-            # Discard the director's provisional role/load-balanced occupancy.
-            self.adapter.director.route_usage = dict((key, value) for key, value in usage.items()
-                                                     if not key[1].startswith('spg:'))
         for actor, status in sorted(outcomes.items()):
             if actor in plans:
                 self.states[actor]['route'] = plans[actor]
-                agent = getattr(self.adapter.director, 'agents', {}).get(actor)
-                if agent is not None:
-                    agent['route'] = plans[actor]
-                    if not restoring:
-                        agent['route_entry_fixed']=True;agent['route_started']=False
             sys.stdout.write('[Offline LAN 0.9.22] BOT TACTICS route bot=%d map=%s status=%s id=%s\n' % (
                 actor, name, status, (plans.get(actor) or {}).get('id', 'auto_navigation')))
 
@@ -4328,7 +4321,7 @@ class BotRuntime(object):
             manual, manual_outcomes = bot_tactics_runtime.assign_manual_positions(
                 self._bot_tactics, map_name, self.baked_graph, states,
                 allocation_seed=getattr(self, '_initial_allocation_seed', None),
-                paired_routes=(getattr(self.adapter.director, 'map_data', None) or {}).get('routes', {}))
+                paired_routes=self._route_catalog)
             for actor in manual_outcomes:
                 plans.pop(actor, None)
             plans.update(manual)
@@ -5139,6 +5132,10 @@ class BotRuntime(object):
                     return False
             accepted[bot_id] = order
         previous = self._server_orders
+        # A live Bot missing from a batch keeps executing its last valid order.
+        for bot_id, order in previous.items():
+            if bot_id not in accepted and (self.states.get(bot_id) or {}).get('alive'):
+                accepted[bot_id] = order
         changed_ids = set(previous).union(accepted)
         changed_ids = set(
             bot_id for bot_id in changed_ids
@@ -5231,7 +5228,7 @@ class BotRuntime(object):
             if isinstance(values, dict):
                 result['route'][key] = dict(values)
         if route.get('id') and not route.get('_editor_source'):
-            catalog = getattr(getattr(self.adapter, 'director', None), 'map_data', {}).get('routes', {})
+            catalog = self._route_catalog
             scoped = [r['_editor_class'] for r in catalog.get(state['team'], ())
                       if r.get('_editor_source') == route.get('id')]
             if scoped:
@@ -5735,7 +5732,7 @@ class BotRuntime(object):
         server_order = self._server_orders.get(state['id'])
         cache_key = (('server', self._server_order_tokens.get(
                           state['id'], 0))
-                     if server_order is not None else ('local',))
+                     if server_order is not None else ('hold',))
         cached = self._decision_cache.get(state['id'])
         return not (
             cached is not None and cached[0] == cache_key and
@@ -11382,7 +11379,7 @@ class BotRuntime(object):
             return cached
         snapshot = _player_effective_params(raw, visibility_tick)
         descriptor = {}
-        tactical = {}
+        built = None
         try:
             descriptor = (self.player_descriptor_resolver(raw)
                           if callable(self.player_descriptor_resolver)
@@ -11390,17 +11387,32 @@ class BotRuntime(object):
                               vehicle_name or 'ussr:R11_MS-1'))
         except Exception:
             descriptor = {}
-        if vehicle_name:
+        if vehicle_name and descriptor is not None and descriptor != {}:
             try:
-                tactical = ai_planner.build_vehicle_profile(descriptor)
+                tactical = bot_profile.vehicle_profile(descriptor)
+                built = (descriptor, tactical['class_tag'],
+                         max(0.0, _number(tactical['armor'])))
             except Exception:
-                tactical = {}
+                built = None
+        if built is not None:
+            self._player_vehicle_builds[player_id] = built
+        else:
+            built = self._player_vehicle_builds.get(player_id)
+            if built is not None:
+                # A failed rebuild keeps this round's last built descriptor,
+                # class and armour; camouflage still uses the new snapshot.
+                sys.stdout.write(
+                    '[Offline LAN 0.9.22] PLAYER VEHICLE PROFILE rebuild failed '
+                    'player=%d vehicle=%s; keeping the last built profile\n' % (
+                        player_id, vehicle_name or '-'))
+            else:
+                built = (descriptor, 'unknown', 0.0)
         profile = snapshot['spotting']
         camouflage = snapshot['camouflage']
         cached = {
-            'descriptor': descriptor,
-            'class_tag': str(tactical.get('class_tag') or 'unknown'),
-            'armor': max(0.0, _number(tactical.get('armor'))),
+            'descriptor': built[0],
+            'class_tag': built[1],
+            'armor': built[2],
             'spotting': ((camouflage['base_moving'],
                           camouflage['base_still']),
                          camouflage['shot_factor'], profile),
@@ -16897,7 +16909,7 @@ class BotRuntime(object):
             decide_with_order = getattr(self.adapter, 'decide_with_order', None)
             cache_key = (('server', self._server_order_tokens.get(
                               state['id'], 0))
-                         if server_order is not None else ('local',))
+                         if server_order is not None else ('hold',))
             decision_cache = self._decision_cache.get(state['id'])
             decision_cache_valid = bool(
                 decision_cache is not None and len(decision_cache) >= 6 and
@@ -17294,23 +17306,18 @@ class BotRuntime(object):
                             source='server_order', received_order=received_order,
                             server_selection=server_order.get('tactical_evidence'))
                 else:
+                    # No server order has arrived for this Bot yet. Stop in
+                    # place without fire permission until the first one does.
                     if diagnostic is not None:
-                        diagnostic.count('decision_local_planner')
-                    if (state.get('profile') or {}).get('class_tag') == 'SPG':
-                        strategic = self.adapter.plan_order(decision_state)
-                        strategic = spg_route_travel.apply(self,state,strategic,now)
-                        strategic = self._artillery_position_order(state,strategic,targets,now)
-                        command = timed_call(self._combat_diagnostics,'bot.planner_driver',
-                            self.adapter.decide_with_order,decision_state,strategic,sample_clear)
-                    else:
-                        command = timed_call(
-                            self._combat_diagnostics, 'bot.planner_driver',
-                            self.adapter.decide,
-                            decision_state, sample_clear)
+                        diagnostic.count('decision_hold_without_order')
+                    hold = _hold_order(state, position)
+                    command = timed_call(
+                        self._combat_diagnostics, 'bot.planner_driver',
+                        decide_with_order, decision_state, hold, sample_clear)
                     if record_orders:
                         command['order_evidence'] = dict(sampled_at=now,
-                            source='local_planner', final_order=_order_evidence(command),
-                            reason='server_order_or_order_adapter_unavailable')
+                            source='hold_without_order', final_order=_order_evidence(hold),
+                            reason='no_server_order_received')
                 if command.pop('navigation_replan', False):
                     self.navigator.request_replan(state['id'], position, now)
                 self._report_blocked_planner(

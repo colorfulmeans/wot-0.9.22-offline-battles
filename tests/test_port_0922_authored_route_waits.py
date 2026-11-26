@@ -5,7 +5,7 @@ import unittest
 
 from test_port_0922_bot_tactics_editor import cfg, planning, profile
 from test_port_0922_server_bot_ai import BotPlanner, _bot, _route, _state, _bot_contact
-from gui.mods.offline_lan_0922.ai.planner import build_vehicle_profile
+from gui.mods.offline_lan_0922.bot_profile import vehicle_profile
 from gui.mods.offline_lan_0922.ai.adapter import BotAdapter
 from gui.mods.offline_lan_0922.ai.driver import combat_hull_aim
 
@@ -13,7 +13,7 @@ from gui.mods.offline_lan_0922.ai.driver import combat_hull_aim
 class AuthoredRouteWaitTests(unittest.TestCase):
     def test_armoured_td_acquires_distant_proved_target_while_parked(self):
         planner, manifest = self.setup_route('AT-SPG', 60)
-        manifest[0]['profile'] = build_vehicle_profile(dict(
+        manifest[0]['profile'] = vehicle_profile(dict(
             type=dict(name='Tortoise', tags=('AT-SPG',)),
             physics=dict(speedLimits=(5.56, 2.78)),
             hull=dict(primaryArmor=(273.1, 152.4, 101.6)),
@@ -56,7 +56,7 @@ class AuthoredRouteWaitTests(unittest.TestCase):
     def test_td_sniper_reach_is_the_same_during_travel_and_parking(self):
         planner, manifest = self.setup_route('AT-SPG', 60)
         bot = manifest[0]
-        bot['profile'] = build_vehicle_profile(dict(
+        bot['profile'] = vehicle_profile(dict(
             type=dict(tags=('AT-SPG',)), physics=dict(speedLimits=(5.56, 2.78)),
             hull=dict(primaryArmor=273.1), turret=dict(primaryArmor=0.),
             gun=dict(shots=())))
@@ -70,7 +70,7 @@ class AuthoredRouteWaitTests(unittest.TestCase):
         # sources at slow, ordinary, and fast descriptor speeds.
         for speed in (5.56, 10., 16.67):
             def profile_for(hull, turret):
-                return build_vehicle_profile(dict(type=dict(tags=('AT-SPG',)),
+                return vehicle_profile(dict(type=dict(tags=('AT-SPG',)),
                     physics=dict(speedLimits=(speed, 2.78)),
                     hull=dict(primaryArmor=hull), turret=dict(primaryArmor=turret),
                     gun=dict(shots=())))
@@ -79,7 +79,6 @@ class AuthoredRouteWaitTests(unittest.TestCase):
                                  ((273.1, 152.4, 101.6), 0.), (80., 200.)):
                 value = profile_for(hull, turret)
                 self.assertEqual(reference['roles'], value['roles'])
-                self.assertEqual('sniper', value['dominant_role'])
                 self.assertEqual(255., value['desired_range'])
                 self.assertEqual(450., value['fire_range'])
                 self.assertGreaterEqual(value['armor'], 119.9)
@@ -89,7 +88,7 @@ class AuthoredRouteWaitTests(unittest.TestCase):
                                      ('mediumTank',135.,340.),
                                      ('lightTank',175.,320.)):
             def profile_for(armor):
-                return build_vehicle_profile(dict(type=dict(tags=(tag,)),
+                return vehicle_profile(dict(type=dict(tags=(tag,)),
                     physics=dict(speedLimits=(10., 2.78)),
                     hull=dict(primaryArmor=armor), turret=dict(primaryArmor=0.),
                     gun=dict(shots=())))
@@ -140,7 +139,7 @@ class AuthoredRouteWaitTests(unittest.TestCase):
         # Build the production profile rather than hiding its range reduction
         # behind the server fixture's generic 520 m profile.
         planner, manifest = self.setup_route('AT-SPG', 60)
-        manifest[0]['profile'] = build_vehicle_profile(dict(
+        manifest[0]['profile'] = vehicle_profile(dict(
             type=dict(name='Tortoise', tags=('AT-SPG',)),
             physics=dict(speedLimits=(5.56, 2.78)),
             hull=dict(primaryArmor=228.6), turret=dict(primaryArmor=0.),

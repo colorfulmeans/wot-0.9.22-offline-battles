@@ -141,18 +141,9 @@ class _StaticGridLifecycle(object):
         pass
 
 
-class _Director(object):
-    def __init__(self): self.registered = []
-    def register_profile(self, *args): self.registered.append(args)
-
 class _Adapter(object):
     def __init__(self, *unused):
-        self.director = _Director(); self.calls = []; self.server_orders = []
-    def register(self, *args): self.director.registered.append(args)
-    def plan_order(self, state):
-        target_id = state['contacts'][0]['id'] if state.get('contacts') else None
-        return dict(target_id=target_id, fire_allowed=True, shell_index=2,
-                    fire_range=500.0)
+        self.calls = []; self.server_orders = []
     def decide(self, state, clear):
         self.calls.append((state, clear(state['yaw'])))
         target_id = (state['contacts'][0]['id']
@@ -179,9 +170,6 @@ class _FixedAdapter(_Adapter):
 
     def decide(self, state, clear):
         self.calls.append((state, clear(state['yaw'])))
-        return dict(self.command)
-
-    def plan_order(self, state):
         return dict(self.command)
 
     def decide_with_order(self, state, strategic, clear):
@@ -243,6 +231,26 @@ def _combat_descriptor(reload_time=0.5, clip=(2, 0.2),
                          'circularVisionRadius': 445.0},
         physics={'speedLimits': (14.0, 7.0)}, chassis=chassis,
         hull=hull, maxHealth=1000, radio=types.SimpleNamespace(distance=700.0))
+
+
+_FIXTURE_CLASSES = {'HT': 'heavyTank', 'MT': 'mediumTank', 'LT': 'lightTank',
+                    'TD': 'AT-SPG', 'SPG': 'SPG', 'heavyTank': 'heavyTank',
+                    'mediumTank': 'mediumTank', 'lightTank': 'lightTank',
+                    'AT-SPG': 'AT-SPG'}
+
+
+def _class_descriptor(vehicle_name):
+    """Return a combat descriptor tagged with its fixture vehicle's class.
+
+    The installed descriptor owns a Bot's tactical class. Fixture vehicles
+    name it after the nation, for example ``test:SPG`` or ``fake:heavyTank``.
+    """
+    descriptor = _combat_descriptor()
+    name = str(vehicle_name or '')
+    tag = _FIXTURE_CLASSES.get(name.split(':', 1)[-1])
+    if tag is not None:
+        descriptor.type = types.SimpleNamespace(name=name, tags=frozenset((tag,)))
+    return descriptor
 
 
 def _wide_track_descriptor():
@@ -6997,7 +7005,7 @@ class BotRuntimeTests(unittest.TestCase):
                 ValueError, 'collision manifest descriptor is unavailable'):
             self.runtime.battle_start(start)
 
-    def test_injected_baked_graph_replaces_runtime_grid_and_passes_routes(self):
+    def test_injected_baked_graph_replaces_runtime_grid_and_builds_route_catalog(self):
         graph = _graph()
         seen = []
         def factory(*args, **kwargs):
@@ -7012,10 +7020,13 @@ class BotRuntimeTests(unittest.TestCase):
             direction_probe=lambda *unused: {'clear': True, 'slope': 0.0})
         runtime.battle_start(self.start)
         self.assertTrue(runtime.navigator.grid.prebaked)
-        for team in ('1', '2'):
-            actual = seen[0][1]['baked_routes'][team]
-            self.assertEqual([(r['id'], r['waypoints']) for r in graph['routes'][team]],
-                             [(r['id'], r['waypoints']) for r in actual])
+        self.assertEqual({}, seen[0][1])
+        for team in (1, 2):
+            expected = [(r['id'], tuple((float(p[0]), float(p[1]), bool(p[2]) if len(p) > 2 else False)
+                                        for p in r['waypoints']))
+                        for r in graph['routes'][str(team)]]
+            self.assertEqual(expected, [(r['id'], r['waypoints'])
+                                        for r in runtime._route_catalog[team]])
 
     def test_supported_map_with_empty_baked_routes_fails_closed(self):
         graph = _graph()
@@ -7117,7 +7128,16 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertGreater(bot['z'], 0.0)
         self.assertEqual(0, bot['shell_index'])
         # The opening shot also waits for this Bot's gunner tier, which the
-        # banked-pose contract above is not about.
+        # banked-pose contract above is not about. A Bot fires only on orders.
+        self.assertTrue(self.runtime._apply_orders({
+            'bot_order_revision': 1,
+            'bot_orders': [{
+                'id': 11, 'target_kind': 'human', 'target_id': 2,
+                'aim_position': (5.0, 1.0, 5.0), 'face_position': (5.0, 1.0, 5.0),
+                'move_position': (0.0, 0.0, 0.0), 'fire_allowed': True,
+                'fire_range': 500.0, 'shell_index': 0, 'combat_mode': 'engage',
+            }],
+        }))
         now = 1.46
         while now < 8.0 and not self.runtime.states[11]['fire_seq']:
             now += .04
@@ -20065,6 +20085,64 @@ class BotRuntimeTests(unittest.TestCase):
             'visible_by_player_ids' in contact
             for contact in observation['contacts']))
 
+    def test_bot_without_any_server_order_holds_without_fire_permission(self):
+        adapter = _Adapter()
+        runtime = self.module.BotRuntime(
+            1, descriptor_resolver=lambda unused: _combat_descriptor(),
+            adapter_factory=lambda *args, **kwargs: adapter,
+            direction_probe=lambda *unused: {'clear': True, 'slope': 0.0},
+            ground_probe=lambda *unused: 0.0,
+            physics_ground_probe=lambda *unused: 0.0,
+            spawn_resolver=_spawn_resolver, baked_graph=_graph())
+        runtime.battle_start(self.start)
+        position = (runtime.states[11]['x'], runtime.states[11]['y'], runtime.states[11]['z'])
+        runtime.update(.04, 1.0)
+        hold = adapter.server_orders[-1]
+        self.assertEqual('hold', hold['combat_mode'])
+        self.assertEqual(position, hold['move_position'])
+        self.assertEqual(0.0, hold['throttle_override'])
+        self.assertIsNone(hold['target_id'])
+        self.assertFalse(hold['fire_allowed'])
+
+    def test_live_bot_missing_from_a_batch_keeps_its_last_valid_order(self):
+        runtime = self.module.BotRuntime(1)
+        runtime.states = {11: {'id': 11, 'alive': True}, 12: {'id': 12, 'alive': True},
+                          13: {'id': 13, 'alive': False}}
+        first = [{'id': bot_id, 'combat_mode': 'route', 'move_position': (bot_id, 0.0, 10.0)}
+                 for bot_id in (11, 12, 13)]
+        self.assertTrue(runtime._apply_orders({'bot_order_revision': 1, 'bot_orders': first}))
+        self.assertTrue(runtime._apply_orders({'bot_order_revision': 2, 'bot_orders': [
+            {'id': 12, 'combat_mode': 'hold', 'move_position': (12.0, 0.0, 0.0)}]}))
+        self.assertEqual(('route', (11.0, 0.0, 10.0)), (runtime._server_orders[11]['combat_mode'],
+                                                       runtime._server_orders[11]['move_position']))
+        self.assertEqual('hold', runtime._server_orders[12]['combat_mode'])
+        self.assertNotIn(13, runtime._server_orders)
+
+    def test_failed_human_profile_rebuild_keeps_the_last_built_profile(self):
+        from contextlib import redirect_stdout
+        heavy = _combat_descriptor()
+        heavy.hull.primaryArmor = (240.0, 200.0, 180.0)
+        heavy.type = types.SimpleNamespace(name='test:heavy', tags=('heavyTank',))
+
+        def resolve(raw):
+            if raw.get('vehicle_compact_descr') == 'broken':
+                raise ValueError('descriptor rebuild failed')
+            return heavy
+
+        runtime = self.module.BotRuntime(1, player_descriptor_resolver=resolve)
+        raw = _admit_player({'id': 2, 'team': 2, 'alive': True, 'vehicle': 'test:heavy',
+                             'x': 0.0, 'y': 0.0, 'z': 100.0})
+        built = runtime._player_vehicle_profile(raw)
+        self.assertEqual(('heavyTank', 240.0), (built['class_tag'], built['armor']))
+        output = io.StringIO()
+        with redirect_stdout(output):
+            rebuilt = runtime._player_vehicle_profile(dict(raw, vehicle_compact_descr='broken'))
+        self.assertIs(heavy, rebuilt['descriptor'])
+        self.assertEqual(('heavyTank', 240.0), (rebuilt['class_tag'], rebuilt['armor']))
+        self.assertIn('PLAYER VEHICLE PROFILE rebuild failed player=2', output.getvalue())
+        # Camouflage is read from the new snapshot, not from the kept build.
+        self.assertIsNot(built['spotting'], rebuilt['spotting'])
+
     def test_human_armor_profiles_do_not_override_result_based_ammunition(self):
         descriptor_calls = []
 
@@ -20136,7 +20214,7 @@ class BotRuntimeTests(unittest.TestCase):
                        'piercingPower': 60.0, 'damage': 420.0},
              'speed': 700.0},
         )
-        weapon_profile = self.module.ai_planner.build_vehicle_profile(
+        weapon_profile = self.module.bot_profile.vehicle_profile(
             weapon_descriptor)
         weapon_profile = BattleState._sanitize_bot_profile(weapon_profile)
         personality = {'aggression': 0.5}
@@ -20274,7 +20352,9 @@ class BotRuntimeTests(unittest.TestCase):
                       planner.build_orders(
                           manifest, bot_states, [enemy], 1.0)['orders'])
         self.assertIsNone(orders[11]['target_id'])
-        self.assertEqual('route', orders[11]['combat_mode'])
+        # Bot 11 keeps its own lane; it already holds that short lane's end.
+        self.assertEqual(('hold', 'safe-1'),
+                         (orders[11]['combat_mode'], orders[11]['route_id']))
         self.assertFalse(orders[11]['fire_allowed'])
         self.assertEqual(2, orders[12]['target_id'])
         self.assertEqual('human', orders[12]['target_kind'])
@@ -20472,8 +20552,9 @@ class BotRuntimeTests(unittest.TestCase):
         orders = planner.build_orders(
             manifest, bot_states, [enemy], 1.0)['orders']
         self.assertTrue(all(order['target_id'] is None for order in orders))
-        self.assertTrue(all(order['combat_mode'] == 'route'
-                            for order in orders))
+        # Both keep their own lane: route travel, or a hold at its end.
+        self.assertTrue(all(order['combat_mode'] in ('route', 'hold') and
+                            order['route_id'] == 'safe-1' for order in orders))
         self.assertTrue(all(not order['fire_allowed'] for order in orders))
 
     def test_full_roster_firing_lane_refresh_is_staggered_and_complete(self):

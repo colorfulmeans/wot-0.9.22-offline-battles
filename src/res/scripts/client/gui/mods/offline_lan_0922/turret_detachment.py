@@ -122,7 +122,7 @@ def launch_impulse(seed):
 
     ``seed`` must be the same integer on every client in the room; the
     runtime derives it from the round id and the engine id with
-    ``ai.planner.stable_seed``, both of which are already replicated.  The
+    ``bot_lineup.stable_seed``, both of which are already replicated.  The
     arc therefore needs no wire field of its own and still looks the same on
     every screen.
 

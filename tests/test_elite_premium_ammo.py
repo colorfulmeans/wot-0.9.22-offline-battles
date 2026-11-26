@@ -7,7 +7,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT/'src/res/scripts/client'), str(ROOT/'server'), str(ROOT/'tests')]
 from gui.mods.offline_lan_0922 import ammo_policy, default_loadouts, bot_fittings
-from gui.mods.offline_lan_0922.ai.planner import build_vehicle_profile
+from gui.mods.offline_lan_0922.bot_profile import vehicle_profile
 from lan_battle_server import BattleState
 import test_special_default_loadouts as special_defaults
 
@@ -75,14 +75,14 @@ class EliteAmmunitionTests(unittest.TestCase):
         for vehicle in ('usa:A100_T49', 'uk:GB24_Centurion_Mk3',
                         'japan:J25_Type_4', 'japan:J20_Type_2605'):
             descriptor = special_defaults.SpecialDefaultsTests().descriptor(vehicle)
-            p = build_vehicle_profile(descriptor)
+            p = vehicle_profile(descriptor)
             base = ammo_policy.allocation(p, 100, len(p['shells']))
             p['bot_tier'] = 'elite'
             self.assertEqual(base, ammo_policy.allocation(p, 100, len(p['shells'])), vehicle)
 
     def test_gold_primary_su100y_keeps_higher_penetration_silver_backup(self):
         descriptor = special_defaults.SpecialDefaultsTests().descriptor('ussr:R49_SU100Y')
-        p = build_vehicle_profile(descriptor)
+        p = vehicle_profile(descriptor)
         p['bot_tier'] = 'elite'
         self.assertEqual([30, 60, 10], ammo_policy.allocation(p, 100, 3))
         self.assertEqual([1, 0, 2], [s['index'] for s in ammo_policy.stages(p)])
@@ -187,7 +187,7 @@ class EliteAmmunitionTests(unittest.TestCase):
     def test_tier_survives_native_profile_and_wire_sanitizer(self):
         descriptor = special_defaults.SpecialDefaultsTests().descriptor()
         with mock.patch.object(bot_fittings, 'context', return_value=dict(wire=dict(tier='elite'))):
-            p = build_vehicle_profile(descriptor)
+            p = vehicle_profile(descriptor)
         wire = BattleState._sanitize_bot_profile(p)
         self.assertEqual('elite', wire['bot_tier'])
         self.assertEqual(ammo_policy.allocation(p, 100, len(p['shells'])),

@@ -79,17 +79,17 @@ class DefaultRouteTests(unittest.TestCase):
         runtime.baked_graph=self.graph;runtime._bot_tactics=edited_profile(self.graph)
         factory=mock.Mock(return_value=object());runtime.adapter_factory=factory
         runtime._new_adapter('31_airfield',5)
-        route=factory.call_args.kwargs['baked_routes']['1'][0]
+        factory.assert_called_once_with('31_airfield',5)
+        route=runtime._route_catalog[1][0]
         expected=runtime._bot_tactics['maps']['31_airfield']['default_routes'][0]['points']
-        self.assertEqual(expected,route['waypoints'])
-        runtime.adapter_factory=module.BotAdapter
-        adapter=runtime._new_adapter('31_airfield',5)
-        assigned=[adapter.director.register_profile(i,1,dict(class_tag='mediumTank',
-                  roles={'flanker':1.0},vehicle_name='test'))['route'] for i in range(11,25)]
-        edited=[r for r in assigned if r is not None and r['id']==route['id']]
+        self.assertEqual([(float(p[0]),float(p[1]),bool(p[2])) for p in expected],list(route['waypoints']))
+        states=[dict(id=i,team=1,slot=i-11,profile=dict(class_tag='mediumTank')) for i in range(11,25)]
+        plans,unused,unused_usage=planning.assign_initial_routes(
+            runtime._bot_tactics,'31_airfield',self.graph,states,runtime._route_catalog,5)
+        edited=[r for r in plans.values() if r is not None and r['id']==route['id']]
         self.assertTrue(edited)
         for selected in edited:
-            self.assertEqual([tuple(p) for p in expected],list(selected['waypoints']))
+            self.assertEqual(route['waypoints'],selected['waypoints'])
         runtime._publish_equipment_state=mock.Mock()
         # The ordinary manifest serializer is shared by first load and handoff.
         state={k:0 for k in ('id','team','slot','name','vehicle','health','max_health','x','y','z','yaw',
@@ -107,10 +107,9 @@ class DefaultRouteTests(unittest.TestCase):
                          [(p['x'],p['z']) for p in catalog[route['id']]['waypoints']])
         self.assertFalse(route['id'].startswith('user_'))
         # The next round with no override must use the unmodified graph again.
-        runtime.adapter_factory=factory
         runtime._bot_tactics=config.empty();runtime._new_adapter('31_airfield',6)
-        self.assertEqual(planning.default_routes(config.empty(),'31_airfield',self.graph)[0],
-                         factory.call_args.kwargs['baked_routes'])
+        self.assertEqual(planning.route_catalog(config.empty(),'31_airfield',self.graph)[0],
+                         runtime._route_catalog)
 
     def test_editor_registry_matches_every_shipped_default_id(self):
         root=Path(__file__).resolve().parents[1]
@@ -136,9 +135,7 @@ class DefaultRouteTests(unittest.TestCase):
         runtime._bot_tactics=config.canonical(profile)
         runtime.adapter=runtime._new_adapter('31_airfield',5)
         for actor,tag in ((11,'heavyTank'),(12,'mediumTank')):
-            assigned=runtime.adapter.director.register_profile(actor,1,dict(class_tag=tag,
-                roles={'frontline':1.0},vehicle_name='test'))
-            source=next(r for r in runtime.adapter.director.map_data['routes'][1] if r['id']==edit['id'])
+            source=next(r for r in runtime._route_catalog[1] if r['id']==edit['id'])
             runtime.states[actor]=dict(id=actor,team=1,slot=actor-11,profile={'class_tag':tag},route=source)
         runtime._prepare_user_routes(dict(map='31_airfield'),False)
         self.assertEqual(config.default_route_id(edit),runtime.states[11]['route']['id'])

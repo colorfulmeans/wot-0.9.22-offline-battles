@@ -75,7 +75,7 @@ from gui.mods.offline_lan_0922 import siege_mechanics
 from gui.mods.offline_lan_0922 import spotting
 from gui.mods.offline_lan_0922 import stun_mechanics
 from gui.mods.offline_lan_0922 import vehicle_physics
-from gui.mods.offline_lan_0922.ai import planner as bot_planner
+from gui.mods.offline_lan_0922 import bot_lineup as lineup_rules
 from gui.mods.offline_lan_0922.ai.maps import get_tactical_map
 from gui.mods.offline_lan_0922.ai.maps_0922_extra import (
     TACTICAL_MAPS_0922_EXTRA as _MAPS_0922_DATA,
@@ -2454,7 +2454,7 @@ class BattleState:
         self.team_classes = bot_tactics.team_class_choices(sizes=self.team_sizes)
         self.team_class_notice = None
         self.last_bot_class_error = None
-        self.bot_tier_mode = bot_planner.normalize_bot_tier_mode(
+        self.bot_tier_mode = lineup_rules.normalize_bot_tier_mode(
             bot_tier_mode)
         self.bot_skill_mode = bot_gunnery.normalize_skill_mode(
             bot_skill_mode)
@@ -3447,7 +3447,7 @@ class BattleState:
                 return False, "not_waiting"
             if player_id != self.host_player_id:
                 return False, "host_only"
-            mode = bot_planner.normalize_bot_tier_mode(requested_mode)
+            mode = lineup_rules.normalize_bot_tier_mode(requested_mode)
             if mode != requested_mode:
                 return False, "invalid_mode"
             if mode == self.bot_tier_mode:
@@ -4080,7 +4080,7 @@ class BattleState:
                 host=self.players[self.host_player_id]
                 host_tier=next((r['level'] for r in catalog if r.get('name')==host.vehicle),1)
                 pool=[r for r in catalog if r.get('name') in allowed_names and
-                      bot_planner.vehicle_in_bot_tier_mode(host_tier,r.get('level',1),self.bot_tier_mode)]
+                      lineup_rules.vehicle_in_bot_tier_mode(host_tier,r.get('level',1),self.bot_tier_mode)]
                 occupied = {(side, slot) for participant, side, slot in assignment_plan}
                 slot_tiers = []
                 for row in self.bot_lineup:
@@ -4109,15 +4109,15 @@ class BattleState:
                     if automatic and not row['random']:groups.append([tag for tag in bot_tactics.CLASSES if row[tag]])
                 human_tiers=[next((r['level'] for r in catalog if r.get('name')==p.vehicle),host_tier)
                              for p,side,slot in assignment_plan]
-                proposed=bot_planner.bot_match_tiers(host_tier,self.bot_tier_mode,
+                proposed=lineup_rules.bot_match_tiers(host_tier,self.bot_tier_mode,
                     available_tiers=[r.get('level',1) for r in pool],required_tiers=human_tiers)
                 proposed=tuple(sorted(set(proposed)|set(human_tiers)))
-                tiers=policy.matching_tiers([(r.get('level',1),CLASSES.get(r['name']) or bot_planner.vehicle_match_class(r)) for r in pool],
+                tiers=policy.matching_tiers([(r.get('level',1),CLASSES.get(r['name']) or lineup_rules.vehicle_match_class(r)) for r in pool],
                     needed,human_tiers,proposed,self.bot_tier_mode=='random',groups,slot_tiers)
                 if tiers is None:
                     if slot_tiers:
                         return None, 'invalid_bot_lineup'
-                    available=set(CLASSES.get(r['name']) or bot_planner.vehicle_match_class(r) for r in pool)
+                    available=set(CLASSES.get(r['name']) or lineup_rules.vehicle_match_class(r) for r in pool)
                     for team in (1,2):
                         row=self.team_classes[str(team)]
                         if row['random']:continue
@@ -4133,7 +4133,7 @@ class BattleState:
                     row=self.team_classes[str(team)]
                     automatic,pinned,human_spgs=self._class_context(team,assignment_plan)
                     quota=policy.artillery_limit(self.team_sizes[team],human_spgs,pinned.count('SPG'),row)
-                    classes=set(CLASSES.get(r['name']) or bot_planner.vehicle_match_class(r) for r in pool if r.get('level',1) in (tiers or ()))
+                    classes=set(CLASSES.get(r['name']) or lineup_rules.vehicle_match_class(r) for r in pool if r.get('level',1) in (tiers or ()))
                     # Legacy probes without a native catalog can still use the
                     # default random mode; explicit guarantees require evidence.
                     if row['random'] and not catalog:continue
@@ -5415,8 +5415,7 @@ class BattleState:
             profile['bot_tier'] = raw['bot_tier']
         profile["vehicle_name"] = descriptor_name(raw.get("vehicle_name"))
         profile["gun_name"] = descriptor_name(raw.get("gun_name"))
-        for key in ("class_tag", "dominant_role"):
-            profile[key] = _safe_name(raw.get(key), "unknown")
+        profile["class_tag"] = _safe_name(raw.get("class_tag"), "unknown")
         roles = raw.get("roles")
         profile["roles"] = {}
         if isinstance(roles, dict):
@@ -5430,7 +5429,6 @@ class BattleState:
                                       ("armor", 0.0, 10000.0),
                                       ("parking_radius", math.hypot(3.5, 1.7), 20.0)):
             profile[key] = round(_clamp(_finite_float(raw.get(key), default), 0.0, maximum), 3)
-        profile["burst_size"] = max(1, min(64, int(_finite_float(raw.get("burst_size"), 1))))
         profile["clip_size"] = max(1, min(MAX_PLAYER_CLIP_SIZE, int(_finite_float(raw.get("clip_size"), 1))))
         profile["shells"] = []
         if 'ammo_limit' in raw:

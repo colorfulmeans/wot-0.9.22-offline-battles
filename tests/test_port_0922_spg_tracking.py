@@ -5,6 +5,7 @@ import io
 import math
 from pathlib import Path
 import sys
+import types
 import unittest
 from unittest import mock
 
@@ -75,6 +76,7 @@ class SPGTrackingTests(unittest.TestCase):
             reload_time=15, clip=(1, 0), turret_yaw_limits=(-.15, .15),
             turret_speed=.3, gun_speed=.3, dispersion=.03, max_ammo=30)
         descriptor.chassis.rotationSpeed = .25
+        descriptor.type = types.SimpleNamespace(name='test:SPG', tags=frozenset(('SPG',)))
         descriptor.gun.pitchLimits = {'absolute': (-.9, .15)}
         descriptor.gun.shots = ({'shell': {'effectsIndex': 0, 'kind': 'HIGH_EXPLOSIVE'}, 'speed': 425.,
                                 'gravity': 143., 'maxDistance': 10000.},)

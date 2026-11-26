@@ -22,7 +22,7 @@ import windows_server  # noqa: E402
 from gui.mods.offline_lan_0922 import vehicle_blacklist  # noqa: E402
 from gui.mods.offline_lan_0922 import descriptor_donation  # noqa: E402
 from gui.mods.offline_lan_0922 import vehicle_configuration  # noqa: E402
-from gui.mods.offline_lan_0922.ai import planner as bot_planner  # noqa: E402
+from gui.mods.offline_lan_0922 import bot_lineup  # noqa: E402
 from gui.mods.offline_lan_0922.battle_runtime import BattleRuntime  # noqa: E402
 
 
@@ -55,7 +55,7 @@ class BotLineupIntegrationTests(unittest.TestCase):
         artillery = {'name': 'ussr:artillery', 'tags': ('SPG',)}
         destroyer = {'name': 'ussr:destroyer', 'tags': ('AT-SPG',)}
 
-        selected = bot_planner.select_bot_lineup(
+        selected = bot_lineup.select_bot_lineup(
             [artillery, destroyer], 15)
 
         self.assertEqual(15, len(selected))
@@ -67,7 +67,7 @@ class BotLineupIntegrationTests(unittest.TestCase):
         artillery = {'name': 'ussr:artillery', 'tags': ('SPG',)}
         destroyer = {'name': 'ussr:destroyer', 'tags': ('AT-SPG',)}
 
-        selected = bot_planner.select_bot_lineup(
+        selected = bot_lineup.select_bot_lineup(
             [artillery], 15, spg_limit=0,
             fallback_candidates=[artillery, destroyer])
 
@@ -76,7 +76,7 @@ class BotLineupIntegrationTests(unittest.TestCase):
     def test_automatic_rosters_allow_artillery_without_removing_humans(self):
         entries = {}
         for level in range(1, 11):
-            for class_tag in bot_planner.MATCH_CLASSES:
+            for class_tag in bot_lineup.MATCH_CLASSES:
                 entries[len(entries)] = types.SimpleNamespace(
                     name='ussr:%s_%d' % (class_tag, level), level=level,
                     tags=(class_tag,))
@@ -91,7 +91,7 @@ class BotLineupIntegrationTests(unittest.TestCase):
             for team in (1, 2) for slot in range(1 if team == 1 else 0, 15)
         ]
         for level in range(1, 11):
-            for mode in bot_planner.BOT_TIER_MODES:
+            for mode in bot_lineup.BOT_TIER_MODES:
                 for human_class in ('SPG', 'heavyTank'):
                     player_name = 'ussr:%s_%d' % (human_class, level)
                     descriptor = types.SimpleNamespace(type=by_name[player_name])
@@ -238,7 +238,7 @@ class BotLineupIntegrationTests(unittest.TestCase):
         return battle, descriptor
 
     def test_profile_exclusions_cover_automatic_and_mirrored_human_vehicles(self):
-        for mode in bot_planner.BOT_TIER_MODES:
+        for mode in bot_lineup.BOT_TIER_MODES:
             assignments = []
             for worker in (False, True):
                 battle, descriptor = self._profile_exclusion_runtime(

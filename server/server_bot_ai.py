@@ -3931,7 +3931,6 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
                               focus["position"]["z"] - bz)
         if distance > fire_range:
             order["fire_allowed"] = False
-        dominant = str(profile.get("dominant_role") or "support")
         roles = profile.get("roles") if isinstance(profile.get("roles"), dict) else {}
         far_limit = desired_range * (1.08 + personality["caution"] * 0.18)
         close_limit = desired_range * (0.48 + personality["aggression"] * 0.10)
@@ -3981,7 +3980,8 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
             personality["initiative"] * 0.30 +
             support_score * (0.35 + personality["teamwork"] * 0.25) -
             personality["caution"] * 0.55)
-        threshold = 0.24 if dominant == "brawler" else 0.34
+        # Heavy tanks, the brawler class, press a distant contact sooner.
+        threshold = 0.24 if profile.get("class_tag") == "heavyTank" else 0.34
         far_mode = ("advance_contact" if advance_score >= threshold
                     else "support_hold")
         range_mode = self._stable_range_mode(

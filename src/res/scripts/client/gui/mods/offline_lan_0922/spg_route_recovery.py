@@ -18,12 +18,11 @@ def distance(a, b):
 
 
 def _catalog(runtime, team):
-    director = getattr(getattr(runtime, 'adapter', None), 'director', None)
-    catalog = (getattr(director, 'map_data', None) or {}).get('routes')
-    if catalog is None:
+    catalog = getattr(runtime, '_route_catalog', None)
+    if not catalog:
         if not runtime.baked_graph.get('routes'):
             return []
-        catalog, unused = bot_tactics_runtime.default_routes(
+        catalog, unused = bot_tactics_runtime.route_catalog(
             runtime._bot_tactics, runtime._navigation_map_name, runtime.baked_graph)
     rows = list(catalog.get(team, catalog.get(str(team), ())))
     settings = bot_tactics.map_settings(runtime._bot_tactics, runtime._navigation_map_name)
@@ -76,7 +75,6 @@ def select_route(runtime, state, failed, prefer_spg=False):
     candidates = artillery + [dict(id=g['id'], points=g['points'], borrowed=True,
                         road_geometry=g['road_geometry'], road_ids=sorted(g['ids'])) for g in groups.values()]
     orders = getattr(runtime, '_server_orders', {})
-    agents = getattr(getattr(getattr(runtime, 'adapter', None), 'director', None), 'agents', {})
     occupied = []
     for other in runtime._ordered_states():
         if other['id'] == state['id'] or other['team'] != state['team'] or not other.get('alive', True):continue
@@ -87,7 +85,7 @@ def select_route(runtime, state, failed, prefer_spg=False):
         else:
             order = orders.get(other['id']) or {}
             route = (next((r for r in rows if r['id'] == order.get('route_id')),None)
-                     or other.get('route') or (agents.get(other['id']) or {}).get('route') or {})
+                     or other.get('route') or {})
             occupied.append((geometry(route.get('waypoints', ())),set(v for v in
                 (order.get('route_id'),route.get('id'),route.get('_route_family'),route.get('_editor_source')) if v)))
     def usage(r):

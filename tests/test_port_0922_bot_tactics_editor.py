@@ -305,10 +305,10 @@ class RealRuntimeIntegrationTests(unittest.TestCase):
         sys.modules.update(self.saved)
 
     def runtime(self):
-        descriptor=self.harness._combat_descriptor();graph=_graph()
+        graph=_graph()
         def spawn(team,slot):
             row=graph['spawn_formations'][str(team)][slot];return tuple(row[:3]),row[3]
-        return self.module.BotRuntime(1,descriptor_resolver=lambda unused:descriptor,
+        return self.module.BotRuntime(1,descriptor_resolver=self.harness._class_descriptor,
             ground_probe=lambda *args:0.,physics_ground_probe=lambda *args:0.,
             direction_probe=lambda *args:{'clear':True,'slope':0.},baked_graph=graph,spawn_resolver=spawn)
 

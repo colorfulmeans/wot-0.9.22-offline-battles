@@ -32,13 +32,10 @@ class FollowupTests(unittest.TestCase):
     def test_real_adapter_retains_defense_owner_and_distinguishes_hold(self):
         from gui.mods.offline_lan_0922.ai.adapter import BotAdapter
         from gui.mods.offline_lan_0922 import spg_route_travel as travel
-        descriptor=dict(type=dict(name='SPG',tags=('SPG',)),
-            physics=dict(speedLimits=(18.,)),hull={},turret={},gun=dict(shots=()))
         state=dict(id=1,slot=0,position=(0.,0.,0.),yaw=0.,speed=0.,dt=.05,now=1.,neighbours=())
         target=dict(alive=True,visible=True,position=(90.,3.,-50.))
         for hold in (False, True):
             adapter=BotAdapter('01_karelia',7)
-            adapter.register(1,1,descriptor)
             strategic=dict(spg_mode='sortie',combat_mode='base_defense',target_id=9,
                 move_position=(0.,0.,200.) if not hold else (0.,0.,0.),
                 face_position=(0.,0.,200.),aim_position=(90.,3.,-50.),

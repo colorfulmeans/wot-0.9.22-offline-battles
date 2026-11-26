@@ -452,5 +452,4 @@ class RuntimeLotteryTests(unittest.TestCase):
             heavy['route']['waypoints']=[]
             rt._prepare_user_routes(dict(message,bot_manifest=published['bots']),True)
             self.assertIsNone(rt.states[12]['route'])
-            self.assertIsNone(rt.adapter.director.agents[12]['route'])
             self.assertEqual([],rt._manifest_entry(rt.states[12])['route']['waypoints'])

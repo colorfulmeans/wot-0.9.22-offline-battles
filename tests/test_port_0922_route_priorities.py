@@ -3,7 +3,6 @@ import copy
 import unittest
 from unittest import mock
 from gui.mods.offline_lan_0922 import bot_tactics as config, bot_tactics_runtime as planning
-from gui.mods.offline_lan_0922.ai.planner import BattleDirector
 from bot_tactics_store import graph_data
 
 
@@ -27,33 +26,25 @@ class RoutePriorityTests(unittest.TestCase):
             bad=copy.deepcopy(doc);bad['maps']['31_airfield']['default_routes'][0].update(class_tag=tag,priority=value)
             with self.assertRaises(config.TacticsError):config.canonical(bad)
 
-    def test_default_allocation_prefers_class_priority_then_spills_at_capacity(self):
+    def test_class_priority_edits_install_variants_without_changing_the_graph(self):
         graph,doc=profile();original=copy.deepcopy(graph)
         north,central,south=graph['routes']['1']
         doc['maps']['31_airfield']['default_routes']=[edit(north,'lightTank',9),edit(central,'heavyTank',9)]
         routes,status=planning.default_routes(config.canonical(doc),'31_airfield',graph)
         self.assertTrue(all(v=='baked_route_connected' for v in status.values()))
-        director=BattleDirector('31_airfield',123,baked_routes=routes)
-        preferred=next(r for r in director._routes_for(1) if r['id']==north['id'])
-        # Capacity is per vehicle class, not the parent route's total.
-        for i in range(3):
-            agent=director.register_profile(i+1,1,dict(class_tag='lightTank',roles={'brawler':1.0},vehicle_name='test'))
-            self.assertEqual(north['id'],agent['route']['id'])
-        agent=director.register_profile(100,1,dict(class_tag='lightTank',roles={'brawler':1.0},vehicle_name='test'))
-        self.assertNotEqual(north['id'],agent['route']['id'])
-        heavy=BattleDirector('31_airfield',123,baked_routes=routes)
-        self.assertEqual(central['id'],heavy.register_profile(1,1,dict(class_tag='heavyTank',roles={'scout':1.0},vehicle_name='test'))['route']['id'])
         self.assertEqual(original,graph)
         self.assertEqual(1,len([r for r in routes['1'] if r['id']==north['id']]))
 
     def test_implicit_default_five_outranks_four_but_explicit_six_wins(self):
         graph,doc=profile();central=graph['routes']['1'][1]
+        state=dict(id=1,team=1,slot=0,x=0.,y=0.,z=0.,profile=dict(class_tag='lightTank'))
         for priority,expected in ((4,False),(6,True)):
             doc['maps']['31_airfield']['default_routes']=[edit(central,'lightTank',priority)]
-            routes,unused=planning.default_routes(config.canonical(doc),'31_airfield',graph)
-            director=BattleDirector('31_airfield',123,baked_routes=routes)
-            chosen=director.register_profile(1,1,dict(class_tag='lightTank',roles={'scout':1.0}))['route']
-            self.assertEqual(expected,chosen['id'] in (central['id'],'class_lt_'+central['id']))
+            canonical=config.canonical(doc)
+            catalog,unused=planning.route_catalog(canonical,'31_airfield',graph)
+            plans,unused,unused_usage=planning.assign_initial_routes(
+                canonical,'31_airfield',graph,[state],catalog,7)
+            self.assertEqual(expected,plans[1]['id'] in (central['id'],'class_lt_'+central['id']))
 
     def test_custom_default_five_matches_a_current_baked_route_and_four_does_not(self):
         graph,doc=profile()
@@ -105,10 +96,11 @@ class RoutePriorityTests(unittest.TestCase):
         entry=doc['maps']['31_airfield'];entry['default_routes']=[]
         for route in graph['routes']['1']:
             item=edit(route,'all',0);item.pop('priority');item['disabled']=True;entry['default_routes'].append(item)
-        clean=config.canonical(doc);routes,_=planning.default_routes(clean,'31_airfield',graph)
-        director=BattleDirector('31_airfield',123,baked_routes=routes)
-        self.assertEqual((),director._routes_for(1))
-        self.assertIsNone(director.register_profile(1,1,dict(class_tag='heavyTank',roles={}))['route'])
+        clean=config.canonical(doc);catalog,_=planning.route_catalog(clean,'31_airfield',graph)
+        self.assertEqual((),catalog[1])
+        plans,unused,unused_usage=planning.assign_initial_routes(
+            clean,'31_airfield',graph,[dict(id=1,team=1,slot=0,profile=dict(class_tag='heavyTank'))],catalog,7)
+        self.assertIsNone(plans[1])
         self.assertEqual(original,graph)
         bad=copy.deepcopy(doc);bad['maps']['31_airfield']['default_routes'][0]['disabled']=1
         with self.assertRaises(config.TacticsError):config.canonical(bad)

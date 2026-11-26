@@ -20,9 +20,6 @@ from gui.mods.offline_lan_0922.ai.adapter import BotAdapter
 from gui.mods.offline_lan_0922.ai.driver import (
     LocalDriver, RECOVERY_YAW_OFFSET, TRAFFIC_WAIT_LEASE_SECONDS,
 )
-from gui.mods.offline_lan_0922.ai.planner import (
-    BattleDirector, build_vehicle_profile,
-)
 from gui.mods.offline_lan_0922.ai.navigation import (
     BAKED_FATAL_HAZARDS, BAKED_SHALLOW_WATER, _distance_2d,
     MAX_SEARCH_EXPANSIONS_PER_CATCH_UP_FRAME,
@@ -31,28 +28,6 @@ from gui.mods.offline_lan_0922.ai.navigation import (
 )
 from gui.mods.offline_lan_0922 import prebaked_navigation
 from lan_battle_server import MAP_POOL
-
-
-class _StrictNoLegacyStuff(object):
-    """Expose attributes while rejecting every mapping-style access path."""
-    def __init__(self, **attributes):
-        self.__dict__.update(attributes)
-
-    @staticmethod
-    def _forbidden(*unused_args, **unused_kwargs):
-        raise AssertionError('Operation is not allowed')
-
-    get = _forbidden
-    keys = _forbidden
-    items = _forbidden
-    values = _forbidden
-    iterkeys = _forbidden
-    iteritems = _forbidden
-    itervalues = _forbidden
-    __getitem__ = _forbidden
-    __contains__ = _forbidden
-    __iter__ = _forbidden
-    __len__ = _forbidden
 
 
 class _PendingSearch(object):
@@ -282,208 +257,20 @@ class BotAiPortTests(unittest.TestCase):
         self.assertEqual({'x': 1.0, 'y': 2.0, 'z': 3.0}, result[0]['position'])
 
     def test_adapter_returns_no_engine_objects(self):
-        descriptor = {'type': {'name': 'MS-1', 'tags': ('mediumTank',)},
-                      'physics': {'speedLimits': (18.0,)}, 'hull': {},
-                      'turret': {}, 'gun': {'shots': ()}}
         adapter = BotAdapter('01_karelia', 7)
-        adapter.register(1, 1, descriptor)
-        order = adapter.decide({
+        order = adapter.decide_with_order({
             'id': 1, 'slot': 0, 'position': (0, 0, 0),
             'yaw': 0, 'speed': 0,
             'dt': 0.05, 'now': 1, 'health': 100, 'max_health': 100,
             'contacts': (), 'neighbours': (),
-        }, lambda yaw: True)
+        }, {'combat_mode': 'route', 'move_position': (0.0, 0.0, 40.0)},
+            lambda yaw: True)
         self.assertEqual(1, order['bot_id'])
         self.assertIn('throttle', order)
         self.assertIsInstance(order['move_position'], tuple)
 
-    def test_adapter_passes_signed_speed_to_the_route_planner(self):
-        descriptor = {'type': {'name': 'MS-1', 'tags': ('mediumTank',)},
-                      'physics': {'speedLimits': (18.0,)}, 'hull': {},
-                      'turret': {}, 'gun': {'shots': ()}}
-        adapter = BotAdapter('01_karelia', 7)
-        adapter.register(1, 1, descriptor)
-        observed = []
-        original_order_for = adapter.director.order_for
-
-        def order_for(*args, **kwargs):
-            observed.append(args[3])
-            return original_order_for(*args, **kwargs)
-
-        adapter.director.order_for = order_for
-        adapter.decide({
-            'id': 1, 'slot': 0, 'position': (0, 0, 0),
-            'yaw': 0, 'speed': -3.5,
-            'dt': 0.05, 'now': 1, 'health': 100, 'max_health': 100,
-            'contacts': (), 'neighbours': (),
-        }, lambda unused_yaw: True)
-
-        self.assertEqual([-3.5], observed)
-
-    def test_vehicle_profile_reads_native_1513_components_as_attributes(self):
-        descriptor = _StrictNoLegacyStuff(
-            type=_StrictNoLegacyStuff(
-                name='Strict heavy', tags=('heavyTank',)),
-            physics={'speedLimits': (18.0, 7.0)},
-            hull=_StrictNoLegacyStuff(primaryArmor=(110.0, 135.0, 95.0)),
-            turret=_StrictNoLegacyStuff(primaryArmor=180.0),
-            gun=_StrictNoLegacyStuff(shots=(
-                _StrictNoLegacyStuff(
-                    speed=900.0,
-                    shell=_StrictNoLegacyStuff(
-                        kind='ARMOR_PIERCING',
-                        piercingPower=(150.0, 170.0),
-                        damage=(300.0, 340.0))),
-                _StrictNoLegacyStuff(
-                    speed=640.0,
-                    shell=_StrictNoLegacyStuff(
-                        kind='HIGH_EXPLOSIVE',
-                        piercingPower=(42.0, 58.0),
-                        damage=(410.0, 450.0))),
-            )),
-        )
-
-        profile = build_vehicle_profile(descriptor)
-
-        self.assertEqual('heavyTank', profile['class_tag'])
-        self.assertEqual('Strict heavy', profile['vehicle_name'])
-        self.assertEqual(18.0, profile['speed'])
-        self.assertEqual(180.0, profile['armor'])
-        self.assertEqual((
-            {'index': 0, 'kind': 'ARMOR_PIERCING', 'name': '',
-             'penetration': 160.0, 'damage': 320.0, 'speed': 900.0},
-            {'index': 1, 'kind': 'HIGH_EXPLOSIVE', 'name': '',
-             'penetration': 50.0, 'damage': 430.0, 'speed': 640.0},
-        ), profile['shells'])
-
-    @staticmethod
-    def _strategy_profile(class_tag, speed, armor):
-        return build_vehicle_profile({
-            'type': {'name': class_tag, 'tags': (class_tag,)},
-            'physics': {'speedLimits': (speed, 6.0)},
-            'hull': {'primaryArmor': armor},
-            'turret': {'primaryArmor': armor},
-            'gun': {'shots': ()},
-        })
-
-    def test_karelia_strategy_matches_vehicle_classes_from_both_spawns(self):
-        profiles = {
-            'H': self._strategy_profile('heavyTank', 12.0, 180.0),
-            'L': self._strategy_profile('lightTank', 20.0, 35.0),
-            'M': self._strategy_profile('mediumTank', 18.0, 85.0),
-            'T': self._strategy_profile('AT-SPG', 11.0, 110.0),
-            'S': self._strategy_profile('SPG', 10.0, 30.0),
-        }
-        expected = {
-            'H': 'east_shelf',
-            'L': 'middle_road',
-            'M': 'west_ridge',
-            'T': 'west_ridge',
-            'S': 'middle_road',
-        }
-
-        for team in (1, 2):
-            for label, profile in profiles.items():
-                director = BattleDirector('01_karelia', 41)
-                agent = director.register_profile(
-                    100 + team, team, profile, label)
-                with self.subTest(team=team, vehicle_class=label):
-                    self.assertEqual(expected[label], agent['route']['id'])
-
-    def test_karelia_common_lineup_orders_keep_primary_class_lanes(self):
-        profiles = {
-            'H': self._strategy_profile('heavyTank', 12.0, 180.0),
-            'L': self._strategy_profile('lightTank', 20.0, 35.0),
-            'M': self._strategy_profile('mediumTank', 18.0, 85.0),
-            'T': self._strategy_profile('AT-SPG', 11.0, 110.0),
-            'S': self._strategy_profile('SPG', 10.0, 30.0),
-        }
-        expected = {
-            'H': 'east_shelf', 'L': 'middle_road',
-            'M': 'west_ridge', 'T': 'west_ridge',
-            'S': 'middle_road',
-        }
-        lineups = (
-            'HHHHHLLLLMMMTTS',
-            'LLLLMMMTTSHHHHH',
-        )
-
-        for team in (1, 2):
-            for lineup in lineups:
-                director = BattleDirector('01_karelia', 73)
-                assigned = []
-                for index, label in enumerate(lineup):
-                    agent = director.register_profile(
-                        index + 1, team, profiles[label],
-                        '%s-%d' % (label, index))
-                    assigned.append((label, agent['route']['id']))
-                with self.subTest(team=team, lineup=lineup):
-                    self.assertTrue(all(route is not None for label,route in assigned))
-                    self.assertTrue(all(n<=3 for n in director.route_usage.values()))
-                    self.assertEqual(len(lineup)-1,sum(director.route_usage.values()))
-                    self.assertTrue(all(key[2]!='SPG' for key in director.route_usage))
-
-    def test_spg_uses_battery_route_without_consuming_frontline_capacity(self):
-        director = BattleDirector('04_himmelsdorf', 29)
-        profile = self._strategy_profile('SPG', 10.0, 30.0)
-
-        first = director.register_profile(501, 1, profile, 'Battery one')
-        second = director.register_profile(502, 1, profile, 'Battery two')
-
-        self.assertEqual('rear_guard', first['route']['id'])
-        self.assertNotEqual(first['route']['id'], second['route']['id'])
-        self.assertEqual({}, director.route_usage)
-
-    def test_baked_route_geometry_uses_current_static_strategy_metadata(self):
-        baked = {'1': [], '2': []}
-        route_ids = ('west_ridge', 'middle_road', 'east_shelf')
-        for team in (1, 2):
-            for index, route_id in enumerate(route_ids):
-                baked[str(team)].append({
-                    'id': route_id,
-                    'capacity': 1,
-                    'risk': 0.01,
-                    'role_weights': {'scout': 0.0},
-                    'waypoints': (
-                        (float(index), float(team), False),
-                        (float(index + 10), float(team), True),
-                    ),
-                })
-            baked[str(team)].append({
-                'id': 'custom_route',
-                'capacity': 9,
-                'risk': 0.33,
-                'role_weights': {'support': 0.77},
-                'waypoints': ((20.0, float(team), False),),
-            })
-
-        director = BattleDirector(
-            '01_karelia', 19, baked_routes=baked)
-
-        for team in (1, 2):
-            routes = dict((route['id'], route)
-                          for route in director._routes_for(team))
-            with self.subTest(team=team):
-                self.assertEqual(
-                    baked[str(team)][1]['waypoints'],
-                    routes['middle_road']['waypoints'])
-                self.assertEqual(6, routes['east_shelf']['capacity'])
-                self.assertEqual(
-                    1.0, routes['middle_road']['role_weights']['scout'])
-                self.assertEqual(
-                    1.0,
-                    routes['middle_road']['class_weights']['lightTank'])
-                self.assertEqual(9, routes['custom_route']['capacity'])
-                self.assertEqual(
-                    {'support': 0.77},
-                    routes['custom_route']['role_weights'])
-
     def test_adapter_preserves_face_and_commanded_hold_semantics(self):
-        descriptor = {'type': {'name': 'MS-1', 'tags': ('mediumTank',)},
-                      'physics': {'speedLimits': (18.0,)}, 'hull': {},
-                      'turret': {}, 'gun': {'shots': ()}}
         adapter = BotAdapter('01_karelia', 7)
-        adapter.register(1, 1, descriptor)
         order = adapter.decide_with_order({
             'id': 1, 'slot': 0,
             'position': (0.0, 0.0, 0.0), 'yaw': 0.0,
@@ -507,13 +294,9 @@ class BotAiPortTests(unittest.TestCase):
         self.assertAlmostEqual(math.atan2(20.0, 40.0), order['target_yaw'])
 
     def test_adapter_reports_pending_navigation_as_wait_not_arrival(self):
-        descriptor = {'type': {'name': 'MS-1', 'tags': ('mediumTank',)},
-                      'physics': {'speedLimits': (18.0,)}, 'hull': {},
-                      'turret': {}, 'gun': {'shots': ()}}
         adapter = BotAdapter(
             '01_karelia', 7,
             navigation_target=lambda unused_id, position, *unused: position)
-        adapter.register(1, 1, descriptor)
 
         order = adapter.decide_with_order({
             'id': 1, 'slot': 0,
@@ -535,72 +318,6 @@ class BotAiPortTests(unittest.TestCase):
         # deliberate arrived/combat facing is exercised by the preceding test.
         self.assertEqual(0.0, order['turn'])
         self.assertEqual(0.25, order['target_yaw'])
-
-    def test_local_director_does_not_jiggle_without_confirmed_cover(self):
-        descriptor = {
-            'type': {'name': 'heavy', 'tags': ('heavyTank',)},
-            'physics': {'speedLimits': (12.0,)},
-            'hull': {'primaryArmor': 180.0},
-            'turret': {'primaryArmor': 180.0,
-                       'circularVisionRadius': 400.0},
-            'gun': {'shots': ()},
-        }
-        director = BattleDirector('04_himmelsdorf', 45)
-        agent = director.register(401, 1, descriptor, 'Jiggler')
-        agent['personality'].update({
-            'caution': 0.2, 'patience': 0.2,
-            'aggression': 0.3, 'jiggle': 0.95,
-        })
-        position = (185.0, 0.0, -82.0)
-        target = (185.0, 0.0, -22.0)
-        modes = set()
-        throttle_values = set()
-
-        for tick in range(600):
-            now = tick * 0.2
-            director.update_contact(
-                1, 402, 2, target, 1000, 1000,
-                'heavyTank', True, now)
-            order = director.order_for(
-                401, position, 0.0, 0.0, 1000, 1000, now)
-            modes.add(order['combat_mode'])
-            throttle_values.add(order['throttle_override'])
-
-        self.assertNotIn('jiggle_forward', modes)
-        self.assertNotIn('jiggle_back', modes)
-        self.assertEqual({None}, throttle_values)
-
-    def test_discovered_artillery_has_priority_over_a_soft_regular_target(self):
-        director = BattleDirector('04_himmelsdorf', 46)
-        profile = self._strategy_profile('mediumTank', 18.0, 85.0)
-        director.register_profile(401, 1, profile, 'Hunter')
-        director.update_contact(
-            1, 402, 2, (0.0, 0.0, 100.0), 10, 1000,
-            'heavyTank', True, 1.0, shootable_by_ids=(401,))
-        director.update_contact(
-            1, 403, 2, (0.0, 0.0, 130.0), 500, 500,
-            'SPG', True, 1.0, shootable_by_ids=(401,))
-
-        order = director.order_for(
-            401, (0.0, 0.0, 0.0), 0.0, 0.0, 1000, 1000, 1.0)
-
-        self.assertEqual(403, order['target_id'])
-
-    def test_unspotted_artillery_does_not_override_a_visible_target(self):
-        director = BattleDirector('04_himmelsdorf', 47)
-        profile = self._strategy_profile('mediumTank', 18.0, 85.0)
-        director.register_profile(401, 1, profile, 'Hunter')
-        director.update_contact(
-            1, 402, 2, (0.0, 0.0, 100.0), 800, 1000,
-            'heavyTank', True, 1.0, shootable_by_ids=(401,))
-        director.update_contact(
-            1, 403, 2, (0.0, 0.0, 130.0), 500, 500,
-            'SPG', False, 1.0, shootable_by_ids=(401,))
-
-        order = director.order_for(
-            401, (0.0, 0.0, 0.0), 0.0, 0.0, 1000, 1000, 1.0)
-
-        self.assertEqual(402, order['target_id'])
 
     def test_navigation_accepts_caller_probes(self):
         grid = TerrainGrid(lambda x, z, hint_y: 0.0,
@@ -1988,76 +1705,6 @@ class BotAiPortTests(unittest.TestCase):
         graph['game_version'] = 'locally-repacked-client'
         self.assertIs(graph, prebaked_navigation._validate(
             graph, '01_karelia'))
-
-    def test_baked_routes_keep_validated_team_endpoints_unchanged(self):
-        team_one = ((-2.0, -350.0, False),
-                    (40.0, -120.0, True),
-                    (-2.0, 350.0, False))
-        team_two = tuple(reversed(team_one))
-        director = BattleDirector('95_lost_city', 7, baked_routes={
-            '1': ({'id': 'baked-1', 'waypoints': team_one},),
-            '2': ({'id': 'baked-2', 'waypoints': team_two},),
-        })
-
-        first = director.register_profile(1, 1, {'roles': {}}, 'First')
-        second = director.register_profile(2, 2, {'roles': {}}, 'Second')
-
-        self.assertEqual(team_one, first['route']['waypoints'])
-        self.assertEqual(team_two, second['route']['waypoints'])
-        self.assertEqual(3, len(first['route']['waypoints']))
-
-    def test_route_hold_metadata_does_not_pause_local_director(self):
-        director = BattleDirector('07_lakeville', 'no-route-holds')
-        agent = director.register_profile(
-            92, 1, {'roles': {}, 'vehicle_name': 'medium'},
-            'Continuous traveller')
-        agent['route'] = {
-            'waypoints': (
-                (0.0, -40.0, False),
-                (0.0, -20.0, True),
-                (0.0, 80.0, False),
-            )}
-        agent['route_started'] = True
-        agent['waypoint_index'] = 1
-
-        target = director._route_position(
-            agent, (0.0, 0.0, -20.0), 3.0, 0.0)
-
-        self.assertEqual((0.0, 0.0, 80.0), target)
-        self.assertEqual(2, agent['waypoint_index'])
-
-    def test_only_a_forward_moving_spawn_skips_its_rear_connector(self):
-        descriptor = {
-            'type': {'name': 'medium', 'tags': ('mediumTank',)},
-            'physics': {'speedLimits': (18.0,)}, 'hull': {},
-            'turret': {}, 'gun': {'shots': ()}}
-        cases = (
-            (0.0, (0.0, 0.0, -65.0), 1),
-            (-2.0, (0.0, 0.0, -65.0), 1),
-            (2.0, (40.0, 0.0, 40.0), 2),
-        )
-        for speed, expected, waypoint_index in cases:
-            director = BattleDirector('07_lakeville', 'forward-join')
-            agent = director.register(
-                93, 1, descriptor, 'Forward join bot')
-            agent['route'] = {
-                'waypoints': (
-                    (0.0, -40.0, False),
-                    (0.0, -65.0, False),
-                    (40.0, 40.0, False),
-                )}
-            agent['route_started'] = False
-
-            order = director.order_for(
-                93, (0.0, 0.0, -20.0), 0.0, speed,
-                1000, 1000, 0.0)
-
-            with self.subTest(speed=speed):
-                self.assertEqual(expected, order['move_position'])
-                self.assertEqual(waypoint_index, agent['waypoint_index'])
-                self.assertEqual(
-                    (0.0, 0.0, -20.0), order['route_anchor'])
-                self.assertTrue(order['route_join'])
 
     def test_normal_route_turn_keeps_full_throttle(self):
         driver = LocalDriver()

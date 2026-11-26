@@ -389,9 +389,6 @@ class AirfieldLiveEgressTests(unittest.TestCase):
                 self.assertEqual('pending', state['navigation_status'])
 
     def test_pending_real_navigator_releases_driver_at_simulated_cadences(self):
-        descriptor = {'type': {'name': 'fixture', 'tags': ('mediumTank',)},
-                      'physics': {'speedLimits': (18.0,)}, 'hull': {},
-                      'turret': {}, 'gun': {'shots': ()}}
         yaws = (-1.6190630752041757, -0.33802882616391305,
                 -0.35569306375834053, 2.6040338608473577,
                 -0.25993647587052265, 2.6744495558238204)
@@ -404,7 +401,6 @@ class AirfieldLiveEgressTests(unittest.TestCase):
                             ('join', bot_id, nav.grid.cell_for(position)), state['now'])
                     adapter = BotAdapter('31_airfield', 7,
                                          navigation_target=navigation_target)
-                    adapter.register(bot, 1, descriptor)
                     state = {'id': bot, 'slot': 0, 'position': current,
                              'yaw': yaw, 'speed': 0.0, 'dt': 1.0 / fps,
                              'now': 0.0, 'neighbours': ()}

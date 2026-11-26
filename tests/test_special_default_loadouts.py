@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT/'src/res/scripts/client'), str(ROOT/'server'), str(ROOT/'tests')]
 from gui.mods.offline_lan_0922 import default_loadouts as policy
 from gui.mods.offline_lan_0922 import default_crew
-from gui.mods.offline_lan_0922.ai.planner import build_vehicle_profile, select_shell_index
+from gui.mods.offline_lan_0922.bot_profile import vehicle_profile
 from server_bot_ai import BotPlanner
 from lan_battle_server import BattleState
 
@@ -37,7 +37,7 @@ class SpecialDefaultsTests(unittest.TestCase):
         if roles is None:
             return None
         from gui.mods.offline_lan_0922.ammo_policy import allocation
-        counts = allocation(build_vehicle_profile(descriptor), descriptor.gun.maxAmmo, len(descriptor.gun.shots))
+        counts = allocation(vehicle_profile(descriptor), descriptor.gun.maxAmmo, len(descriptor.gun.shots))
         result = []
         for role in ('standard', 'premium', 'he'):
             for index in sorted(roles):
@@ -58,7 +58,7 @@ class SpecialDefaultsTests(unittest.TestCase):
             piercingPower=(105,105), damage=(480,480)), speed=1173))
         descriptor.gun.shots[0].shell.kind = 'ARMOR_PIERCING_CR'
         descriptor.gun.maxAmmo = 72
-        profile = BattleState._sanitize_bot_profile(build_vehicle_profile(descriptor))
+        profile = BattleState._sanitize_bot_profile(vehicle_profile(descriptor))
         state = _BotAmmoState(descriptor, profile)
         self.assertEqual({1: 'standard', 0: 'premium'}, state.categories)
         self.assertEqual([14, 58, 0], state.remaining)
@@ -70,20 +70,19 @@ class SpecialDefaultsTests(unittest.TestCase):
         roles = policy.descriptor_roles(descriptor)
         self.assertEqual({2: 'standard', 1: 'premium'}, roles)
         self.assertEqual([102, 18, 101, 5], self.bot_ammo(descriptor))
-        profile = build_vehicle_profile(descriptor)
+        profile = vehicle_profile(descriptor)
         wire = BattleState._sanitize_bot_profile(profile)
         self.assertEqual(roles, policy.profile_roles(wire))
         for plans in (False, True):
             self.assertEqual(2, BotPlanner._shell_index(wire, {'armor': 0}, {'aggression': .5},
                                                       {'ammo_remaining': [0, 9, 14]}, plans))
-        self.assertEqual(2, select_shell_index(profile, {'armor': 0}, {'aggression': .5}))
         self.assertEqual(1, BotPlanner._shell_index(wire, {'armor': 0}, {'aggression': .5},
                                                   {'ammo_remaining': [0, 9, 0]}, False))
 
     def test_worker_initial_inventory_and_load_use_the_same_roles(self):
         from gui.mods.offline_lan_0922.bot_runtime import _BotAmmoState
         descriptor = self.descriptor()
-        state = _BotAmmoState(descriptor, build_vehicle_profile(descriptor))
+        state = _BotAmmoState(descriptor, vehicle_profile(descriptor))
         self.assertEqual([0, 5, 18], state.remaining)
         self.assertEqual((2, 2), (state.loaded, state.next))
         self.assertEqual(2, state._available(0))
@@ -100,7 +99,7 @@ class SpecialDefaultsTests(unittest.TestCase):
             descriptor.gun.shots.insert(0, types.SimpleNamespace(shell=types.SimpleNamespace(
                 name='excluded_native_round', compactDescr=999, kind='HIGH_EXPLOSIVE',
                 piercingPower=(1, 1), damage=(1, 1)), speed=100))
-            state = _BotAmmoState(descriptor, build_vehicle_profile(descriptor))
+            state = _BotAmmoState(descriptor, vehicle_profile(descriptor))
             row = _ammo_row(state)
             self.assertEqual(state.shell_count, len(row[0]), vehicle)
             self.assertEqual(state.shell_count, len(row[1]), vehicle)
@@ -113,7 +112,7 @@ class SpecialDefaultsTests(unittest.TestCase):
 
     def test_lower_penetration_gold_ap_remains_primary(self):
         descriptor = self.descriptor('ussr:R49_SU100Y')
-        profile = BattleState._sanitize_bot_profile(build_vehicle_profile(descriptor))
+        profile = BattleState._sanitize_bot_profile(vehicle_profile(descriptor))
         self.assertEqual({1: 'standard', 0: 'premium', 2: 'he'}, policy.profile_roles(profile))
         self.assertEqual(1, BotPlanner._shell_index(profile, {'armor': 0}, {'aggression': .5}, None, True))
         self.assertEqual(1, BotPlanner._shell_index(profile, {'armor': 0}, {'aggression': .5}, None, False))

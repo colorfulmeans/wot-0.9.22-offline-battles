@@ -281,6 +281,40 @@ def default_routes(profile, name, graph):
     return result, outcomes
 
 
+def route_catalog(profile, name, graph):
+    """Return each team's routes from the baked graph with Default edits.
+
+    Waypoints become (x, z, hold) tuples and a class deletion writes a zero
+    class weight. A route without a usable waypoint is left out.
+    """
+    routes, outcomes = default_routes(profile, name, graph)
+    catalog = {}
+    for team in (1, 2):
+        rows = []
+        for raw in routes.get(str(team), ()) or ():
+            if not isinstance(raw, dict):
+                continue
+            waypoints = []
+            for point in raw.get('waypoints', ()) or ():
+                try:
+                    waypoints.append((float(point[0]), float(point[1]),
+                                      bool(point[2]) if len(point) > 2 else False))
+                except (TypeError, ValueError, IndexError):
+                    continue
+            if not waypoints:
+                continue
+            route = dict(raw)
+            route['role_weights'] = dict(route.get('role_weights', {}) or {})
+            if 'class_weights' in route:
+                route['class_weights'] = dict(route.get('class_weights', {}) or {})
+            for tag in route.get('_editor_disabled_classes', ()):
+                route.setdefault('class_weights', {})[tag] = 0.0
+            route['waypoints'] = tuple(waypoints)
+            rows.append(route)
+        catalog[team] = tuple(rows)
+    return catalog, outcomes
+
+
 def assign_initial_routes(profile, name, graph, states, catalog, seed):
     """Spread classes over whole-team lanes before using reserve/overflow.
 

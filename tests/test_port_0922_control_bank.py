@@ -247,7 +247,7 @@ class ControlBankTests(unittest.TestCase):
         self.assertFalse(self.calls[-1][2])
 
     def test_control_deadline_uses_callback_time_and_restores_temporary_scope(self):
-        self.runtime._decision_cache[11] = (('local',), 1.1)
+        self.runtime._decision_cache[11] = (('hold',), 1.1)
         observed = []
 
         def observe(step, now, unused_players, unused_neighbours):

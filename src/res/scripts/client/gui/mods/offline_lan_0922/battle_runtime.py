@@ -20,7 +20,7 @@ import traceback
 from gui.mods.offline_lan_0922 import water_surfaces
 
 from gui.mods.offline_lan_0922.ai import maps as tactical_maps
-from gui.mods.offline_lan_0922.ai import planner as bot_planner
+from gui.mods.offline_lan_0922 import bot_lineup
 from gui.mods.offline_lan_0922.ai import tactical_geometry
 from gui.mods.offline_lan_0922.ai.driver import gun_yaw_limits, NAVIGATION_MAX_GRADE
 from gui.mods.offline_lan_0922.artillery_controller import \
@@ -5528,7 +5528,7 @@ class BattleRuntime(object):
             player_profile = self._vehicle_profile(
                 planning_descriptor.type)
             tier = int(player_profile['level'])
-            tier_mode = bot_planner.normalize_bot_tier_mode(
+            tier_mode = bot_lineup.normalize_bot_tier_mode(
                 self._start_message.get('bot_tier_mode'))
             excluded_names = set(
                 self._start_message.get('bot_excluded_vehicles') or ())
@@ -5543,7 +5543,7 @@ class BattleRuntime(object):
                         all_candidates.append(self._vehicle_profile(entry))
             candidates = [
                 candidate for candidate in all_candidates
-                if bot_planner.vehicle_in_bot_tier_mode(
+                if bot_lineup.vehicle_in_bot_tier_mode(
                     tier, candidate['level'], tier_mode)
             ]
             if not candidates:
@@ -5578,7 +5578,7 @@ class BattleRuntime(object):
                         int(value.get('team', 0)),
                         int(value.get('slot', 0)),
                         int(value.get('id', 0)))))
-            lineup_random = random.Random(bot_planner.stable_seed(
+            lineup_random = random.Random(bot_lineup.stable_seed(
                 'battle-lineup-v1', self._start_message.get('round_id'),
                 self._start_message.get('map'), seed_players, seed_bots))
 
@@ -5618,7 +5618,7 @@ class BattleRuntime(object):
 
             available_tiers = sorted(set(
                 int(candidate['level']) for candidate in candidates))
-            match_tiers = list(bot_planner.bot_match_tiers(
+            match_tiers = list(bot_lineup.bot_match_tiers(
                 tier, tier_mode, lineup_random.random(),
                 lineup_random.random(), available_tiers, required_tiers=[
                     profile['level'] for profiles in humans_by_team.values()
@@ -5629,8 +5629,8 @@ class BattleRuntime(object):
                         match_tiers.append(profile['level'])
                     if not any(
                             candidate['level'] == profile['level'] and
-                            bot_planner.vehicle_match_class(candidate) ==
-                            bot_planner.vehicle_match_class(profile)
+                            bot_lineup.vehicle_match_class(candidate) ==
+                            bot_lineup.vehicle_match_class(profile)
                             for candidate in candidates):
                         candidates.append(profile)
             match_tiers = tuple(sorted(set(match_tiers)))
@@ -5641,7 +5641,7 @@ class BattleRuntime(object):
                 slots=set(int(r.get('slot',0)) for r in bots_by_team[side])
                 pinned_names=[r['vehicle'] for r in self._start_message.get('bot_lineup') or ()
                               if r.get('team')==side and r.get('slot') in slots and r.get('vehicle')]
-                pinned_tags=[bot_planner.vehicle_match_class(v) for v in all_candidates if v['name'] in pinned_names]
+                pinned_tags=[bot_lineup.vehicle_match_class(v) for v in all_candidates if v['name'] in pinned_names]
                 row=room_choices[str(side)]
                 needed.update(class_policy.required(row,pinned_tags))
                 if len(slots)>len(pinned_names) and not row['random']:groups.append([tag for tag in bot_tactics.CLASSES if row[tag]])
@@ -5654,7 +5654,7 @@ class BattleRuntime(object):
                               (row.get('nation') or row.get('vehicle_class'))]
             slot_tiers = [[v['level'] for v in candidates if v['name'] not in excluded_names
                            and lineup_slots.matches(row, v)] for row in filtered_slots]
-            resolved=class_policy.matching_tiers([(v['level'],bot_planner.vehicle_match_class(v)) for v in candidates
+            resolved=class_policy.matching_tiers([(v['level'],bot_lineup.vehicle_match_class(v)) for v in candidates
                                                   if v['name'] not in excluded_names],needed,
                 [v['level'] for values in humans_by_team.values() for v in values],match_tiers,tier_mode=='random',groups,slot_tiers)
             if resolved is None:raise ValueError('No legal battle-tier window can supply the selected Bot classes')
@@ -5662,9 +5662,9 @@ class BattleRuntime(object):
             team_size = max(
                 len(humans_by_team[team]) + len(bots_by_team[team])
                 for team in (1, 2))
-            requirements = bot_planner.shared_human_requirements(
+            requirements = bot_lineup.shared_human_requirements(
                 humans_by_team)
-            template = bot_planner.build_match_template(
+            template = bot_lineup.build_match_template(
                 candidates, team_size, player_profile, match_tiers,
                 lineup_random, requirements)
             validated_names = set(value['name'] for value in all_candidates)
@@ -5690,7 +5690,7 @@ class BattleRuntime(object):
                 if key in bot_slots:
                     pinned_vehicles[key] = raw['vehicle']
             artillery_names = set(candidate['name'] for candidate in all_candidates
-                                  if bot_planner.vehicle_match_class(candidate) == 'SPG')
+                                  if bot_lineup.vehicle_match_class(candidate) == 'SPG')
             from gui.mods.offline_lan_0922 import lineup_slots
             for row in self._start_message.get('bot_lineup') or ():
                 key = (row.get('team'), row.get('slot'))
@@ -5704,7 +5704,7 @@ class BattleRuntime(object):
             assignments = dict(pinned_vehicles)
             for team in (1, 2):
                 team_bots = bots_by_team[team]
-                picked = bot_planner.remaining_match_template(
+                picked = bot_lineup.remaining_match_template(
                     template, humans_by_team[team])
                 # Human tier/class reservations may mirror their exact tank.
                 # Apply profile exclusions after removing human slots so that
@@ -5713,28 +5713,28 @@ class BattleRuntime(object):
                           if entry['name'] not in excluded_names]
                 # Restore automatic SPGs while counting human artillery in
                 # the per-team quota. Explicit host overrides remain intact.
-                human_spgs = sum(bot_planner.vehicle_match_class(entry) == 'SPG'
+                human_spgs = sum(bot_lineup.vehicle_match_class(entry) == 'SPG'
                                  for entry in humans_by_team[team])
                 from gui.mods.offline_lan_0922 import team_class_policy as class_policy
-                pinned_tags=[bot_planner.vehicle_match_class(v) for (side,slot),name in pinned_vehicles.items()
+                pinned_tags=[bot_lineup.vehicle_match_class(v) for (side,slot),name in pinned_vehicles.items()
                              if side==team for v in all_candidates if v['name']==name]
                 pinned_spgs=pinned_tags.count('SPG')
                 choices=bot_tactics.team_class_choices(self._start_message.get('team_classes'))[str(team)]
-                team_candidates=[v for v in automatic_candidates if class_policy.allows(choices,bot_planner.vehicle_match_class(v))]
-                picked=[v for v in picked if class_policy.allows(choices,bot_planner.vehicle_match_class(v))]
+                team_candidates=[v for v in automatic_candidates if class_policy.allows(choices,bot_lineup.vehicle_match_class(v))]
+                picked=[v for v in picked if class_policy.allows(choices,bot_lineup.vehicle_match_class(v))]
                 auto_bots=[raw for raw in team_bots if (team,int(raw.get('slot',0))) not in pinned_vehicles]
                 limit=class_policy.artillery_limit(len(humans_by_team[team])+len(team_bots),human_spgs,pinned_spgs,choices)
                 required=class_policy.required(choices,pinned_tags)
                 reason=class_policy.validate(choices,len(auto_bots),pinned_tags,
-                    set(bot_planner.vehicle_match_class(v) for v in team_candidates),limit)
+                    set(bot_lineup.vehicle_match_class(v) for v in team_candidates),limit)
                 if reason:raise ValueError('Invalid class selection for team %d: %s'%(team,reason))
                 reserved=[]
                 for tag in required:
-                    pool=[v for v in team_candidates if bot_planner.vehicle_match_class(v)==tag]
+                    pool=[v for v in team_candidates if bot_lineup.vehicle_match_class(v)==tag]
                     reserved.append(lineup_random.choice(pool))
-                picked=reserved+bot_planner.select_bot_lineup(
+                picked=reserved+bot_lineup.select_bot_lineup(
                     picked or team_candidates,len(auto_bots)-len(reserved),
-                    spg_limit=max(0,limit-sum(bot_planner.vehicle_match_class(v)=='SPG' for v in reserved)),
+                    spg_limit=max(0,limit-sum(bot_lineup.vehicle_match_class(v)=='SPG' for v in reserved)),
                     fallback_candidates=team_candidates)
                 picked = list(picked[:len(auto_bots)])
                 # The template balances roles and tiers, not vehicle names.
@@ -5744,8 +5744,8 @@ class BattleRuntime(object):
                 for entry in picked:
                     pool = [candidate for candidate in team_candidates
                             if candidate['level'] == entry['level'] and
-                            bot_planner.vehicle_match_class(candidate) ==
-                            bot_planner.vehicle_match_class(entry)]
+                            bot_lineup.vehicle_match_class(candidate) ==
+                            bot_lineup.vehicle_match_class(entry)]
                     if pool:
                         randomized.append(lineup_random.choice(pool))
                 picked = randomized
@@ -11557,6 +11557,7 @@ class BattleRuntime(object):
         ('bot_physics', '_physics_params'),
         ('bot_motion_probe', '_motion_probe_cache'),
         ('bot_server_orders', '_server_orders'),
+        ('bot_route_catalog', '_route_catalog'),
         ('bot_spot_profiles', '_spotting_profiles'),
         ('bot_cover_queue', '_cover_queue'),
         ('bot_receipts', '_world_receipt_waiting'),
@@ -11576,12 +11577,6 @@ class BattleRuntime(object):
         ('nav_segment_cache', '_segment_cache'),
         ('nav_ground_cache', '_ground_cache'),
         ('nav_failed_edges', '_failed_edges'),
-    )
-
-    _MEASURED_DIRECTOR_STRUCTURES = (
-        ('ai_agents', 'agents'),
-        ('ai_contacts', 'contacts'),
-        ('ai_map_data', 'map_data'),
     )
 
     _MEASURED_DESTRUCTIBLE_GLOBALS = (
@@ -11632,9 +11627,6 @@ class BattleRuntime(object):
         rows.extend((name, getattr(getattr(navigator, 'grid', None),
                                    attribute, None))
                     for name, attribute in self._MEASURED_NAV_GRID_STRUCTURES)
-        director = getattr(getattr(bots, 'adapter', None), 'director', None)
-        rows.extend((name, getattr(director, attribute, None))
-                    for name, attribute in self._MEASURED_DIRECTOR_STRUCTURES)
         rows.extend((name, getattr(self._destructibles, attribute, None))
                     for name, attribute
                     in self._MEASURED_DESTRUCTIBLE_GLOBALS)
@@ -28654,10 +28646,10 @@ class BattleRuntime(object):
             'native_remote': bool(getattr(
                 self._remote_factory, 'native_entities', False)),
             'properties': properties,
-            'spot_visible': bot_planner.bot_initially_visible(
+            'spot_visible': bot_lineup.bot_initially_visible(
                 int(state.get('team', 1)),
                 int(getattr(self.client, 'team', 1)), True),
-            'spot_marker_visible': bot_planner.bot_initially_visible(
+            'spot_marker_visible': bot_lineup.bot_initially_visible(
                 int(state.get('team', 1)),
                 int(getattr(self.client, 'team', 1)), True),
             'spot_until': 0.0, 'radio_spot_until': 0.0,
@@ -30493,7 +30485,7 @@ class BattleRuntime(object):
         pose = self._turret_detachment_pose(record, state, entity)
         if pose is None:
             return False
-        seed = bot_planner.stable_seed(
+        seed = bot_lineup.stable_seed(
             'turret-obstacle-v1',
             (self._start_message or {}).get('round_id'), key)
         plan = self._run_optional_feature(
