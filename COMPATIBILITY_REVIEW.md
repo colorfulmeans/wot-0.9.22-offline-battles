@@ -473,7 +473,7 @@ module triangles/picking, and camera rotation.
 ### Test baseline review and evidence boundary
 
 `tools/audit_test_baselines.py` inventories all test files, literal battle-start
-inputs, current-profile references and historical scene replay hooks. The
+inputs and current-profile references. The
 October 30 inventory examined 484 files and flagged 45 for input-boundary
 review. A missing literal `bot_tactics` is not by itself a defect: many are
 isolated solver/ownership tests or receive their start message through helpers.
@@ -481,8 +481,8 @@ isolated solver/ownership tests or receive their start message through helpers.
 | Boundary | Current treatment |
 | --- | --- |
 | First-run/restored route baseline | `default_tactics_owner_20261025.json` and the current `bot_tactics.default_profile()` remain authoritative; the complete owner document and all map/parking exits are checked by the adopted-default launcher tests. No route data is changed here. |
-| Great Wall current allocation | The configured scenario now passes the current profile into both runtime and server planner; mid-route actors rejoin through the production planner. The old empty-profile/frozen-lane replay remains a separately identified physical regression. Its targets and deadlines do not define correct authored routes. |
-| Himmelsdorf and Fjords departure scenarios | Current-allocation paths now receive the current profile in both planner and runtime. Historic Himmelsdorf build-506 lane replay remains isolated. Flattened heights and controlled probes do not certify native city navigation. |
+| Great Wall gatehouse | The gatehouse scenes are removed. The empty-profile/frozen-lane replay left with the local planner, and the opposed-hull scene on the old built-in `wall_pass` route left with the old routes. Their Default `valley` replacement is removed too: it drove Bots on the flat graph without the client's avoidance and collision owners, with the 4 m cells as the only hull authority, while Windows play passes the gatehouse. |
+| Himmelsdorf and Fjords departure scenarios | Current-allocation paths now receive the current profile in both planner and runtime. The historic Himmelsdorf build-506 lane replay was removed with the old routes; the departure scene draws the Default lanes at 15 and 24 FPS. Flattened heights and controlled probes do not certify native city navigation. |
 | Airfield/Highway/support/report replays | Captured poses, erased cells, analytic alleys and controlled probes deliberately reproduce a particular ownership/geometry law. They do not validate the shipping default route selection. |
 | Other flagged runtime/traffic/rotation/contact/aim/wreck tests | Their local commands, descriptors, targets or collision oracles isolate the named law. They are not full default-profile acceptance. Supplying a route policy to every isolated law would change the question being tested. |
 | SPG planning/graph tests | Baked geometry and explicit source plans are separate from native ray/arc acceptance and from the complete human route baseline. |
@@ -4707,8 +4707,8 @@ published to other handlers until its own `welcome` has been sent under the
 same state lock, so another player cannot start a battle whose first message to
 the new client would arrive before its identity and round assignment.
 
-The elected authority client runs tactical bots using standard-map annotations,
-vehicle roles, persistent randomized personalities, bounded line-of-sight
+The elected authority client runs tactical bots on the built-in Default routes,
+using vehicle roles, persistent randomized personalities, bounded line-of-sight
 caching and local avoidance of terrain, water, steep slopes, obstacles and
 nearby vehicles. The Python server remains canonical for room phase, HP, shot
 events, elimination, capture, timeout and the copied five-second result
@@ -4730,6 +4730,23 @@ update, defender stop, empty-base reset and victory at 100 points. Standard
 battles end by
 elimination, capture or the server-owned 15-minute timeout.
 
+Bot routes come only from the built-in Default tactics. Navigation graphs carry
+terrain, links, hazards and spawns, but no routes. At round start the host
+completes the map's route rows from the Default: every row the profile does not
+define, by team, route and vehicle class, keeps the Default's row, so a profile
+without rows uses the whole Default. The launcher editor shows the same rows
+and starts each edit from the Default's own row; an all-class edit also moves
+the Default's class rows of that route. The worker builds its route catalog
+from these rows alone. A row that fails the baked navigation check is not used
+that round, and class rows of a failed shared route are dropped with it; no
+other geometry stands in for them. Routes carry no lane capacity, risk or role
+affinity: allocation keeps the limit of three Bots of one class per lane before
+reserve and overflow admission, and the pressure rebalance scores a route's
+class weights but no role affinity. A profile map entry must name the map's
+current navigation graph. The graphs record no
+earlier identities, so a profile saved against an older graph does not load;
+an applied one falls back to the built-in Default and its file is kept.
+
 The same canonical update drives a narrow defense context for the server
 planner. One, two or three invaders request at most one, two or three eligible
 responders respectively, selected by distance and vehicle profile speed and
@@ -4740,10 +4757,10 @@ ordinary visible-target aim and fire admission. No unspotted invader position
 is included in a Bot order.
 
 This source wiring is not the same as final bot-behavior acceptance. The
-spawn-congestion/OBB, reverse-steering and baked-route changes proven in the
-retired predecessor are retained only as algorithm-derived changes;
-real-client acceptance still has to check them against #1513 terrain and
-presentation timing.
+spawn-congestion/OBB and reverse-steering changes proven in the retired
+predecessor are retained only as algorithm-derived changes; real-client
+acceptance still has to check them against #1513 terrain and presentation
+timing.
 
 ## Hidden-worker authority
 

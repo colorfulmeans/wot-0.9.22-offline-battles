@@ -68,8 +68,6 @@ Each route supports up to three vehicles **per class, per team**; smaller capaci
 
 Maps where spawn areas and capture bases are separate default to symmetry off, but you may enable and save it. Saved choices are retained. Corresponding symmetric routes receive matching random allocations when availability and capacity permit; independent routes need not match.
 
-**Move route endpoints to spawn centers** is a one-shot command. For a selected route, its first point moves to the friendly spawn center and its last point to the opposing spawn center. A single-point route moves only its first point. Nothing happens without a selected nonempty route. Spawn centers are displayed separately from capture circles: this command does not guarantee an endpoint inside a capture circle.
-
 ## Small waiting places
 
 Choose a specific class, route and waypoint. Click **Add waiting place**, or double-click the waypoint, to open the waiting-place panel. Enable waiting-place editing and click to add or drag places. Each waypoint supports at most three small places.
@@ -109,7 +107,9 @@ Check a draft, then test representative vehicle classes in game. Export an error
 New profiles load the complete revised 41-map baseline, including routes,
 waiting places and artillery positions. Individual restoration commands restore
 the selected baseline item; restoring a shared route also restores its baseline
-class settings. Upgrading does not automatically overwrite saved profiles.
+class settings. Upgrading does not automatically overwrite saved profiles. A
+profile saved for an older navigation graph no longer loads; if it was the
+applied profile, the launcher applies the built-in Default and keeps the file.
 
 Built-in route and position names follow the launcher language. Newly entered custom names retain their original text and are not automatically translated.
 

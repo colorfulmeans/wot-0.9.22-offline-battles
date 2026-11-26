@@ -43,7 +43,7 @@ jobs:
           tools/benchmark_navigation_resolution.cpp
           native/offline_navigation.cpp native/offline_async_worker.cpp
           -o /tmp/navigation-resolution
-      - name: Verify retained routes, every reverse edge and paired native search
+      - name: Verify Default routes, every reverse edge and paired native search
         env:
           PYTHONDONTWRITEBYTECODE: '1'
         run: >-
