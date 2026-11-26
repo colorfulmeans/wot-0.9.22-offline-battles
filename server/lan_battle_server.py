@@ -6149,6 +6149,7 @@ class BattleState:
             row = dict(state)
             row["id"] = bot_id
             row["team"] = team
+            row["class_tag"] = str((identity.get("profile") or {}).get("class_tag") or "")
             result.append(row)
         return result
 
@@ -6166,6 +6167,9 @@ class BattleState:
         """Keep only Bots that can move to answer a broadcast radio call."""
         from gui.mods.offline_lan_0922 import empty_ammo
         if empty_ammo.confirmed(bot) or (current_order or {}).get('empty_ammo'):
+            return False
+        if command == "ATTACK" and bot.get("class_tag") == "SPG":
+            # Artillery keeps its position; ATTACK places go to tanks.
             return False
         try:
             has_pose = bool(bot.get("world_pose", True))

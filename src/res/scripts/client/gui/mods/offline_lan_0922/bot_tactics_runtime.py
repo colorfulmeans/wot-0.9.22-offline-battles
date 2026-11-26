@@ -285,7 +285,9 @@ def assign_initial_routes(profile, name, graph, states, catalog, seed):
     """Spread classes over whole-team lanes before using reserve/overflow.
 
     Class geometry variants share one lane occupancy.
-    Priorities are local to the vehicle class. Only an absent/unusable catalog produces automatic routing.
+    Priorities are local to the vehicle class. A class without a usable route
+    shares the team's least-used route, ignoring class disabling; only a team
+    without any usable route leaves a tank without one.
     Restored manifests bypass this fresh-round allocator entirely.
     """
     settings = config.map_settings(profile, name)
@@ -297,9 +299,8 @@ def assign_initial_routes(profile, name, graph, states, catalog, seed):
 
     def candidates(state):
         tag = (state.get('profile') or {}).get('class_tag')
-        # SPGs own parking connections and spg_attack routes separately.
-        # Missing artillery authoring means automatic travel, never borrowing
-        # an ordinary class road or its capacity.
+        # SPGs own parking positions and spg_attack routes separately and
+        # never borrow an ordinary class road or its capacity.
         if tag not in config.CLASSES or tag == 'SPG':
             return []
         rows = catalog.get(state['team'], catalog.get(str(state['team']), ())) or ()
@@ -341,6 +342,27 @@ def assign_initial_routes(profile, name, graph, states, catalog, seed):
             priority = route.get('class_priorities', {}).get(tag, config.DEFAULT_ROUTE_PRIORITY)
             choices.append((priority, 'custom:' + family, paired,
                             (route_value(route), key, 'random_' + route['policy'])))
+        if choices:
+            return choices
+        # No route admits this class: share the team's least-used route and
+        # ignore class disabling. Slot limits and route validity still apply.
+        for base in rows:
+            if base.get('_editor_source'):
+                continue
+            choices.append((config.DEFAULT_ROUTE_PRIORITY, 'default:' + base['id'], False,
+                            (base, (state['team'], base['id'], tag), 'class_fallback')))
+        for route in authored:
+            if (route.get('disabled') or route['team'] != state['team'] or
+                    (route['slots'] and state.get('slot') not in route['slots']) or
+                    errors[route['id']] or route.get('purpose') == 'spg_attack'):
+                continue
+            p = route['points'][0]
+            if not _route_reachable(grid, (state['x'], state['y'], state['z']),
+                                    grid.closest((p[0], 0, p[1]))):
+                continue
+            choices.append((config.DEFAULT_ROUTE_PRIORITY, 'custom:' + route['id'], False,
+                            (route_value(route), (state['team'], 'user_' + route['id'], tag),
+                             'class_fallback')))
         return choices
 
     def reserve(state, selected):
@@ -367,6 +389,8 @@ def assign_initial_routes(profile, name, graph, states, catalog, seed):
             route = row[3][0]
             family = route.get('_route_family') or route.get('_editor_source') or route['id']
             used = lane_usage.get((state['team'], family), 0)
+            if row[3][2] == 'class_fallback':
+                return (-used,)
             tag = (state.get('profile') or {}).get('class_tag')
             same_class = class_usage.get((state['team'], family, tag), 0)
             reserve = route.get('_route_tier', 'main') == 'reserve'

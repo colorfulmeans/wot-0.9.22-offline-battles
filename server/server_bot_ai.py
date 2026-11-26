@@ -2921,13 +2921,11 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
             route = bot.get("route") if isinstance(bot.get("route"), dict) else {}
         waypoints = route.get("waypoints") if isinstance(route.get("waypoints"), list) else []
         if not waypoints:
-            route_ids = ("left_flank", "center_line", "right_flank")
-            route_id = route_ids[(bot["slot"] + bot["id"]) % len(route_ids)]
-            side = -1.0 if route_id == "left_flank" else (1.0 if route_id == "right_flank" else 0.0)
-            direction = 1.0 if bot["team"] == 1 else -1.0
-            point = {"x": round(side * 115.0, 3), "y": 0.0,
-                     "z": round(direction * 18.0, 3)}
-            return route_id, 0, point, point, False
+            # Only an SPG, or a tank whose team has no ordinary route at all,
+            # has no waypoints. Its artillery or capture order replaces this
+            # hold at the current position; no lane is invented.
+            position = _point(bot.get("state"))
+            return None, 0, position, dict(position), False
         route_id = str(route.get("id") or "uploaded_route")
         authored = bot_tactics.route_config(
             self.tactics, self.tactics_map, route_id, bot['team'], waypoints)
@@ -3771,6 +3769,13 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
         route_id, route_index, move, route_anchor, route_join = self._route(bot, now)
         retreat_point = self._retreat_point(bot, route_anchor)
         profile = dict(bot["profile"])
+        # A tank whose team has no ordinary route takes the enemy base.
+        routeless = (route_id is None and capture_target is not None and
+                     bot["id"] not in self._travel_tasks and
+                     bot["id"] not in self._route_recoveries and
+                     str(profile.get("class_tag") or "") != "SPG")
+        if routeless:
+            move = dict(capture_target["point"])
         desired_range = max(10.0, _number(profile.get("desired_range"), 180.0))
         fire_range = max(desired_range, _number(profile.get("fire_range"), 500.0))
         personality = self._personality(bot["id"])
@@ -3870,6 +3875,8 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
                     order, bot, focus, profile, personality,
                     bool(focus.get("visible")))
             self._apply_artillery_order(order, bot)
+            # TURNBACK returns an SPG to its own artillery position.
+            order["_turnback_position"] = dict(order["route_anchor"])
             self._firing_holds.pop(bot["id"], None)
             return order
 
@@ -3909,6 +3916,8 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
             self._cover_states.pop(bot["id"], None)
             self._retreat_states.pop(bot["id"], None)
             self._firing_holds.pop(bot["id"], None)
+            if routeless:
+                self._apply_base_capture_order(order, bot, capture_target)
             return order
 
         observers = focus.get("shootable_by_bot_ids")
@@ -3990,8 +3999,8 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
                 # Keep a distant contact as an aiming target while travelling
                 # the assigned lane. Switching to the enemy's position and
                 # back to the route repeatedly resets local navigation progress.
-                order["combat_mode"] = "advance" if route_id else "advance_contact"
-                order["move_position"] = dict(move if route_id else focus["position"])
+                order["combat_mode"] = "advance"
+                order["move_position"] = dict(move)
                 order["throttle_override"] = 1.0
             elif range_mode == "support_hold":
                 order["combat_mode"] = "support_hold"

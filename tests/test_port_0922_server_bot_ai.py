@@ -1453,7 +1453,7 @@ class ServerBotTacticsTests(unittest.TestCase):
                     self.assertEqual(0.0, order['throttle_override'])
                     self.assertEqual(command, order['team_command'])
 
-    def test_turnback_uses_route_retreat_point_for_every_vehicle_role(self):
+    def test_turnback_uses_route_retreat_point_and_artillery_position(self):
         route = _route('turnback-lane', [
             (0, -100, False), (0, 100, False),
             (0, 300, False), (0, 500, False),
@@ -1478,13 +1478,74 @@ class ServerBotTacticsTests(unittest.TestCase):
                 order = planner.build_orders(
                     manifest, states, [], 1.0,
                     team_orders=[team_order])['orders'][0]
+                self.assertNotIn('_route_position', order)
+                self.assertNotIn('_turnback_position', order)
+                if class_tag == 'SPG':
+                    # An SPG returns to its artillery position, never along
+                    # a tank lane. Without a plan it holds where it is, so the
+                    # call completes at once and the artillery order resumes.
+                    self.assertTrue(order['player_command_cancelled'])
+                    self.assertEqual('artillery_hold', order['combat_mode'])
+                    self.assertEqual({'x': 0.0, 'y': 0.0, 'z': 400.0}, order['move_position'])
+                    continue
                 self.assertEqual('team_turnback', order['combat_mode'])
                 self.assertEqual(
                     {'x': 0.0, 'y': 0.0, 'z': 300.0},
                     order['move_position'])
                 self.assertIsNone(order['throttle_override'])
-                self.assertNotIn('_route_position', order)
-                self.assertNotIn('_turnback_position', order)
+
+    def test_turnback_returns_a_planned_spg_to_its_parking_position(self):
+        from unittest import mock
+        planner = BotPlanner()
+        bot = _bot(11, 1, 0, {})
+        point = {'x': 30.0, 'y': 0.0, 'z': -120.0}
+        with mock.patch('server_bot_ai.spg_positions.canonical_plan',
+                        return_value=dict(point=point, face=point, radius=12.0)):
+            order = planner.build_orders(
+                [bot], [_state(11, 1, 0, 400)], [], 1.0,
+                team_orders=[{
+                    'command_id': '1:1:1', 'command': 'TURNBACK',
+                    'team': 1, 'issuer_id': 1,
+                    'issued_tick': 100, 'expires_tick': 200,
+                    'recipient_bot_ids': [11],
+                }])['orders'][0]
+        self.assertEqual('team_turnback', order['combat_mode'])
+        self.assertEqual(point, order['move_position'])
+
+    def test_bot_without_waypoints_gets_no_invented_route(self):
+        planner = BotPlanner()
+        bot = planner._alive_bots([_bot(11, 1, 0, {})], [_state(11, 1, 40, -60)])[0]
+        position = {'x': 40.0, 'y': 0.0, 'z': -60.0}
+        self.assertEqual((None, 0, position, position, False), planner._route(bot, 1.0))
+        order = planner.build_orders([_bot(11, 1, 0, {})], [_state(11, 1, 40, -60)], [], 1.0)['orders'][0]
+        self.assertIsNone(order['route_id'])
+        self.assertEqual('artillery_hold', order['combat_mode'])
+        self.assertEqual(position, order['move_position'])
+
+    def test_tank_without_any_route_takes_the_enemy_base(self):
+        defense = {'capture_bases': {'2': [dict(id='2:0', x=0., z=300., radius=50.)]}}
+        target = {'x': 0.0, 'y': 0.0, 'z': 300.0}
+        planner = BotPlanner()
+        bot = planner._alive_bots([_bot(11, 1, 0, {}, 'heavyTank')], [_state(11, 1, 0, -300)])[0]
+        capture = planner._capture_target(defense, 1)
+        for no_known_enemies in (True, False):
+            with self.subTest(no_known_enemies=no_known_enemies):
+                order = planner._order_for(bot, 0, 1, None, [], 1.0, team_bots=[bot],
+                                           capture_target=capture,
+                                           no_known_enemies=no_known_enemies)
+                self.assertEqual('base_capture', order['combat_mode'])
+                self.assertEqual(target, order['move_position'])
+                self.assertIsNone(order['route_id'])
+        attack = planner.build_orders(
+            [_bot(11, 1, 0, {}, 'heavyTank')], [_state(11, 1, 0, -300)], [], 2.0, defense,
+            team_orders=[{
+                'command_id': '1:1:2', 'command': 'ATTACK',
+                'team': 1, 'issuer_id': 1,
+                'issued_tick': 100, 'expires_tick': 200,
+                'recipient_bot_ids': [11],
+            }])['orders'][0]
+        self.assertEqual('team_attack', attack['combat_mode'])
+        self.assertEqual(target, attack['move_position'])
 
     def test_radio_stop_cannot_override_existing_combat(self):
         planner = BotPlanner()

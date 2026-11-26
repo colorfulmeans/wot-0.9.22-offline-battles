@@ -176,6 +176,25 @@ class TeamCommandTests(unittest.TestCase):
 
         self.assertEqual([11, 12, 13], ack['recipient_bot_ids'])
 
+    def test_artillery_does_not_answer_attack_so_tanks_take_the_places(self):
+        for identity in self.state.bot_manifest:
+            identity['profile'] = {'class_tag': 'heavyTank'}
+        self.state.bot_manifest[0]['profile'] = {'class_tag': 'SPG'}
+        self.state.bot_manifest.extend([
+            {'id': 13, 'team': 1, 'profile': {'class_tag': 'mediumTank'}},
+            {'id': 14, 'team': 1, 'profile': {'class_tag': 'lightTank'}},
+        ])
+        self.state.bot_states.update({
+            13: {'id': 13, 'team': 1, 'alive': True, 'x': 60.0, 'z': 0.0},
+            14: {'id': 14, 'team': 1, 'alive': True, 'x': 80.0, 'z': 0.0},
+        })
+
+        help_me = self.state.submit_team_command(1, self._message('HELPME'))
+        attack = self.state.submit_team_command(1, self._message('ATTACK', sequence=2))
+
+        self.assertEqual([11, 12, 13], help_me['recipient_bot_ids'])
+        self.assertEqual([12, 13, 14], attack['recipient_bot_ids'])
+
     def test_broadcast_without_nearby_bots_falls_back_to_two_nearest_mobile_bots(self):
         self.state.bot_states[11]['x'] = 450.0
         self.state.bot_states[12]['x'] = 400.0

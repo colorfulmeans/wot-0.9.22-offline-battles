@@ -231,9 +231,13 @@ class RouteTasksMixin:
                 if distance(point(bot['state']),point(previous['goal']))<=bot_tactics.ROUTE_ARRIVAL_RADIUS:
                     order['player_command_cancelled']=True
                     self._previous_player.pop(actor,None)
-                    self._task_rejoin(bot)
-                    identity,index,move,anchor,join=self._route(bot,now)
-                    order.update(route_id=identity,route_index=index,move_position=move,route_anchor=anchor,route_join=join,combat_mode='route',throttle_override=None)
+                    if bot['profile'].get('class_tag')=='SPG':
+                        # Back at its artillery position; it has no lane to rejoin.
+                        self._apply_artillery_order(order, bot)
+                    else:
+                        self._task_rejoin(bot)
+                        identity,index,move,anchor,join=self._route(bot,now)
+                        order.update(route_id=identity,route_index=index,move_position=move,route_anchor=anchor,route_join=join,combat_mode='route',throttle_override=None)
                     player_order=None
         task = self._travel_tasks.get(actor)
         released=False

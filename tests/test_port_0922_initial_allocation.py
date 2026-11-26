@@ -213,7 +213,8 @@ class InitialRouteLotteryTests(unittest.TestCase):
         self.assertTrue(all(plans[s['id']] is None if s['profile']['class_tag']=='SPG'
                             else plans[s['id']] is not None for s in states))
         catalog[1][0]['_editor_disabled_classes']=['lightTank']
-        self.assertIsNone(self.assign(catalog,actors(1))[0][100])
+        plans,outcomes,unused=self.assign(catalog,actors(1))
+        self.assertEqual('lane_0',plans[100]['id']);self.assertEqual('class_fallback',outcomes[100])
 
     def test_random_global_state_and_input_are_not_mutated(self):
         catalog=lanes();saved=copy.deepcopy(catalog);before=random.getstate()
@@ -235,7 +236,32 @@ class InitialRouteLotteryTests(unittest.TestCase):
         plans,unused,usage=self.assign(catalog,actors(2,'mediumTank'))
         self.assertTrue(all(route is not None for route in plans.values()))
         self.assertEqual({(t,'lane_0','mediumTank'):2 for t in (1,2)},usage)
-        self.assertTrue(all(route is None for route in self.assign(catalog,actors(1,'heavyTank'))[0].values()))
+        plans,outcomes,unused=self.assign(catalog,actors(1,'heavyTank'))
+        self.assertTrue(all(route['id']=='lane_0' for route in plans.values()))
+        self.assertEqual({'class_fallback'},set(outcomes.values()))
+
+    def test_class_without_a_route_shares_the_teams_least_used_route(self):
+        catalog=lanes(5)
+        for team in (1,2):
+            for route in catalog[team]:
+                route['class_weights']={'lightTank':1.,'heavyTank':0.}
+                route['_editor_disabled_classes']=['heavyTank']
+        states=actors(2,'lightTank')+actors(3,'heavyTank')
+        for state in states:
+            if state['profile']['class_tag']=='heavyTank':state['id']+=10
+        plans,outcomes,unused=self.assign(catalog,states)
+        for team in (1,2):
+            heavy=[s['id'] for s in states if s['team']==team and s['profile']['class_tag']=='heavyTank']
+            self.assertEqual({'class_fallback'},set(outcomes[i] for i in heavy))
+            loads=[[plans[s['id']]['id'] for s in states if s['team']==team].count(r['id'])
+                   for r in catalog[team]]
+            self.assertEqual([1,2,2],sorted(loads))
+
+    def test_team_without_any_route_leaves_its_tanks_without_one(self):
+        catalog=lanes();catalog[1]=[]
+        plans,outcomes,unused=self.assign(catalog,actors(1,'heavyTank'))
+        self.assertIsNone(plans[100]);self.assertEqual('full_or_unusable_routes_auto',outcomes[100])
+        self.assertIsNotNone(plans[200])
 
     def test_custom_symmetric_mirror_identity_and_capacity(self):
         raw=profile();graph=_graph();states=_states(graph,3)
