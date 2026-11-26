@@ -4721,8 +4721,9 @@ be reordered across that barrier.
 
 The pure-data server planner emits revisioned global `bot_orders`, which the
 0.9.22 authority now uses for macro targets after reporting bounded visibility
-observations. BigWorld terrain, collision, water and slope probes remain local,
-and the client planner is a fallback when no server order is available. The
+observations. BigWorld terrain, collision, water and slope probes remain local.
+A Bot that has not yet received a server order holds in place without fire
+permission, and a live Bot missing from a batch keeps its last valid order. The
 server derives its standard-mode capture law from the retired predecessor: a
 50-metre radius, one update per second, at most three capture points per
 update, defender stop, empty-base reset and victory at 100 points. Standard

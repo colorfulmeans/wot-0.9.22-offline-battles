@@ -213,10 +213,8 @@ and export the launcher's error report; no debug switch is required.
 
 Temporary pressure deployments now retain their waypoint progress while their
 current lane still needs support, even when another lane becomes the highest
-priority. Artillery which exhausts its checked parking candidates starts another
-bounded exclusion cycle instead of permanently keeping the last failed goal.
-Normal connectivity, occupancy, hull collision and ballistic checks remain in
-force. Error reports distinguish the server battle round from the planner seed,
+priority. Normal connectivity, occupancy, hull collision and ballistic checks
+remain in force. Error reports distinguish the server battle round from the planner seed,
 include the actual base-defense input and final responders, and record native
 contact geometry and same-step movement phases for unresolved stalls.
 
@@ -281,18 +279,16 @@ gravity and landing damage remain active. Live #1513 playtesting is required.
 
 Blocked artillery deployment first uses collision-checked straight escape
 steps when the hull cannot pivot. After twenty seconds without net progress,
-it can choose another reachable parking position, keeping manual positions
-inside authored regions and respecting other artillery reservations. Retries
-are bounded. Shallow depressions now check opposing chassis support before
+including while its position is occupied, the SPG gives the position up and
+holds where it is, firing when it can; that position is not refilled for the
+round. Shallow depressions now check opposing chassis support before
 small successive drops can lower a Bot or wreck between the banks; ordinary
 slopes and genuine cliff departures retain their normal support behaviour.
 
 Nearby Bot route corners now use the installed traverse rate to brake and
 align before advancing, preventing a coasting hull from orbiting a short
 navigation point. Failed forward motion can try shorter checked straight
-escapes before repeating a pivot. Artillery stuck in a coarse navigation hole
-can rank alternate parking from its original connected spawn, while all
-movement still uses the live pose and native collision checks. Capture squads
+escapes before repeating a pivot. Capture squads
 replace a member after twenty seconds without net progress when another
 eligible vehicle is available; vehicles inside the circle or fighting known
 contacts retain their places, and the three-vehicle limit remains unchanged.
@@ -694,10 +690,9 @@ whose profile changed after it started must be restarted first.
   to react, how patiently it waits for the aiming circle, how far off centre
   it lays the gun and how badly it leads a moving target. The same rating is
   the chance it does the tactically right thing each time the situation
-  comes up: reaching for cover, peeking out of it, angling its hull, picking
-  the round that beats the armour in front of it, aiming at the part it can
-  actually hurt, turning on whoever just hit it, breaking off when it should,
-  avoiding a crossfire and going around a flank. A weak Bot is not a Bot that
+  comes up: reaching for cover, peeking out of it, angling its hull, aiming at
+  the part it can actually hurt, turning on whoever just hit it and going
+  around a flank. A weak Bot is not a Bot that
   does everything slightly worse; it is one that does not think of some of
   it. The waiting room chooses how competence is spread over the whole roster
   - easy, relaxed, pub mix, hard or brutal - and the launcher's exact Bot
@@ -840,11 +835,11 @@ sweep, including both crossings of the -pi/pi boundary.
 
 Route-assignment evidence includes pressure scores, every donor candidate's
 outcome, the previous waypoint/distance, and the last eight assignment events.
-This preserves expiry followed by reassignment within one server update;
+This preserves a catalog reset followed by reassignment within one server update;
 `history_dropped` explicitly counts older omitted events. The server also logs
 each new `BOT ROUTE ASSIGNMENT` once, without waiting for an order revision;
 round changes reset the diagnostic sequence tracking. These diagnostics do
-not change route selection, lease renewal/expiry, avoidance or retry policy.
+not change route selection, avoidance or retry policy.
 
 Artillery retains one same-region retry after a confirmed blocked firing
 episode. A second completed failure gives other reachable parking regions an
@@ -954,9 +949,9 @@ This test branch removes broad native static-edge review and its live missing-ce
 
 The route editor offers All class routes above All vehicle classes. Default route names are editable in shared, individual-class and total views; parking names are also editable. User-entered names stay unchanged when switching UI language. Authors can name the complete experimental layout in Chinese; English names are reviewed when that layout is adopted as the new bundled default. Renaming changes neither geometry nor class priorities. It shows effective per-class coloured routes and red SPG parking, without a separate shared-default line. Selecting a coloured route scopes edits to that vehicle class; overlapping routes can be selected by class in the list. All vehicle classes edits shared defaults in black. Shared travel edits preserve independently enabled class geometry, priorities and waiting places. Disabled class records follow shared travel with all waiting data removed and remain disabled. Shared defaults expose travel geometry only. A later class edit affects only that class. The symmetry checkbox controls whether the opposite team is updated; merely switching views does not replace geometry. Only explicit small parking places own waiting durations. A parent with such places grows on the selected route; collapsed groups retain a large parent marker. A parent with no small places is an ordinary travel node and cannot retain a waiting clock. Default routes can be deleted for a specific class or all classes, including from the total view; deletion follows route symmetry and excludes the lane from Bot allocation. Undo or resetting the profile restores deleted defaults. New routes contain fixed own/enemy spawn endpoints. Blank left clicks select nothing and add nothing; Shift-click or Insert point adds a draggable intermediate node, always before the terminal endpoint. Selecting fixed endpoints cannot move/delete them or clear redo history. The sixteen-node limit includes both endpoints. Existing reviewed capture-area terminals are retained. The Pit, Tundra and Lost City disable route symmetry; other maps reverse intermediate travel with fixed team endpoints. Waiting-mode blank clicks still add a 60-second place, and SPG parking keeps click-to-move. Double-clicking an existing route node opens waiting edits and detaches symmetry as an undoable change. This view changes no battle-side navigation work.
 
-Route priorities are set per vehicle class (0..9, higher first). All vehicle classes has no priority control. All class routes allows editing the selected vehicle class route priority and the selected SPG parking priority; priority-only edits retain shared custom-route geometry and class membership. At fresh round creation, each Bot draws uniformly among available highest-priority lanes, with replacement until capacity is reached; lower priorities become eligible after that tier fills. Default class variants share the original lane capacity. Explicit fixed-slot custom routes retain their assignment authority. Corresponding Bots by class ordinal share symmetric lane-family draws and use their own team's geometry. Standalone/asymmetric routes draw independently; unmatched class counts, unavailable counterparts and exhausted capacity also allow local allocation. Empty/full route catalogs use automatic navigation. SPG parking regions use the same priority-before-random policy, reserving actual vehicle-sized clear space rather than distributing in region order. Edited default parking tied to symmetric lane families shares the draw when both sides have the same available families; standalone parking and unmatched safe spaces stay local. Source-catalog cost priorities retain their lower-first convention; editor priorities are higher-first. A fresh entropy seed is shared by the round's initial allocators without changing projectile random state. Published manifests preserve the choice across authority handoff and reconnect; runtime blockage/relocation remains under existing navigation owners. Save and apply for the next round; allocation adds no native movement queries or configuration rewrites.
+Route priorities are set per vehicle class (0..9, higher first). All vehicle classes has no priority control. All class routes allows editing the selected vehicle class route priority and the selected SPG parking priority; priority-only edits retain shared custom-route geometry and class membership. At fresh round creation, each Bot draws uniformly among available highest-priority lanes, with replacement until capacity is reached; lower priorities become eligible after that tier fills. Default class variants share the original lane capacity. Explicit fixed-slot custom routes retain their assignment authority. Corresponding Bots by class ordinal share symmetric lane-family draws and use their own team's geometry. Standalone/asymmetric routes draw independently; unmatched class counts, unavailable counterparts and exhausted capacity also allow local allocation. A vehicle class that no route admits shares its team's least-used route; tanks of a team with no route at all take the enemy base. SPG parking regions use the same priority-before-random policy, reserving actual vehicle-sized clear space rather than distributing in region order. Edited default parking tied to symmetric lane families shares the draw when both sides have the same available families; standalone parking and unmatched safe spaces stay local. Source-catalog cost priorities retain their lower-first convention; editor priorities are higher-first. A fresh entropy seed is shared by the round's initial allocators without changing projectile random state. Published manifests preserve the choice across authority handoff and reconnect; runtime blockage/relocation remains under existing navigation owners. Save and apply for the next round; allocation adds no native movement queries or configuration rewrites.
 
-Default SPG parking is deletable from the total, shared and SPG editor views. A bounded per-map deletion list persists after saving, reopening and applying the profile. Deleting parking also removes its edited override, leaves combat routes and opposite-side parking unchanged, and excludes it from initial placement and later artillery relocation. Deleting the last default parking uses automatic deployment rather than reinstating the deleted list. Undo restores the previous draft.
+Default SPG parking is deletable from the total, shared and SPG editor views. A bounded per-map deletion list persists after saving, reopening and applying the profile. Deleting parking also removes its edited override, leaves combat routes and opposite-side parking unchanged, and excludes it from initial placement and later artillery relocation. Deleting the last default parking leaves that team's artillery without positions: each SPG holds where it is and fires when it can, and the deleted list is not reinstated. Undo restores the previous draft.
 
 Deleting the last small waiting place restores a three-field ordinary parent gate, with no hold flag or clock. Contract loading/saving discards retired parent-only durations and empty waiting-place collections. Reselecting or double-clicking that parent only focuses its waiting editor; it cannot recreate a sixty-second small place. The explicit Add wait point action still permits intentional placement at the parent's coordinates. Existing nonempty places retain their individual times and geometry.
 
