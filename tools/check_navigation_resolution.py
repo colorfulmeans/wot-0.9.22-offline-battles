@@ -46,13 +46,13 @@ def inspect(graph, cases):
             row['reference_ms']=(time.perf_counter()-before)*1000
             rows.append(row)
         return rows
-    legacy = baker._legacy_baker()
+    navgrid = baker.navgrid
     rows = []
     for start, end in cases:
-        first, offset_a = legacy._nearest_node(graph, start)
-        last, offset_b = legacy._nearest_node(graph, end)
+        first, offset_a = navgrid._nearest_node(graph, start)
+        last, offset_b = navgrid._nearest_node(graph, end)
         before = time.perf_counter()
-        path, distance = legacy._graph_path(graph, first, last)
+        path, distance = navgrid._graph_path(graph, first, last)
         rows.append(dict(start=start, end=end, connected=bool(path),
                          length=distance, nodes=len(path),
                          snap_offsets=[offset_a, offset_b],

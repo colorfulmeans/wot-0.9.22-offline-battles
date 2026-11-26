@@ -47,7 +47,7 @@ class ResolutionTests(unittest.TestCase):
     def test_local_exact_collision_keeps_width_and_does_not_inflate_wall_cells(self):
         import test_port_0922_navigation_collision_bake as fixture
         field=baker.compiled_navigation_obstacles(fixture.compiled([]),fixture.VFS([]),
-            baker._legacy_baker(),precise_regions=((-10.,-10.,10.,10.),))
+            baker.navgrid,precise_regions=((-10.,-10.,10.,10.),))
         wall=((0.,0.,-10.),(0.,10.,-10.),(0.,0.,10.))
         field._raster_triangle(wall)
         self.assertTrue(field.blocked(2.1,0.,1.1,margin=2.15))
@@ -60,7 +60,7 @@ class ResolutionTests(unittest.TestCase):
     def test_sloping_face_keeps_local_height_and_vertical_wall_still_blocks(self):
         import test_port_0922_navigation_collision_bake as fixture
         field=baker.compiled_navigation_obstacles(
-            fixture.compiled([]),fixture.VFS([]),baker._legacy_baker())
+            fixture.compiled([]),fixture.VFS([]),baker.navgrid)
         field._raster_triangle(((0.,0.,0.),(20.,10.,0.),(0.,0.,20.)))
         self.assertFalse(field.blocked(.5,.5,1.1,margin=0.))
         self.assertTrue(field.blocked(4.5,.5,1.1,margin=0.))
@@ -93,7 +93,7 @@ class ResolutionTests(unittest.TestCase):
     def test_separate_icicles_do_not_fill_air_and_real_walls_still_block(self):
         import test_port_0922_navigation_collision_bake as fixture
         field=baker.compiled_navigation_obstacles(
-            fixture.compiled([]),fixture.VFS([]),baker._legacy_baker())
+            fixture.compiled([]),fixture.VFS([]),baker.navgrid)
         field._mark_cell(0,0,.78,.97)
         field._mark_cell(0,0,9.97,10.13)
         self.assertFalse(field.blocked(.5,.5,1.1,margin=0.))
@@ -104,16 +104,16 @@ class ResolutionTests(unittest.TestCase):
         self.assertEqual((1.8,4.),field.height_intervals[(0,0)][1])
 
     def test_resolution_edges_check_interior_without_weakening_collision(self):
-        legacy=types.SimpleNamespace(_ground_height=lambda *args: 1.1)
+        navgrid=types.SimpleNamespace(_ground_height=lambda *args: 1.1)
         calls=[]
         def original(terrain,obstacles,start,end):
             calls.append((start,end))
             return not (.2 < end[0] < .3)
         self.assertFalse(baker._resolution_segment_clear(
-            None,None,(0.,1.1,0.),(2.,1.1,0.),legacy,original))
+            None,None,(0.,1.1,0.),(2.,1.1,0.),navgrid,original))
         self.assertEqual(.25,calls[-1][1][0])
         self.assertTrue(baker._resolution_segment_clear(
-            None,None,(0.,1.1,0.),(0.,1.1,2.),legacy,original))
+            None,None,(0.,1.1,0.),(0.,1.1,2.),navgrid,original))
 
     def test_local_meshes_keep_original_base_and_short_bidirectional_passages(self):
         import subprocess, math, copy
@@ -173,20 +173,6 @@ class ResolutionTests(unittest.TestCase):
                         self.assertTrue(grid._baked_corridor(first,last)[0],(name,cell,other))
                         self.assertIn(tuple(sorted((cell,other))),grid._edge_keys_for_segment(first,last))
 
-    def test_previous_profile_identity_preserves_custom_waypoints(self):
-        for name in ('04_himmelsdorf', '86_himmelsdorf_winter'):
-            meta = bot_tactics.MAPS[name]
-            profile = bot_tactics.empty('retained authored route')
-            route = dict(id='banana', team=2, symmetric=False,
-                         points=[[70.,346.,0],[180.55,116.688,0],
-                                 [175.887,87.135,0],[2.,-250.,0]])
-            profile['maps'][name] = dict(mode='regular',
-                resource_sha256=meta['navigation_previous_sha256'],
-                routes=[], positions=[], default_routes=[route])
-            result = bot_tactics.canonical(profile)['maps'][name]
-            self.assertEqual(meta['resource_sha256'], result['resource_sha256'])
-            self.assertEqual(route['points'], result['default_routes'][0]['points'])
-
     def test_local_mesh_wire_keeps_base_arrays_and_adds_only_scoped_meshes(self):
         from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
         from gui.mods.offline_lan_0922.native_navigation import NativeNavigation
@@ -209,15 +195,6 @@ class ResolutionTests(unittest.TestCase):
         damaged=copy.deepcopy(graph);damaged['local_meshes'][0]['links'][0]=255
         with self.assertRaises(ValueError):
             validate_graph(damaged,'04_himmelsdorf')
-
-    def test_original_and_test_build_profile_identities_both_migrate(self):
-        for name in ('04_himmelsdorf','86_himmelsdorf_winter'):
-            meta=bot_tactics.MAPS[name]
-            for old in [meta['navigation_previous_sha256']]+meta['navigation_previous_sha256s']:
-                profile=bot_tactics.default_profile()
-                profile['maps'][name]['resource_sha256']=old
-                result=bot_tactics.canonical(profile)
-                self.assertEqual(meta['resource_sha256'],result['maps'][name]['resource_sha256'])
 
     def test_manifest_editor_and_actual_local_mesh_bytes_have_one_identity(self):
         import hashlib

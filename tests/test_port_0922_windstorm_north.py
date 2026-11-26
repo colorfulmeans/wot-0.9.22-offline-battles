@@ -94,14 +94,14 @@ class NorthRuntimeTests(unittest.TestCase):
         terrain = types.SimpleNamespace(water_depth=lambda x, z, y: 0.)
         obstacles = types.SimpleNamespace(raster_size=1.,
             surface_height=lambda x, z: math.floor(x)*.13)
-        legacy = types.SimpleNamespace(VEHICLE_HALF_WIDTH=2.15, WATER_DEPTH_LIMIT=.9,
+        navgrid = types.SimpleNamespace(VEHICLE_HALF_WIDTH=2.15, WATER_DEPTH_LIMIT=.9,
             MAX_GRADE=.38, _ground_height=lambda t, o, x, z: o.surface_height(x, z))
-        self.assertTrue(footprint_support(terrain, obstacles, legacy, 269., 243., 269*.13))
+        self.assertTrue(footprint_support(terrain, obstacles, navgrid, 269., 243., 269*.13))
         obstacles.surface_height = lambda x, z: -3. if x < 269. else 0.
-        self.assertFalse(footprint_support(terrain, obstacles, legacy, 269., 243., 0.))
+        self.assertFalse(footprint_support(terrain, obstacles, navgrid, 269., 243., 0.))
         obstacles.surface_height = lambda x, z: 0.
         terrain.water_depth = lambda x, z, y: 1. if x < 268. else 0.
-        self.assertFalse(footprint_support(terrain, obstacles, legacy, 269., 243., 0.))
+        self.assertFalse(footprint_support(terrain, obstacles, navgrid, 269., 243., 0.))
 
     def test_actual_runtime_accepts_both_planner_and_committed_emil_lengths(self):
         import types

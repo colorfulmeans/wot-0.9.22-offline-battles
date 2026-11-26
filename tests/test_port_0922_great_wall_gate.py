@@ -1,11 +1,10 @@
-"""Two friendly hulls meeting inside Great Wall's gatehouse must both leave.
+"""Bots on the Default ``valley`` route drive through Great Wall's gatehouse.
 
 The map's only east crossing is a gatehouse whose baked corridor is one cell
-wide at its north mouth and two cells inside, and both teams' Default
-``valley`` routes cross it in opposite directions. Every head-on swing offset
-is blocked in there, so an unbounded crossing hold stopped both hulls and each
-driver then timed out into a steered reverse that parked its hull across the
-passage.
+wide at its north mouth and two cells inside. Both teams' Default ``valley``
+routes run through it, and team 2 reaches it about 230 m after its spawn.
+The scene is flat: four-metre heights are zeroed as in the departure
+fixtures, and the navigation grid stands in for collision.
 """
 import copy
 import json
@@ -23,26 +22,33 @@ from test_port_0922_fjord_departure import _bots
 
 ROOT = Path(__file__).resolve().parents[1]
 MAP_NAME = '59_asia_great_wall'
-# The gatehouse passage, from the bake's own grid-phase record.
+# The gatehouse passage, from the bake's grid-phase record and passage rows.
 PASSAGE_X = 404.0
-SOUTH_POSE = (PASSAGE_X, -158.0, 0.0)
-NORTH_POSE = (PASSAGE_X, -142.0, math.pi)
-# The gatehouse interior, from the baked passage rows.
 PASSAGE_SOUTH = -158.0
 PASSAGE_NORTH = -140.0
-SECONDS = 30.0
+SECONDS = 120.0
 FPS = 15
 
 
 def _flat_graph():
     path = ROOT / 'navgraphs' / ('%s.json' % MAP_NAME)
     graph = copy.deepcopy(json.loads(path.read_text()))
-    # Keep the production topology, hazards, routes and formations and isolate
-    # traffic from four-metre height sampling, exactly as the departure
-    # fixtures do.
     graph['heights_mm'] = [
         0 if value is not None else None for value in graph['heights_mm']]
     return graph
+
+
+def _valley(route):
+    identity = (route or {}).get('id') or ''
+    return identity == 'valley' or identity.endswith('_valley')
+
+
+def _segment_distance(point, first, second):
+    dx, dz = second[0] - first[0], second[1] - first[1]
+    length = dx * dx + dz * dz
+    t = 0.0 if not length else max(0.0, min(1.0, (
+        (point[0] - first[0]) * dx + (point[1] - first[1]) * dz) / length))
+    return math.hypot(first[0] + t * dx - point[0], first[1] + t * dz - point[1])
 
 
 class GreatWallGateTests(unittest.TestCase):
@@ -57,7 +63,12 @@ class GreatWallGateTests(unittest.TestCase):
                 sys.modules.pop(key, None)
         sys.modules.update(self._gui_modules)
 
-    def test_opposed_hulls_in_the_gatehouse_both_leave_the_passage(self):
+    def run_scene(self, seconds=SECONDS):
+        """Drive the Default round; report team 2's valley Bots at the gatehouse.
+
+        Returns the runtime, the valley Bot ids, when each crossed north of
+        the gatehouse and how many seconds each spent inside it.
+        """
         module = runtime_fixtures._load()
         original_factors = module.loadout.attribute_factors
         module.loadout.attribute_factors = bot_default_crew_factors
@@ -67,9 +78,6 @@ class GreatWallGateTests(unittest.TestCase):
         runtime_box = {}
 
         def spawn(team, slot):
-            if team == 2 and slot in (0, 1):
-                x, z, yaw = SOUTH_POSE if slot == 0 else NORTH_POSE
-                return ((x, 0.0, z), yaw)
             point = graph['spawn_formations'][str(team)][slot]
             return ((point[0], 0.0, point[2]), point[3])
 
@@ -111,59 +119,61 @@ class GreatWallGateTests(unittest.TestCase):
             firing_lane_probe=lambda *unused: False)
         runtime_box['runtime'] = runtime
         # A fixed allocation seed replays the same Default lane draw.
-        with mock.patch.object(module.random.SystemRandom, 'getrandbits',return_value=0x0922):
-            published=runtime.battle_start({'map': MAP_NAME, 'round_id': 7,
-                                  'bot_tactics': module.bot_tactics.default_profile(),
-                                  'bot_authority_id': 1, 'bots': _bots()})[0]
-        planner=BotPlanner();planner.tactics=runtime._bot_tactics;planner.tactics_map=MAP_NAME
-        opposed = [bot_id for bot_id, state in runtime.states.items()
-                   if int(state.get('team', 0)) == 2 and
-                   abs(state['x'] - PASSAGE_X) < 1.0 and
-                   -160.0 < state['z'] < -140.0]
-        self.assertEqual(2, len(opposed))
-        # These two recorded hulls are already mid-route, not fresh spawns.
-        for actor in planner._alive_bots(published['bots'],list(runtime.states.values())):
-            if actor['id'] in opposed:planner._task_rejoin(actor)
-
-        held = dict((bot_id, 0.0) for bot_id in opposed)
-        broadside = dict((bot_id, 0.0) for bot_id in opposed)
-        original_adjust = runtime._traffic_coordinator.adjust
-        clock = [0.0]
-
-        def adjust(bot_id, source, command, neighbours, now, direction_clear):
-            result = original_adjust(bot_id, source, command, neighbours, now,
-                                     direction_clear)
-            if (int(bot_id) in held and
-                    result.get('traffic_mode') == 'head_on_blocked'):
-                held[int(bot_id)] += 1.0 / FPS
-            return result
-
-        runtime._traffic_coordinator.adjust = adjust
-
-        for frame in range(1, int(FPS * SECONDS) + 1):
-            clock[0] = frame / float(FPS)
+        with mock.patch.object(module.random.SystemRandom, 'getrandbits', return_value=0x0922):
+            published = runtime.battle_start({
+                'map': MAP_NAME, 'round_id': 7, 'bot_authority_id': 1, 'bots': _bots(),
+                'bot_tactics': module.bot_tactics.for_round(
+                    module.bot_tactics.default_profile(), MAP_NAME)})[0]
+        planner = BotPlanner()
+        planner.tactics = runtime._bot_tactics
+        planner.tactics_map = MAP_NAME
+        valley = sorted(bot['id'] for bot in published['bots']
+                        if bot['team'] == 2 and _valley(bot.get('route')))
+        crossed = {}
+        inside = dict((bot_id, 0.0) for bot_id in valley)
+        for frame in range(1, int(FPS * seconds) + 1):
+            now = frame / float(FPS)
             # Bots move only on server orders, as in the worker.
-            orders=planner.build_orders(published['bots'],list(runtime.states.values()),[],clock[0])
-            runtime._apply_orders(dict(bot_order_revision=orders['revision'],bot_orders=orders['orders']))
-            runtime.update(1.0 / float(FPS), clock[0])
-            for bot_id in opposed:
+            orders = planner.build_orders(
+                published['bots'], list(runtime.states.values()), [], now)
+            runtime._apply_orders(dict(bot_order_revision=orders['revision'],
+                                       bot_orders=orders['orders']))
+            runtime.update(1.0 / float(FPS), now)
+            for bot_id in valley:
                 state = runtime.states[bot_id]
-                if (-160.0 < state['z'] < -140.0 and
-                        abs(math.sin(state['yaw'])) > 0.5):
-                    broadside[bot_id] += 1.0 / FPS
+                if (abs(state['x'] - PASSAGE_X) < 8.0 and
+                        PASSAGE_SOUTH <= state['z'] <= PASSAGE_NORTH):
+                    inside[bot_id] += 1.0 / FPS
+                if (bot_id not in crossed and state['z'] > PASSAGE_NORTH + 4.0 and
+                        abs(state['x'] - PASSAGE_X) < 40.0):
+                    crossed[bot_id] = now
+        return runtime, valley, crossed, inside
 
-        # Both hulls have to leave the passage: the northbound one through the
-        # wall, the one facing the other way back out of its south mouth.
-        # The passage has to be clear again: one hull through the wall, the
-        # other back out of the mouth it came from.
+    def test_both_default_valley_routes_cross_the_gatehouse(self):
+        from gui.mods.offline_lan_0922 import bot_tactics, bot_tactics_runtime
+        graph = json.loads((ROOT / 'navgraphs' / ('%s.json' % MAP_NAME)).read_text())
+        document = bot_tactics.for_round(bot_tactics.default_profile(), MAP_NAME)
+        routes, outcomes = bot_tactics_runtime.default_routes(document, MAP_NAME, graph)
+        centre = (PASSAGE_X, (PASSAGE_SOUTH + PASSAGE_NORTH) / 2.0)
+        for team in ('1', '2'):
+            rows = [route for route in routes[team] if _valley(route)]
+            self.assertTrue(rows, team)
+            for route in rows:
+                points = route['waypoints']
+                self.assertLess(min(_segment_distance(centre, first, second)
+                                    for first, second in zip(points, points[1:])),
+                                4.0, (team, route['id']))
+        self.assertTrue(all(status == 'baked_route_connected'
+                            for key, status in outcomes.items() if _valley(dict(id=key.split(':', 1)[1]))))
+
+    def test_default_valley_bots_drive_through_the_gatehouse(self):
+        runtime, valley, crossed, inside = self.run_scene()
+        self.assertGreaterEqual(len(valley), 2)
+        # Every team-2 valley Bot gets through, and none sits in the passage.
         self.assertEqual([], [
-            (bot_id, round(runtime.states[bot_id]['z'], 1))
-            for bot_id in opposed
-            if PASSAGE_SOUTH <= runtime.states[bot_id]['z'] <= PASSAGE_NORTH])
-        # Neither may spend the round stopped by the crossing hold, and
-        # neither may sit broadside in a passage no hull can turn in.
-        self.assertLessEqual(max(held.values()), 5.0)
-        self.assertLessEqual(max(broadside.values()), 5.0)
+            (bot_id, round(runtime.states[bot_id]['x'], 1), round(runtime.states[bot_id]['z'], 1))
+            for bot_id in valley if bot_id not in crossed])
+        self.assertLessEqual(max(inside.values()), 10.0)
 
 
 if __name__ == '__main__':

@@ -1,12 +1,12 @@
 """Revalidate retained railway-map spawn slots without rebaking navigation."""
-import argparse, collections, copy, hashlib, json, math, sys, zipfile
+import argparse, collections, copy, json, math, sys, zipfile
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 import repair_railway_navigation_0922 as railway
 import bake_navigation_0922 as baker
 
 
-def repair_spawns(graph, obstacles, envelope, legacy):
+def repair_spawns(graph, obstacles, envelope, navgrid):
     result = copy.deepcopy(graph)
     width, size = graph['width'], graph['cell_size']
     half_width, half_length = envelope['half_width'], envelope['half_length']
@@ -41,7 +41,7 @@ def repair_spawns(graph, obstacles, envelope, legacy):
                  for slot,pose in enumerate(poses)]
     def clear(pose, team, slot):
         return (cell(pose) in reachable[team] and
-            not baker.spawn_pose_blocked(obstacles, pose, half_width, half_length, legacy) and
+            not baker.spawn_pose_blocked(obstacles, pose, half_width, half_length, navgrid) and
             all((t == team and s == slot) or
                 (math.hypot(pose[0]-p[0],pose[2]-p[2]) >= baker.SPAWN_MINIMUM_SPACING and
                  not baker.spawn_obbs_overlap(pose,p,half_width,half_length))
@@ -59,7 +59,7 @@ def repair_spawns(graph, obstacles, envelope, legacy):
         result['spawn_formations'][team][slot] = chosen
         all_poses = [(t,s,chosen if (t,s)==(team,slot) else p) for t,s,p in all_poses]
         changes.append(dict(team=team,slot=slot,before=original,after=chosen))
-    failures = baker.spawn_clearance_failures(result['spawn_formations'],obstacles,envelope,legacy)
+    failures = baker.spawn_clearance_failures(result['spawn_formations'],obstacles,envelope,navgrid)
     assert not failures, failures
     assert all(cell(p) in reachable[t] for t,s,p in all_poses)
     result['validation']['spawn_railway_revalidation'] = dict(
@@ -82,8 +82,6 @@ def repair_spawns(graph, obstacles, envelope, legacy):
         spawn_maximum_projection_metres=max([0.]+[
             math.hypot(row['after'][0]-row['before'][0],row['after'][2]-row['before'][2])
             for row in changes]))
-    result.setdefault('navigation_previous_sha256s',[]).append(hashlib.sha256(
-        json.dumps(graph,sort_keys=True,separators=(',',':')).encode()).hexdigest())
     return result
 
 
@@ -92,7 +90,7 @@ def main():
     parser.add_argument('--output',type=Path,required=True);args=parser.parse_args()
     args.output.mkdir(parents=True,exist_ok=True)
     envelope=baker.representative_vehicle_chassis_envelope(args.client)
-    vfs=baker.PackageVFS(str(Path(args.client)/'res/packages'));legacy=baker._legacy_baker()
+    vfs=baker.PackageVFS(str(Path(args.client)/'res/packages'));navgrid=baker.navgrid
     report=[]
     try:
         for path in sorted((railway.ROOT/'navgraphs').glob('*.json')):
@@ -102,12 +100,11 @@ def main():
             print('Checking '+path.stem,flush=True)
             with zipfile.ZipFile(Path(args.client)/'res/packages'/(path.stem+'.pkg')) as z:
                 unused,compiled=baker._compiled_models(z.read('spaces/'+path.stem+'/space.bin'))
-            field=baker.compiled_navigation_obstacles(compiled,vfs,legacy)
-            result=repair_spawns(graph,field,envelope,legacy)
-            result['navigation_previous_sha256s'][-1] = hashlib.sha256(path.read_bytes()).hexdigest()
+            field=baker.compiled_navigation_obstacles(compiled,vfs,navgrid)
+            result=repair_spawns(graph,field,envelope,navgrid)
             for key in ('heights_mm','links','hazards','local_meshes'):
                 assert result.get(key)==graph.get(key),key
-            validation=baker._terrain_validation(legacy.validate_graph,result,dict(bases=result['bases']))
+            validation=navgrid.validate_graph(result,dict(bases=result['bases']))
             (args.output/path.name).write_text(json.dumps(result,sort_keys=True,separators=(',',':'))+'\n')
             row=dict(map=path.stem,spawn=result['validation']['spawn_railway_revalidation'],graph=validation)
             report.append(row);print(path.stem+' changed '+str(len(row['spawn']['changes'])),flush=True)

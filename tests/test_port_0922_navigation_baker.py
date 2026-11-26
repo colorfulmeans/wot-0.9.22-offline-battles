@@ -35,6 +35,8 @@ def load_module(name):
 space = load_module('space_bin_0922')
 baker = load_module('bake_navigation_0922')
 packed = load_module('packed_xml')
+# The reviewed navigation grid source; an edit to it updates this pin.
+NAVIGATION_GRID_SHA256 = 'ff6100af45c3588ec1b856595902cedb92649873cecfaf97e7c57234f68126a9'
 
 
 def section(name, version, offset, size, rows=0):
@@ -100,8 +102,8 @@ class CompiledSpace0922Test(unittest.TestCase):
             with self.assertRaises(baker.UnsafeBakeInputError):
                 baker.ctf_base_radii(invalid, graph['objective_bases'])
 
-    def test_terrain_validation_reports_no_route_statistics(self):
-        legacy = baker._legacy_baker()
+    def test_validation_reports_no_route_statistics(self):
+        navgrid = baker.navgrid
         graph = {
             'cell_size': 4.0,
             'origin': (0.0, 0.0),
@@ -112,47 +114,29 @@ class CompiledSpace0922Test(unittest.TestCase):
             'links': [1 << 4, (1 << 3) | (1 << 4), 1 << 3],
             'hazards': [0, 0, 0],
             'directions': [list(direction)
-                           for direction in legacy.DIRECTIONS],
+                           for direction in navgrid.DIRECTIONS],
         }
-        result = baker._terrain_validation(
-            legacy.validate_graph, graph, {'bases': ((0.0, 0.0), (8.0, 0.0))})
+        result = navgrid.validate_graph(graph, {'bases': ((0.0, 0.0), (8.0, 0.0))})
         self.assertEqual(1, result['components'])
         self.assertEqual(3, result['base_path_nodes'])
-        self.assertFalse(set(baker._ROUTE_STATISTICS) & set(result))
+        self.assertEqual([], [key for key in result if 'route' in key])
 
     def test_bake_config_carries_the_objectives_and_no_routes(self):
         graph = json.loads((ROOT / 'navgraphs' / '06_ensk.json').read_text())
         objectives = tuple(tuple(point) for point in graph['objective_bases'])
-        config = baker._target_bake_config(
-            baker._legacy_baker(), graph['bounds'], objectives)
+        config = baker._bake_config(graph['bounds'], objectives)
         self.assertEqual(objectives, config['bases'])
         self.assertEqual(objectives, config['anchors'])
-        self.assertEqual((), config['routes'])
+        self.assertNotIn('routes', config)
         self.assertEqual(tuple(graph['bounds']), config['bounds'])
 
-    def test_navigation_baker_uses_neutral_pinned_baseline(self):
-        path = Path(baker.NAVIGATION_BAKER)
-        self.assertTrue(path.is_file())
-        self.assertEqual(
-            Path(baker.NAVIGATION_BASELINE_ROOT) / 'tools' /
-            'bake_navigation.py', path)
-        self.assertEqual(
-            baker.NAVIGATION_BAKER_SHA256,
-            hashlib.sha256(path.read_bytes()).hexdigest())
-        self.assertEqual(
-            'f5b0173c296cd36753a5866ba5e6f2119e3edb25',
-            baker.NAVIGATION_BASELINE_COMMIT)
-        self.assertEqual(7, len(baker.NAVIGATION_BASELINE_SHA256))
-        baseline_root = Path(baker.NAVIGATION_BASELINE_ROOT)
-        self.assertEqual('navigation_baseline_f5b0173', baseline_root.name)
-        self.assertEqual(
-            set(baker.NAVIGATION_BASELINE_SHA256),
-            {path.relative_to(baseline_root).as_posix()
-             for path in baseline_root.rglob('*') if path.is_file()})
-        for relative_path, digest in baker.NAVIGATION_BASELINE_SHA256.items():
-            baseline_path = baseline_root / Path(relative_path)
-            self.assertEqual(
-                digest, hashlib.sha256(baseline_path.read_bytes()).hexdigest())
+    def test_navigation_grid_is_pinned_by_its_own_hash(self):
+        # A checkout may use CRLF; the pin is over the LF-normalized source.
+        source = (TOOLS / 'navigation_grid.py').read_bytes().replace(b'\r\n', b'\n')
+        self.assertEqual(NAVIGATION_GRID_SHA256, hashlib.sha256(source).hexdigest())
+        self.assertIs(baker.navgrid, sys.modules['navigation_grid'])
+        self.assertEqual(['wot_space_bin_utils'],
+                         sorted(path.name for path in (TOOLS / 'vendor').iterdir()))
 
     @staticmethod
     def _vehicle_chassis_visual(minimum, maximum):
@@ -224,15 +208,15 @@ class CompiledSpace0922Test(unittest.TestCase):
     def test_spawn_clearance_uses_yaw_oriented_maximum_chassis_obb(self):
         obstacles = types.SimpleNamespace(
             raster_size=1.0, cells={(0, 4): [0.65, 2.4]})
-        legacy = types.SimpleNamespace(
+        navgrid = types.SimpleNamespace(
             VEHICLE_GROUND_CLEARANCE=0.65,
             VEHICLE_CLEARANCE_HEIGHT=2.4)
 
         self.assertTrue(baker.spawn_obstacle_obb_blocked(
-            obstacles, 0.0, 0.0, 0.0, 0.0, 2.24, 5.46, legacy))
+            obstacles, 0.0, 0.0, 0.0, 0.0, 2.24, 5.46, navgrid))
         self.assertFalse(baker.spawn_obstacle_obb_blocked(
             obstacles, 0.0, 0.0, 0.0, math.pi / 2.0,
-            2.24, 5.46, legacy))
+            2.24, 5.46, navgrid))
 
     def test_spawn_clearance_rejects_overlapping_maximum_chassis_obbs(self):
         first = (0.0, 0.0, 0.0, 0.0)
@@ -475,7 +459,7 @@ class CompiledSpace0922Test(unittest.TestCase):
             bounds = resource['boxes'][instance[13]][:6]
             records.append(baker._soft_destructible_spawn_obb(
                 transform, bounds))
-        legacy = types.SimpleNamespace(
+        navgrid = types.SimpleNamespace(
             VEHICLE_GROUND_CLEARANCE=0.65,
             VEHICLE_CLEARANCE_HEIGHT=2.4)
         obstacles = types.SimpleNamespace(
@@ -487,13 +471,13 @@ class CompiledSpace0922Test(unittest.TestCase):
         # The captured M41 90 birth pose is inside wire (32386, 24).
         self.assertTrue(baker.spawn_soft_destructible_obb_blocked(
             obstacles, -26.0, 386.0, 3.829, math.pi,
-            half_width, half_length, legacy))
+            half_width, half_length, navgrid))
         failures = []
         for team in ('1', '2'):
             for slot, pose in enumerate(graph['spawn_formations'][team]):
                 if baker.spawn_soft_destructible_obb_blocked(
                         obstacles, pose[0], pose[2], pose[1], pose[3],
-                        half_width, half_length, legacy):
+                        half_width, half_length, navgrid):
                     failures.append((team, slot))
 
         # Soft objects at exact decoded spawns are cleared during startup;
@@ -539,15 +523,18 @@ class CompiledSpace0922Test(unittest.TestCase):
         paths = sorted(path for path in graph_root.glob('*.json')
                        if path.name != 'manifest.json')
         self.assertEqual(41, len(paths))
-        legacy = load_module('bake_navigation_0922')._legacy_baker()
+        navgrid = load_module('bake_navigation_0922').navgrid
+
+        identity_history = ('capture_coordinate_previous_sha256', 'terrain_edge_previous_sha256',
+                            'navigation_previous_sha256', 'navigation_previous_sha256s',
+                            'route_previous_sha256')
 
         def route_fields(node, path=''):
-            # Identity history is not route data; every other field is.
             found = []
             if isinstance(node, dict):
                 for key, value in node.items():
                     child = path + '.' + key if path else key
-                    if 'route' in key and key != 'route_previous_sha256':
+                    if 'route' in key or 'previous_sha256' in key:
                         found.append(child)
                     found.extend(route_fields(value, child))
             elif isinstance(node, list):
@@ -555,8 +542,8 @@ class CompiledSpace0922Test(unittest.TestCase):
                     found.extend(route_fields(item, path))
             return found
 
-        def without_routes(graph, identity):
-            # Exactly what removing the residual old routes deleted.
+        def without_routes(graph):
+            # Exactly what removing the old routes and old identities deleted.
             result = copy.deepcopy(graph)
             del result['routes']
             route_statistics = ('route_segments', 'maximum_route_detour',
@@ -573,7 +560,10 @@ class CompiledSpace0922Test(unittest.TestCase):
                     (record or {}).pop(key, None)
             if railway:
                 del railway['routes_preserved']
-            result['navigation_previous_sha256s'].append(identity)
+            # Collision proofs recorded for the old route segments.
+            (result['bake'].get('local_meshes') or {}).pop('geometry_provenance', None)
+            for key in identity_history:
+                result.pop(key, None)
             return result
 
         for path in paths:
@@ -584,18 +574,18 @@ class CompiledSpace0922Test(unittest.TestCase):
                 # not its stale pre-pruning "one component" summary.
                 prior=json.loads(subprocess.check_output(['git','show',
                     '100bac61:navgraphs/'+path.name],cwd=ROOT))
-                before=legacy._connected_components(prior)
-                after=legacy._connected_components(data)
+                before=navgrid._connected_components(prior)
+                after=navgrid._connected_components(data)
                 self.assertEqual(len(before),len(after),(path.stem,'new disconnected pocket'))
                 self.assertEqual(len(after),data['validation']['components'])
                 self.assertGreaterEqual(data['validation']['largest_fraction'],
                     round(before[0]/float(sum(before)),5))
-                # Bot routes come from the built-in Default tactics.
+                # Bot routes come from the built-in Default tactics, and a
+                # graph names only its own identity.
                 self.assertEqual([], route_fields(data))
                 shipped=subprocess.check_output(['git','show',
                     '54c995f9:navgraphs/'+path.name],cwd=ROOT)
-                self.assertEqual(without_routes(
-                    json.loads(shipped), hashlib.sha256(shipped).hexdigest()), data)
+                self.assertEqual(without_routes(json.loads(shipped)), data)
 
     def test_reads_0920_bwt2_chunk_vector(self):
         settings = struct.pack('<f4i3I', 100.0, -4, 3, -4, 3, 0, 0, 0)
@@ -631,7 +621,7 @@ class CompiledSpace0922Test(unittest.TestCase):
             identity, (2.5, 0.7, -0.25, 3.5, 2.0, 0.25))
         inside_clearance = baker._soft_destructible_spawn_obb(
             identity, (2.49, 0.7, -0.25, 3.5, 2.0, 0.25))
-        legacy = types.SimpleNamespace(
+        navgrid = types.SimpleNamespace(
             VEHICLE_GROUND_CLEARANCE=0.65,
             VEHICLE_CLEARANCE_HEIGHT=2.4)
 
@@ -639,15 +629,15 @@ class CompiledSpace0922Test(unittest.TestCase):
         # ends at x=2.5, where exact contact is allowed but 1 cm inside is not.
         self.assertFalse(baker.spawn_soft_destructible_obb_blocked(
             types.SimpleNamespace(soft_spawn_obbs=(touching,)),
-            0.0, 0.0, 0.0, math.pi / 2.0, 1.0, 2.0, legacy))
+            0.0, 0.0, 0.0, math.pi / 2.0, 1.0, 2.0, navgrid))
         self.assertTrue(baker.spawn_soft_destructible_obb_blocked(
             types.SimpleNamespace(soft_spawn_obbs=(inside_clearance,)),
-            0.0, 0.0, 0.0, math.pi / 2.0, 1.0, 2.0, legacy))
+            0.0, 0.0, 0.0, math.pi / 2.0, 1.0, 2.0, navgrid))
         # Without the rotation the 1 m half-width lies on X, so the same body
         # remains a full metre outside the expanded chassis footprint.
         self.assertFalse(baker.spawn_soft_destructible_obb_blocked(
             types.SimpleNamespace(soft_spawn_obbs=(inside_clearance,)),
-            0.0, 0.0, 0.0, 0.0, 1.0, 2.0, legacy))
+            0.0, 0.0, 0.0, 0.0, 1.0, 2.0, navgrid))
 
     def test_compiled_bridge_keeps_walkable_deck_and_blocks_body(self):
         deck = ((0.0, 2.0, 0.0), (4.0, 2.0, 0.0), (0.0, 2.0, 4.0))
@@ -670,12 +660,12 @@ class CompiledSpace0922Test(unittest.TestCase):
                 self.blockers.append(triangle)
 
         obstacles = Obstacles()
-        legacy = types.SimpleNamespace(
+        navgrid = types.SimpleNamespace(
             _is_bridge_model=lambda name: 'bridge' in name.lower())
 
         baker._raster_compiled_collision_instance(
             obstacles, 'content/WideBridge.primitives_processed',
-            [deck, body], legacy)
+            [deck, body], navgrid)
 
         self.assertEqual(1, obstacles.bridge_instance_count)
         self.assertEqual(1, obstacles.bridge_surface_triangle_count)
@@ -716,12 +706,12 @@ class CompiledSpace0922Test(unittest.TestCase):
             ((-1.0, -2.0, -3.0), (-4.0, -5.0, -6.0),
              (-7.0, -8.0, -9.0)),
         ]
-        legacy = types.SimpleNamespace(
+        navgrid = types.SimpleNamespace(
             _bsp_triangles=lambda unused_section, unused_names, unused_flags:
             self.fail('version 2 must not use the legacy parser'))
 
         decoded = baker._bsp_triangles_0922(
-            self._bsp2_v2(triangles, node_count=3, shared_count=2), legacy)
+            self._bsp2_v2(triangles, node_count=3, shared_count=2), navgrid)
 
         self.assertEqual(triangles, decoded)
 
@@ -729,7 +719,7 @@ class CompiledSpace0922Test(unittest.TestCase):
         triangle = ((0.0, 0.0, 0.0),
                     (1.0, 0.0, 0.0),
                     (0.0, 1.0, 0.0))
-        legacy = types.SimpleNamespace(_bsp_triangles=None)
+        navgrid = types.SimpleNamespace(_bsp_triangles=None)
         wrong_triangle_count = bytearray(self._bsp2_v2([triangle]))
         struct.pack_into('<I', wrong_triangle_count, 16, 2)
         malformed = (
@@ -743,7 +733,7 @@ class CompiledSpace0922Test(unittest.TestCase):
         for section_data in malformed:
             with self.subTest(length=len(section_data)):
                 with self.assertRaises(ValueError):
-                    baker._bsp_triangles_0922(section_data, legacy)
+                    baker._bsp_triangles_0922(section_data, navgrid)
 
     def test_bsp2_legacy_layout_remains_compatible(self):
         triangle = ((0.0, 1.0, 2.0),
@@ -753,11 +743,11 @@ class CompiledSpace0922Test(unittest.TestCase):
                         struct.pack('<9fI',
                                     *(triangle[0] + triangle[1] + triangle[2] +
                                       (0,))))
-        legacy = types.SimpleNamespace(
+        navgrid = types.SimpleNamespace(
             _bsp_triangles=lambda value, names, flags:
             [('legacy', value, names, flags)])
 
-        decoded = baker._bsp_triangles_0922(section_data, legacy)
+        decoded = baker._bsp_triangles_0922(section_data, navgrid)
 
         self.assertEqual([('legacy', section_data, (), {})], decoded)
 
@@ -832,9 +822,9 @@ class CompiledSpace0922Test(unittest.TestCase):
         arena = (-500.0, -500.0, 500.0, 500.0)
         config = {
             'bounds': arena,
-            # Prokhorovka's east lane waypoint. The baseline baker's 16 m
-            # anchor margin used to push the sampled rectangle out to x=512,
-            # and Bot A* reached every cell baked out there.
+            # An anchor at Prokhorovka's east edge. A 16 m anchor margin used
+            # to push the sampled rectangle out to x=512, and Bot A* reached
+            # every cell baked out there.
             'anchors': ((496.0, -316.0),),
             'bases': ((-126.0, 446.0), (54.0, -446.0)),
         }
@@ -1006,7 +996,7 @@ class CompiledSpace0922Test(unittest.TestCase):
                     return False
                 return blocked(x, z, ground, margin)
 
-        legacy = types.SimpleNamespace(
+        navgrid = types.SimpleNamespace(
             HAZARD_EDGE=2, HAZARD_WATER=1, WATER_DEPTH_LIMIT=0.9,
             BRIDGE_OBSTACLE_MARGIN=1.0, VEHICLE_HALF_WIDTH=2.15,
             MAX_GRADE_UP=0.38, MAX_GRADE_DOWN=0.38,
@@ -1019,13 +1009,13 @@ class CompiledSpace0922Test(unittest.TestCase):
             x, z, ground: edge_clear(x, z, ground)
             if edge_clear is not None else True,
         )
-        return Terrain(), Obstacles(), legacy
+        return Terrain(), Obstacles(), navgrid
 
     def test_lakeville_corner_link_changes_only_the_proved_two_bits(self):
         graph = self._lakeville_corner_graph()
         segments = []
         samples = []
-        terrain, obstacles, legacy = self._lakeville_corner_dependencies(
+        terrain, obstacles, navgrid = self._lakeville_corner_dependencies(
             segment_clear=lambda unused_terrain, unused_obstacles, start, end:
             segments.append((start, end)) or True,
             edge_clear=lambda x, z, ground:
@@ -1033,7 +1023,7 @@ class CompiledSpace0922Test(unittest.TestCase):
         )
 
         added = baker.install_lakeville_narrow_corner_link(
-            graph, terrain, obstacles, legacy)
+            graph, terrain, obstacles, navgrid)
 
         self.assertEqual(1, added)
         self.assertEqual(2, len(segments))
@@ -1055,7 +1045,7 @@ class CompiledSpace0922Test(unittest.TestCase):
                 if name == 'corner_hazard':
                     graph['hazards'][0] = 3
                 calls = []
-                terrain, obstacles, legacy = self._lakeville_corner_dependencies(
+                terrain, obstacles, navgrid = self._lakeville_corner_dependencies(
                     segment_clear=lambda unused_terrain, unused_obstacles,
                     start, unused_end: calls.append(start) or
                     not (name == 'one_way' and len(calls) == 2),
@@ -1071,7 +1061,7 @@ class CompiledSpace0922Test(unittest.TestCase):
 
                 with self.assertRaises(space.UnsafeBakeInputError):
                     baker.install_lakeville_narrow_corner_link(
-                        graph, terrain, obstacles, legacy)
+                        graph, terrain, obstacles, navgrid)
 
                 self.assertEqual([0, 0, 0, 0], graph['links'])
 
@@ -1096,7 +1086,7 @@ class CompiledSpace0922Test(unittest.TestCase):
 
         terrain = Terrain()
         obstacles = Obstacles()
-        legacy = types.SimpleNamespace(
+        navgrid = types.SimpleNamespace(
             HAZARD_WATER=1,
             HAZARD_EDGE=2,
             HAZARD_SHALLOW_WATER=4,
@@ -1119,7 +1109,7 @@ class CompiledSpace0922Test(unittest.TestCase):
                 lambda unused_terrain, unused_obstacles,
                 unused_start, unused_end: True),
         )
-        return terrain, obstacles, legacy
+        return terrain, obstacles, navgrid
 
     @staticmethod
     def _reviewed_adapter_graph(origin=(0.0, 0.0), width=3, height=3):
@@ -1156,10 +1146,10 @@ class CompiledSpace0922Test(unittest.TestCase):
             'points': ((0.0, 0.0), (4.0, 4.0)),
             'side_states': {(4.0, 0.0): 2, (0.0, 4.0): 2},
         }
-        terrain, obstacles, legacy = self._reviewed_adapter_dependencies()
+        terrain, obstacles, navgrid = self._reviewed_adapter_dependencies()
 
         record = baker.install_reviewed_narrow_corner_link(
-            graph, terrain, obstacles, legacy, contract)
+            graph, terrain, obstacles, navgrid, contract)
 
         self.assertEqual('safe_diagonal', record['kind'])
         self.assertEqual(2, record['directed_links_added'])
@@ -1174,7 +1164,7 @@ class CompiledSpace0922Test(unittest.TestCase):
         graph['hazards'][1] = 2
         graph['hazards'][2] = 3
         original = copy.deepcopy(graph)
-        terrain, obstacles, legacy = self._reviewed_adapter_dependencies()
+        terrain, obstacles, navgrid = self._reviewed_adapter_dependencies()
         contract = {
             'id': 'test_safe_diagonal',
             'points': ((0.0, 0.0), (4.0, 4.0)),
@@ -1183,7 +1173,7 @@ class CompiledSpace0922Test(unittest.TestCase):
 
         with self.assertRaises(space.UnsafeBakeInputError):
             baker.install_reviewed_narrow_corner_link(
-                graph, terrain, obstacles, legacy, contract)
+                graph, terrain, obstacles, navgrid, contract)
 
         self.assertEqual(original, graph)
 
@@ -1204,11 +1194,11 @@ class CompiledSpace0922Test(unittest.TestCase):
             'side_states': {(4.0, 0.0): 2},
             'maximum_water_depth': 0.9,
         }
-        terrain, obstacles, legacy = self._reviewed_adapter_dependencies(
+        terrain, obstacles, navgrid = self._reviewed_adapter_dependencies(
             edge=lambda x, unused_z, unused_ground: x != 4.0)
 
         record = baker.install_reviewed_terrain_path(
-            graph, terrain, obstacles, legacy, contract)
+            graph, terrain, obstacles, navgrid, contract)
 
         self.assertEqual('edge_erosion', record['kind'])
         self.assertEqual(1, record['revived_nodes'])
@@ -1243,14 +1233,14 @@ class CompiledSpace0922Test(unittest.TestCase):
             'side_states': {(4.0, 0.0): 1},
             'maximum_water_depth': 1.1,
         }
-        terrain, obstacles, legacy = self._reviewed_adapter_dependencies(
+        terrain, obstacles, navgrid = self._reviewed_adapter_dependencies(
             water=lambda x, unused_z, unused_ground:
             1.0 if 2.0 <= x <= 6.0 else 0.0,
             edge=lambda x, unused_z, unused_ground:
             not (2.0 <= x <= 6.0))
 
         record = baker.install_reviewed_terrain_path(
-            graph, terrain, obstacles, legacy, contract)
+            graph, terrain, obstacles, navgrid, contract)
 
         self.assertEqual(1.0, record['maximum_water_depth'])
         self.assertEqual(4, graph['hazards'][middle])
@@ -1262,9 +1252,9 @@ class CompiledSpace0922Test(unittest.TestCase):
         # between these two constants is what made bots queue on the dry bank
         # of a twenty-centimetre ditch while the native probe was willing to
         # drive it, so the baker refuses to bake when they disagree.
-        legacy = baker._legacy_baker()
+        navgrid = baker.navgrid
 
-        self.assertEqual(legacy.WATER_DEPTH_LIMIT,
+        self.assertEqual(navgrid.WATER_DEPTH_LIMIT,
                          baker.SHALLOW_WATER_THRESHOLD)
         self.assertEqual(1.2, baker.SHALLOW_WATER_THRESHOLD)
 
@@ -1273,7 +1263,7 @@ class CompiledSpace0922Test(unittest.TestCase):
         # Ordinary navigable water no longer sets HAZARD_SHALLOW_WATER, so a
         # contract that still expected it would describe a graph this baker
         # cannot produce and would fail its own pre-mutation assertion.
-        legacy = baker._legacy_baker()
+        navgrid = baker.navgrid
         contracts = []
         for records in baker._REVIEWED_TERRAIN_PATH_CONTRACTS.values():
             contracts.extend(records)
@@ -1285,7 +1275,7 @@ class CompiledSpace0922Test(unittest.TestCase):
                 for point, hazard in (contract.get(key) or {}).items():
                     with self.subTest(contract=contract['id'], point=point):
                         self.assertFalse(
-                            int(hazard) & legacy.HAZARD_SHALLOW_WATER)
+                            int(hazard) & navgrid.HAZARD_SHALLOW_WATER)
 
     def test_reviewed_ford_leaves_ordinary_navigable_water_unflagged(self):
         # One ford, both sides of the limit: the deep cell keeps the shallow
@@ -1317,16 +1307,16 @@ class CompiledSpace0922Test(unittest.TestCase):
                 return 0.5
             return 0.0
 
-        terrain, obstacles, legacy = self._reviewed_adapter_dependencies(
+        terrain, obstacles, navgrid = self._reviewed_adapter_dependencies(
             water=water,
             edge=lambda x, unused_z, unused_ground: not 2.0 <= x <= 14.0)
 
         record = baker.install_reviewed_terrain_path(
-            graph, terrain, obstacles, legacy, contract)
+            graph, terrain, obstacles, navgrid, contract)
 
         self.assertEqual(1.0, record['maximum_water_depth'])
         self.assertEqual(2, record['revived_nodes'])
-        self.assertEqual(legacy.HAZARD_SHALLOW_WATER, graph['hazards'][deep])
+        self.assertEqual(navgrid.HAZARD_SHALLOW_WATER, graph['hazards'][deep])
         self.assertEqual(0, graph['hazards'][knee])
         self.assertEqual(0, graph['heights_mm'][deep])
         self.assertEqual(0, graph['heights_mm'][knee])
@@ -1354,7 +1344,7 @@ class CompiledSpace0922Test(unittest.TestCase):
                 graph['hazards'][self._adapter_index(
                     graph, (4.0, 0.0))] = (3 if name == 'side' else 2)
                 original = copy.deepcopy(graph)
-                terrain, obstacles, legacy = self._reviewed_adapter_dependencies(
+                terrain, obstacles, navgrid = self._reviewed_adapter_dependencies(
                     height=(lambda x, unused_z: x)
                     if name == 'grade' else None,
                     water=(lambda unused_x, unused_z, unused_ground: 1.0)
@@ -1367,7 +1357,7 @@ class CompiledSpace0922Test(unittest.TestCase):
 
                 with self.assertRaises(space.UnsafeBakeInputError):
                     baker.install_reviewed_terrain_path(
-                        graph, terrain, obstacles, legacy, contract)
+                        graph, terrain, obstacles, navgrid, contract)
 
                 self.assertEqual(original, graph)
 
@@ -1396,12 +1386,12 @@ class CompiledSpace0922Test(unittest.TestCase):
             index = self._adapter_index(graph, point)
             graph['heights_mm'][index] = 8500
             graph['links'][index] = east if point[0] == -198.0 else west
-        terrain, obstacles, legacy = self._reviewed_adapter_dependencies(
+        terrain, obstacles, navgrid = self._reviewed_adapter_dependencies(
             surface=lambda x, z: 8.5
             if 80.0 <= z <= 92.0 and -198.0 <= x <= -190.0 else None)
 
         record = baker.install_munchen_underpass(
-            graph, terrain, obstacles, legacy)
+            graph, terrain, obstacles, navgrid)
 
         self.assertEqual('underpass_layer', record['kind'])
         self.assertEqual(3, record['replaced_upper_layer_nodes'])
@@ -1458,7 +1448,7 @@ class CompiledSpace0922Test(unittest.TestCase):
             def blocked(self, unused_x, unused_z, unused_height, margin):
                 return False
 
-        legacy = types.SimpleNamespace(
+        navgrid = types.SimpleNamespace(
             DIRECTIONS=directions,
             WATER_DEPTH_LIMIT=0.9,
             VEHICLE_HALF_WIDTH=2.15,
@@ -1472,8 +1462,8 @@ class CompiledSpace0922Test(unittest.TestCase):
         )
 
         record = baker.find_downhill_spawn_ingress(
-            graph, Terrain(), Obstacles(), (0.0, 0.0), (10.0, 0.0), legacy)
-        validation = baker.install_downhill_spawn_ingress(graph, record, legacy)
+            graph, Terrain(), Obstacles(), (0.0, 0.0), (10.0, 0.0), navgrid)
+        validation = baker.install_downhill_spawn_ingress(graph, record, navgrid)
 
         self.assertEqual([[0, 0], [1, 0], [2, 0], [3, 0], [4, 0]],
                          record['cells'])
@@ -1510,7 +1500,7 @@ class CompiledSpace0922Test(unittest.TestCase):
 
         directions = ((-1, -1), (0, -1), (1, -1), (-1, 0),
                       (1, 0), (-1, 1), (0, 1), (1, 1))
-        legacy = types.SimpleNamespace(
+        navgrid = types.SimpleNamespace(
             DIRECTIONS=directions, WATER_DEPTH_LIMIT=0.9,
             VEHICLE_HALF_WIDTH=2.15, HAZARD_WATER=1, HAZARD_EDGE=2,
             _ground_height=lambda terrain, unused_obstacles, x, z:
@@ -1519,7 +1509,7 @@ class CompiledSpace0922Test(unittest.TestCase):
         )
         with self.assertRaises(space.UnsafeBakeInputError):
             baker.find_downhill_spawn_ingress(
-                graph, Terrain(), Obstacles(), (0.0, 0.0), (10.0, 0.0), legacy)
+                graph, Terrain(), Obstacles(), (0.0, 0.0), (10.0, 0.0), navgrid)
 
 
 if __name__ == '__main__':

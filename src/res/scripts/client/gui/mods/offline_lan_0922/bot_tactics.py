@@ -47,6 +47,10 @@ class TacticsError(ValueError):
     pass
 
 
+class RetiredMapIdentity(TacticsError):
+    """A profile map entry names a navigation graph this build does not ship."""
+
+
 def route_motion_identity(order):
     """An aiming target does not own an unchanged authored travel leg."""
     if (order.get('combat_mode') not in ('route', 'advance') or
@@ -243,20 +247,6 @@ def waypoint(raw, bounds):
     return value
 
 
-# Known test-build resource identities accepted during navigation rollback.
-NAVIGATION_ROLLBACK_IDENTITIES = {'04_himmelsdorf': 'f03b9a8a6f706e055198185b393afe19cc91bb4e1034e09eb4979b50a0bf543c',
- '05_prohorovka': '648694cb5cacae9c039833659579b2f95a1a4a5908ea9efc796c34c57e023ed7',
- '06_ensk': 'c37fbee5d445a6b3456dab9a21511f096b38f0e96f2267a8e160d1bbc13265ca',
- '114_czech': '20edc5c59bfb2008931a67e6451484a215e7fecbf1e5d824e12f5163afe81b40',
- '17_munchen': 'cca0e9e9e5b47a46ec682413907b6b7954a0fb83ff4f13f010f4d901caa663ef',
- '35_steppes': '12898d9b0487eacfdcbde51dc1711e2223d7ec0113e7d75f95e948d2c029eb9b',
- '44_north_america': '9209714bbde0dd3bbb2e9d8f26f32065d7505519946a97edc6e7a69d20184384',
- '45_north_america': '2194e14f3592fcbbede09c8fe3064b2a0fc96596f5a7f1fcdab00d87b102f8b4',
- '47_canada_a': 'cacfe6cfe6f44eda588037b97b1725acaca8346db695071dcdce3d231cc5187c',
- '86_himmelsdorf_winter': '141bfa6e0011557242941c2f71dfcb507fadf33f7fc34945c33e5d4a0b873809',
- '92_stalingrad': 'a91c83e470a7cb790b85014ba0f99f815e56dcb3e3cbfcb7b165042fbb604a76'}
-
-
 def sys_contract():
     import sys
     return sys.modules[__name__]
@@ -297,12 +287,11 @@ def canonical(raw):
         meta = MAPS[name]
         _keys(settings, ('mode', 'resource_sha256', 'routes', 'positions', 'default_routes', 'deleted_positions'),
               ('mode', 'resource_sha256', 'routes', 'positions'))
-        fingerprints = (meta['resource_sha256'], meta.get('capture_coordinate_previous_sha256'),
-                        meta.get('terrain_edge_previous_sha256'), meta.get('route_previous_sha256'),
-                        NAVIGATION_ROLLBACK_IDENTITIES.get(name),
-                        meta.get('navigation_previous_sha256')) + tuple(meta.get('navigation_previous_sha256s', ()))
-        if settings['mode'] != 'regular' or settings['resource_sha256'] not in fingerprints or not settings['resource_sha256']:
+        if settings['mode'] != 'regular':
             raise TacticsError('Map mode or resource fingerprint mismatch: %s' % name)
+        # A profile names the current navigation graph; no older one is accepted.
+        if settings['resource_sha256'] != meta['resource_sha256']:
+            raise RetiredMapIdentity('Map mode or resource fingerprint mismatch: %s' % name)
         entry = dict(mode='regular', resource_sha256=meta['resource_sha256'], routes=[], positions=[])
         deleted = settings.get('deleted_positions', [])
         if not isinstance(deleted, list) or len(deleted) > 48:
@@ -457,6 +446,8 @@ def load(path):
         if len(data) > MAX_BYTES:
             raise TacticsError('Tactics document is too large')
         return canonical(json.loads(data.decode('utf-8-sig')))
+    except RetiredMapIdentity as error:
+        raise RetiredMapIdentity('Cannot load tactics: %s' % error)
     except (IOError, UnicodeError, ValueError, TypeError) as error:
         raise TacticsError('Cannot load tactics: %s' % error)
 

@@ -31,8 +31,7 @@ def graph_summary(graph):
 		collision_height_intervals=bake.get('collision_height_intervals'),
 		collision_cell_raster=bake.get('collision_cell_raster'),
 		sampling_policy=rebake.get('sampling_policy'),
-		collision_edge_sample_metres=rebake.get('collision_edge_sample_metres'),
-		previous_identity=graph.get('navigation_previous_sha256'))
+		collision_edge_sample_metres=rebake.get('collision_edge_sample_metres'))
 
 
 def mod_dir():

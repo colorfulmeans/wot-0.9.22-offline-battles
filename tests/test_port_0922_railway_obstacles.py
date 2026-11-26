@@ -82,9 +82,9 @@ class RailwayGraphMaskTests(unittest.TestCase):
     def test_repair_is_idempotent_and_retains_initial_mask_evidence(self):
         import repair_railway_navigation_0922 as repair
         field=types.SimpleNamespace(cells={(0,0):True},raster_size=1.,blocked=lambda x,z,y,margin:abs(x)<.2)
-        legacy=types.SimpleNamespace(VEHICLE_HALF_WIDTH=2.15,validate_graph=lambda *a:{'ok':True})
+        navgrid=types.SimpleNamespace(VEHICLE_HALF_WIDTH=2.15,validate_graph=lambda *a:{'ok':True})
         graph=dict(width=2,height=1,cell_size=8.,origin=[-4.,0.],heights_mm=[0,0],links=[1,2],hazards=[0,0],directions=[(1,0),(-1,0)],routes={},bases=[[-4.,0.],[4.,0.]],bake={})
-        first=repair.repair(graph,field,legacy)
-        self.assertEqual(first,repair.repair(first,field,legacy))
+        first=repair.repair(graph,field,navgrid)
+        self.assertEqual(first,repair.repair(first,field,navgrid))
 
 if __name__=='__main__':unittest.main()

@@ -23,7 +23,7 @@ class WaterPolicyTests(unittest.TestCase):
             self.assertEqual(1.2, NAVIGABLE_WATER_DEPTH)
             self.assertEqual(NAVIGABLE_WATER_DEPTH, fixture.module.BOT_WATER_AVOID_DEPTH)
             self.assertEqual(NAVIGABLE_WATER_DEPTH, baker.SHALLOW_WATER_THRESHOLD)
-            self.assertEqual(NAVIGABLE_WATER_DEPTH, baker._legacy_baker().WATER_DEPTH_LIMIT)
+            self.assertEqual(NAVIGABLE_WATER_DEPTH, baker.navgrid.WATER_DEPTH_LIMIT)
         finally:
             fixture.tearDown()
 
@@ -44,12 +44,6 @@ class WaterPolicyTests(unittest.TestCase):
                 for yaw in (math.pi/2,-math.pi/2):
                     for x in range(265,307):
                         self.assertTrue(grid.hull_pose_clear((x,-15.,189.),yaw,3.2,width), (x,yaw,width))
-
-    def test_old_profile_identity_remains_accepted_by_rebuilt_grid(self):
-        import hashlib,subprocess
-        graph=json.loads((ROOT/'navgraphs/84_winter.json').read_bytes())
-        old=subprocess.check_output(['git','show','f317c4e6:navgraphs/84_winter.json'],cwd=ROOT)
-        self.assertIn(hashlib.sha256(old).hexdigest(),graph['navigation_previous_sha256s'])
 
 
 class ArtilleryProofDiagnosticsTests(unittest.TestCase):

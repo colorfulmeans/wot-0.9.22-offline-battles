@@ -32,9 +32,7 @@ def _bake_one(client_root, output_root, map_name, existing_root=None):
             previous = stream.read()
         existing = json.loads(previous)
     graph = baker.bake_map_graph(client_root, map_name, existing_graph=existing)
-    if existing is not None:
-        graph['terrain_edge_previous_sha256'] = hashlib.sha256(previous).hexdigest()
-    baker._legacy_baker().write_graph(path, graph)
+    baker.navgrid.write_graph(path, graph)
     schema.validate_graph(graph, map_name)
     bake = graph.get('bake', {})
     if (bake.get('navigation_collision_policy') != baker.NAVIGATION_COLLISION_POLICY or

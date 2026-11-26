@@ -124,13 +124,13 @@ class NarrowPassageTests(unittest.TestCase):
         output.assert_not_called()
         self.assertNotIn('narrow_passage_target',nav.bot_states[7])
 
-    def test_current_default_passes_the_captured_opposed_gate_scene(self):
+    def test_default_gate_scene_hands_the_passage_target_to_the_progress_owner(self):
         import test_port_0922_great_wall_gate as gate
         import test_port_0922_bot_runtime as fixtures
         original=fixtures._load
         issued=[]
         def load():
-            module=original();start=module.BotRuntime.battle_start
+            module=original()
             remember=TerrainNavigator.remember_runtime_target
             def tracked(nav,bot,current,goal,target,now,**kwargs):
                 accepted=remember(nav,bot,current,goal,target,now,**kwargs)
@@ -140,16 +140,13 @@ class NarrowPassageTests(unittest.TestCase):
                 return accepted
             patcher=mock.patch.object(TerrainNavigator,'remember_runtime_target',tracked)
             patcher.start();self.addCleanup(patcher.stop)
-            def configured(runtime,message):
-                document=bot_tactics.for_round(bot_tactics.default_profile(),message['map'])
-                return start(runtime,dict(message,bot_tactics=document))
-            module.BotRuntime.battle_start=configured
             return module
-        case=gate.GreatWallGateTests('test_opposed_hulls_in_the_gatehouse_both_leave_the_passage')
+        # Default valley Bots reach the gatehouse in the scene's first minute.
+        case=gate.GreatWallGateTests('test_default_valley_bots_drive_through_the_gatehouse')
         case.setUp()
         try:
             with mock.patch.object(fixtures,'_load',side_effect=load):
-                case.test_opposed_hulls_in_the_gatehouse_both_leave_the_passage()
+                case.run_scene(60.0)
             self.assertTrue(issued,'The passage target must enter the existing finite progress owner')
             self.assertTrue(all(accepted and remembered==target for accepted,remembered,target in issued))
         finally:

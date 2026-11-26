@@ -9,7 +9,6 @@ runtime override and does not infer water from missing navigation heights.
 import argparse
 import collections
 import copy
-import hashlib
 import json
 import math
 from pathlib import Path
@@ -24,23 +23,26 @@ import bake_navigation_0922 as baker
 def geometry(client, name):
     original = baker.refine_terrain_edges
     try:
-        baker.refine_terrain_edges = lambda graph, terrain, obstacles, legacy: (terrain, obstacles, legacy)
+        baker.refine_terrain_edges = lambda graph, terrain, obstacles, navgrid: (terrain, obstacles, navgrid)
         return baker.bake_map_graph(client, name, existing_graph={'map': name})
     finally:
         baker.refine_terrain_edges = original
 
 
-def validate_routes(graph, legacy):
+MAX_SEGMENT_DETOUR = 2.0
+
+
+def validate_routes(graph, navgrid):
     """Validate additive passages with the shipping layered search.
 
-    The baseline validator knows only the coarse layer. Using it alone on
+    The coarse validator knows only the coarse layer. Using it alone on
     Windstorm reported a 4.15x detour before and after this bake, even though
     the shipping local bridge mesh provides the passage. Check every Default
-    route segment through that mesh instead of suppressing it.
+    route segment through that mesh instead of suppressing it. The checks gate
+    the bake; the graph carries no route data.
     """
     if not graph.get('local_meshes'):
-        return baker._terrain_validation(
-            legacy.validate_graph, graph, dict(bases=graph['bases']))
+        return navgrid.validate_graph(graph, dict(bases=graph['bases']))
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'launcher'))
     from gui.mods.offline_lan_0922 import bot_tactics
     from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
@@ -50,24 +52,21 @@ def validate_routes(graph, legacy):
     for route in bot_tactics.default_map(graph['map']).get('default_routes', ()):
         if not route.get('disabled'):
             cases.update((tuple(a[:2]), tuple(b[:2])) for a, b in zip(route['points'], route['points'][1:]))
-    proofs = []
     for start, end in sorted(cases):
         receipt = connection(grid, graph, start, end)
         if not receipt['connected']:
             raise ValueError('shipping layered route incomplete: %r' % receipt)
         direct = max(graph['cell_size'], math.hypot(end[0]-start[0], end[1]-start[1]))
-        receipt['detour'] = receipt['length']/direct
-        if receipt['detour'] > legacy.MAX_ROUTE_DETOUR:
+        if receipt['length']/direct > MAX_SEGMENT_DETOUR:
             raise ValueError('shipping layered route excessive detour: %r' % receipt)
-        proofs.append(receipt)
-    return dict(water_rebake_layered_routes=proofs)
+    return {}
 
 
-def rebake_layer(layer, terrain, obstacles, legacy, previous_limit=.9):
+def rebake_layer(layer, terrain, obstacles, navgrid, previous_limit=.9):
     """Measure all cells, retaining non-water and authored lower-layer proofs."""
     result = copy.deepcopy(layer)
     width, height, size = layer['width'], layer['height'], layer['cell_size']
-    old_limit = float(getattr(legacy, 'WATER_DEPTH_LIMIT'))
+    old_limit = float(getattr(navgrid, 'WATER_DEPTH_LIMIT'))
     limit = baker.NAVIGABLE_WATER_DEPTH
     candidates = set()
     depths = []
@@ -79,7 +78,7 @@ def rebake_layer(layer, terrain, obstacles, legacy, previous_limit=.9):
         # An existing bridge/underpass layer is authoritative. In an absent
         # cell the exact static geometry supplies the ground, never a nearby
         # route node or zero-height substitution.
-        ground = old_height / 1000. if old_height is not None else legacy._ground_height(terrain, obstacles, x, z)
+        ground = old_height / 1000. if old_height is not None else navgrid._ground_height(terrain, obstacles, x, z)
         depth = None if ground is None else terrain.water_depth(x, z, ground)
         depths.append(depth)
         count['cells_measured'] += 1
@@ -93,41 +92,41 @@ def rebake_layer(layer, terrain, obstacles, legacy, previous_limit=.9):
             # Ordinary 0.9--1.2 m water is no longer a special ford.
             # Authored navigation heights have millimetre precision.
             if depth <= limit + .00051:
-                hazard &= ~legacy.HAZARD_SHALLOW_WATER
-            elif not previous & legacy.HAZARD_SHALLOW_WATER:
+                hazard &= ~navgrid.HAZARD_SHALLOW_WATER
+            elif not previous & navgrid.HAZARD_SHALLOW_WATER:
                 raise ValueError('existing node has unreviewed deep water: %r' % ((x, ground, z),))
-        elif previous & (legacy.HAZARD_WATER | legacy.HAZARD_EDGE) and previous_limit < limit:
-            hazard &= ~legacy.HAZARD_SHALLOW_WATER
+        elif previous & (navgrid.HAZARD_WATER | navgrid.HAZARD_EDGE) and previous_limit < limit:
+            hazard &= ~navgrid.HAZARD_SHALLOW_WATER
             if depth > limit + 1e-7:
-                hazard = (hazard & ~legacy.HAZARD_EDGE) | legacy.HAZARD_WATER
+                hazard = (hazard & ~navgrid.HAZARD_EDGE) | navgrid.HAZARD_WATER
             else:
-                hazard &= ~legacy.HAZARD_WATER
+                hazard &= ~navgrid.HAZARD_WATER
                 # Only the changed water rule may revive an old cell. A dry
                 # cliff or obstacle is not reopened by this water rebake.
-                legacy.WATER_DEPTH_LIMIT = previous_limit
+                navgrid.WATER_DEPTH_LIMIT = previous_limit
                 try:
                     old_supported = depth <= previous_limit and baker.continuous_terrain_edge_clearance(
-                        terrain, obstacles, x, z, ground, legacy, legacy._has_safe_edge_clearance)
+                        terrain, obstacles, x, z, ground, navgrid, navgrid._has_safe_edge_clearance)
                 finally:
-                    legacy.WATER_DEPTH_LIMIT = limit
+                    navgrid.WATER_DEPTH_LIMIT = limit
                 supported = baker.continuous_terrain_edge_clearance(
-                    terrain, obstacles, x, z, ground, legacy, legacy._has_safe_edge_clearance)
-                margin = (legacy.BRIDGE_OBSTACLE_MARGIN if obstacles.surface_height(x, z) is not None
-                          else legacy.VEHICLE_HALF_WIDTH)
+                    terrain, obstacles, x, z, ground, navgrid, navgrid._has_safe_edge_clearance)
+                margin = (navgrid.BRIDGE_OBSTACLE_MARGIN if obstacles.surface_height(x, z) is not None
+                          else navgrid.VEHICLE_HALF_WIDTH)
                 if not old_supported and supported and not obstacles.blocked(x, z, ground, margin=margin):
                     result['heights_mm'][index] = int(round(ground * 1000.))
                     result['links'][index] = 0
-                    hazard &= ~(legacy.HAZARD_WATER | legacy.HAZARD_EDGE)
+                    hazard &= ~(navgrid.HAZARD_WATER | navgrid.HAZARD_EDGE)
                     candidates.add(index)
                 else:
-                    hazard |= legacy.HAZARD_EDGE
+                    hazard |= navgrid.HAZARD_EDGE
         elif old_height is None and depth > limit + 1e-7:
-            hazard |= legacy.HAZARD_WATER
+            hazard |= navgrid.HAZARD_WATER
         result['hazards'][index] = hazard
         if hazard != previous or result['heights_mm'][index] != old_height:
             changed.append(index)
-    legacy.WATER_DEPTH_LIMIT = old_limit
-    directions = [tuple(d) for d in layer.get('directions', legacy.DIRECTIONS)]
+    navgrid.WATER_DEPTH_LIMIT = old_limit
+    directions = [tuple(d) for d in layer.get('directions', navgrid.DIRECTIONS)]
     checked, added = 0, 0
     def point(index):
         return (layer['origin'][0]+index % width*size, result['heights_mm'][index]/1000.,
@@ -145,8 +144,8 @@ def rebake_layer(layer, terrain, obstacles, legacy, previous_limit=.9):
                 continue
             checked += 1
             start, end = point(index), point(following)
-            if (baker._resolution_segment_clear(terrain, obstacles, start, end, legacy, legacy._segment_clear) and
-                    baker._resolution_segment_clear(terrain, obstacles, end, start, legacy, legacy._segment_clear)):
+            if (baker._resolution_segment_clear(terrain, obstacles, start, end, navgrid, navgrid._segment_clear) and
+                    baker._resolution_segment_clear(terrain, obstacles, end, start, navgrid, navgrid._segment_clear)):
                 result['links'][index] |= 1 << bit
                 result['links'][following] |= 1 << directions.index((-dx, -dz))
                 added += 1
@@ -177,7 +176,7 @@ def rebake_layer(layer, terrain, obstacles, legacy, previous_limit=.9):
                 result['links'][following] &= ~(1 << reverse)
         result['heights_mm'][index] = None
         result['links'][index] = layer['links'][index]
-        result['hazards'][index] |= legacy.HAZARD_EDGE
+        result['hazards'][index] |= navgrid.HAZARD_EDGE
     changed = [i for i in range(width*height) if any(
         layer[key][i] != result[key][i] for key in ('heights_mm', 'links', 'hazards'))]
     count.update(revived_cells=len(connected), changed_cells=len(changed),
@@ -191,8 +190,8 @@ def rebake_layer(layer, terrain, obstacles, legacy, previous_limit=.9):
 def build(client, previous, output):
     raw = Path(previous).read_bytes()
     original = json.loads(raw)
-    terrain, obstacles, legacy = geometry(client, original['map'])
-    graph, receipt = rebake_layer(original, terrain, obstacles, legacy,
+    terrain, obstacles, navgrid = geometry(client, original['map'])
+    graph, receipt = rebake_layer(original, terrain, obstacles, navgrid,
                                   original['bake']['water_depth_limit'])
     layers = []
     patches = []
@@ -203,12 +202,12 @@ def build(client, previous, output):
                     list(details['region'][:2]) == patch['origin'] and
                     'water_depth_limit' in details):
                 previous_limit = details['water_depth_limit']
-        rebuilt, proof = rebake_layer(patch, terrain, obstacles, legacy, previous_limit)
+        rebuilt, proof = rebake_layer(patch, terrain, obstacles, navgrid, previous_limit)
         patches.append(rebuilt); layers.append(proof)
     if 'local_meshes' in original:
         graph['local_meshes'] = patches
-    if (original['bake'].get('water_depth_limit') == legacy.WATER_DEPTH_LIMIT and
-            original['bake'].get('shallow_water_threshold') == legacy.SHALLOW_WATER_THRESHOLD and
+    if (original['bake'].get('water_depth_limit') == navgrid.WATER_DEPTH_LIMIT and
+            original['bake'].get('shallow_water_threshold') == navgrid.SHALLOW_WATER_THRESHOLD and
             original['bake'].get('water_policy_rebake', {}).get('all_cells_measured') and
             all(all(a[k] == b[k] for k in ('heights_mm','hazards','links'))
                 for a,b in zip([original]+original.get('local_meshes',[]),[graph]+graph.get('local_meshes',[])))):
@@ -217,27 +216,22 @@ def build(client, previous, output):
         print(graph['map'], 'remeasured; retained identical geometry and provenance',flush=True)
         return
     bake = graph['bake']
-    bake['water_depth_limit'] = legacy.WATER_DEPTH_LIMIT
-    bake['shallow_water_threshold'] = legacy.SHALLOW_WATER_THRESHOLD
+    bake['water_depth_limit'] = navgrid.WATER_DEPTH_LIMIT
+    bake['shallow_water_threshold'] = navgrid.SHALLOW_WATER_THRESHOLD
     bake['water_policy_rebake'] = dict(base=receipt, local_layers=layers,
         source='pinned #1513 terrain, BWWa water and compiled collision',
         previous_water_depth_limit=original['bake']['water_depth_limit'],
         collision_edge_sample_metres=.25, navigation_strategy_changed=False,
         non_water_geometry_retained=True, all_cells_measured=True)
-    identities = set(original.get('navigation_previous_sha256s', ()))
-    identities.add(hashlib.sha256(raw).hexdigest())
-    if original.get('navigation_previous_sha256'):
-        identities.add(original['navigation_previous_sha256'])
-    graph['navigation_previous_sha256s'] = sorted(identities)
     for key in ('spawn_formations','spawn_anchors','bases','objective_bases','bounds',
                 'origin','width','height','cell_size'):
         assert graph.get(key) == original.get(key), key
-    graph['validation'].update(validate_routes(graph, legacy))
+    graph['validation'].update(validate_routes(graph, navgrid))
     for key, bit in (('rejected_water_nodes', 1), ('rejected_edge_nodes', 2), ('shallow_water_nodes', 4)):
         bake[key] = sum(bool(h & bit) for h in graph['hazards'])
     bake['retained_nodes'] = sum(h is not None for h in graph['heights_mm'])
-    components = legacy._connected_components(graph)
-    previous_components = legacy._connected_components(original)
+    components = navgrid._connected_components(graph)
+    previous_components = navgrid._connected_components(original)
     if len(components) > len(previous_components):
         raise ValueError('water rebake introduced a disconnected component')
     bake['water_policy_rebake']['previous_actual_components'] = previous_components

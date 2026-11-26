@@ -20,18 +20,18 @@ TACTICAL_MAPS = {
 	'04_himmelsdorf': HIMMELSDORF,
 }
 
-# The other rectangles live in data-only modules, one per original map group.
-from gui.mods.offline_lan_0922.ai import maps_group_a as bot_ai_maps_group_a
-from gui.mods.offline_lan_0922.ai import maps_group_b as bot_ai_maps_group_b
-from gui.mods.offline_lan_0922.ai import maps_group_c as bot_ai_maps_group_c
-from gui.mods.offline_lan_0922.ai import maps_extra as bot_ai_maps_extra
-from gui.mods.offline_lan_0922.ai import maps_0922_extra as bot_ai_maps_0922_extra
+# The other rectangles live in data-only modules, one per map group.
+from gui.mods.offline_lan_0922.ai import maps_group_a
+from gui.mods.offline_lan_0922.ai import maps_group_b
+from gui.mods.offline_lan_0922.ai import maps_group_c
+from gui.mods.offline_lan_0922.ai import maps_extra
+from gui.mods.offline_lan_0922.ai import maps_0922_extra
 
-TACTICAL_MAPS.update(bot_ai_maps_group_a.TACTICAL_MAPS_GROUP_A)
-TACTICAL_MAPS.update(bot_ai_maps_group_b.TACTICAL_MAPS_GROUP_B)
-TACTICAL_MAPS.update(bot_ai_maps_group_c.TACTICAL_MAPS_GROUP_C)
-TACTICAL_MAPS.update(bot_ai_maps_extra.TACTICAL_MAPS_EXTRA)
-TACTICAL_MAPS.update(bot_ai_maps_0922_extra.TACTICAL_MAPS_0922_EXTRA)
+TACTICAL_MAPS.update(maps_group_a.TACTICAL_MAPS_GROUP_A)
+TACTICAL_MAPS.update(maps_group_b.TACTICAL_MAPS_GROUP_B)
+TACTICAL_MAPS.update(maps_group_c.TACTICAL_MAPS_GROUP_C)
+TACTICAL_MAPS.update(maps_extra.TACTICAL_MAPS_EXTRA)
+TACTICAL_MAPS.update(maps_0922_extra.TACTICAL_MAPS_0922_EXTRA)
 
 
 def normalize_map_name(map_name):

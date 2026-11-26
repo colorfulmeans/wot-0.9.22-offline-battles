@@ -5,7 +5,7 @@ import struct
 import unittest
 from pathlib import Path
 from test_port_0922_navigation_baker import compiled_space
-from gui.mods.offline_lan_0922 import capture_circles, bot_tactics
+from gui.mods.offline_lan_0922 import capture_circles
 from gui.mods.offline_lan_0922.bot_editor_maps import MAPS
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,15 +40,3 @@ class CaptureCoordinateTests(unittest.TestCase):
         duplicate = compiled_space([('WTCP', 2, struct.pack('<II', 124, 5) + b''.join(rows + rows[-1:]))])
         with self.assertRaises(ValueError):
             capture_circles.standard_circles_from_space(duplicate)
-
-    def test_verified_coordinate_only_update_preserves_authored_profile(self):
-        profile = bot_tactics.empty()
-        name = '01_karelia'
-        profile['maps'][name] = dict(mode='regular', resource_sha256=MAPS[name]['capture_coordinate_previous_sha256'],
-                                     routes=[], positions=[dict(id='test', label='Authored parking', team=1,
-                                         point=[398.0, 402.0], radius=16.0, heading=0.0, priority=5)])
-        updated = bot_tactics.canonical(profile)
-        self.assertEqual(MAPS[name]['resource_sha256'], updated['maps'][name]['resource_sha256'])
-        profile['maps'][name]['resource_sha256'] = '0' * 64
-        with self.assertRaises(bot_tactics.TacticsError):
-            bot_tactics.canonical(profile)

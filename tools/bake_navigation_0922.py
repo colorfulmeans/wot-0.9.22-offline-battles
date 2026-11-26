@@ -1,22 +1,19 @@
 #!/usr/bin/env python3
 """Inspect strict navigation-bake inputs from the pinned WoT 0.9.22 client.
 
-This #1513 input adapter uses the repository's pinned navigation-baseline
-snapshot for graph construction and validation. It reads the packed resources:
+This #1513 baker reads the packed resources:
 
 * arena definitions and destructibles from ``scripts.pkg``;
 * terrain height blocks from ``*.cdata_processed``; and
 * compiled-space metadata from ``space.bin``.
 
-The pinned baker supplies the graph construction and validation algorithm.
-This adapter decodes #1513 collision, destructible, bridge and water semantics
-before baking any supported standard-mode map. A terrain-only graph would
-silently route tanks through buildings, bridges or water.
+It decodes #1513 collision, destructible, bridge and water semantics before
+baking any supported standard-mode map; ``navigation_grid`` then constructs
+and validates the graph. A terrain-only graph would silently route tanks
+through buildings, bridges or water.
 """
 
 import argparse
-import hashlib
-import importlib.util
 import io
 import json
 import math
@@ -34,32 +31,11 @@ from gui.mods.offline_lan_0922.ai.navigation import NAVIGABLE_WATER_DEPTH
 from packed_xml import (TYPE_ELEMENT, TYPE_STRING, TYPE_VECTOR, read_packed_xml)
 from space_bin_0922 import (CompiledSpace, CompiledSpaceError,
                             UnsafeBakeInputError, describe_space)
+import navigation_grid as navgrid
 
 
-GAME_VERSION = '0.9.22.0.1-cn-1513'
+GAME_VERSION = navgrid.GAME_VERSION
 VENDOR_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'vendor')
-NAVIGATION_BASELINE_COMMIT = 'f5b0173c296cd36753a5866ba5e6f2119e3edb25'
-NAVIGATION_BAKER_SHA256 = (
-    '7ea6081f8d3814679d9064838102470950bfa7a7f5b9528d8165af91bdf94727')
-NAVIGATION_BASELINE_ROOT = os.path.join(
-    VENDOR_ROOT, 'navigation_baseline_f5b0173')
-NAVIGATION_BAKER = os.path.join(
-    NAVIGATION_BASELINE_ROOT, 'tools', 'bake_navigation.py')
-NAVIGATION_BASELINE_SHA256 = {
-    'tools/bake_navigation.py': NAVIGATION_BAKER_SHA256,
-    'tools/build_navmesh_probe.py': (
-        'f3ad40738c5b162afdb017c01e0af8adfea54774f92ead71f2f638993af9a3af'),
-    'scripts/client/gui/mods/offhangar/bot_ai_maps.py': (
-        '13abd89f40a33e01a347df00c4447ebde09457c0c09f8efc92391d9684a9e016'),
-    'scripts/client/gui/mods/offhangar/bot_ai_maps_extra.py': (
-        'efee5742e227298fd47156bc3a02d62f2cf47e75f2df82311b5975a58e0fec86'),
-    'scripts/client/gui/mods/offhangar/bot_ai_maps_group_a.py': (
-        'dc03f590c79a606d84b365af4ce292d3bbb7b3c46ab514d39ff991b2b1151244'),
-    'scripts/client/gui/mods/offhangar/bot_ai_maps_group_b.py': (
-        'ec6db32b412885581791ad8ad888cb2df55ca6489a8eddc9dfb6a4a4ec663f4a'),
-    'scripts/client/gui/mods/offhangar/bot_ai_maps_group_c.py': (
-        'f6b71578f032a0fa1e442ebf7fc241a23d76171c8ea72cbde5ca728591e4d9e0'),
-}
 
 # Ordinary #1513 navigable water is not a navigation hazard.  The 0.8.2
 # baseline flagged every cell deeper than 0.12 m as shallow water, which cost
@@ -444,52 +420,13 @@ def require_safe_bake(client_root, map_name):
     return result
 
 
-def _legacy_baker():
-    """Load the exact pinned graph/raster implementation.
-
-    The target adapter deliberately supplies only #1513 resource readers.  All
-    clearance, grade, reversible-link and base-connectivity invariants remain
-    commit f5b0173's pinned code rather than following a mutable worktree.
-    """
-    for relative_path, expected_digest in NAVIGATION_BASELINE_SHA256.items():
-        path = os.path.join(
-            NAVIGATION_BASELINE_ROOT, *relative_path.split('/'))
-        with open(path, 'rb') as stream:
-            digest = hashlib.sha256(stream.read()).hexdigest()
-        if digest != expected_digest:
-            raise ValueError(
-                'vendored navigation baseline does not match %s: %s' %
-                (NAVIGATION_BASELINE_COMMIT, relative_path))
-    spec = importlib.util.spec_from_file_location(
-        '_offline_lan_navigation_baseline_baker', NAVIGATION_BAKER)
-    if spec is None or spec.loader is None:
-        raise ValueError('pinned navigation baker not found: %s' %
-                         NAVIGATION_BAKER)
-    module = importlib.util.module_from_spec(spec)
-    previous_bytecode_policy = sys.dont_write_bytecode
-    sys.dont_write_bytecode = True
-    try:
-        spec.loader.exec_module(module)
-    finally:
-        sys.dont_write_bytecode = previous_bytecode_policy
-    # Keep the verified vendor bytes intact; #1513 owns its water policy.
-    # Local mesh builders use this returned module too, including the
-    # existing_graph geometry-only entry which bypasses bake_graph below.
-    module.WATER_DEPTH_LIMIT = NAVIGABLE_WATER_DEPTH
-    module.SHALLOW_WATER_THRESHOLD = NAVIGABLE_WATER_DEPTH
-    return module
-
-
 def _target_sampling_bounds(map_name, map_config, cell_size):
     """Sample the stock arena rectangle, then apply the Great Wall X phase.
 
-    The baseline baker widens its sampling rectangle by a 16 metre margin
-    around every authored anchor.  That margin exists for authoring bounds that
-    predate exact client data; here ``bounds`` is the stock ``boundingBox``
-    itself, so the margin only pushed sampled cells -- and the gameplay
-    rectangle published beside them -- past the official red border.  Sample the
-    stock rectangle aligned outward to the cell grid instead, and refuse an
-    anchor that genuinely sits outside the play area rather than widening it.
+    ``bounds`` is the stock ``boundingBox`` itself. Sample it aligned outward
+    to the cell grid, without a margin that would push sampled cells -- and
+    the gameplay rectangle published beside them -- past the official red
+    border, and refuse an anchor that sits outside the play area.
     """
     arena = tuple(float(value) for value in map_config.get('bounds', ()))
     if len(arena) != 4 or arena[0] >= arena[2] or arena[1] >= arena[3]:
@@ -501,7 +438,7 @@ def _target_sampling_bounds(map_name, map_config, cell_size):
         x, z = float(point[0]), float(point[1])
         if not (arena[0] <= x <= arena[2] and arena[1] <= z <= arena[3]):
             raise UnsafeBakeInputError(
-                'tactical anchor %r is outside the stock arena rectangle %r' %
+                'anchor %r is outside the stock arena rectangle %r' %
                 ((x, z), arena))
     size = float(cell_size)
     sampled = (
@@ -655,30 +592,14 @@ def _record_target_grid_phase(graph, map_name, cell_size):
     return True
 
 
-def _target_bake_config(legacy, bounds, bases):
-    """Give the pinned baker the stock rectangle and the decoded objectives.
+def _bake_config(bounds, bases):
+    """The grid's input: the stock rectangle and the decoded objectives.
 
-    The pinned baker predates the explicit objective/start contracts and
-    expects a ``bases`` member on its private input shape. Its anchors are
-    these arena-decoded objectives alone: Bot routes come from the built-in
-    Default tactics, so the graph carries none.
+    The objectives are the bake's only anchors. Bot routes come from the
+    built-in Default tactics, so the graph carries none.
     """
-    config = legacy._bake_map_config(dict(
-        bounds=tuple(bounds), bases={1: tuple(bases[0]), 2: tuple(bases[1])}))
-    config['bases'] = tuple(bases)
-    return config
-
-
-# The pinned validator also scores routes; a graph without routes has none.
-_ROUTE_STATISTICS = ('route_segments', 'maximum_route_detour',
-                     'maximum_opening_regression')
-
-
-def _terrain_validation(validate, graph, config):
-    result = validate(graph, config)
-    for key in _ROUTE_STATISTICS:
-        result.pop(key, None)
-    return result
+    return dict(bounds=tuple(bounds), bases=tuple(tuple(base) for base in bases),
+                anchors=tuple(tuple(base) for base in bases))
 
 
 class PackageVFS(object):
@@ -841,10 +762,10 @@ def _soft_destructible_spawn_obb(transform, bounds):
 
 
 def _raster_compiled_collision_instance(obstacles, model_name, triangles,
-                                        legacy):
+                                        navgrid):
     """Raster one compiled instance with the mature bridge-deck semantics."""
     bridge_deck = set()
-    if legacy._is_bridge_model(model_name):
+    if navgrid._is_bridge_model(model_name):
         obstacles.bridge_instance_count += 1
         bridge_deck = obstacles._bridge_deck_triangles(triangles)
     for triangle in triangles:
@@ -855,11 +776,11 @@ def _raster_compiled_collision_instance(obstacles, model_name, triangles,
             obstacles._raster_triangle(triangle)
 
 
-def _bsp_triangles_0922(section, legacy, with_materials=False):
+def _bsp_triangles_0922(section, navgrid, with_materials=False):
     """Decode the exact BSP2 layouts used by the pinned client.
 
     BigWorld BSP version 0 stores its triangle count in the second header
-    word, which is the layout understood by the pinned baseline baker. Version
+    word, which is the layout ``navigation_grid._bsp_triangles`` reads. Version
     2 instead stores three ABI structure sizes there; its counts and bounding
     box precede the triangle array.  Treating those sizes as legacy counts
     produces a handful of giant, misaligned triangles and can seal real
@@ -873,7 +794,7 @@ def _bsp_triangles_0922(section, legacy, with_materials=False):
     version = (magic >> 24) & 0xFF
     if version == 0:
         if not with_materials:
-            return legacy._bsp_triangles(section, (), {})
+            return navgrid._bsp_triangles(section, (), {})
         if len(section) < 16:
             raise ValueError('truncated BSP2 version 0 header')
         triangle_count = struct.unpack_from('<I', section, 4)[0]
@@ -993,7 +914,7 @@ def collision_triangle_blocks_disk(triangle,x,z,minimum,maximum,radius):
     return abs(area)>1.e-9 and bool(signs) and all(s==signs[0] for s in signs)
 
 
-def compiled_navigation_obstacles(compiled, vfs, legacy, precise_regions=()):
+def compiled_navigation_obstacles(compiled, vfs, navgrid, precise_regions=()):
     """Build the static navigation raster directly from placed compiled colliders.
 
     All original destructible surfaces (71..85) are removed BEFORE node,
@@ -1013,7 +934,7 @@ def compiled_navigation_obstacles(compiled, vfs, legacy, precise_regions=()):
         raise UnsafeBakeInputError('BSMI placements and visibility masks do not align')
     colliders = bsmo['models_colliders']
 
-    class CompiledObstacles(legacy.ObstacleField):
+    class CompiledObstacles(navgrid.ObstacleField):
         def _raster_triangle(self,triangle):
             # Raster occupancy is triangle/cell intersection, not the vertical
             # bounds of the entire model face copied across its whole footprint.
@@ -1050,7 +971,7 @@ def compiled_navigation_obstacles(compiled, vfs, legacy, precise_regions=()):
         def _mark_cell(self, cell_x, cell_z, minimum_y, maximum_y):
             # A roof icicle and fallen icicle may share X/Z while leaving the
             # vehicle-height band empty. A bounding min/max fills that air gap.
-            legacy.ObstacleField._mark_cell(self,cell_x,cell_z,minimum_y,maximum_y)
+            navgrid.ObstacleField._mark_cell(self,cell_x,cell_z,minimum_y,maximum_y)
             key=(cell_x,cell_z)
             intervals=sorted(self.height_intervals.get(key,[])+[(minimum_y,maximum_y)])
             merged=[]
@@ -1061,12 +982,12 @@ def compiled_navigation_obstacles(compiled, vfs, legacy, precise_regions=()):
                     merged.append((low,high))
             self.height_intervals[key]=merged
 
-        def blocked(self,x,z,ground_y,margin=legacy.VEHICLE_HALF_WIDTH):
+        def blocked(self,x,z,ground_y,margin=navgrid.VEHICLE_HALF_WIDTH):
             radius=int(math.ceil(float(margin)/self.raster_size))
             cx=int(math.floor(float(x)/self.raster_size))
             cz=int(math.floor(float(z)/self.raster_size))
-            minimum=float(ground_y)+legacy.VEHICLE_GROUND_CLEARANCE
-            maximum=float(ground_y)+legacy.VEHICLE_CLEARANCE_HEIGHT
+            minimum=float(ground_y)+navgrid.VEHICLE_GROUND_CLEARANCE
+            maximum=float(ground_y)+navgrid.VEHICLE_CLEARANCE_HEIGHT
             precise=any(left<=x<=right and bottom<=z<=top for left,bottom,right,top in precise_regions)
             examined=set()
             for ix in range(cx-radius,cx+radius+1):
@@ -1112,9 +1033,9 @@ def compiled_navigation_obstacles(compiled, vfs, legacy, precise_regions=()):
         materials = material_cache[model_id]
         if name not in mesh_cache:
             try:
-                sections = legacy._primitive_sections(vfs.read(name))
+                sections = navgrid._primitive_sections(vfs.read(name))
                 mesh_cache[name] = (_bsp_triangles_0922(
-                    sections['bsp2'], legacy, with_materials=True)
+                    sections['bsp2'], navgrid, with_materials=True)
                     if 'bsp2' in sections else None)
             except (KeyError, ValueError, struct.error, zipfile.BadZipFile) as error:
                 raise UnsafeBakeInputError('%s: no valid authored collision: %s' % (name, error))
@@ -1183,10 +1104,10 @@ def compiled_navigation_obstacles(compiled, vfs, legacy, precise_regions=()):
             # The raster itself applies the existing 0.65m ground clearance.
             # Do not skip a whole short model: an elevated/rotated short shape
             # can still be a hard obstacle, and mixed models need face granularity.
-            _raster_compiled_collision_instance(obstacles, name, hard, legacy)
+            _raster_compiled_collision_instance(obstacles, name, hard, navgrid)
             if railway_vehicle:
                 _raster_compiled_collision_instance(
-                    obstacles.railway_obstacles, name, hard, legacy)
+                    obstacles.railway_obstacles, name, hard, navgrid)
     obstacles.soft_spawn_obbs = tuple(obstacles.soft_spawn_obbs)
     return obstacles
 
@@ -1276,7 +1197,7 @@ def _graph_cell_point(graph, cell):
             graph['origin'][1] + cell[1] * graph['cell_size'])
 
 
-def install_lakeville_narrow_corner_link(graph, terrain, obstacles, legacy):
+def install_lakeville_narrow_corner_link(graph, terrain, obstacles, navgrid):
     """Install the one proved #1513 Lakeville diagonal, or fail closed."""
     start_point = (-122.0, 46.0)
     end_point = (-118.0, 42.0)
@@ -1313,8 +1234,8 @@ def install_lakeville_narrow_corner_link(graph, terrain, obstacles, legacy):
     if (side_index is None or graph['heights_mm'][side_index] is None or
             rejected_index is None or
             graph['heights_mm'][rejected_index] is not None or
-            graph['hazards'][rejected_index] != legacy.HAZARD_EDGE or
-            graph['hazards'][rejected_index] & legacy.HAZARD_WATER):
+            graph['hazards'][rejected_index] != navgrid.HAZARD_EDGE or
+            graph['hazards'][rejected_index] & navgrid.HAZARD_WATER):
         raise UnsafeBakeInputError(
             'Lakeville narrow-corridor corner contract changed')
 
@@ -1324,8 +1245,8 @@ def install_lakeville_narrow_corner_link(graph, terrain, obstacles, legacy):
 
     start = point(start_cell, start_index)
     end = point(end_cell, end_index)
-    if (not legacy._segment_clear(terrain, obstacles, start, end) or
-            not legacy._segment_clear(terrain, obstacles, end, start)):
+    if (not navgrid._segment_clear(terrain, obstacles, start, end) or
+            not navgrid._segment_clear(terrain, obstacles, end, start)):
         raise UnsafeBakeInputError(
             'Lakeville narrow-corridor segment is no longer two-way safe')
 
@@ -1337,24 +1258,24 @@ def install_lakeville_narrow_corner_link(graph, terrain, obstacles, legacy):
             fraction = float(step) / float(steps)
             x = first[0] + (second[0] - first[0]) * fraction
             z = first[2] + (second[2] - first[2]) * fraction
-            ground = legacy._ground_height(terrain, obstacles, x, z)
+            ground = navgrid._ground_height(terrain, obstacles, x, z)
             if ground is None or not math.isfinite(float(ground)):
                 return False
-            if terrain.water_depth(x, z, ground) > legacy.WATER_DEPTH_LIMIT:
+            if terrain.water_depth(x, z, ground) > navgrid.WATER_DEPTH_LIMIT:
                 return False
-            margin = (legacy.BRIDGE_OBSTACLE_MARGIN
+            margin = (navgrid.BRIDGE_OBSTACLE_MARGIN
                       if obstacles.surface_height(x, z) is not None
-                      else legacy.VEHICLE_HALF_WIDTH)
+                      else navgrid.VEHICLE_HALF_WIDTH)
             if obstacles.blocked(x, z, ground, margin=margin):
                 return False
-            if not legacy._has_safe_edge_clearance(
+            if not navgrid._has_safe_edge_clearance(
                     terrain, obstacles, x, z, ground):
                 return False
             if previous is not None:
                 run = math.hypot(x - previous[0], z - previous[2])
                 delta = float(ground) - previous[1]
-                if (delta > run * legacy.MAX_GRADE_UP or
-                        delta < -run * legacy.MAX_GRADE_DOWN):
+                if (delta > run * navgrid.MAX_GRADE_UP or
+                        delta < -run * navgrid.MAX_GRADE_DOWN):
                     return False
             previous = (x, float(ground), z)
         return True
@@ -1393,7 +1314,7 @@ def _assert_missing_graph_states(graph, states, label):
                 (label, point))
 
 
-def _sample_reviewed_terrain_path(terrain, obstacles, legacy, points,
+def _sample_reviewed_terrain_path(terrain, obstacles, navgrid, points,
                                   label, maximum_water_depth,
                                   obstacle_margin, allow_surfaces=False,
                                   minimum_overhead_clearance=None,
@@ -1423,7 +1344,7 @@ def _sample_reviewed_terrain_path(terrain, obstacles, legacy, points,
                      (float(second[0]) - float(first[0])) * fraction)
                 z = (float(first[1]) +
                      (float(second[1]) - float(first[1])) * fraction)
-                ground = (legacy._ground_height(terrain, obstacles, x, z)
+                ground = (navgrid._ground_height(terrain, obstacles, x, z)
                           if use_surface_ground else terrain.height(x, z))
                 if ground is None or not math.isfinite(float(ground)):
                     raise UnsafeBakeInputError(
@@ -1438,7 +1359,7 @@ def _sample_reviewed_terrain_path(terrain, obstacles, legacy, points,
                         x, z, ground, margin=float(obstacle_margin)):
                     raise UnsafeBakeInputError(
                         '%s local path collision clearance changed' % label)
-                edge_clear = legacy._has_safe_edge_clearance(
+                edge_clear = navgrid._has_safe_edge_clearance(
                     terrain, obstacles, x, z, ground)
                 if not edge_clear:
                     report['edge_clearance_failures'] += 1
@@ -1465,8 +1386,8 @@ def _sample_reviewed_terrain_path(terrain, obstacles, legacy, points,
                 if previous is not None:
                     run = math.hypot(x - previous[0], z - previous[2])
                     delta = ground - previous[1]
-                    if (delta > run * legacy.MAX_GRADE_UP + 1e-7 or
-                            delta < -run * legacy.MAX_GRADE_DOWN - 1e-7):
+                    if (delta > run * navgrid.MAX_GRADE_UP + 1e-7 or
+                            delta < -run * navgrid.MAX_GRADE_DOWN - 1e-7):
                         raise UnsafeBakeInputError(
                             '%s local path grade changed: %.5f' %
                             (label, abs(delta) / max(run, 1e-9)))
@@ -1522,7 +1443,7 @@ def _add_reversible_path_links(graph, cells, indices, label):
     return added
 
 
-def install_reviewed_narrow_corner_link(graph, terrain, obstacles, legacy,
+def install_reviewed_narrow_corner_link(graph, terrain, obstacles, navgrid,
                                         contract):
     """Add one exact safe diagonal while leaving blocked side cells shut."""
     label = str(contract['id'])
@@ -1533,7 +1454,7 @@ def install_reviewed_narrow_corner_link(graph, terrain, obstacles, legacy,
     cells = [state[0] for state in states]
     indices = [state[1] for state in states]
     for point, index in zip(points, indices):
-        ground = legacy._ground_height(
+        ground = navgrid._ground_height(
             terrain, obstacles, point[0], point[1])
         if (ground is None or graph['heights_mm'][index] is None or
                 abs(int(graph['heights_mm'][index]) -
@@ -1554,12 +1475,12 @@ def install_reviewed_narrow_corner_link(graph, terrain, obstacles, legacy,
              points[0][1])
     second = (points[1][0], graph['heights_mm'][indices[1]] / 1000.0,
               points[1][1])
-    if (not legacy._segment_clear(terrain, obstacles, first, second) or
-            not legacy._segment_clear(terrain, obstacles, second, first)):
+    if (not navgrid._segment_clear(terrain, obstacles, first, second) or
+            not navgrid._segment_clear(terrain, obstacles, second, first)):
         raise UnsafeBakeInputError('%s corner segment is not two-way safe' % label)
     report = _sample_reviewed_terrain_path(
-        terrain, obstacles, legacy, points, label,
-        legacy.WATER_DEPTH_LIMIT, legacy.VEHICLE_HALF_WIDTH,
+        terrain, obstacles, navgrid, points, label,
+        navgrid.WATER_DEPTH_LIMIT, navgrid.VEHICLE_HALF_WIDTH,
         allow_surfaces=True, require_edge_clearance=True,
         use_surface_ground=True)
     added = _add_reversible_path_links(
@@ -1575,13 +1496,13 @@ def install_reviewed_narrow_corner_link(graph, terrain, obstacles, legacy,
         'directed_links_added': added,
         'maximum_grade': round(report['maximum_grade'], 5),
         'maximum_water_depth': round(report['maximum_water_depth'], 5),
-        'obstacle_margin': float(legacy.VEHICLE_HALF_WIDTH),
+        'obstacle_margin': float(navgrid.VEHICLE_HALF_WIDTH),
         'reversible': True,
         'side_cells_remain_closed': True,
     }
 
 
-def install_reviewed_terrain_path(graph, terrain, obstacles, legacy,
+def install_reviewed_terrain_path(graph, terrain, obstacles, navgrid,
                                   contract):
     """Restore a proved terrain/ford chain without widening adjacent cells."""
     label = str(contract['id'])
@@ -1613,33 +1534,33 @@ def install_reviewed_terrain_path(graph, terrain, obstacles, legacy,
                 '%s isolated terrain point is unexpectedly linked' % label)
     maximum_water_depth = float(contract['maximum_water_depth'])
     report = _sample_reviewed_terrain_path(
-        terrain, obstacles, legacy, points, label, maximum_water_depth,
-        legacy.VEHICLE_HALF_WIDTH)
+        terrain, obstacles, navgrid, points, label, maximum_water_depth,
+        navgrid.VEHICLE_HALF_WIDTH)
     if report['edge_clearance_failures'] < 1:
         raise UnsafeBakeInputError(
             '%s no longer needs its scoped edge adapter' % label)
     kind = str(contract['kind'])
     if (kind == 'ford' and
-            report['maximum_water_depth'] <= legacy.WATER_DEPTH_LIMIT):
+            report['maximum_water_depth'] <= navgrid.WATER_DEPTH_LIMIT):
         raise UnsafeBakeInputError(
             '%s no longer needs its scoped ford depth' % label)
     if (kind != 'ford' and
-            report['maximum_water_depth'] > legacy.WATER_DEPTH_LIMIT):
+            report['maximum_water_depth'] > navgrid.WATER_DEPTH_LIMIT):
         raise UnsafeBakeInputError(
             '%s unexpectedly crosses deep water' % label)
 
-    shallow_threshold = float(legacy.SHALLOW_WATER_THRESHOLD)
+    shallow_threshold = float(navgrid.SHALLOW_WATER_THRESHOLD)
     for point, index in zip(points, indices):
         if point not in missing_states:
             continue
         graph['heights_mm'][index] = terrain_heights[point]
         graph['links'][index] = 0
         graph['hazards'][index] &= ~(
-            legacy.HAZARD_WATER | legacy.HAZARD_EDGE)
+            navgrid.HAZARD_WATER | navgrid.HAZARD_EDGE)
         water_depth = terrain.water_depth(
             point[0], point[1], terrain_heights[point] / 1000.0)
         if float(water_depth) > shallow_threshold:
-            graph['hazards'][index] |= legacy.HAZARD_SHALLOW_WATER
+            graph['hazards'][index] |= navgrid.HAZARD_SHALLOW_WATER
     added = _add_reversible_path_links(
         graph, cells, indices, label)
     _assert_missing_graph_states(graph, side_states, label)
@@ -1653,14 +1574,14 @@ def install_reviewed_terrain_path(graph, terrain, obstacles, legacy,
         'maximum_grade': round(report['maximum_grade'], 5),
         'maximum_water_depth': round(report['maximum_water_depth'], 5),
         'local_water_depth_limit': round(maximum_water_depth, 5),
-        'obstacle_margin': float(legacy.VEHICLE_HALF_WIDTH),
+        'obstacle_margin': float(navgrid.VEHICLE_HALF_WIDTH),
         'edge_clearance_relaxed': True,
         'reversible': True,
         'side_cells_remain_closed': True,
     }
 
 
-def install_munchen_underpass(graph, terrain, obstacles, legacy):
+def install_munchen_underpass(graph, terrain, obstacles, navgrid):
     """Select Munich's terrain layer beneath one bridge, with strict walls."""
     label = 'munchen_west_bridge_underpass'
     points = (
@@ -1706,8 +1627,8 @@ def install_munchen_underpass(graph, terrain, obstacles, legacy):
             raise UnsafeBakeInputError(
                 '%s bridge-layer contract changed at %r' % (label, point))
     report = _sample_reviewed_terrain_path(
-        terrain, obstacles, legacy, points, label,
-        legacy.WATER_DEPTH_LIMIT, legacy.BRIDGE_OBSTACLE_MARGIN,
+        terrain, obstacles, navgrid, points, label,
+        navgrid.WATER_DEPTH_LIMIT, navgrid.BRIDGE_OBSTACLE_MARGIN,
         allow_surfaces=True, minimum_overhead_clearance=8.0)
     if report['surface_samples'] < 1:
         raise UnsafeBakeInputError('%s lost its overhead bridge surface' % label)
@@ -1719,7 +1640,7 @@ def install_munchen_underpass(graph, terrain, obstacles, legacy):
         _disconnect_graph_node(graph, cell, index)
         graph['heights_mm'][index] = terrain_heights[point]
         graph['hazards'][index] &= ~(
-            legacy.HAZARD_WATER | legacy.HAZARD_EDGE)
+            navgrid.HAZARD_WATER | navgrid.HAZARD_EDGE)
     added = _add_reversible_path_links(
         graph, cells, indices, label)
     _assert_missing_graph_states(graph, side_absent, label)
@@ -1742,26 +1663,26 @@ def install_munchen_underpass(graph, terrain, obstacles, legacy):
         'maximum_water_depth': round(report['maximum_water_depth'], 5),
         'minimum_overhead_clearance': round(
             report['minimum_overhead_clearance'], 5),
-        'obstacle_margin': float(legacy.BRIDGE_OBSTACLE_MARGIN),
+        'obstacle_margin': float(navgrid.BRIDGE_OBSTACLE_MARGIN),
         'reversible': True,
         'side_cells_remain_closed': True,
         'adjacent_bridge_deck_preserved': True,
     }
 
 
-def install_reviewed_map_adapters(graph, terrain, obstacles, legacy,
+def install_reviewed_map_adapters(graph, terrain, obstacles, navgrid,
                                   map_name):
     """Install only the fail-closed local topology contracts for this map."""
     records = []
     if map_name == '17_munchen':
         records.append(install_munchen_underpass(
-            graph, terrain, obstacles, legacy))
+            graph, terrain, obstacles, navgrid))
     for contract in _REVIEWED_NARROW_CORNER_CONTRACTS.get(map_name, ()):
         records.append(install_reviewed_narrow_corner_link(
-            graph, terrain, obstacles, legacy, contract))
+            graph, terrain, obstacles, navgrid, contract))
     for contract in _REVIEWED_TERRAIN_PATH_CONTRACTS.get(map_name, ()):
         records.append(install_reviewed_terrain_path(
-            graph, terrain, obstacles, legacy, contract))
+            graph, terrain, obstacles, navgrid, contract))
     return records
 
 
@@ -1787,7 +1708,7 @@ def _grid_line(start, end):
 
 
 def _probe_downhill_ingress(graph, terrain, obstacles, stock_spawn,
-                            enemy_base, main_nodes, target_cell, legacy):
+                            enemy_base, main_nodes, target_cell, navgrid):
     """Prove one collision-free, water-free downhill line into ``main_nodes``."""
     start_cell = _graph_cell(graph, stock_spawn)
     cells = list(_grid_line(start_cell, target_cell))
@@ -1810,19 +1731,19 @@ def _probe_downhill_ingress(graph, terrain, obstacles, stock_spawn,
     heights = []
     for cell in cells:
         x, z = _graph_cell_point(graph, cell)
-        ground = legacy._ground_height(terrain, obstacles, x, z)
+        ground = navgrid._ground_height(terrain, obstacles, x, z)
         if ground is None or not math.isfinite(float(ground)):
             return None
-        if terrain.water_depth(x, z, ground) > legacy.WATER_DEPTH_LIMIT:
+        if terrain.water_depth(x, z, ground) > navgrid.WATER_DEPTH_LIMIT:
             return None
-        if obstacles.blocked(x, z, ground, margin=legacy.VEHICLE_HALF_WIDTH):
+        if obstacles.blocked(x, z, ground, margin=navgrid.VEHICLE_HALF_WIDTH):
             return None
         heights.append(float(ground))
 
     maximum_downhill_grade = 0.0
     for index, (first, second) in enumerate(zip(cells, cells[1:])):
         dx, dz = second[0] - first[0], second[1] - first[1]
-        if (dx, dz) not in legacy.DIRECTIONS:
+        if (dx, dz) not in navgrid.DIRECTIONS:
             return None
         world_dx = dx * graph['cell_size']
         world_dz = dz * graph['cell_size']
@@ -1863,7 +1784,7 @@ def _probe_downhill_ingress(graph, terrain, obstacles, stock_spawn,
 
 
 def find_downhill_spawn_ingress(graph, terrain, obstacles, stock_spawn,
-                                enemy_base, legacy):
+                                enemy_base, navgrid):
     """Choose the nearest proved downhill entry into the retained main graph."""
     main_nodes = set(index for index, height in enumerate(graph['heights_mm'])
                      if height is not None)
@@ -1876,7 +1797,7 @@ def find_downhill_spawn_ingress(graph, terrain, obstacles, stock_spawn,
         raise UnsafeBakeInputError('spawn ingress has no enemy-facing direction')
     candidates = []
     for index in main_nodes:
-        point = legacy._node_point(graph, index)
+        point = navgrid._node_point(graph, index)
         dx = point[0] - float(stock_spawn[0])
         dz = point[1] - float(stock_spawn[1])
         progress = (dx * forward_x + dz * forward_z) / forward_length
@@ -1889,14 +1810,14 @@ def find_downhill_spawn_ingress(graph, terrain, obstacles, stock_spawn,
     for unused_distance, unused_lateral, unused_index, cell in candidates:
         record = _probe_downhill_ingress(
             graph, terrain, obstacles, stock_spawn, enemy_base,
-            main_nodes, cell, legacy)
+            main_nodes, cell, navgrid)
         if record is not None:
             return record
     raise UnsafeBakeInputError(
         'stock spawn has no collision-free downhill ingress into the main graph')
 
 
-def install_downhill_spawn_ingress(graph, record, legacy):
+def install_downhill_spawn_ingress(graph, record, navgrid):
     """Install a proved ingress without adding any uphill/reverse edge."""
     cells = [tuple(cell) for cell in record['cells']]
     indices = list(record['cell_indices'])
@@ -1904,25 +1825,25 @@ def install_downhill_spawn_ingress(graph, record, legacy):
     if len(cells) < 2 or len(cells) != len(indices) or len(cells) != len(heights):
         raise UnsafeBakeInputError('invalid downhill spawn ingress record')
     direction_bits = dict((direction, index)
-                          for index, direction in enumerate(legacy.DIRECTIONS))
+                          for index, direction in enumerate(navgrid.DIRECTIONS))
     for index, height in zip(indices[:-1], heights[:-1]):
         graph['heights_mm'][index] = int(height)
         graph['links'][index] = 0
-        graph['hazards'][index] &= ~legacy.HAZARD_EDGE
+        graph['hazards'][index] &= ~navgrid.HAZARD_EDGE
     for first, second, first_index, second_index in zip(
             cells, cells[1:], indices, indices[1:]):
         direction = (second[0] - first[0], second[1] - first[1])
         reverse = (-direction[0], -direction[1])
         graph['links'][first_index] |= 1 << direction_bits[direction]
         graph['links'][second_index] &= ~(1 << direction_bits[reverse])
-    return validate_downhill_spawn_ingress(graph, record, legacy)
+    return validate_downhill_spawn_ingress(graph, record, navgrid)
 
 
-def validate_downhill_spawn_ingress(graph, record, legacy):
+def validate_downhill_spawn_ingress(graph, record, navgrid):
     cells = [tuple(cell) for cell in record['cells']]
     indices = list(record['cell_indices'])
     direction_bits = dict((direction, index)
-                          for index, direction in enumerate(legacy.DIRECTIONS))
+                          for index, direction in enumerate(navgrid.DIRECTIONS))
     maximum_grade = 0.0
     for position, (first, second, first_index, second_index) in enumerate(zip(
             cells, cells[1:], indices, indices[1:])):
@@ -1945,7 +1866,7 @@ def validate_downhill_spawn_ingress(graph, record, legacy):
         run = graph['cell_size'] * (math.sqrt(2.0)
                                     if direction[0] and direction[1] else 1.0)
         maximum_grade = max(maximum_grade, -delta / 1000.0 / run)
-        if graph['hazards'][first_index] & legacy.HAZARD_WATER:
+        if graph['hazards'][first_index] & navgrid.HAZARD_WATER:
             raise UnsafeBakeInputError('spawn ingress crosses deep water')
     if abs(maximum_grade - float(record['maximum_downhill_grade'])) > 0.001:
         raise UnsafeBakeInputError('spawn ingress slope metadata does not match graph')
@@ -2085,7 +2006,7 @@ def representative_vehicle_chassis_envelope(client_root):
 
 
 def spawn_obstacle_obb_blocked(obstacles, x, z, ground_y, yaw, half_width,
-                               half_length, legacy):
+                               half_length, navgrid):
     """Return whether an oriented maximum chassis overlaps compiled BSP."""
     half_width = float(half_width)
     half_length = float(half_length)
@@ -2104,9 +2025,9 @@ def spawn_obstacle_obb_blocked(obstacles, x, z, ground_y, yaw, half_width,
     maximum_cell_z = int(math.floor(
         (float(z) + extent_z + cell_radius) / obstacles.raster_size))
     vehicle_minimum_y = (float(ground_y) +
-                         float(legacy.VEHICLE_GROUND_CLEARANCE))
+                         float(navgrid.VEHICLE_GROUND_CLEARANCE))
     vehicle_maximum_y = (float(ground_y) +
-                         float(legacy.VEHICLE_CLEARANCE_HEIGHT))
+                         float(navgrid.VEHICLE_CLEARANCE_HEIGHT))
     for cell_x in range(minimum_cell_x, maximum_cell_x + 1):
         sample_x = (cell_x + 0.5) * obstacles.raster_size
         delta_x = sample_x - float(x)
@@ -2166,7 +2087,7 @@ def _convex_footprints_overlap(first, second):
 
 
 def spawn_soft_destructible_obb_blocked(obstacles, x, z, ground_y, yaw,
-                                        half_width, half_length, legacy):
+                                        half_width, half_length, navgrid):
     """Return whether a spawn chassis intersects a skipped soft BSMO OBB."""
     records = tuple(getattr(obstacles, 'soft_spawn_obbs', ()))
     if not records:
@@ -2180,9 +2101,9 @@ def spawn_soft_destructible_obb_blocked(obstacles, x, z, ground_y, yaw,
     minimum_z = min(point[1] for point in footprint)
     maximum_z = max(point[1] for point in footprint)
     minimum_y = (float(ground_y) +
-                 float(legacy.VEHICLE_GROUND_CLEARANCE))
+                 float(navgrid.VEHICLE_GROUND_CLEARANCE))
     maximum_y = (float(ground_y) +
-                 float(legacy.VEHICLE_CLEARANCE_HEIGHT))
+                 float(navgrid.VEHICLE_CLEARANCE_HEIGHT))
     for record in records:
         if (float(record['maximum_x']) <= minimum_x or
                 float(record['minimum_x']) >= maximum_x or
@@ -2197,14 +2118,14 @@ def spawn_soft_destructible_obb_blocked(obstacles, x, z, ground_y, yaw,
     return False
 
 
-def spawn_pose_blocked(obstacles, pose, half_width, half_length, legacy):
+def spawn_pose_blocked(obstacles, pose, half_width, half_length, navgrid):
     """Apply both hard-BSP and spawn-only soft-destructible clearance."""
     return (spawn_obstacle_obb_blocked(
         obstacles, pose[0], pose[2], pose[1], pose[3],
-        half_width, half_length, legacy) or
+        half_width, half_length, navgrid) or
         spawn_soft_destructible_obb_blocked(
             obstacles, pose[0], pose[2], pose[1], pose[3],
-            half_width, half_length, legacy))
+            half_width, half_length, navgrid))
 
 
 def spawn_obbs_overlap(first, second, half_width, half_length):
@@ -2237,7 +2158,7 @@ def spawn_obbs_overlap(first, second, half_width, half_length):
 
 
 def spawn_clearance_failures(formations, obstacles, vehicle_envelope,
-                             legacy):
+                             navgrid):
     """Audit all published slots against BSP and every other maximum OBB."""
     half_width = float(vehicle_envelope['half_width'])
     half_length = float(vehicle_envelope['half_length'])
@@ -2249,11 +2170,11 @@ def spawn_clearance_failures(formations, obstacles, vehicle_envelope,
             records.append(record)
             if spawn_obstacle_obb_blocked(
                     obstacles, pose[0], pose[2], pose[1], pose[3],
-                    half_width, half_length, legacy):
+                    half_width, half_length, navgrid):
                 failures.append(('compiled_bsp', team, slot))
             if spawn_soft_destructible_obb_blocked(
                     obstacles, pose[0], pose[2], pose[1], pose[3],
-                    half_width, half_length, legacy):
+                    half_width, half_length, navgrid):
                 failures.append(('soft_destructible_obb', team, slot))
     for index, first in enumerate(records):
         for second in records[index + 1:]:
@@ -2302,7 +2223,7 @@ def _pack_spawn_candidates(nodes, yaw, half_width, half_length, required):
 
 
 def bake_spawn_formations(graph, anchors, map_name, obstacles,
-                          vehicle_envelope, legacy):
+                          vehicle_envelope, navgrid):
     """Emit two complete formations or reject the entire map bake.
 
     The runtime is intentionally not allowed to invent, project or nudge a
@@ -2365,7 +2286,7 @@ def bake_spawn_formations(graph, anchors, map_name, obstacles,
             if distance_sq > SPAWN_MAXIMUM_PROJECTION ** 2:
                 continue
             pose = (candidate[1], candidate[2], candidate[3], yaw)
-            if spawn_pose_blocked(obstacles, pose, half_width, half_length, legacy):
+            if spawn_pose_blocked(obstacles, pose, half_width, half_length, navgrid):
                 continue
             candidates.append((distance_sq, template, candidate))
         candidates.sort(key=lambda entry: (entry[0], entry[1], entry[2][0]))
@@ -2415,7 +2336,7 @@ def bake_spawn_formations(graph, anchors, map_name, obstacles,
             '%s: opposing spawn formations are only %.2f m apart' %
             (map_name, minimum_team_separation))
     clearance_failures = spawn_clearance_failures(
-        formations, obstacles, vehicle_envelope, legacy)
+        formations, obstacles, vehicle_envelope, navgrid)
     if clearance_failures:
         raise UnsafeBakeInputError(
             '%s: baked spawn OBB clearance failed: %r' %
@@ -2444,7 +2365,7 @@ def bake_spawn_formations(graph, anchors, map_name, obstacles,
 
 
 def continuous_terrain_edge_clearance(terrain, obstacles, x, z, ground_y,
-                                    legacy, original):
+                                    navgrid, original):
     """Retain continuous terrain shoulders while rejecting unsupported lips.
 
     This is node eligibility, not permission to climb a slope: links retain
@@ -2456,7 +2377,7 @@ def continuous_terrain_edge_clearance(terrain, obstacles, x, z, ground_y,
         return True
     if obstacles.surface_height(x, z) is not None:
         return False
-    neighbours = [legacy._ground_height(terrain, obstacles, x + dx, z + dz)
+    neighbours = [navgrid._ground_height(terrain, obstacles, x + dx, z + dz)
                   for dx, dz in ((-1, 0), (1, 0), (0, -1), (0, 1))]
     if any(value is None for value in neighbours):
         return False
@@ -2466,18 +2387,18 @@ def continuous_terrain_edge_clearance(terrain, obstacles, x, z, ground_y,
         dx, dz = math.sin(math.radians(angle)), math.cos(math.radians(angle))
         for radius in range(1, 7):
             sx, sz = x + dx * radius, z + dz * radius
-            height = legacy._ground_height(terrain, obstacles, sx, sz)
+            height = navgrid._ground_height(terrain, obstacles, sx, sz)
             if height is None or not math.isfinite(height):
                 return False
-            if terrain.water_depth(sx, sz, height) > legacy.WATER_DEPTH_LIMIT:
+            if terrain.water_depth(sx, sz, height) > navgrid.WATER_DEPTH_LIMIT:
                 return False
             expected = ground_y + radius * (gx * dx + gz * dz)
-            if expected - height > legacy.VEHICLE_GROUND_CLEARANCE:
+            if expected - height > navgrid.VEHICLE_GROUND_CLEARANCE:
                 return False
     return True
 
 
-def refine_terrain_edges(graph, terrain, obstacles, legacy):
+def refine_terrain_edges(graph, terrain, obstacles, navgrid):
     """Recheck every cliff-eroded cell without replacing validated topology.
 
     Do not reclassify building footprints, deep water or authored lower bridge
@@ -2490,17 +2411,17 @@ def refine_terrain_edges(graph, terrain, obstacles, legacy):
     width, height = result['width'], result['height']
     candidates = set()
     for index, hazard in enumerate(graph['hazards']):
-        if graph['heights_mm'][index] is not None or hazard != legacy.HAZARD_EDGE:
+        if graph['heights_mm'][index] is not None or hazard != navgrid.HAZARD_EDGE:
             continue
         x, z = _graph_cell_point(result, (index % width, index // width))
-        ground = legacy._ground_height(terrain, obstacles, x, z)
+        ground = navgrid._ground_height(terrain, obstacles, x, z)
         if ground is None or not math.isfinite(ground):
             continue
-        if (terrain.water_depth(x, z, ground) > legacy.WATER_DEPTH_LIMIT or
-                obstacles.blocked(x, z, ground, margin=legacy.VEHICLE_HALF_WIDTH)):
+        if (terrain.water_depth(x, z, ground) > navgrid.WATER_DEPTH_LIMIT or
+                obstacles.blocked(x, z, ground, margin=navgrid.VEHICLE_HALF_WIDTH)):
             continue
         if not continuous_terrain_edge_clearance(
-                terrain, obstacles, x, z, ground, legacy, legacy._has_safe_edge_clearance):
+                terrain, obstacles, x, z, ground, navgrid, navgrid._has_safe_edge_clearance):
             continue
         result['heights_mm'][index] = int(round(ground * 1000))
         result['hazards'][index] = 0
@@ -2522,8 +2443,8 @@ def refine_terrain_edges(graph, terrain, obstacles, legacy):
                 continue
             ex, ez = _graph_cell_point(result, (nx, nz))
             end = (ex, result['heights_mm'][following] / 1000., ez)
-            if (legacy._segment_clear(terrain, obstacles, start, end) and
-                    legacy._segment_clear(terrain, obstacles, end, start)):
+            if (navgrid._segment_clear(terrain, obstacles, start, end) and
+                    navgrid._segment_clear(terrain, obstacles, end, start)):
                 result['links'][index] |= 1 << bit
                 result['links'][following] |= 1 << directions.index((-dx, -dz))
     connected = set()
@@ -2549,15 +2470,15 @@ def refine_terrain_edges(graph, terrain, obstacles, legacy):
         result['links'][index] = graph['links'][index]
     result['bake']['edge_clearance_policy'] = 'continuous-terrain-tangent-v1'
     result['bake']['edge_continuity_sample_metres'] = 1.0
-    result['bake']['edge_continuity_tolerance_metres'] = legacy.VEHICLE_GROUND_CLEARANCE
+    result['bake']['edge_continuity_tolerance_metres'] = navgrid.VEHICLE_GROUND_CLEARANCE
     result['bake']['continuous_terrain_nodes_added'] = len(connected)
     if result.get('bases'):
-        result['bake']['continuous_terrain_validation'] = _terrain_validation(
-            legacy.validate_graph, result, dict(bases=result['bases']))
+        result['bake']['continuous_terrain_validation'] = navgrid.validate_graph(
+            result, dict(bases=result['bases']))
     return result
 
 
-def _resolution_segment_clear(terrain, obstacles, start, end, legacy, original):
+def _resolution_segment_clear(terrain, obstacles, start, end, navgrid, original):
     """Keep collision/width/grade laws; densely prove new short grid edges."""
     if not original(terrain, obstacles, start, end):
         return False
@@ -2568,7 +2489,7 @@ def _resolution_segment_clear(terrain, obstacles, start, end, legacy, original):
         fraction = float(index) / steps
         x = start[0] + (end[0] - start[0]) * fraction
         z = start[2] + (end[2] - start[2]) * fraction
-        y = legacy._ground_height(terrain, obstacles, x, z)
+        y = navgrid._ground_height(terrain, obstacles, x, z)
         if y is None:
             return False
         current = (x, y, z)
@@ -2580,12 +2501,9 @@ def _resolution_segment_clear(terrain, obstacles, start, end, legacy, original):
 
 def bake_map_graph(client_root, map_name, output=None, cell_size=4.0, existing_graph=None):
     """Bake a #1513 CTF map with compiled BSP collision and BWWa water cells."""
-    if os.path.basename(NAVIGATION_BAKER) != 'bake_navigation.py':
-        raise AssertionError('unexpected mature baker path')
     inspection = inspect_client_map(client_root, map_name)
     packages = os.path.join(os.path.abspath(client_root), 'res', 'packages')
     vfs = PackageVFS(packages)
-    legacy = _legacy_baker()
     map_path = os.path.join(packages, map_name + '.pkg')
     try:
         with zipfile.ZipFile(map_path, 'r') as package:
@@ -2609,7 +2527,7 @@ def bake_map_graph(client_root, map_name, output=None, cell_size=4.0, existing_g
                 if len(payload) < 36 or payload[:4] != b'hmp\0':
                     raise ValueError('invalid #1513 terrain height payload')
                 width, height = struct.unpack_from('<II', payload, 4)
-                png_width, png_height, rows = legacy.decode_png_rgba(payload[36:])
+                png_width, png_height, rows = navgrid.decode_png_rgba(payload[36:])
                 if (width, height) != (png_width, png_height) or width < 5:
                     raise ValueError('invalid #1513 terrain height dimensions')
                 self.width, self.height = width, height
@@ -2646,7 +2564,7 @@ def bake_map_graph(client_root, map_name, output=None, cell_size=4.0, existing_g
                 # It is a coverage index, not a flat deep-water mask: stock
                 # Tundra deliberately covers the whole space at water_y=-.289.
                 # The record's water surface minus decoded terrain is the
-                # authoritative depth used by the mature thresholds below.
+                # authoritative depth used by the grid's water thresholds.
                 # Unparsed .odata can only refine alpha/edge visuals; it never
                 # grants a path through a positive-depth BWWa cell.
                 ground = float(height) if height is not None else self.height(x, z)
@@ -2659,13 +2577,13 @@ def bake_map_graph(client_root, map_name, output=None, cell_size=4.0, existing_g
                 return max(0.0, depth)
 
         terrain = TargetTerrain()
-        obstacles = compiled_navigation_obstacles(compiled, vfs, legacy)
+        obstacles = compiled_navigation_obstacles(compiled, vfs, navgrid)
         if existing_graph is not None:
             if existing_graph.get('map') != map_name:
                 raise ValueError('terrain refinement map mismatch')
-            graph = refine_terrain_edges(existing_graph, terrain, obstacles, legacy)
+            graph = refine_terrain_edges(existing_graph, terrain, obstacles, navgrid)
             if output:
-                legacy.write_graph(output, graph)
+                navgrid.write_graph(output, graph)
             return graph
         vehicle_envelope = representative_vehicle_chassis_envelope(
             client_root)
@@ -2696,162 +2614,129 @@ def bake_map_graph(client_root, map_name, output=None, cell_size=4.0, existing_g
                 'stock arena boundingBox is outside compiled terrain bounds')
         # The flags select the fully reversible main component. Stock spawn
         # ramps are validated and attached separately below; using their raw
-        # coordinates here would force the mature component selector to treat
+        # coordinates here would force the grid's component selector to treat
         # a deliberate one-way descent as an ordinary two-way route.
-        config = _target_bake_config(legacy, arena_world_bounds, bases)
-        original_maps, original_game_version = legacy.MAPS, legacy.GAME_VERSION
-        original_format_name, original_format_version = legacy.FORMAT_NAME, legacy.FORMAT_VERSION
-        original_expanded_bounds = legacy._expanded_bounds
-        original_shallow_threshold = legacy.SHALLOW_WATER_THRESHOLD
-        if SHALLOW_WATER_THRESHOLD != legacy.WATER_DEPTH_LIMIT:
-            # The two constants must name the same line.  A baseline that
-            # forbids water above one depth while this baker still penalises
-            # water above another reintroduces the split that made bots stall
-            # on a dry bank, so refuse to bake rather than emit a graph whose
+        config = _bake_config(arena_world_bounds, bases)
+        if SHALLOW_WATER_THRESHOLD != navgrid.WATER_DEPTH_LIMIT:
+            # The two constants must name the same line.  A grid that forbids
+            # water above one depth while this baker still penalises water
+            # above another reintroduces the split that made bots stall on a
+            # dry bank, so refuse to bake rather than emit a graph whose
             # hazard class no longer matches the runtime probe.
             raise UnsafeBakeInputError(
-                'shallow-water threshold %r does not match the baseline '
+                'shallow-water threshold %r does not match the grid '
                 'navigable water limit %r' % (SHALLOW_WATER_THRESHOLD,
-                                              legacy.WATER_DEPTH_LIMIT))
-        def target_expanded_bounds(map_config, requested_cell_size):
-            return _target_sampling_bounds(
-                map_name, map_config, requested_cell_size)
-        try:
-            legacy.MAPS = {map_name: config}
-            legacy.GAME_VERSION = GAME_VERSION
-            legacy.FORMAT_NAME = 'offline-lan-0922-navgraph'
-            legacy.FORMAT_VERSION = 2
-            legacy._expanded_bounds = target_expanded_bounds
-            legacy.SHALLOW_WATER_THRESHOLD = SHALLOW_WATER_THRESHOLD
-            original_terrain, original_obstacles = legacy.Terrain, legacy.ObstacleField
-            original_segment_clear = legacy._segment_clear
-            original_validate = legacy.validate_graph
-            original_bake_routes = legacy.bake_tactical_routes
-            original_retain = legacy.retain_base_component
-            legacy.Terrain, legacy.ObstacleField = (lambda unused_resources, unused_map: terrain), (lambda unused_resources, unused_map, soft_models=None: obstacles)
-            if map_name in ('04_himmelsdorf', '86_himmelsdorf_winter') and float(cell_size) == 2.0:
-                legacy._segment_clear = lambda terrain, obstacles, start, end: _resolution_segment_clear(
-                    terrain, obstacles, start, end, legacy, original_segment_clear)
-            ingress_records = {}
-            # The stock CTF XML has no teamSpawnPoints: the client forms a
-            # safe line around the flag.  Retain the *real* flags while choosing
-            # the component (the mature baker's 56m objective reach check), then
-            # use the first safe graph cell as the formation anchor.  This is
-            # intentionally not a relaxation of validation: the second pass
-            # below validates both safe anchors at <= 12m and their complete
-            # two-way path.
-            def safe_config(graph):
-                anchors = []
-                for index, start in enumerate(navigation_starts):
-                    # The Pit is the verified #1513 exception: both stock
-                    # starts sit atop a smooth ramp whose inward descent is
-                    # steeper than the mature graph's reversible 0.38 limit.
-                    # Prove that one-way entry instead of weakening every map.
-                    if map_name == '100_thepit' and stock_spawns[index]:
-                        team = index + 1
-                        record = ingress_records.get(team)
-                        if record is None:
-                            record = find_downhill_spawn_ingress(
-                                graph, terrain, obstacles, start,
-                                bases[1 - index], legacy)
-                            ingress_records[team] = record
-                        anchors.append(tuple(record['main_anchor']))
-                    else:
-                        node, offset = legacy._nearest_node(
-                            graph, start, max_distance=56.0)
-                        if node is None:
-                            raise UnsafeBakeInputError(
-                                'CTF objective has no reachable safe spawn anchor')
-                        anchors.append(legacy._node_point(graph, node))
-                adjusted = dict(config)
-                adjusted['bases'] = tuple(anchors)
-                adjusted['anchors'] = tuple(anchors) + tuple(config.get('anchors', ()))
-                return adjusted
-            # Bot routes come from the built-in Default tactics; bake none.
-            legacy.bake_tactical_routes = lambda unused_graph, unused_config: {}
-            legacy.validate_graph = lambda graph, unused_config: original_validate(graph, safe_config(graph))
-            # Lakeville's decoded water volumes intentionally split off the
-            # inaccessible lake-side scenery.  The base-serving component is
-            # 59.3% (not a tiny shortcut); keep a conservative majority guard
-            # while preserving the old validator's post-prune single-component
-            # check.
-            def retain_component(graph, unused_config):
-                lakeville_links = (
-                    install_lakeville_narrow_corner_link(
-                        graph, terrain, obstacles, legacy)
-                    if map_name == '07_lakeville' else 0)
-                adapters = install_reviewed_map_adapters(
-                    graph, terrain, obstacles, legacy, map_name)
-                graph['bake']['narrow_corner_links_added'] = (
-                    lakeville_links + sum(
-                        1 for record in adapters
-                        if record['kind'] == 'safe_diagonal'))
-                if adapters:
-                    graph['bake']['verified_local_adapters'] = adapters
-                    graph['bake']['local_adapter_directed_links_added'] = sum(
-                        record['directed_links_added']
-                        for record in adapters)
-                return original_retain(
-                    graph, config, minimum_fraction=0.55)
-            legacy.retain_base_component = retain_component
-            graph = legacy.bake_graph(None, map_name, cell_size)
-            graph.pop('routes', None)
-            spawn_anchors = []
-            spawn_offsets = []
-            adjusted = safe_config(graph)
-            for start, anchor in zip(navigation_starts, adjusted['bases']):
-                spawn_anchors.append(tuple(anchor))
-                spawn_offsets.append(math.hypot(float(anchor[0]) - float(start[0]),
-                                                float(anchor[1]) - float(start[1])))
-            spawn_config = dict(config)
-            spawn_config['bases'] = tuple(spawn_anchors)
-            spawn_config['anchors'] = tuple(spawn_anchors)
-            graph['bases'] = [list(point) for point in spawn_anchors]
-            graph['objective_bases'] = [list(point) for point in bases]
-            graph['objective_base_radii'] = [point[1] for point in standard_circles]
-            graph['ctf_spawn_points'] = [[list(point) for point in team]
-                                         for team in stock_spawns]
-            graph['spawn_anchors'] = [list(point) for point in spawn_anchors]
-            graph['spawn_anchor_source'] = (
-                'ctf teamSpawnPoints projected onto validated graph'
-                if all(stock_spawns) else
-                'ctf objectives projected onto validated graph')
-            graph['validation'] = _terrain_validation(
-                original_validate, graph, spawn_config)
-            graph['validation']['spawn_start_reach_metres'] = [round(value, 3)
-                                                               for value in spawn_offsets]
-            if ingress_records:
-                ingress_validation = {}
-                graph['spawn_ingress'] = {}
-                for team in sorted(ingress_records):
-                    record = ingress_records[team]
-                    ingress_validation[str(team)] = install_downhill_spawn_ingress(
-                        graph, record, legacy)
-                    graph['spawn_ingress'][str(team)] = record
-                graph['validation']['spawn_ingress'] = ingress_validation
-                graph['bake']['directed_spawn_ingress'] = True
-                graph['bake']['reversible_links_except_spawn_ingress'] = True
-            formations, formation_validation = bake_spawn_formations(
-                graph, spawn_anchors, map_name, obstacles,
-                vehicle_envelope, legacy)
-            graph['spawn_formations'] = formations
-            graph['spawn_formation_source'] = (
-                'ctf teamSpawnPoints plus validated 15-slot layout'
-                if all(stock_spawns) else
-                'ctf objective geometry plus validated 15-slot layout')
-            graph['validation'].update(formation_validation)
-            _record_target_grid_phase(graph, map_name, cell_size)
-            _publish_gameplay_bounds(graph, config)
-        finally:
-            legacy.MAPS, legacy.GAME_VERSION = original_maps, original_game_version
-            legacy.FORMAT_NAME, legacy.FORMAT_VERSION = original_format_name, original_format_version
-            legacy._expanded_bounds = original_expanded_bounds
-            legacy.SHALLOW_WATER_THRESHOLD = original_shallow_threshold
-            legacy.Terrain, legacy.ObstacleField = original_terrain, original_obstacles
-            legacy._segment_clear = original_segment_clear
-            legacy.validate_graph = original_validate
-            legacy.bake_tactical_routes = original_bake_routes
-            legacy.retain_base_component = original_retain
+                                              navgrid.WATER_DEPTH_LIMIT))
+        segment_clear = navgrid._segment_clear
+        if map_name in ('04_himmelsdorf', '86_himmelsdorf_winter') and float(cell_size) == 2.0:
+            def segment_clear(terrain, obstacles, start, end):
+                return _resolution_segment_clear(
+                    terrain, obstacles, start, end, navgrid, navgrid._segment_clear)
+        ingress_records = {}
+        # The stock CTF XML has no teamSpawnPoints: the client forms a
+        # safe line around the flag.  Retain the *real* flags while choosing
+        # the component (the grid's 56m objective reach check), then use the
+        # first safe graph cell as the formation anchor.  This is
+        # intentionally not a relaxation of validation: the second pass
+        # below validates both safe anchors at <= 12m and their complete
+        # two-way path.
+        def safe_config(graph):
+            anchors = []
+            for index, start in enumerate(navigation_starts):
+                # The Pit is the verified #1513 exception: both stock
+                # starts sit atop a smooth ramp whose inward descent is
+                # steeper than the grid's reversible 0.38 limit.  Prove
+                # that one-way entry instead of weakening every map.
+                if map_name == '100_thepit' and stock_spawns[index]:
+                    team = index + 1
+                    record = ingress_records.get(team)
+                    if record is None:
+                        record = find_downhill_spawn_ingress(
+                            graph, terrain, obstacles, start,
+                            bases[1 - index], navgrid)
+                        ingress_records[team] = record
+                    anchors.append(tuple(record['main_anchor']))
+                else:
+                    node, offset = navgrid._nearest_node(
+                        graph, start, max_distance=56.0)
+                    if node is None:
+                        raise UnsafeBakeInputError(
+                            'CTF objective has no reachable safe spawn anchor')
+                    anchors.append(navgrid._node_point(graph, node))
+            adjusted = dict(config)
+            adjusted['bases'] = tuple(anchors)
+            adjusted['anchors'] = tuple(anchors) + tuple(config.get('anchors', ()))
+            return adjusted
+        graph = navgrid.bake_graph(
+            map_name, _target_sampling_bounds(map_name, config, cell_size),
+            config['bases'], terrain, obstacles, cell_size,
+            segment_clear=segment_clear)
+        # Lakeville's decoded water volumes intentionally split off the
+        # inaccessible lake-side scenery.  The base-serving component is
+        # 59.3% (not a tiny shortcut); keep a conservative majority guard
+        # while preserving the validator's post-prune single-component check.
+        lakeville_links = (
+            install_lakeville_narrow_corner_link(
+                graph, terrain, obstacles, navgrid)
+            if map_name == '07_lakeville' else 0)
+        adapters = install_reviewed_map_adapters(
+            graph, terrain, obstacles, navgrid, map_name)
+        graph['bake']['narrow_corner_links_added'] = (
+            lakeville_links + sum(
+                1 for record in adapters
+                if record['kind'] == 'safe_diagonal'))
+        if adapters:
+            graph['bake']['verified_local_adapters'] = adapters
+            graph['bake']['local_adapter_directed_links_added'] = sum(
+                record['directed_links_added']
+                for record in adapters)
+        navgrid.retain_base_component(graph, config, minimum_fraction=0.55)
+        navgrid.validate_graph(graph, safe_config(graph))
+        spawn_anchors = []
+        spawn_offsets = []
+        adjusted = safe_config(graph)
+        for start, anchor in zip(navigation_starts, adjusted['bases']):
+            spawn_anchors.append(tuple(anchor))
+            spawn_offsets.append(math.hypot(float(anchor[0]) - float(start[0]),
+                                            float(anchor[1]) - float(start[1])))
+        spawn_config = dict(config)
+        spawn_config['bases'] = tuple(spawn_anchors)
+        spawn_config['anchors'] = tuple(spawn_anchors)
+        graph['bases'] = [list(point) for point in spawn_anchors]
+        graph['objective_bases'] = [list(point) for point in bases]
+        graph['objective_base_radii'] = [point[1] for point in standard_circles]
+        graph['ctf_spawn_points'] = [[list(point) for point in team]
+                                     for team in stock_spawns]
+        graph['spawn_anchors'] = [list(point) for point in spawn_anchors]
+        graph['spawn_anchor_source'] = (
+            'ctf teamSpawnPoints projected onto validated graph'
+            if all(stock_spawns) else
+            'ctf objectives projected onto validated graph')
+        graph['validation'] = navgrid.validate_graph(graph, spawn_config)
+        graph['validation']['spawn_start_reach_metres'] = [round(value, 3)
+                                                           for value in spawn_offsets]
+        if ingress_records:
+            ingress_validation = {}
+            graph['spawn_ingress'] = {}
+            for team in sorted(ingress_records):
+                record = ingress_records[team]
+                ingress_validation[str(team)] = install_downhill_spawn_ingress(
+                    graph, record, navgrid)
+                graph['spawn_ingress'][str(team)] = record
+            graph['validation']['spawn_ingress'] = ingress_validation
+            graph['bake']['directed_spawn_ingress'] = True
+            graph['bake']['reversible_links_except_spawn_ingress'] = True
+        formations, formation_validation = bake_spawn_formations(
+            graph, spawn_anchors, map_name, obstacles,
+            vehicle_envelope, navgrid)
+        graph['spawn_formations'] = formations
+        graph['spawn_formation_source'] = (
+            'ctf teamSpawnPoints plus validated 15-slot layout'
+            if all(stock_spawns) else
+            'ctf objective geometry plus validated 15-slot layout')
+        graph['validation'].update(formation_validation)
+        _record_target_grid_phase(graph, map_name, cell_size)
+        _publish_gameplay_bounds(graph, config)
         graph['bake']['source'] = '0.9.22 placed BSMI/BSMO colliders with per-model BSP material mapping'
         graph['bake']['navigation_collision_policy'] = NAVIGATION_COLLISION_POLICY
         graph['bake']['collision_height_intervals'] = 'overlapping_union_preserves_vertical_gaps-v1'
@@ -2869,7 +2754,7 @@ def bake_map_graph(client_root, map_name, output=None, cell_size=4.0, existing_g
         graph['bake']['compiled_static_geometry_bytes'] = len(compiled.sections['BSGD']._data)
         graph['bake']['collision_linkage'] = _collision_linkage_summary(compiled)
         if output:
-            legacy.write_graph(output, graph)
+            navgrid.write_graph(output, graph)
         return graph
     finally:
         vfs.close()

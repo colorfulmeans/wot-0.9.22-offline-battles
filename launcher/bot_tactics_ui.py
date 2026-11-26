@@ -1258,12 +1258,6 @@ class BotTacticsEditor(ConnectionEditorMixin):
         scope=self._route_scope();item=self._selected()
         remaining=copy.deepcopy([r for r in edits if not (r['id']==self._route_identity() and r.get('class_tag','all')==scope and
                    (r['team']==self.team or item.get('symmetric')))])
-        if scope=='all':
-            for edit in remaining:
-                if (edit['id']!=item['id'] or edit.get('class_tag','all') not in contract.CLASSES[:-1] or
-                        (edit['team']!=self.team and not item.get('symmetric'))):continue
-                source=next((r for r in getattr(self,'baseline_sources',{}).get(str(edit['team']),()) if r['id']==item['id']),None)
-                if source:edit['points']=[list(p[:2])+[0] for p in source['waypoints']]
         if remaining==edits:return
         self.checkpoint()
         if remaining:self.entry()['default_routes']=remaining

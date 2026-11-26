@@ -1,4 +1,4 @@
-"""Compare all Windstorm route segments and recorded bridge exits in both searches.
+"""Compare the Windstorm Default route segments and recorded bridge exits in both searches.
 
 Compile tools/benchmark_navigation_resolution.cpp with native/offline_navigation.cpp
 and native/offline_async_worker.cpp, then pass the executable to this checker.
@@ -20,10 +20,6 @@ from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
 from gui.mods.offline_lan_0922 import bot_tactics
 old=json.loads(subprocess.check_output(['git','show',args.baseline_ref+':navgraphs/84_winter.json'],cwd=ROOT));new=json.loads((ROOT/'navgraphs/84_winter.json').read_bytes())
 pairs=set()
-for routes in old['routes'].values():
- for route in routes:
-  p=route['waypoints']
-  for a,b in zip(p,p[1:]):pairs.add((tuple(a[:2]),tuple(b[:2])));pairs.add((tuple(b[:2]),tuple(a[:2])))
 for r in bot_tactics.default_map('84_winter')['default_routes']:
  if r.get('disabled'):continue
  for a,b in zip(r['points'],r['points'][1:]):pairs.add((tuple(a[:2]),tuple(b[:2])));pairs.add((tuple(b[:2]),tuple(a[:2])))

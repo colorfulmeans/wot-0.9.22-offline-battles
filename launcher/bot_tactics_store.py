@@ -170,7 +170,14 @@ class Store:
     def ensure_active(self):
         if not self.active_path.exists():
             _atomic(self.active_path, contract.default_profile())
-        document = self._load_owned(self.active_path)
+        try:
+            document = self._load_owned(self.active_path)
+        except contract.RetiredMapIdentity:
+            # An applied profile that names an older navigation graph falls
+            # back to the built-in Default. Its named profile file is left
+            # where it is; a damaged file still reports its error.
+            _atomic(self.active_path, contract.default_profile())
+            document = self._load_owned(self.active_path)
         if document['name'].casefold() == 'default' and document != contract.default_profile():
             _atomic(self.active_path, contract.default_profile())
         # Keep the runtime materialization synchronized with its named owner.

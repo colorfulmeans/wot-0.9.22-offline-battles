@@ -2,7 +2,6 @@
 import argparse
 import collections
 import copy
-import hashlib
 import json
 import math
 from pathlib import Path
@@ -45,14 +44,14 @@ def footprint(pose, half_width, half_length, ground):
                 height_span=span, samples=samples)
 
 
-def repair(graph, terrain, obstacles, legacy, envelope):
+def repair(graph, terrain, obstacles, navgrid, envelope):
     result = copy.deepcopy(graph)
     hw, hl = envelope['half_width'], envelope['half_length']
     ground_cache = {}
     def ground(x, z):
         key = (x, z)
         if key not in ground_cache:
-            ground_cache[key] = legacy._ground_height(terrain, obstacles, x, z)
+            ground_cache[key] = navgrid._ground_height(terrain, obstacles, x, z)
         return ground_cache[key]
     size, width = graph['cell_size'], graph['width']
     def cell(x, z):
@@ -100,7 +99,7 @@ def repair(graph, terrain, obstacles, legacy, envelope):
                 pose = [x, round(y, 4), z, original[3]]
                 if not connected(pose, team) or not footprint(pose, hw, hl, ground)['clear']:
                     continue
-                if baker.spawn_pose_blocked(obstacles, pose, hw, hl, legacy):
+                if baker.spawn_pose_blocked(obstacles, pose, hw, hl, navgrid):
                     continue
                 if any(math.hypot(x-p[0], z-p[2]) < baker.SPAWN_MINIMUM_SPACING or
                        baker.spawn_obbs_overlap(pose, p, hw, hl) for t, s, p in fixed):
@@ -128,7 +127,7 @@ def repair(graph, terrain, obstacles, legacy, envelope):
         raise ValueError('No collision-free local formation repair')
     for (team, slot), pose in selected.items():
         result['spawn_formations'][team][slot] = pose
-    failures = baker.spawn_clearance_failures(result['spawn_formations'], obstacles, envelope, legacy)
+    failures = baker.spawn_clearance_failures(result['spawn_formations'], obstacles, envelope, navgrid)
     if failures:
         raise ValueError(failures)
     audit = []
@@ -149,8 +148,6 @@ def repair(graph, terrain, obstacles, legacy, envelope):
         footprint_slope_limit_degrees=8., height_span_limit_metres=MAX_HEIGHT_SPAN,
         vehicle_envelope=envelope, hard_and_soft_clearance=True,
         pairwise_clearance=True, directed_home_connection=True)
-    previous = result.setdefault('navigation_previous_sha256s', [])
-    previous.append(hashlib.sha256((ROOT/'navgraphs/47_canada_a.json').read_bytes()).hexdigest())
     return result, audit
 
 
@@ -160,14 +157,14 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     geometry.EXTRA_REGIONS = ((-190, -345, -45, -240), (135, 255, 275, 355))
-    terrain, obstacles, legacy = geometry.geometry(args.client, '47_canada_a')
+    terrain, obstacles, navgrid = geometry.geometry(args.client, '47_canada_a')
     envelope = baker.representative_vehicle_chassis_envelope(args.client)
     graph = json.loads((ROOT/'navgraphs/47_canada_a.json').read_bytes())
-    result, audit = repair(graph, terrain, obstacles, legacy, envelope)
+    result, audit = repair(graph, terrain, obstacles, navgrid, envelope)
     for key in graph:
-        if key not in ('spawn_formations', 'validation', 'navigation_previous_sha256s'):
+        if key not in ('spawn_formations', 'validation'):
             assert result[key] == graph[key], key
-    legacy.validate_graph(result, dict(bases=result['bases']))
+    navgrid.validate_graph(result, dict(bases=result['bases']))
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output/'47_canada_a.json').write_bytes((json.dumps(result, sort_keys=True, separators=(',', ':'))+'\n').encode())
     (args.output/'audit.json').write_text(json.dumps(audit, indent=2))

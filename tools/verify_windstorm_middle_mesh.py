@@ -23,7 +23,7 @@ def verify(client, output, search_report=None):
     source = json.loads((ROOT/'navgraphs/84_winter.json').read_bytes())
     old = json.loads(subprocess.check_output(['git', 'show', '09b87889:navgraphs/84_winter.json'], cwd=ROOT))
     for field in ('cell_size', 'origin', 'width', 'height', 'heights_mm', 'hazards',
-                  'routes', 'spawn_formations', 'spawn_anchors', 'objective_bases'):
+                  'spawn_formations', 'spawn_anchors', 'objective_bases'):
         assert source[field] == old[field], field
     assert source['local_meshes'][:2] == old['local_meshes']
     expected = list(old['links'])
@@ -31,7 +31,7 @@ def verify(client, output, search_report=None):
         expected[i] &= ~(1 << bit)
     assert source['links'] == expected
     meshes.EXTRA_REGIONS = (REGION,)
-    terrain, obstacles, legacy = meshes.geometry(client, '84_winter')
+    terrain, obstacles, navgrid = meshes.geometry(client, '84_winter')
     graph = pn.with_shore_hazards(source)
     grid = TerrainGrid(lambda *a: None, baked_graph=graph)
     results = []
@@ -62,7 +62,7 @@ def verify(client, output, search_report=None):
             for n in range(max(1, int(math.ceil(distance/.25)))+1):
                 t = n/max(1, int(math.ceil(distance/.25)))
                 x, z = first[0]+(last[0]-first[0])*t, first[2]+(last[2]-first[2])*t
-                y = legacy._ground_height(terrain, obstacles, x, z)
+                y = navgrid._ground_height(terrain, obstacles, x, z)
                 assert y is not None
                 for width in (1.2, 1.8, 2.15):
                     assert not obstacles.blocked(x, z, y, margin=width), ('collision', x, z, width)
@@ -70,10 +70,10 @@ def verify(client, output, search_report=None):
                         for across in (-width, 0., width):
                             sx = x+math.sin(yaw)*along+math.cos(yaw)*across
                             sz = z+math.cos(yaw)*along-math.sin(yaw)*across
-                            support = legacy._ground_height(terrain, obstacles, sx, sz)
+                            support = navgrid._ground_height(terrain, obstacles, sx, sz)
                             assert support is not None, ('support', x, z, sx, sz, width)
                             depth = terrain.water_depth(sx, sz, support)
-                            assert depth <= legacy.WATER_DEPTH_LIMIT, ('deep', x, z, sx, sz, width, depth)
+                            assert depth <= navgrid.WATER_DEPTH_LIMIT, ('deep', x, z, sx, sz, width, depth)
                             max_depth = max(max_depth, depth)
                 samples += 1
         results.append(dict(start=start, end=end, path=path, length=length,

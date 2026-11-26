@@ -22,14 +22,14 @@ ORIGIN = (280.3538467765204, -14.974234580993652, 219.5717056753799)
 YAW = -1.2797609560299639
 
 
-def footprint_support(terrain, obstacles, legacy, x, z, y):
+def footprint_support(terrain, obstacles, navgrid, x, z, y):
     """Prove the original 2.15 m half-width, rather than a 6 m spare apron.
 
     This is a bake-only, bounded bank measurement. Keep the same water and
     drop/grade limits on a dense quarter-metre lattice over the width disk.
     Runtime collision shapes, queries and guards are untouched.
     """
-    width = legacy.VEHICLE_HALF_WIDTH
+    width = navgrid.VEHICLE_HALF_WIDTH
     count = int(math.ceil(width/.25))
 
     def anchor(px, pz, height):
@@ -50,32 +50,30 @@ def footprint_support(terrain, obstacles, legacy, x, z, y):
             distance = math.hypot(dx, dz)
             if distance > width+1e-8:
                 continue
-            ground = legacy._ground_height(terrain, obstacles, x+dx, z+dz)
-            if ground is None or terrain.water_depth(x+dx, z+dz, ground) > legacy.WATER_DEPTH_LIMIT:
+            ground = navgrid._ground_height(terrain, obstacles, x+dx, z+dz)
+            if ground is None or terrain.water_depth(x+dx, z+dz, ground) > navgrid.WATER_DEPTH_LIMIT:
                 return False
             sample = anchor(x+dx, z+dz, ground)
             measured_run = math.hypot(sample[0]-origin[0], sample[1]-origin[1])
-            if abs(ground-y) > measured_run*legacy.MAX_GRADE+1e-6:
+            if abs(ground-y) > measured_run*navgrid.MAX_GRADE+1e-6:
                 return False
     return True
 
 
-def bank_support(terrain, obstacles, legacy, x, z, y):
+def bank_support(terrain, obstacles, navgrid, x, z, y):
     return (any(left <= x <= right and bottom <= z <= top
                 for left, bottom, right, top in (BANK, SOUTH_SHOAL)+MOUTHS) and
-            footprint_support(terrain, obstacles, legacy, x, z, y))
+            footprint_support(terrain, obstacles, navgrid, x, z, y))
 
 
 def build(client):
-    current_raw = (ROOT/'navgraphs/84_winter.json').read_bytes()
-    current = json.loads(current_raw)
     raw = subprocess.check_output(['git', 'show', BASELINE+':navgraphs/84_winter.json'], cwd=ROOT)
     graph = json.loads(raw)
     meshes.EXTRA_REGIONS = (REGION,)
-    terrain, obstacles, legacy = meshes.geometry(client, '84_winter')
+    terrain, obstacles, navgrid = meshes.geometry(client, '84_winter')
     # The original bridge/ordinary-ground law remains the primary proof. Only
     # this explicitly measured bank uses the full-width local support proof.
-    original_edge = legacy._has_safe_edge_clearance
+    original_edge = navgrid._has_safe_edge_clearance
     measured = set()
 
     def edge_clear(t, o, x, z, y):
@@ -84,27 +82,27 @@ def build(client):
             # still hang a wide track off this diagonal bridge. Prove the
             # original full width here as well, without altering the hull.
             if o.surface_height(x, z) is not None:
-                return footprint_support(t, o, legacy, x, z, y)
+                return footprint_support(t, o, navgrid, x, z, y)
             return True
-        if bank_support(t, o, legacy, x, z, y):
+        if bank_support(t, o, navgrid, x, z, y):
             measured.add((x, z))
             return True
         return False
 
     try:
-        legacy._has_safe_edge_clearance = edge_clear
-        patch = meshes.bake_patch(REGION, terrain, obstacles, legacy)
+        navgrid._has_safe_edge_clearance = edge_clear
+        patch = meshes.bake_patch(REGION, terrain, obstacles, navgrid)
         for i in range(patch['width']*patch['height']):
             x, z = REGION[0]+i%patch['width'], REGION[1]+i//patch['width']
-            y = legacy._ground_height(terrain, obstacles, x, z)
+            y = navgrid._ground_height(terrain, obstacles, x, z)
             if y is None:
-                patch['hazards'][i] = legacy.HAZARD_EDGE
-            elif terrain.water_depth(x, z, y) > legacy.WATER_DEPTH_LIMIT:
-                patch['hazards'][i] = legacy.HAZARD_WATER
+                patch['hazards'][i] = navgrid.HAZARD_EDGE
+            elif terrain.water_depth(x, z, y) > navgrid.WATER_DEPTH_LIMIT:
+                patch['hazards'][i] = navgrid.HAZARD_WATER
             elif not edge_clear(terrain, obstacles, x, z, y):
-                patch['hazards'][i] = legacy.HAZARD_EDGE
+                patch['hazards'][i] = navgrid.HAZARD_EDGE
     finally:
-        legacy._has_safe_edge_clearance = original_edge
+        navgrid._has_safe_edge_clearance = original_edge
     graph['local_meshes'].append(patch)
     refined = []
     for i, mask in enumerate(graph['links']):
@@ -112,7 +110,7 @@ def build(client):
         z = graph['origin'][1]+i//graph['width']*graph['cell_size']
         if not mask or not (REGION[0]-4 <= x <= REGION[2]+4 and REGION[1]-4 <= z <= REGION[3]+4):
             continue
-        for bit, (dx, dz) in enumerate(legacy.DIRECTIONS):
+        for bit, (dx, dz) in enumerate(navgrid.DIRECTIONS):
             if not mask & (1 << bit):
                 continue
             steps = int(math.ceil(math.hypot(dx*4., dz*4.)/.25))
@@ -133,19 +131,14 @@ def build(client):
         measured_south_shoal=SOUTH_SHOAL, baseline=BASELINE,
         supported_nodes=sum(v is not None for v in patch['heights_mm']),
         measured_bank_nodes=[list(p) for p in sorted(measured)],
-        bank_support_half_width=legacy.VEHICLE_HALF_WIDTH,
-        bridge_support_half_width=legacy.VEHICLE_HALF_WIDTH,
-        support_sample_metres=.25, water_depth_limit=legacy.WATER_DEPTH_LIMIT,
+        bank_support_half_width=navgrid.VEHICLE_HALF_WIDTH,
+        bridge_support_half_width=navgrid.VEHICLE_HALF_WIDTH,
+        support_sample_metres=.25, water_depth_limit=navgrid.WATER_DEPTH_LIMIT,
         bridge_height_basis='actual_1m_surface_raster_cell_centres',
-        drop_grade_limit=legacy.MAX_GRADE, coarse_links_refined=refined,
+        drop_grade_limit=navgrid.MAX_GRADE, coarse_links_refined=refined,
         recorded_origin=ORIGIN, recorded_yaw=YAW, recorded_distances=[.5, 3.4308600425720215])
-    previous = set(graph.get('navigation_previous_sha256s', ()))
-    previous.update(current.get('navigation_previous_sha256s', ()))
-    previous.add(hashlib.sha256(current_raw).hexdigest())
-    previous.add(hashlib.sha256(raw).hexdigest())
-    graph['navigation_previous_sha256s'] = sorted(previous)
     assert graph['local_meshes'][0] == json.loads(raw)['local_meshes'][0]
-    for key in ('routes', 'spawn_formations', 'heights_mm', 'hazards', 'width', 'height', 'origin', 'cell_size'):
+    for key in ('spawn_formations', 'heights_mm', 'hazards', 'width', 'height', 'origin', 'cell_size'):
         assert graph[key] == json.loads(raw)[key], key
     path = ROOT/'navgraphs/84_winter.json'
     path.write_bytes((json.dumps(graph, separators=(',', ':'))+'\n').encode())

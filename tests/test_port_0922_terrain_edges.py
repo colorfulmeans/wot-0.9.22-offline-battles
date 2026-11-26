@@ -14,11 +14,11 @@ class TerrainEdgeTests(unittest.TestCase):
         terrain = types.SimpleNamespace(height=height,
                                         water_depth=lambda x, z, y: water)
         obstacles = types.SimpleNamespace(surface_height=lambda x, z: 10 if bridge else None)
-        legacy = types.SimpleNamespace(
+        navgrid = types.SimpleNamespace(
             _ground_height=lambda t, o, x, z: t.height(x, z),
             WATER_DEPTH_LIMIT=.9, VEHICLE_GROUND_CLEARANCE=.65)
         return continuous_terrain_edge_clearance(
-            terrain, obstacles, 0, 0, height(0, 0), legacy,
+            terrain, obstacles, 0, 0, height(0, 0), navgrid,
             lambda *args: False)
 
     def test_continuous_slopes_survive_all_headings(self):
@@ -54,11 +54,11 @@ class TerrainEdgeTests(unittest.TestCase):
         original = copy.deepcopy(graph)
         terrain = types.SimpleNamespace(height=lambda x,z:50,water_depth=lambda *a:0)
         obstacles = types.SimpleNamespace(surface_height=lambda *a:None,blocked=lambda *a,**k:False)
-        legacy = types.SimpleNamespace(HAZARD_EDGE=2,WATER_DEPTH_LIMIT=.9,
+        navgrid = types.SimpleNamespace(HAZARD_EDGE=2,WATER_DEPTH_LIMIT=.9,
             VEHICLE_HALF_WIDTH=2.15,VEHICLE_GROUND_CLEARANCE=.65,
             _ground_height=lambda t,o,x,z:50,_has_safe_edge_clearance=lambda *a:True,
             _segment_clear=lambda *a:True)
-        result = refine_terrain_edges(graph,terrain,obstacles,legacy)
+        result = refine_terrain_edges(graph,terrain,obstacles,navgrid)
         self.assertEqual(original,graph)
         self.assertEqual(4,result['bake']['continuous_terrain_nodes_added'])
         self.assertEqual(original['spawn_formations'],result['spawn_formations'])
@@ -66,7 +66,7 @@ class TerrainEdgeTests(unittest.TestCase):
             self.assertIsNone(result['heights_mm'][index])
             self.assertEqual(original['hazards'][index],result['hazards'][index])
         self.assertTrue(result['links'][4])
-        legacy._segment_clear=lambda *a:False
-        isolated=refine_terrain_edges(graph,terrain,obstacles,legacy)
+        navgrid._segment_clear=lambda *a:False
+        isolated=refine_terrain_edges(graph,terrain,obstacles,navgrid)
         self.assertEqual(0,isolated['bake']['continuous_terrain_nodes_added'])
         self.assertEqual(original['heights_mm'],isolated['heights_mm'])

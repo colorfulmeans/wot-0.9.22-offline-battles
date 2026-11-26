@@ -26,14 +26,14 @@ def geometry(client, name):
     original_obstacles=baker.compiled_navigation_obstacles
     try:
         baker.compiled_navigation_obstacles=lambda c,v,l:original_obstacles(c,v,l,precise_regions=EXTRA_REGIONS)
-        baker.refine_terrain_edges=lambda graph,terrain,obstacles,legacy:(terrain,obstacles,legacy)
+        baker.refine_terrain_edges=lambda graph,terrain,obstacles,navgrid:(terrain,obstacles,navgrid)
         return baker.bake_map_graph(client,name,existing_graph={'map':name})
     finally:
         baker.refine_terrain_edges=original
         baker.compiled_navigation_obstacles=original_obstacles
 
 
-def bake_patch(region, terrain, obstacles, legacy, cell_size=1.):
+def bake_patch(region, terrain, obstacles, navgrid, cell_size=1.):
     import bake_navigation_0922 as baker
     left,bottom,right,top=region;size=float(cell_size)
     if size not in (1., 2.):
@@ -43,17 +43,17 @@ def bake_patch(region, terrain, obstacles, legacy, cell_size=1.):
                heights_mm=[None]*(width*height),links=[0]*(width*height),hazards=[0]*(width*height))
     for i in range(width*height):
         x=left+i%width*size;z=bottom+i//width*size
-        y=legacy._ground_height(terrain,obstacles,x,z)
+        y=navgrid._ground_height(terrain,obstacles,x,z)
         if y is None:continue
-        if terrain.water_depth(x,z,y)>legacy.WATER_DEPTH_LIMIT:continue
-        if not legacy._has_safe_edge_clearance(terrain,obstacles,x,z,y):continue
-        margin=legacy.BRIDGE_OBSTACLE_MARGIN if obstacles.surface_height(x,z) is not None else legacy.VEHICLE_HALF_WIDTH
+        if terrain.water_depth(x,z,y)>navgrid.WATER_DEPTH_LIMIT:continue
+        if not navgrid._has_safe_edge_clearance(terrain,obstacles,x,z,y):continue
+        margin=navgrid.BRIDGE_OBSTACLE_MARGIN if obstacles.surface_height(x,z) is not None else navgrid.VEHICLE_HALF_WIDTH
         if obstacles.blocked(x,z,y,margin=margin):continue
         patch['heights_mm'][i]=int(round(y*1000.))
     for i,y in enumerate(patch['heights_mm']):
         if y is None:continue
         x,z=i%width,i//width
-        for bit,(dx,dz) in enumerate(legacy.DIRECTIONS):
+        for bit,(dx,dz) in enumerate(navgrid.DIRECTIONS):
             nx,nz=x+dx,z+dz
             if not (0<=nx<width and 0<=nz<height):continue
             j=nz*width+nx
@@ -61,17 +61,17 @@ def bake_patch(region, terrain, obstacles, legacy, cell_size=1.):
             if dx and dz and (patch['heights_mm'][z*width+nx] is None or patch['heights_mm'][nz*width+x] is None):continue
             start=(left+x*size,y/1000.,bottom+z*size)
             end=(left+nx*size,patch['heights_mm'][j]/1000.,bottom+nz*size)
-            if baker._resolution_segment_clear(terrain,obstacles,start,end,legacy,legacy._segment_clear):
+            if baker._resolution_segment_clear(terrain,obstacles,start,end,navgrid,navgrid._segment_clear):
                 patch['links'][i]|=1<<bit
     for i,mask in enumerate(patch['links']):
-        for bit,(dx,dz) in enumerate(legacy.DIRECTIONS):
+        for bit,(dx,dz) in enumerate(navgrid.DIRECTIONS):
             if mask&(1<<bit):
-                j=i+dx+dz*width;reverse=legacy.DIRECTIONS.index((-dx,-dz))
+                j=i+dx+dz*width;reverse=navgrid.DIRECTIONS.index((-dx,-dz))
                 if not patch['links'][j]&(1<<reverse):patch['links'][i]&=~(1<<bit)
     return patch
 
 
-def verify_passages(graph, terrain, obstacles, legacy):
+def verify_passages(graph, terrain, obstacles, navgrid):
     import bake_navigation_0922 as baker
     from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
     grid=TerrainGrid(lambda *args:None,baked_graph=graph)
@@ -87,10 +87,10 @@ def verify_passages(graph, terrain, obstacles, legacy):
             if length>math.hypot(last[0]-first[0],last[1]-first[1])*1.8+12.:
                 raise ValueError('circled passage %d still takes a remote detour'%(number+1))
             for x,y in zip(path,path[1:]):
-                if not baker._resolution_segment_clear(terrain,obstacles,x,y,legacy,legacy._segment_clear):
+                if not baker._resolution_segment_clear(terrain,obstacles,x,y,navgrid,navgrid._segment_clear):
                     raise ValueError('circled passage %d path fails physical clearance: %r %r'%(number+1,x,y))
             records.append(dict(passage=number+1,start=first,end=last,length=round(length,4),
-                path=path,collision_sample_metres=.25,half_width=legacy.VEHICLE_HALF_WIDTH))
+                path=path,collision_sample_metres=.25,half_width=navgrid.VEHICLE_HALF_WIDTH))
     return records
 
 
@@ -116,27 +116,21 @@ def build(name, client, contexts=None):
                 patch['links'].append(mask);patch['hazards'].append(fine['hazards'][index])
         patches.append(patch)
     if client:
-        terrain,obstacles,legacy=geometry(client,name)
-        if contexts is not None:contexts[name]=(terrain,obstacles,legacy)
+        terrain,obstacles,navgrid=geometry(client,name)
+        if contexts is not None:contexts[name]=(terrain,obstacles,navgrid)
         for region in EXTRA_REGIONS:
-            patches.append(bake_patch(region,terrain,obstacles,legacy))
+            patches.append(bake_patch(region,terrain,obstacles,navgrid))
             print(name,'proved local region',region,flush=True)
     graph['local_meshes']=patches
-    graph['navigation_previous_sha256']=hashlib.sha256(fine_raw).hexdigest()
-    graph['navigation_previous_sha256s']=[hashlib.sha256(raw).hexdigest()]
-    previous=(ROOT/'navgraphs'/(name+'.json')).read_bytes()
-    old=json.loads(previous)
-    graph['navigation_previous_sha256s']+=old.get('navigation_previous_sha256s',[])+[hashlib.sha256(previous).hexdigest()]
-    graph['navigation_previous_sha256s']=sorted(set(graph['navigation_previous_sha256s']))
     graph['bake']['local_meshes']=dict(base_cell_size=4.,regions=REGIONS,
         local_cell_size=2.,base_geometry_unchanged=True,source_commit='413724fe',
-        collision_edge_sample_metres=.25,geometry_provenance=fine['bake']['resolution_rebake']['collision_route_validation'])
+        collision_edge_sample_metres=.25)
     if client:
         graph['bake']['local_meshes'].update(additional_regions=EXTRA_REGIONS,
             additional_cell_size=1.,circled_passages=CIRCLED_PASSAGES,
-            node_half_width=legacy.VEHICLE_HALF_WIDTH,all_new_edges_collision_sample_metres=.25,
+            node_half_width=navgrid.VEHICLE_HALF_WIDTH,all_new_edges_collision_sample_metres=.25,
             local_collision_policy='body_height_clipped_triangles_against_original_2.15m_disk')
-    for field in ('cell_size','origin','width','height','heights_mm','links','hazards','routes','spawn_formations'):
+    for field in ('cell_size','origin','width','height','heights_mm','links','hazards','spawn_formations'):
         assert graph[field]==json.loads(raw)[field],field
     return graph
 

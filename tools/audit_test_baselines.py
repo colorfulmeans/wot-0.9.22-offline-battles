@@ -50,12 +50,11 @@ def inventory(root=ROOT):
                     and node.name.startswith('test_') for node in ast.walk(tree)),
                 battle_starts=calls.starts,
                 references_current_profile='default_profile(' in source,
-                historical_lane_replay='route_scene_fixture' in source,
                 json_references=sorted(set(re.findall(r'''['"]([^'"\n]+\.json)['"]''', source))),
                 map_literals=sorted(set(re.findall(r'''['"](\d\d_[a-z0-9_]+)['"]''', source)))))
     return dict(evidence='AST inventory only; no tests executed', files=records,
-        review_required=[row['file'] for row in records if row['historical_lane_replay'] or
-                         any(not call['tactics_explicit'] for call in row['battle_starts'])])
+        review_required=[row['file'] for row in records
+                         if any(not call['tactics_explicit'] for call in row['battle_starts'])])
 
 
 def main():

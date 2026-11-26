@@ -1,7 +1,5 @@
 """Directed route admission, reviewed road gates and navigation ownership."""
 import copy
-import hashlib
-import importlib.util
 import json
 from pathlib import Path
 import sys
@@ -15,16 +13,6 @@ from gui.mods.offline_lan_0922 import bot_tactics_runtime as planning
 from gui.mods.offline_lan_0922 import spg_positions
 import bake_navigation_0922 as bake
 import test_port_0922_battle_runtime as native
-
-
-def legacy_baker():
-    # Git can check out CRLF on Windows; verify the unchanged vendored source.
-    raw = Path(bake.NAVIGATION_BAKER).read_bytes().replace(b'\r\n', b'\n')
-    assert hashlib.sha256(raw).hexdigest() == bake.NAVIGATION_BAKER_SHA256
-    spec = importlib.util.spec_from_file_location('airfield_review_baker', bake.NAVIGATION_BAKER)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def tiny_graph(width=8, height=8):
@@ -83,7 +71,7 @@ class AirfieldDefaultRoadTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.graph=json.loads((ROOT/'navgraphs/31_airfield.json').read_text())
-        cls.legacy=legacy_baker()
+        cls.navgrid=bake.navgrid
 
     def test_corner_links_leave_the_three_closed_side_cells_unchanged(self):
         self.assertEqual(4,self.graph['bake']['local_adapter_directed_links_added'])
@@ -96,8 +84,8 @@ class AirfieldDefaultRoadTests(unittest.TestCase):
             cells=[bake._graph_state(self.graph,p)[0] for p in (a,b)]
             indices=[bake._graph_state(self.graph,p)[1] for p in (a,b)]
             delta=(cells[1][0]-cells[0][0],cells[1][1]-cells[0][1])
-            self.assertTrue(self.graph['links'][indices[0]] & (1<<self.legacy.DIRECTIONS.index(delta)))
-            self.assertTrue(self.graph['links'][indices[1]] & (1<<self.legacy.DIRECTIONS.index((-delta[0],-delta[1]))))
+            self.assertTrue(self.graph['links'][indices[0]] & (1<<self.navgrid.DIRECTIONS.index(delta)))
+            self.assertTrue(self.graph['links'][indices[1]] & (1<<self.navgrid.DIRECTIONS.index((-delta[0],-delta[1]))))
 
 
 class NavigationOwnershipTests(unittest.TestCase):

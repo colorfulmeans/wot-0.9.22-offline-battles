@@ -23,19 +23,19 @@ class WaterRebakeTests(unittest.TestCase):
             water_depth=lambda x,z,y: (1.05 if x < 10. else 1.8))
         obstacles=types.SimpleNamespace(surface_height=lambda x,z:None,
             blocked=lambda *a,**k:False)
-        legacy=types.SimpleNamespace(WATER_DEPTH_LIMIT=1.2,VEHICLE_HALF_WIDTH=2.15,
+        navgrid=types.SimpleNamespace(WATER_DEPTH_LIMIT=1.2,VEHICLE_HALF_WIDTH=2.15,
             SHALLOW_WATER_THRESHOLD=1.2,BRIDGE_OBSTACLE_MARGIN=1.,
             VEHICLE_GROUND_CLEARANCE=.65,HAZARD_WATER=1,HAZARD_EDGE=2,
             HAZARD_SHALLOW_WATER=4,DIRECTIONS=((-1,0),(1,0)),
             _ground_height=lambda t,o,x,z:-1.,
-            _has_safe_edge_clearance=lambda t,o,x,z,y:t.water_depth(x,z,y)<=legacy.WATER_DEPTH_LIMIT,
+            _has_safe_edge_clearance=lambda t,o,x,z,y:t.water_depth(x,z,y)<=navgrid.WATER_DEPTH_LIMIT,
             _segment_clear=lambda t,o,a,b: True)
-        return terrain,obstacles,legacy
+        return terrain,obstacles,navgrid
 
     def test_remeasures_every_cell_revives_shallow_and_keeps_real_deep_water(self):
         layer=self.layer();original=copy.deepcopy(layer)
-        terrain,obstacles,legacy=self.context()
-        result,proof=rebake.rebake_layer(layer,terrain,obstacles,legacy)
+        terrain,obstacles,navgrid=self.context()
+        result,proof=rebake.rebake_layer(layer,terrain,obstacles,navgrid)
         self.assertEqual(original,layer)
         self.assertEqual(4,proof['cells_measured'])
         self.assertEqual(-1000,result['heights_mm'][2])
@@ -44,22 +44,22 @@ class WaterRebakeTests(unittest.TestCase):
         self.assertTrue(result['links'][2]&1)
         self.assertIsNone(result['heights_mm'][3])
         self.assertEqual(1,result['hazards'][3])
-        self.assertEqual(1.2,legacy.WATER_DEPTH_LIMIT)
+        self.assertEqual(1.2,navgrid.WATER_DEPTH_LIMIT)
 
     def test_obstacle_and_already_reviewed_1_2_support_guards_are_not_overridden(self):
-        layer=self.layer();terrain,obstacles,legacy=self.context()
+        layer=self.layer();terrain,obstacles,navgrid=self.context()
         obstacles.blocked=lambda *a,**k:True
-        result,unused=rebake.rebake_layer(layer,terrain,obstacles,legacy)
+        result,unused=rebake.rebake_layer(layer,terrain,obstacles,navgrid)
         self.assertIsNone(result['heights_mm'][2])
         self.assertTrue(result['hazards'][2]&2)
-        result,unused=rebake.rebake_layer(layer,terrain,obstacles,legacy,previous_limit=1.2)
+        result,unused=rebake.rebake_layer(layer,terrain,obstacles,navgrid,previous_limit=1.2)
         self.assertEqual(layer['heights_mm'],result['heights_mm'])
 
     def test_missing_ground_is_not_water_and_isolated_new_pocket_is_not_published(self):
-        layer=self.layer();terrain,obstacles,legacy=self.context()
+        layer=self.layer();terrain,obstacles,navgrid=self.context()
         layer['heights_mm'][:2]=[None,None];layer['links'][:2]=[0,0]
-        legacy._ground_height=lambda t,o,x,z:None if x<8 else -1.
-        result,proof=rebake.rebake_layer(layer,terrain,obstacles,legacy)
+        navgrid._ground_height=lambda t,o,x,z:None if x<8 else -1.
+        result,proof=rebake.rebake_layer(layer,terrain,obstacles,navgrid)
         self.assertEqual(2,proof['missing_ground'])
         self.assertEqual(0,result['hazards'][0])
         self.assertIsNone(result['heights_mm'][2])

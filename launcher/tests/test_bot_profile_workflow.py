@@ -29,6 +29,17 @@ class StoreOwnershipTests(unittest.TestCase):
         storage._atomic(s.profile_path('A'),profile('A','veteran'))
         self.assertEqual(profile('A','veteran'),storage.contract.load(s.ensure_active()))
 
+    def test_applied_profile_naming_an_older_graph_falls_back_to_default(self):
+        s=self.store;s.save(profile('A'),True)
+        for path in (s.profile_path('A'),s.active_path):
+            old=storage.contract.load(str(path))
+            old['maps']['04_himmelsdorf']['resource_sha256']='0'*64
+            path.write_text(storage.contract.dumps(old),encoding='ascii')
+        saved=s.profile_path('A').read_bytes()
+        self.assertEqual(storage.contract.default_profile(),s.active())
+        self.assertEqual(['Default'],s.names())
+        self.assertEqual(saved,s.profile_path('A').read_bytes())
+
     def test_rename_moves_file_and_applied_owner_delete_returns_default(self):
         s=self.store;s.save(profile('A'),True)
         s.save(profile('B','elite'),previous_name='A')

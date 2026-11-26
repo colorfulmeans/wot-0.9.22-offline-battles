@@ -1,6 +1,5 @@
 """Refine the circled Siegfried town gaps without changing authored roads."""
 import argparse
-import hashlib
 import json
 import math
 from pathlib import Path
@@ -25,13 +24,13 @@ def build(client,output):
     graph=json.loads(raw)
     if graph.get('local_meshes'):raise ValueError('Expected the reviewed coarse source')
     meshes.EXTRA_REGIONS=REGIONS+(CORNER,)
-    terrain,obstacles,legacy=meshes.geometry(client,'14_siegfried_line')
+    terrain,obstacles,navgrid=meshes.geometry(client,'14_siegfried_line')
     ground=terrain.height(*POINT)
-    if ground is None or obstacles.blocked(POINT[0],POINT[1],ground,margin=legacy.VEHICLE_HALF_WIDTH):
+    if ground is None or obstacles.blocked(POINT[0],POINT[1],ground,margin=navgrid.VEHICLE_HALF_WIDTH):
         raise ValueError('The authored corner is not physically supported')
-    patches=[meshes.bake_patch(CORNER,terrain,obstacles,legacy)]
+    patches=[meshes.bake_patch(CORNER,terrain,obstacles,navgrid)]
     for i,region in enumerate(REGIONS):
-        patches.append(meshes.bake_patch(region,terrain,obstacles,legacy,cell_size=2.))
+        patches.append(meshes.bake_patch(region,terrain,obstacles,navgrid,cell_size=2.))
         print('Town region',i+1,'sampled',flush=True)
     graph['local_meshes']=patches
     grid=TerrainGrid(lambda *args:None,baked_graph=pn.with_shore_hazards(graph))
@@ -49,17 +48,14 @@ def build(client,output):
             proof.append(dict(start=first,end=last,length=round(cost,4)))
     graph['bake']['local_meshes']=dict(regions=REGIONS,corner_region=CORNER,
         base_cell_size=4.,local_cell_size=2.,corner_cell_size=1.,
-        base_geometry_unchanged=True,node_half_width=legacy.VEHICLE_HALF_WIDTH,
+        base_geometry_unchanged=True,node_half_width=navgrid.VEHICLE_HALF_WIDTH,
         collision_edge_sample_metres=.25,corner_validation=proof,
-        water_depth_limit=legacy.WATER_DEPTH_LIMIT,
+        water_depth_limit=navgrid.WATER_DEPTH_LIMIT,
         measured_local_cells=sum(len(p['heights_mm']) for p in patches),
         source='exact_0922_client_compiled_geometry',
         local_collision_policy='body_height_clipped_triangles_against_original_2.15m_disk')
-    previous=set(graph.get('navigation_previous_sha256s',()))
-    previous.add(hashlib.sha256(raw).hexdigest())
-    graph['navigation_previous_sha256s']=sorted(previous)
     for field in ('origin','width','height','cell_size','heights_mm','links','hazards',
-                  'routes','spawn_formations','objective_bases','spawn_anchors'):
+                  'spawn_formations','objective_bases','spawn_anchors'):
         assert graph[field]==json.loads(raw)[field],field
     Path(output).write_text(json.dumps(graph,separators=(',',':'))+'\n',encoding='utf8',newline='\n')
     print('Candidate ready:',output,flush=True)

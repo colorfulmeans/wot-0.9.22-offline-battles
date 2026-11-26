@@ -28,15 +28,14 @@ class Namespace(object):
     def __init__(self, **values):
         self.__dict__.update(values)
 
-def _graph(map_name='01_karelia', waypoint_count=2):
-    waypoints = tuple((float(index * 4), 0.0, False)
-                      for index in range(waypoint_count))
-    reverse = tuple(reversed(waypoints))
+def _graph(map_name='01_karelia'):
     return {
         'format': 'offline-lan-0922-navgraph', 'version': 2,
         'game_version': '0.9.22.0.1-cn-1513', 'map': map_name,
         'cell_size': 4.0, 'origin': (0.0, 0.0), 'bounds': (0, 0, 8, 0),
         'width': 3, 'height': 1, 'heights_mm': (0, 0, 0),
+        'directions': ((-1, -1), (0, -1), (1, -1), (-1, 0),
+                       (1, 0), (-1, 1), (0, 1), (1, 1)),
         'links': (1 << 4, (1 << 3) | (1 << 4), 1 << 3),
         'hazards': (0, 0, 0),
         'spawn_anchors': ((0.0, 0.0), (8.0, 0.0)),
@@ -48,10 +47,6 @@ def _graph(map_name='01_karelia', waypoint_count=2):
             '2': tuple((float(slot % 5) * 12.0, 0.0,
                         100.0 - float(slot // 5) * 12.0, 3.14159)
                        for slot in range(15)),
-        },
-        'routes': {
-            '1': ({'id': 'safe-1', 'waypoints': waypoints},),
-            '2': ({'id': 'safe-2', 'waypoints': reverse},),
         },
         'bake': {'max_grade': 0.30},
     }
@@ -151,7 +146,7 @@ def _combat_descriptor(reload_time=0.5, clip=(2, 0.2),
 
 if not hasattr(types, 'SimpleNamespace'):
     types.SimpleNamespace = Namespace
-from gui.mods.offline_lan_0922 import bot_runtime, native_math
+from gui.mods.offline_lan_0922 import bot_runtime, bot_tactics, native_math
 from gui.mods.offline_lan_0922.battle_runtime import BattleRuntime
 bot_runtime.loadout.attribute_factors = _plain_attribute_factors
 fixture = sys.modules[__name__]
@@ -330,12 +325,23 @@ def graph():
         width=width, height=width, heights_mm=[0]*(width*width),
         links=links, hazards=[0]*(width*width),
         spawn_anchors=((-60.,-46.),(60.,46.)),
-        objective_bases=((0.,105.),(0.,-105.)),
-        routes={'1': ({'id':'host-west-north','waypoints':
-                      ((-70.,-70.,False),(-70.,0.,False),(0.,105.,False))},),
-                '2': ({'id':'host-east-south','waypoints':
-                      ((70.,70.,False),(70.,0.,False),(0.,-105.,False))},)})
+        objective_bases=((0.,105.),(0.,-105.)))
     return value
+
+
+# The scene's two lanes, carried as this round's Karelia Default rows.
+SCENE_LANE = 'west_ridge'
+
+
+def scene_tactics():
+    document = bot_tactics.empty()
+    document['maps']['01_karelia'] = dict(
+        mode='regular', routes=[], positions=[],
+        resource_sha256=bot_tactics.MAPS['01_karelia']['resource_sha256'],
+        default_routes=[
+            dict(id=SCENE_LANE, team=1, points=[[-70., -70., 0], [-70., 0., 0], [0., 105., 0]]),
+            dict(id=SCENE_LANE, team=2, points=[[70., 70., 0], [70., 0., 0], [0., -105., 0]])])
+    return document
 
 
 
@@ -391,7 +397,7 @@ class HostScene(object):
             baked_graph=graph(), control_seconds=bot_runtime.WORKER_CONTROL_SECONDS)
         self.owner._bots = self.runtime
         self.runtime.battle_start(dict(round_id=5, map='01_karelia',
-            bot_authority_id=1, bot_skill_mode='brutal', bots=[
+            bot_authority_id=1, bot_skill_mode='brutal', bot_tactics=scene_tactics(), bots=[
                 dict(id=11+i, team=1 if i<14 else 2,
                      slot=i if i<14 else i-14, name='HostBot-%d'%i)
                 for i in range(29)]))

@@ -389,40 +389,6 @@ class RealRuntimeIntegrationTests(unittest.TestCase):
 
 
 class PragueRouteResourceIdentityTests(unittest.TestCase):
-    def test_initial_release_rollback_preserves_saved_test_build_route_edits(self):
-        self.assertEqual(11, len(cfg.NAVIGATION_ROLLBACK_IDENTITIES))
-        for name, successor in cfg.NAVIGATION_ROLLBACK_IDENTITIES.items():
-            with self.subTest(map=name):
-                raw = cfg.empty('Saved test-build route edits')
-                settings = copy.deepcopy(cfg.default_map(name))
-                settings['resource_sha256'] = successor
-                self.assertTrue(settings['default_routes'])
-                settings['default_routes'][0]['disabled'] = True
-                raw['maps'][name] = settings
-                normalized = cfg.canonical(raw)['maps'][name]
-                self.assertEqual(cfg.MAPS[name]['resource_sha256'],
-                                 normalized['resource_sha256'])
-                expected=copy.deepcopy(settings['default_routes'])
-                for row in expected:
-                    if row.get('disabled'):
-                        shared=next((r for r in expected if r['team']==row['team'] and r['id']==row['id'] and r.get('class_tag','all')=='all'),row)
-                        row['points']=[p[:2]+[0] for p in shared['points']]
-                from gui.mods.offline_lan_0922 import route_network
-                route_network.migrate_default_rows(expected)
-                self.assertEqual(expected,normalized['default_routes'])
-
-    def test_previous_exact_route_profile_is_migrated_without_discarding_orders(self):
-        raw = cfg.empty('Existing Prague profile')
-        raw['maps']['114_czech'] = copy.deepcopy(cfg.default_map('114_czech'))
-        raw['maps']['114_czech']['resource_sha256'] = cfg.MAPS['114_czech']['route_previous_sha256']
-        normalized = cfg.canonical(raw)
-        self.assertEqual(cfg.MAPS['114_czech']['resource_sha256'],
-                         normalized['maps']['114_czech']['resource_sha256'])
-        self.assertEqual(raw['maps']['114_czech'].get('default_routes', []),
-                         normalized['maps']['114_czech'].get('default_routes', []))
-        # The orders live in the profile; the graph carries no routes.
-        self.assertNotIn('routes', graph_data('114_czech'))
-
     def test_unrelated_resource_fingerprint_is_still_rejected(self):
         raw = cfg.empty('Invalid Prague profile')
         raw['maps']['114_czech'] = copy.deepcopy(cfg.default_map('114_czech'))

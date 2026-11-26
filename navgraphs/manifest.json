@@ -5,207 +5,207 @@
     {
       "file": "01_karelia.json",
       "map": "01_karelia",
-      "sha256": "25d71c19b699398f58a0341de38349af3b778b4651ae45b3f228f97902b0a710"
+      "sha256": "4a590cc2b04a8433f0c98a97a403218419b3ead271941dd27bc4cfb6e7875f00"
     },
     {
       "file": "02_malinovka.json",
       "map": "02_malinovka",
-      "sha256": "ca678d5069af2ba93b44d6a600223865f991b1c042dc10d3eca49e338be544cb"
+      "sha256": "badd2eabfec8cb10b62a670cc8d8d7a6abab6a7f1cc307c7c3fdd7454d6a8c09"
     },
     {
       "file": "04_himmelsdorf.json",
       "map": "04_himmelsdorf",
-      "sha256": "23524a49932c0b7a8dd79e533373e401c45972d05dd7b86c313528ee9e4e380f"
+      "sha256": "6d9519b42e14c9dbf0875a44b62ce90aa19b5da28cb9762135e7108c407cb31f"
     },
     {
       "file": "05_prohorovka.json",
       "map": "05_prohorovka",
-      "sha256": "cfee19bc7e970ac8634adf66aa3d6f0c0b2b1d888dc9ec1bbf68476a96402c35"
+      "sha256": "f5423871607d9f898651d72d44367e7191fe25ef95614f448456024ddd8ac0ae"
     },
     {
       "file": "06_ensk.json",
       "map": "06_ensk",
-      "sha256": "a5667885940374edc8a26db36a4d2b18ce4e6fc159ee33de7358b1aa96a4326e"
+      "sha256": "30d220a59f89a358f47f517aeda7dc40e9541ad85950c8f3fe09872c6a8a1da2"
     },
     {
       "file": "07_lakeville.json",
       "map": "07_lakeville",
-      "sha256": "473303e0c509a5e1f2f3ac12cee249a0f2f0b7dfaa4f196714e66595d35d5b2f"
+      "sha256": "fce387107d7bf10df87214d7292358f01ff10a3b5d6a7d49710bbd5267c70785"
     },
     {
       "file": "08_ruinberg.json",
       "map": "08_ruinberg",
-      "sha256": "8eb73bf5c6cd13d623ad6bd0e5484f6001bf0561becefcb19921e3f5bae5a9c2"
+      "sha256": "88b48222d26d5bf3b7a1af8bcf2971ef4b1eb78d86e983bd13230e2dd77c51a3"
     },
     {
       "file": "10_hills.json",
       "map": "10_hills",
-      "sha256": "7e30d4a8988138b57082f412447987726145e55cde1c861a7f391989f54ee1cf"
+      "sha256": "523caca6e66b3dcfbde89c00929aa30208e7c3b638e5525e344cd9eca6f5976e"
     },
     {
       "file": "11_murovanka.json",
       "map": "11_murovanka",
-      "sha256": "079b69ae742ddf8b86525218a0406e61f6b050df93a89a6b8bee7e863f1eb1b1"
+      "sha256": "b19b4581eb6da39fbf265091154bf558e2e1f62d5cc04c6cadf2a7b8740479ca"
     },
     {
       "file": "13_erlenberg.json",
       "map": "13_erlenberg",
-      "sha256": "062e64a792e1238f9bb60e38cd983cf193255cbfb5e430cb30c4464b31a3780b"
+      "sha256": "4b2f269cb9d8714eceb54edc3cd41d16f6d4ba23502c0835b570ce180e26b5f3"
     },
     {
       "file": "14_siegfried_line.json",
       "map": "14_siegfried_line",
-      "sha256": "6496ffd00b7e7cb489fa71f85cc8aa3df4fbdf4c364607bc725870c7df840729"
+      "sha256": "c42dd788d521eff70e59a47eae2bd2514e4fad232ffbd7d074d182c60d8e3fbe"
     },
     {
       "file": "17_munchen.json",
       "map": "17_munchen",
-      "sha256": "577e5c4cbd1749c3cd149d94533d5c4f155c6e9205bbe6e3a341a81330716f4d"
+      "sha256": "3019898ac048b7e001f980cb5cb9169335ce0bab04a952e5eb33df24463879cd"
     },
     {
       "file": "18_cliff.json",
       "map": "18_cliff",
-      "sha256": "ad9a2fc6ba8e9093af253e3d856bb3443ec793bf110449a97e3258c388bfc1c0"
+      "sha256": "b8747f91dccefb9189fdda2669faec3f302a2343e42a2d304c49aacde15021f6"
     },
     {
       "file": "19_monastery.json",
       "map": "19_monastery",
-      "sha256": "2e4b0a5b2c1796ef30d52b78d8bf447964b6811a4305db933578b47b5d4a0fc5"
+      "sha256": "ad99fc050d4289929d2c599b18d9a54454153119343ba7932726054b165587c4"
     },
     {
       "file": "22_slough.json",
       "map": "22_slough",
-      "sha256": "4ab6a2296f6392e6f41e5c82db5865ea09797e14c3912d5abeefd68d570b6c92"
+      "sha256": "0e465a8887bcb5e318bc0258830922ce7e8df924e2080ebb9a6765dbba97e958"
     },
     {
       "file": "23_westfeld.json",
       "map": "23_westfeld",
-      "sha256": "cdb8d3208f63510070afe626e94110bb70567e4ff02c529981541ad9f6bc2605"
+      "sha256": "110fcdb7310325fafdf78951fb4adb9620abd290264a2ceef0733075e5a51800"
     },
     {
       "file": "28_desert.json",
       "map": "28_desert",
-      "sha256": "17ae87bc4ced2d79aa173f044a4277ed4f0cb8c0f284119d9911ded71c78817b"
+      "sha256": "15160e73eba263addb433f9d775012169fa6be8260505bcb3c33bcbb87be0b1b"
     },
     {
       "file": "29_el_hallouf.json",
       "map": "29_el_hallouf",
-      "sha256": "2cb423d508edfa94b5922eafb7d031197ab6462b0060cbd9623a2fe845d2350b"
+      "sha256": "1c9711d57eb5354e7e8048823d13de97888100439a8134e5e8c6d56b5a673d0a"
     },
     {
       "file": "31_airfield.json",
       "map": "31_airfield",
-      "sha256": "a258c167a848ce7d93e7196cc956ac7b1eaac44a61ebaf399b8fbcaf428f6e56"
+      "sha256": "44bd6feaf81909df405ac6202a7f73eae3650a0d0bf8423e256caec57980dfea"
     },
     {
       "file": "33_fjord.json",
       "map": "33_fjord",
-      "sha256": "0e8b6d52489e11ba94464178cfc6618382c629505c67fbfdc56ec2d1d7828a1f"
+      "sha256": "d10ed10598eb0e6c1694ac7d7381c426266cce8150efc88ebfd5506dba784496"
     },
     {
       "file": "34_redshire.json",
       "map": "34_redshire",
-      "sha256": "8d27a71d5c9266bf45246377c0a6833953998bb69ead705f66bf769d5b7b1642"
+      "sha256": "5a341fa1ac6961d1084ca8268c9c203560cadcc04298ac787628270c44ef48a3"
     },
     {
       "file": "35_steppes.json",
       "map": "35_steppes",
-      "sha256": "9640b7d15ed038944de825dcdcefb1835fe9c08238f3e65d05b362aced1b6256"
+      "sha256": "0a6241e5e62cddcd47427384c759b3cb1a195c53d64392286d309dca61a65651"
     },
     {
       "file": "36_fishing_bay.json",
       "map": "36_fishing_bay",
-      "sha256": "ebeb7034175f65b5859eb8e127633587f1ab738062710a1b16aeba674bdc03be"
+      "sha256": "43cca705b1b5adb808ec598d14d8eaad98bb0739af51b86fbfd3d569bd552657"
     },
     {
       "file": "37_caucasus.json",
       "map": "37_caucasus",
-      "sha256": "084feb3980135b9727cddc0e5f626c5643359e76103f2a20ec63d77a8ebfd686"
+      "sha256": "3b9811a7f94783643f26a9bb16fe885af157d7b32b0f163632d748a925e38d98"
     },
     {
       "file": "38_mannerheim_line.json",
       "map": "38_mannerheim_line",
-      "sha256": "69336f48522161de1642ac4f6499955417b20e1eb8e19d13f31bd9114febec76"
+      "sha256": "c9c909d9841d69f5d7a1184cab1ed579408b3edc1775911d7ad8d46ef5b10db1"
     },
     {
       "file": "44_north_america.json",
       "map": "44_north_america",
-      "sha256": "8141b70780702a37d16edf909c2251072657956c821406ba7257592e176f6ba4"
+      "sha256": "f0372183286c0e6d8a44af6d279748e221108caf1c9420f3b07e80a31484476e"
     },
     {
       "file": "45_north_america.json",
       "map": "45_north_america",
-      "sha256": "9247333b66d9da58a8276e2c5e6a7bd2dec76492d24dc4e4b33062e21cef2cdf"
+      "sha256": "17612d36625c9a31640fc284fb038b9ff75855ebe125bf1099c0a656a41300c0"
     },
     {
       "file": "47_canada_a.json",
       "map": "47_canada_a",
-      "sha256": "a64b364a94c481932afc329b55dca2ac1eb19ddd1fbdb7cfb638bd93b43f4f9c"
+      "sha256": "4d582d14904ccac0c6529ff0b8d93b228e241e9ae780f4f182c6a53cb77408df"
     },
     {
       "file": "59_asia_great_wall.json",
       "map": "59_asia_great_wall",
-      "sha256": "b1721765ac48e9cac90ced69fd9f21c7e5cf6c03ba5043ad9e7f8b09a12bfe19"
+      "sha256": "6dcfd24aaa7eff9ee01d71ca0ac608fa87c25adf456cbda0bc0c028096747f19"
     },
     {
       "file": "63_tundra.json",
       "map": "63_tundra",
-      "sha256": "f7cad318940cc824a867a1c7154b6c325ccab03e22464974b781797073a0b78c"
+      "sha256": "4ff15a756515112acb05d82e4230ddb59ecb07c2cf9365eafdf6d55594c97d4a"
     },
     {
       "file": "73_asia_korea.json",
       "map": "73_asia_korea",
-      "sha256": "55471f079ae60a2d2283f08c3033ac448293b4e305d96102169836bfeb2e58e6"
+      "sha256": "7036218aa66c1fb3df36ace8792038c9db9a9458722de720ef738433e062fb41"
     },
     {
       "file": "83_kharkiv.json",
       "map": "83_kharkiv",
-      "sha256": "3d97c26549b262656085a8ea0cc2613364a6085944466fe90879c5ff9a58aa59"
+      "sha256": "f9d9c496cd1b169eb6413451d01fc8aa2fa628bdac449da358eb061729b39b8b"
     },
     {
       "file": "84_winter.json",
       "map": "84_winter",
-      "sha256": "28b8e62f9fa3f70ca6086cd512a11c44af89b3e11a590005a5bb20b5e95274f8"
+      "sha256": "5c3d43371a6e8f56191c84a280eba12ad97243becff37a2d32fcb0425e5c1961"
     },
     {
       "file": "86_himmelsdorf_winter.json",
       "map": "86_himmelsdorf_winter",
-      "sha256": "05a0c77ab861f926c9c55d3d3161cfa62947a2d220d5d69be72ece61980c8b38"
+      "sha256": "722562e89cc1ee1bcd3ee07acc634a698890fac3b56b8c8f98bd8a89d812093b"
     },
     {
       "file": "92_stalingrad.json",
       "map": "92_stalingrad",
-      "sha256": "f6ef3250c4a995fe9a17ba5dc16442518bba5d0b0aa61cbd06a27a6af86858a3"
+      "sha256": "0382d207a8c940e8696ceeb5156647422963d0d6af7fd8cca72cab68dfa8a1b0"
     },
     {
       "file": "95_lost_city.json",
       "map": "95_lost_city",
-      "sha256": "7459fa9398911ecd0640b45c57e8f7c55c3134fd08aa5627180acd604a73cf7d"
+      "sha256": "2eed38af793aa95483e6c91b6e9644d515de997fbd2b897e31f89c276efaa6b0"
     },
     {
       "file": "100_thepit.json",
       "map": "100_thepit",
-      "sha256": "f4f30f6b20500be116ebf10192e9d87611d224e517869a84f5d05338f681876d"
+      "sha256": "01c70b0e01f21dfd3e37b80f852a9c0125d9a3a7a03a035883be9988b2836691"
     },
     {
       "file": "101_dday.json",
       "map": "101_dday",
-      "sha256": "e6d49c5939d23c0cb07ccb5b4f0e3da5610f39d64f22b587f52f2a61934e6d17"
+      "sha256": "1aaaf5b93142d5e94129574cc50ef94900fb71a527c8b1f7061338f3d05aa8df"
     },
     {
       "file": "103_ruinberg_winter.json",
       "map": "103_ruinberg_winter",
-      "sha256": "e9f847053cc32e66f99d2658da43dcab9a2d388d836b3bafa642469afe55b202"
+      "sha256": "25c64044689a3c2df9bc47a12b74d071a2956f012cb69d6bc5cc7cae994f3aa5"
     },
     {
       "file": "112_eiffel_tower_ctf.json",
       "map": "112_eiffel_tower_ctf",
-      "sha256": "d0d9fe97173a4001eb21d4606c58d6b9b1be03c91e17befabef7dc6833fa2044"
+      "sha256": "2f655c678047d7a776eb9b95460a70e53db3393c45a665484333380b319f0605"
     },
     {
       "file": "114_czech.json",
       "map": "114_czech",
-      "sha256": "09b2df98e232acc02dc394d883c6b9fc4801ef6970b1760f86f96acbd530e522"
+      "sha256": "bf574d327f6527abda55054540fdf5ee4e389abfdc0f5e9cff6e974612855213"
     }
   ],
   "version": 2

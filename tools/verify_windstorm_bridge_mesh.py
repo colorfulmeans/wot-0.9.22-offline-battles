@@ -22,7 +22,7 @@ def verify(client, output, baseline):
     old = json.loads(subprocess.check_output(
         ['git', 'show', baseline+':navgraphs/84_winter.json'], cwd=ROOT))
     for field in ('cell_size', 'origin', 'width', 'height', 'heights_mm',
-                  'hazards', 'routes', 'spawn_formations', 'spawn_anchors', 'objective_bases'):
+                  'hazards', 'spawn_formations', 'spawn_anchors', 'objective_bases'):
         assert source[field] == old[field], field
     expected_links = list(old['links'])
     regions = source['bake']['local_meshes']['regions']
@@ -34,7 +34,7 @@ def verify(client, output, baseline):
                    for left, bottom, right, top in regions)
     assert expected_links == source['links']
     meshes.EXTRA_REGIONS = (REGION,)
-    terrain, obstacles, legacy = meshes.geometry(client, '84_winter')
+    terrain, obstacles, navgrid = meshes.geometry(client, '84_winter')
     graph = pn.with_shore_hazards(source)
     grid = TerrainGrid(lambda *args: None, baked_graph=graph)
     origin = (126.7290046558638, -8.950407028198242, -276.07781896536494)
@@ -58,8 +58,8 @@ def verify(client, output, baseline):
                 for step in range(steps+1):
                     point = tuple(first[k]+(last[k]-first[k])*step/steps for k in range(3))
                     x, z = point[0], point[2]
-                    ground = legacy._ground_height(terrain, obstacles, x, z)
-                    assert ground is not None and terrain.water_depth(x, z, ground) <= legacy.WATER_DEPTH_LIMIT
+                    ground = navgrid._ground_height(terrain, obstacles, x, z)
+                    assert ground is not None and terrain.water_depth(x, z, ground) <= navgrid.WATER_DEPTH_LIMIT
                     assert pn.pose_is_safe(graph, point, hazard_mask=1|8), point
                     for half_width in (1.2, 1.8, 2.15):
                         assert not obstacles.blocked(x, z, ground, margin=half_width), (point, half_width)

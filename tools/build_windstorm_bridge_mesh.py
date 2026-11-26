@@ -18,20 +18,20 @@ REGION = (106, -302, 214, -230)
 def build(client):
     # Exact triangle clipping is confined to this bridge and its two mouths.
     meshes.EXTRA_REGIONS = (REGION,)
-    terrain, obstacles, legacy = meshes.geometry(client, '84_winter')
-    patch = meshes.bake_patch(REGION, terrain, obstacles, legacy)
+    terrain, obstacles, navgrid = meshes.geometry(client, '84_winter')
+    patch = meshes.bake_patch(REGION, terrain, obstacles, navgrid)
     # Carry the original water/fall evidence at the new sampling resolution.
     # Building footprints remain unknown support, not invented water hazards.
     for index in range(patch['width'] * patch['height']):
         x = REGION[0] + index % patch['width']
         z = REGION[1] + index // patch['width']
-        y = legacy._ground_height(terrain, obstacles, x, z)
+        y = navgrid._ground_height(terrain, obstacles, x, z)
         if y is None:
-            patch['hazards'][index] = legacy.HAZARD_EDGE
-        elif terrain.water_depth(x, z, y) > legacy.WATER_DEPTH_LIMIT:
-            patch['hazards'][index] = legacy.HAZARD_WATER
-        elif not legacy._has_safe_edge_clearance(terrain, obstacles, x, z, y):
-            patch['hazards'][index] = legacy.HAZARD_EDGE
+            patch['hazards'][index] = navgrid.HAZARD_EDGE
+        elif terrain.water_depth(x, z, y) > navgrid.WATER_DEPTH_LIMIT:
+            patch['hazards'][index] = navgrid.HAZARD_WATER
+        elif not navgrid._has_safe_edge_clearance(terrain, obstacles, x, z, y):
+            patch['hazards'][index] = navgrid.HAZARD_EDGE
     path = ROOT / 'navgraphs/84_winter.json'
     raw = subprocess.check_output(['git', 'show', '346ae477:navgraphs/84_winter.json'], cwd=ROOT)
     graph = json.loads(raw)
@@ -47,7 +47,7 @@ def build(client):
         z = graph['origin'][1] + index // graph['width'] * graph['cell_size']
         if not (REGION[0]-4 <= x <= REGION[2]+4 and REGION[1]-4 <= z <= REGION[3]+4):
             continue
-        for bit, (dx, dz) in enumerate(legacy.DIRECTIONS):
+        for bit, (dx, dz) in enumerate(navgrid.DIRECTIONS):
             if not mask & (1 << bit):
                 continue
             steps = int(math.ceil(math.hypot(dx*4., dz*4.)/.25))
@@ -61,22 +61,19 @@ def build(client):
                     graph['links'][index] &= ~(1 << bit)
                     refined.append([index, bit])
                     break
-    previous = set(graph.get('navigation_previous_sha256s', ()))
-    previous.add(hashlib.sha256(raw).hexdigest())
-    graph['navigation_previous_sha256s'] = sorted(previous)
     graph['bake']['local_meshes'] = dict(
         regions=[REGION], base_cell_size=graph['cell_size'], local_cell_size=1.,
         coarse_heights_hazards_unchanged=True, refined_coarse_links=refined,
         collision_edge_sample_metres=.25,
-        node_half_width=legacy.VEHICLE_HALF_WIDTH,
-        bridge_obstacle_margin=legacy.BRIDGE_OBSTACLE_MARGIN,
-        water_depth_limit=legacy.WATER_DEPTH_LIMIT,
+        node_half_width=navgrid.VEHICLE_HALF_WIDTH,
+        bridge_obstacle_margin=navgrid.BRIDGE_OBSTACLE_MARGIN,
+        water_depth_limit=navgrid.WATER_DEPTH_LIMIT,
         local_collision_policy='body_height_clipped_triangles_against_original_margin',
         source='exact_0922_client_compiled_geometry',
         recorded_exit=[126.7290046558638, -8.950407028198242, -276.07781896536494,
                        1.654004054630426, 3.1200008771171768])
     for key, value in json.loads(raw).items():
-        if key not in ('local_meshes', 'bake', 'links', 'navigation_previous_sha256s'):
+        if key not in ('local_meshes', 'bake', 'links'):
             assert graph[key] == value, key
     path.write_bytes((json.dumps(graph, separators=(',', ':')) + '\n').encode())
     manifest_path = ROOT / 'navgraphs/manifest.json'

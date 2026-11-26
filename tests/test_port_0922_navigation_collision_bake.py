@@ -73,12 +73,12 @@ def compiled(remaps, transforms=None, masks=None, labels=None):
 class CollisionBakeTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.legacy = baker._legacy_baker()
+        cls.navgrid = baker.navgrid
 
     def obstacles(self, flags=73 << 8, records=None, data=None, vfs=None):
         records = [(t, 7) for t in WALL] if records is None else records
         return baker.compiled_navigation_obstacles(
-            data or compiled([[(7, flags)]]), vfs or VFS(records), self.legacy)
+            data or compiled([[(7, flags)]]), vfs or VFS(records), self.navgrid)
 
     def test_all_original_materials_excluded_before_raster_regardless_of_model_type(self):
         for kind in range(71, 86):
@@ -250,10 +250,10 @@ class CollisionBakeTest(unittest.TestCase):
     def test_v0_material_id_ignores_padding_too(self):
         data = bsp([(WALL[0], 123)], version=0, padding=0xabcd)
         self.assertEqual([(WALL[0], 123)], baker._bsp_triangles_0922(
-            data, self.legacy, with_materials=True))
+            data, self.navgrid, with_materials=True))
         for broken in (data[:10], data[:-1]):
             with self.assertRaises(ValueError):
-                baker._bsp_triangles_0922(broken, self.legacy, with_materials=True)
+                baker._bsp_triangles_0922(broken, self.navgrid, with_materials=True)
 
     def test_disabled_nonfinite_triangle_does_not_become_an_obstacle(self):
         sentinel = ((math.nan, 0., 0.),) * 3
@@ -281,7 +281,7 @@ class CollisionBakeTest(unittest.TestCase):
         self.assertAlmostEqual(2., field.surface_height(0., 0.))
 
     def bake_synthetic(self, field):
-        """Exercise actual node/link/clearance/component/route construction."""
+        """Exercise actual node/link/clearance/component construction."""
         class FlatTerrain:
             chunks = {0: None}
             waters = ()
@@ -291,31 +291,28 @@ class CollisionBakeTest(unittest.TestCase):
             @staticmethod
             def water_depth(x, z, height=None):
                 return 0.
-        points = ((-18., 2., False), (18., 2., False))
-        routes = tuple(dict(id='crossing', team=team, capacity=15, risk=0.5,
-                            role_weights={'medium': 1.0}, points=points)
-                       for team in (1, 2))
         config = dict(bounds=(-24., -24., 24., 24.),
-                      bases=((-18., 2.), (18., 2.)), anchors=(), routes=routes)
-        with patch.object(self.legacy, 'MAPS', {'synthetic': config}), \
-                patch.object(self.legacy, 'Terrain', lambda *a: FlatTerrain()), \
-                patch.object(self.legacy, 'ObstacleField', lambda *a, **kw: field):
-            return self.legacy.bake_graph(None, 'synthetic')
+                      bases=((-18., 2.), (18., 2.)), anchors=())
+        graph = self.navgrid.bake_graph(
+            'synthetic', config['bounds'], config['bases'], FlatTerrain(), field)
+        self.navgrid.retain_base_component(graph, config)
+        graph['validation'] = self.navgrid.validate_graph(graph, config)
+        return graph
 
-    def test_fresh_graph_has_identical_cells_links_hazards_and_routes_with_soft_scenery(self):
+    def test_fresh_graph_has_identical_cells_links_hazards_and_validation_with_soft_scenery(self):
         empty = self.bake_synthetic(self.obstacles(records=[]))
         soft = self.bake_synthetic(self.obstacles())
         hard = self.bake_synthetic(self.obstacles(flags=0))
-        for key in ('heights_mm', 'links', 'hazards', 'routes', 'validation'):
+        for key in ('heights_mm', 'links', 'hazards', 'validation'):
             self.assertEqual(empty[key], soft[key], key)
         self.assertNotEqual(empty['heights_mm'], hard['heights_mm'])
         self.assertNotEqual(empty['links'], hard['links'])
         self.assertGreater(hard['bake']['rejected_obstacle_nodes'], 0)
         # Cold JSON round trip has the complete graph, with no engine or live repair.
         cold = json.loads(json.dumps(soft))
-        start, _ = self.legacy._nearest_node(cold, (-18., 2.))
-        goal, _ = self.legacy._nearest_node(cold, (18., 2.))
-        path, distance = self.legacy._graph_path(cold, start, goal)
+        start, _ = self.navgrid._nearest_node(cold, (-18., 2.))
+        goal, _ = self.navgrid._nearest_node(cold, (18., 2.))
+        path, distance = self.navgrid._graph_path(cold, start, goal)
         self.assertTrue(path)
         self.assertLess(distance, 42.)
 
@@ -347,9 +344,9 @@ class CollisionBakeTest(unittest.TestCase):
     def test_spawn_only_overlap_does_not_poison_route_raster(self):
         field = self.obstacles()
         self.assertFalse(baker.spawn_obstacle_obb_blocked(
-            field, 0., 0., 0., 0., 1., 2., self.legacy))
+            field, 0., 0., 0., 0., 1., 2., self.navgrid))
         self.assertTrue(baker.spawn_soft_destructible_obb_blocked(
-            field, 0., 0., 0., 0., 1., 2., self.legacy))
+            field, 0., 0., 0., 0., 1., 2., self.navgrid))
 
 
 if __name__ == '__main__':

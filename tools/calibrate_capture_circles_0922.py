@@ -24,8 +24,6 @@ def calibrate(client):
         circles = standard_circles_from_space(space)
         records[name] = dict(space_sha256=hashlib.sha256(space).hexdigest(),
                              centres=[p[0] for p in circles], radii=[p[1] for p in circles])
-        # Preserve authored profiles only for this exact verified metadata change.
-        graph.setdefault('capture_coordinate_previous_sha256', hashlib.sha256(raw).hexdigest())
         graph['objective_bases'] = records[name]['centres']
         graph['objective_base_radii'] = records[name]['radii']
         graphs[path] = graph

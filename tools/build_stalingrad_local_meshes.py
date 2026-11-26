@@ -1,6 +1,5 @@
 """Refine the owner's circled Stalingrad passages on exact #1513 collision."""
 import argparse
-import hashlib
 import json
 import math
 from pathlib import Path
@@ -68,27 +67,24 @@ def build(client, output):
     if graph.get('local_meshes'):
         raise ValueError('Build from the reviewed coarse Stalingrad source')
     meshes.EXTRA_REGIONS = REGIONS
-    terrain, obstacles, legacy = meshes.geometry(client, '92_stalingrad')
+    terrain, obstacles, navgrid = meshes.geometry(client, '92_stalingrad')
     patches = []
     for number, region in enumerate(REGIONS):
-        patch = meshes.bake_patch(region, terrain, obstacles, legacy, cell_size=2.)
+        patch = meshes.bake_patch(region, terrain, obstacles, navgrid, cell_size=2.)
         patches.append(patch)
         print('Circle %d: %d supported / %d samples' % (number+1,
             sum(v is not None for v in patch['heights_mm']),len(patch['heights_mm'])),flush=True)
     graph['local_meshes'] = patches
     graph['bake']['local_meshes'] = dict(regions=REGIONS,base_cell_size=4.,
         local_cell_size=2.,base_geometry_unchanged=True,
-        node_half_width=legacy.VEHICLE_HALF_WIDTH,collision_edge_sample_metres=.25,
-        water_depth_limit=legacy.WATER_DEPTH_LIMIT,
+        node_half_width=navgrid.VEHICLE_HALF_WIDTH,collision_edge_sample_metres=.25,
+        water_depth_limit=navgrid.WATER_DEPTH_LIMIT,
         measured_local_cells=sum(len(p['heights_mm']) for p in patches),
         source='exact_0922_client_compiled_geometry',
         local_collision_policy='body_height_clipped_triangles_against_original_2.15m_disk')
     graph['bake']['local_meshes']['circled_passage_validation'] = prove(graph)
-    previous = set(graph.get('navigation_previous_sha256s', ()))
-    previous.add(hashlib.sha256(raw).hexdigest())
-    graph['navigation_previous_sha256s'] = sorted(previous)
     for key in ('origin','width','height','cell_size','heights_mm','links','hazards',
-                'routes','spawn_formations','objective_bases','spawn_anchors'):
+                'spawn_formations','objective_bases','spawn_anchors'):
         assert graph[key] == json.loads(raw)[key], key
     Path(output).write_text(json.dumps(graph,separators=(',',':'))+'\n',encoding='utf8',newline='\n')
     print('Candidate written to',output,flush=True)
